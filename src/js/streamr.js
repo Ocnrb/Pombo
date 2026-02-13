@@ -94,6 +94,35 @@ class StreamrController {
     }
 
     /**
+     * Sanitize a string for use in Streamr stream path
+     * Only allows alphanumeric, hyphen, underscore
+     * @param {string} name - Original name
+     * @returns {string} - Sanitized name safe for stream path
+     */
+    sanitizeStreamPath(name) {
+        if (!name) return 'channel';
+        
+        // Replace spaces with hyphens, remove invalid chars
+        let sanitized = name
+            .replace(/\s+/g, '-')           // spaces -> hyphens
+            .replace(/[^a-zA-Z0-9_-]/g, '') // remove all except alphanumeric, _, -
+            .replace(/-+/g, '-')            // multiple hyphens -> single
+            .replace(/^-|-$/g, '');         // trim hyphens from ends
+        
+        // Ensure not empty after sanitization
+        if (!sanitized) {
+            sanitized = 'channel';
+        }
+        
+        // Limit length (Streamr has path limits)
+        if (sanitized.length > 50) {
+            sanitized = sanitized.substring(0, 50);
+        }
+        
+        return sanitized;
+    }
+
+    /**
      * Create a new stream with partitions
      * @param {string} channelName - Name of the channel
      * @param {string} creatorAddress - Creator's Ethereum address
@@ -109,20 +138,25 @@ class StreamrController {
         // Use the address for the stream namespace
         const ownerAddress = this.address;
         
+        // Sanitize channel name for Streamr path (only alphanumeric, hyphen, underscore)
+        const sanitizedName = this.sanitizeStreamPath(channelName);
+        
         // Generate unique stream ID ONCE
         const randomHash = cryptoManager.generateRandomHex(8);
-        const streamId = `${ownerAddress}/${channelName}_${randomHash}`;
+        const streamId = `${ownerAddress}/${sanitizedName}_${randomHash}`;
 
         try {
             Logger.debug('Creating stream:', streamId, '- Type:', type);
             Logger.debug('   Owner address:', ownerAddress);
+            Logger.debug('   Original name:', channelName, '-> Sanitized:', sanitizedName);
 
             // Build metadata for The Graph indexing
             // This allows querying Moot channels via The Graph API
+            // Store ORIGINAL name in metadata (for display)
             const metadata = JSON.stringify({
                 app: 'moot',
                 version: '1',
-                name: channelName,
+                name: channelName, // Original name with special chars
                 type: type,
                 createdAt: Date.now()
             });
