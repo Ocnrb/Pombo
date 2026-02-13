@@ -10,6 +10,7 @@ import { notificationManager } from './notifications.js';
 import { graphAPI } from './graph.js';
 import { secureStorage } from './secureStorage.js';
 import { Logger } from './logger.js';
+import { mediaController } from './media.js';
 
 class UIController {
     constructor() {
@@ -458,6 +459,9 @@ class UIController {
         
         // Initialize emoji picker
         this.initEmojiPicker();
+        
+        // Initialize attach button
+        this.initAttachButton();
         
         // Initialize reactions
         this.initReactions();
@@ -999,15 +1003,18 @@ class UIController {
             
             // Get reactions for this message
             const reactionsHtml = this.renderReactions(msgId, isOwn);
+            
+            // Render message content based on type
+            const contentHtml = this.renderMessageContent(msg);
 
             return `
-                <div class="message-entry ${isOwn ? 'own-message' : 'other-message'}" data-msg-id="${msgId}" data-sender="${msg.sender || ''}">
+                <div class="message-entry ${isOwn ? 'own-message' : 'other-message'}" data-msg-id="${msgId}" data-sender="${msg.sender || ''}" data-type="${msg.type || 'text'}">
                     <div class="message-bubble">
                         <div class="flex items-center gap-1 mb-1">
                             ${badge.html}
                             <span class="text-xs font-medium ${badge.textColor}">${this.escapeHtml(displayName)}</span>
                         </div>
-                        <div class="message-content">${this.escapeHtml(msg.text)}</div>
+                        <div class="message-content">${contentHtml}</div>
                         <div class="text-xs text-gray-500 mt-1 ${isOwn ? 'text-right' : 'text-left'}">${time}</div>
                         ${!msg.verified?.valid && msg.signature ? '<div class="text-xs text-red-400 mt-1">⚠️ Invalid signature</div>' : ''}
                         <div class="message-actions">
@@ -1193,6 +1200,104 @@ class UIController {
                 this.toggleReaction(msgId, emoji);
             });
         });
+        
+        // Attach download button listeners
+        document.querySelectorAll('.download-file-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const fileId = btn.dataset.fileId;
+                await this.handleFileDownload(fileId);
+            });
+        });
+    }
+    
+    /**
+     * Handle file download button click
+     */
+    async handleFileDownload(fileId) {
+        const channel = channelManager.getCurrentChannel();
+        if (!channel) return;
+        
+        // Find the message with this file
+        const msg = channel.messages.find(m => m.metadata?.fileId === fileId);
+        if (!msg || !msg.metadata) {
+            this.showNotification('File not found', 'error');
+            return;
+        }
+        
+        // Show immediate feedback - new video panel UI
+        const progressOverlay = document.querySelector(`[data-progress-overlay="${fileId}"]`);
+        if (progressOverlay) {
+            progressOverlay.classList.remove('hidden');
+        }
+        
+        // Legacy progress bar support
+        const progressBar = document.querySelector(`[data-progress-bar="${fileId}"]`);
+        if (progressBar) {
+            progressBar.classList.remove('hidden');
+        }
+        
+        const progressText = document.querySelector(`[data-progress-text="${fileId}"]`);
+        if (progressText) {
+            progressText.textContent = 'Starting...';
+        }
+        
+        const downloadBtn = document.querySelector(`.download-file-btn[data-file-id="${fileId}"]`);
+        if (downloadBtn) {
+            // New video panel UI - swap play icon for loading
+            const playIcon = downloadBtn.querySelector('.download-play-icon');
+            const loadingIcon = downloadBtn.querySelector('.download-loading-icon');
+            if (playIcon) playIcon.classList.add('hidden');
+            if (loadingIcon) loadingIcon.classList.remove('hidden');
+            
+            // Legacy button UI
+            const btnText = downloadBtn.querySelector('.download-btn-text');
+            const btnLoading = downloadBtn.querySelector('.download-btn-loading');
+            if (btnText) btnText.classList.add('hidden');
+            if (btnLoading) btnLoading.classList.remove('hidden');
+            
+            downloadBtn.disabled = true;
+            downloadBtn.classList.add('cursor-not-allowed');
+        }
+        
+        try {
+            await mediaController.startDownload(channel.streamId, msg.metadata, channel.password);
+        } catch (error) {
+            this.showNotification('Download failed: ' + error.message, 'error');
+            // Reset UI state on error
+            this.resetDownloadUI(fileId);
+        }
+    }
+
+    /**
+     * Reset download UI to initial state (on error or cancel)
+     */
+    resetDownloadUI(fileId) {
+        const progressOverlay = document.querySelector(`[data-progress-overlay="${fileId}"]`);
+        if (progressOverlay) {
+            progressOverlay.classList.add('hidden');
+        }
+        
+        const progressBar = document.querySelector(`[data-progress-bar="${fileId}"]`);
+        if (progressBar) {
+            progressBar.classList.add('hidden');
+        }
+        
+        const downloadBtn = document.querySelector(`.download-file-btn[data-file-id="${fileId}"]`);
+        if (downloadBtn) {
+            const playIcon = downloadBtn.querySelector('.download-play-icon');
+            const loadingIcon = downloadBtn.querySelector('.download-loading-icon');
+            if (playIcon) playIcon.classList.remove('hidden');
+            if (loadingIcon) loadingIcon.classList.add('hidden');
+            
+            const btnText = downloadBtn.querySelector('.download-btn-text');
+            const btnLoading = downloadBtn.querySelector('.download-btn-loading');
+            if (btnText) btnText.classList.remove('hidden');
+            if (btnLoading) btnLoading.classList.add('hidden');
+            
+            downloadBtn.disabled = false;
+            downloadBtn.classList.remove('cursor-not-allowed', 'opacity-50');
+        }
     }
 
     /**
@@ -1297,7 +1402,613 @@ class UIController {
             if (reactionPicker && !reactionPicker.contains(e.target)) {
                 reactionPicker.style.display = 'none';
             }
+            
+            // Also close attach menu
+            const attachMenu = document.getElementById('attach-menu');
+            const attachBtn = document.getElementById('attach-btn');
+            if (attachMenu && !attachMenu.contains(e.target) && e.target !== attachBtn) {
+                attachMenu.classList.add('hidden');
+            }
         });
+    }
+
+    /**
+     * Initialize attach button and file handling
+     */
+    initAttachButton() {
+        const attachBtn = document.getElementById('attach-btn');
+        const attachMenu = document.getElementById('attach-menu');
+        const sendImageBtn = document.getElementById('send-image-btn');
+        const sendVideoBtn = document.getElementById('send-video-btn');
+        const imageInput = document.getElementById('image-input');
+        const videoInput = document.getElementById('video-input');
+        
+        // File confirm modal elements
+        const fileConfirmModal = document.getElementById('file-confirm-modal');
+        const confirmFileName = document.getElementById('confirm-file-name');
+        const confirmFileSize = document.getElementById('confirm-file-size');
+        const cancelFileBtn = document.getElementById('cancel-file-btn');
+        const confirmFileBtn = document.getElementById('confirm-file-btn');
+        
+        if (!attachBtn || !attachMenu) return;
+        
+        // Store selected file and type
+        this.pendingFile = null;
+        this.pendingFileType = null;
+        
+        // Toggle attach menu
+        attachBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            attachMenu.classList.toggle('hidden');
+        });
+        
+        // Image button
+        sendImageBtn?.addEventListener('click', () => {
+            attachMenu.classList.add('hidden');
+            imageInput?.click();
+        });
+        
+        // Video button
+        sendVideoBtn?.addEventListener('click', () => {
+            attachMenu.classList.add('hidden');
+            videoInput?.click();
+        });
+        
+        // Image file selected
+        imageInput?.addEventListener('change', (e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+                this.showFileConfirmModal(file, 'image');
+            }
+            e.target.value = '';
+        });
+        
+        // Video file selected
+        videoInput?.addEventListener('change', (e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+                this.showFileConfirmModal(file, 'video');
+            }
+            e.target.value = '';
+        });
+        
+        // Cancel file send
+        cancelFileBtn?.addEventListener('click', () => {
+            this.pendingFile = null;
+            this.pendingFileType = null;
+            fileConfirmModal?.classList.add('hidden');
+        });
+        
+        // Confirm file send
+        confirmFileBtn?.addEventListener('click', async () => {
+            if (!this.pendingFile) return;
+            
+            const file = this.pendingFile;
+            const type = this.pendingFileType;
+            
+            this.pendingFile = null;
+            this.pendingFileType = null;
+            fileConfirmModal?.classList.add('hidden');
+            
+            await this.sendMediaFile(file, type);
+        });
+        
+        // Setup media controller handlers
+        this.setupMediaHandlers();
+    }
+    
+    /**
+     * Show file confirm modal
+     */
+    showFileConfirmModal(file, type) {
+        const modal = document.getElementById('file-confirm-modal');
+        const fileName = document.getElementById('confirm-file-name');
+        const fileSize = document.getElementById('confirm-file-size');
+        const previewIcon = document.getElementById('file-preview-icon');
+        
+        if (!modal) return;
+        
+        this.pendingFile = file;
+        this.pendingFileType = type;
+        
+        fileName.textContent = file.name;
+        fileSize.textContent = this.formatFileSize(file.size);
+        
+        // Update icon based on type
+        if (type === 'image') {
+            previewIcon.innerHTML = `
+                <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/>
+                </svg>
+            `;
+        } else if (type === 'video') {
+            previewIcon.innerHTML = `
+                <svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/>
+                </svg>
+            `;
+        }
+        
+        modal.classList.remove('hidden');
+    }
+    
+    /**
+     * Send media file
+     */
+    async sendMediaFile(file, type) {
+        const currentChannel = channelManager.getCurrentChannel();
+        if (!currentChannel) {
+            this.showNotification('No channel selected', 'error');
+            return;
+        }
+        
+        try {
+            this.showLoading(type === 'image' ? 'Sending image...' : 'Processing video...');
+            
+            if (type === 'image') {
+                await mediaController.sendImage(currentChannel.streamId, file, currentChannel.password);
+                this.showNotification('Image sent!', 'success');
+            } else if (type === 'video') {
+                await mediaController.sendVideo(currentChannel.streamId, file, currentChannel.password);
+                this.showNotification('Video shared!', 'success');
+            }
+            
+            this.hideLoading();
+        } catch (error) {
+            this.hideLoading();
+            this.showNotification('Failed to send: ' + error.message, 'error');
+        }
+    }
+    
+    /**
+     * Setup media controller event handlers
+     */
+    setupMediaHandlers() {
+        // Image received - update image placeholders
+        mediaController.onImageReceived((imageId, base64Data) => {
+            const placeholder = document.querySelector(`[data-image-id="${imageId}"]`);
+            if (placeholder) {
+                placeholder.outerHTML = `
+                    <div class="relative inline-block max-w-xs group">
+                        <img src="${base64Data}" 
+                             class="max-w-full max-h-60 rounded-lg cursor-pointer object-contain" 
+                             onclick="window.uiController.openLightbox('${base64Data}', 'image')"
+                             alt="Image"/>
+                        <button class="absolute top-1 right-1 bg-black/60 hover:bg-black/80 text-white p-1 rounded transition opacity-0 group-hover:opacity-100"
+                                onclick="event.stopPropagation(); window.uiController.openLightbox('${base64Data}', 'image')"
+                                title="Maximize">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
+                            </svg>
+                        </button>
+                    </div>
+                `;
+            }
+        });
+        
+        // File progress - update progress overlay and bar
+        mediaController.onFileProgress((fileId, percent, received, total, fileSize) => {
+            // Show new video panel progress overlay
+            const progressOverlay = document.querySelector(`[data-progress-overlay="${fileId}"]`);
+            if (progressOverlay) {
+                progressOverlay.classList.remove('hidden');
+            }
+            
+            // Update progress percentage text (new UI)
+            const progressPercent = document.querySelector(`[data-progress-percent="${fileId}"]`);
+            if (progressPercent) {
+                progressPercent.textContent = `${percent}%`;
+            }
+            
+            // Legacy: Show progress bar
+            const progressBar = document.querySelector(`[data-progress-bar="${fileId}"]`);
+            if (progressBar) {
+                progressBar.classList.remove('hidden');
+            }
+            
+            // Update progress fill
+            const progressFill = document.querySelector(`[data-progress-fill="${fileId}"]`);
+            if (progressFill) {
+                progressFill.style.width = `${percent}%`;
+            }
+            
+            // Update progress text with MB
+            const progressText = document.querySelector(`[data-progress-text="${fileId}"]`);
+            if (progressText) {
+                const receivedMB = ((received / total) * fileSize / (1024 * 1024)).toFixed(1);
+                const totalMB = (fileSize / (1024 * 1024)).toFixed(1);
+                progressText.textContent = `${receivedMB} / ${totalMB} MB`;
+            }
+            
+            // Update download button to show loading state
+            const downloadBtn = document.querySelector(`.download-file-btn[data-file-id="${fileId}"]`);
+            if (downloadBtn) {
+                // New video panel UI
+                const playIcon = downloadBtn.querySelector('.download-play-icon');
+                const loadingIcon = downloadBtn.querySelector('.download-loading-icon');
+                if (playIcon) playIcon.classList.add('hidden');
+                if (loadingIcon) loadingIcon.classList.remove('hidden');
+                
+                // Legacy UI
+                const btnText = downloadBtn.querySelector('.download-btn-text');
+                const btnLoading = downloadBtn.querySelector('.download-btn-loading');
+                if (btnText) btnText.classList.add('hidden');
+                if (btnLoading) btnLoading.classList.remove('hidden');
+                downloadBtn.disabled = true;
+                downloadBtn.classList.add('cursor-not-allowed');
+            }
+        });
+        
+        // File complete - show video player with seeding badge
+        mediaController.onFileComplete((fileId, metadata, url, blob) => {
+            const container = document.querySelector(`[data-file-id="${fileId}"]`);
+            if (container) {
+                const isSeeding = mediaController.isSeeding(fileId);
+                
+                if (metadata.fileType.startsWith('video/')) {
+                    // Check if video format is playable in browser
+                    const isPlayable = mediaController.isVideoPlayable(metadata.fileType);
+                    
+                    if (isPlayable) {
+                        // Show video player
+                        container.outerHTML = `
+                            <div data-file-id="${fileId}" class="max-w-xs">
+                                <div class="relative rounded-lg overflow-hidden bg-black">
+                                    <video src="${url}" 
+                                           class="max-w-full max-h-60 cursor-pointer video-player-${fileId}" 
+                                           controls
+                                           preload="metadata"
+                                           playsinline
+                                           onclick="event.stopPropagation()">
+                                        <source src="${url}" type="${metadata.fileType}">
+                                        Your browser does not support this video format.
+                                    </video>
+                                    <button class="absolute top-1 right-1 bg-black/60 hover:bg-black/80 text-white p-1 rounded transition"
+                                            onclick="event.stopPropagation(); window.uiController.openLightbox('${url}', 'video')"
+                                            title="Fullscreen">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
+                                        </svg>
+                                    </button>
+                                    ${isSeeding ? `
+                                    <div class="absolute bottom-1 left-1 bg-green-600/90 text-white text-xs px-2 py-0.5 rounded-full flex items-center gap-1">
+                                        <svg class="w-3 h-3 animate-pulse" fill="currentColor" viewBox="0 0 20 20">
+                                            <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z"/>
+                                        </svg>
+                                        <span>Seeding</span>
+                                    </div>
+                                    ` : ''}
+                                </div>
+                                <div class="flex items-center justify-between mt-1 text-xs text-gray-500">
+                                    <span class="truncate flex-1">${this.escapeHtml(metadata.fileName)}</span>
+                                    <div class="flex items-center gap-2 ml-2">
+                                        <span>${this.formatFileSize(metadata.fileSize)}</span>
+                                        <a href="${url}" download="${this.escapeHtml(metadata.fileName)}" class="text-blue-400 hover:underline">Save</a>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                        
+                        // Add error handler to video element
+                        setTimeout(() => {
+                            const videoEl = document.querySelector(`.video-player-${fileId}`);
+                            if (videoEl) {
+                                videoEl.addEventListener('error', (e) => {
+                                    console.error('Video playback error:', e);
+                                    // Replace with download link on error
+                                    const parent = videoEl.closest('[data-file-id]');
+                                    if (parent) {
+                                        parent.innerHTML = `
+                                            <div class="bg-[#252525] rounded-lg p-3">
+                                                <div class="flex items-center gap-2 mb-2">
+                                                    <svg class="w-5 h-5 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                                                    </svg>
+                                                    <span class="text-sm text-gray-300">Format not supported</span>
+                                                </div>
+                                                <a href="${url}" download="${metadata.fileName}" class="block w-full bg-blue-600 hover:bg-blue-700 text-white text-center px-3 py-2 rounded-lg text-sm transition">
+                                                    Download ${metadata.fileName}
+                                                </a>
+                                            </div>
+                                        `;
+                                    }
+                                });
+                                // Force load
+                                videoEl.load();
+                            }
+                        }, 100);
+                    } else {
+                        // Format not playable - show download button
+                        container.outerHTML = `
+                            <div data-file-id="${fileId}" class="max-w-xs">
+                                <div class="bg-[#252525] rounded-lg p-3">
+                                    <div class="flex items-center gap-2 mb-2">
+                                        <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/>
+                                        </svg>
+                                        <span class="font-medium text-sm truncate text-white">${this.escapeHtml(metadata.fileName)}</span>
+                                    </div>
+                                    <div class="text-xs text-yellow-500 mb-2">
+                                        ⚠️ Format not supported in browser (${metadata.fileType.split('/')[1]?.toUpperCase() || 'video'})
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-xs text-gray-400">${this.formatFileSize(metadata.fileSize)}</span>
+                                        <a href="${url}" download="${this.escapeHtml(metadata.fileName)}" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-sm transition">
+                                            Download
+                                        </a>
+                                    </div>
+                                    ${isSeeding ? `
+                                    <div class="flex items-center gap-2 mt-2">
+                                        <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                                        <span class="text-xs text-green-400">Seeding...</span>
+                                    </div>
+                                    ` : ''}
+                                </div>
+                            </div>
+                        `;
+                    }
+                } else {
+                    container.innerHTML = `
+                        <a href="${url}" download="${this.escapeHtml(metadata.fileName)}" class="text-blue-400 hover:underline">${this.escapeHtml(metadata.fileName)}</a>
+                    `;
+                }
+            }
+        });
+        
+        // Seeder update
+        mediaController.onSeederUpdate((fileId, count) => {
+            const seederEl = document.querySelector(`[data-seeder-count="${fileId}"]`);
+            if (seederEl) {
+                seederEl.textContent = `${count} seeder${count !== 1 ? 's' : ''}`;
+            }
+        });
+    }
+    
+    /**
+     * Open media lightbox
+     * @param {string} src - Media source URL
+     * @param {string} type - 'image' or 'video'
+     */
+    openLightbox(src, type = 'image') {
+        const modal = document.getElementById('media-lightbox-modal');
+        const imageEl = document.getElementById('lightbox-image');
+        const videoEl = document.getElementById('lightbox-video');
+        
+        if (!modal) return;
+        
+        // Reset both
+        if (imageEl) imageEl.classList.add('hidden');
+        if (videoEl) {
+            videoEl.classList.add('hidden');
+            videoEl.pause();
+            videoEl.src = '';
+        }
+        
+        // Show appropriate media
+        if (type === 'image' && imageEl) {
+            imageEl.src = src;
+            imageEl.classList.remove('hidden');
+        } else if (type === 'video' && videoEl) {
+            videoEl.src = src;
+            videoEl.classList.remove('hidden');
+        }
+        
+        modal.classList.remove('hidden');
+    }
+    
+    /**
+     * Close media lightbox
+     */
+    closeLightbox() {
+        const modal = document.getElementById('media-lightbox-modal');
+        const videoEl = document.getElementById('lightbox-video');
+        
+        if (videoEl) {
+            videoEl.pause();
+        }
+        
+        if (modal) {
+            modal.classList.add('hidden');
+        }
+    }
+    
+    /**
+     * Render message content based on type
+     */
+    renderMessageContent(msg) {
+        const type = msg.type || 'text';
+        
+        switch (type) {
+            case 'image':
+                // Try cache first, then embedded data (from history), then request
+                let imageData = mediaController.getImage(msg.imageId);
+                
+                // If not in cache but embedded in message (from LogStore), use that and cache it
+                if (!imageData && msg.imageData) {
+                    imageData = msg.imageData;
+                    mediaController.cacheImage(msg.imageId, imageData);
+                }
+                
+                if (imageData) {
+                    return `
+                        <div class="relative inline-block max-w-xs group">
+                            <img src="${imageData}" 
+                                 class="max-w-full max-h-60 rounded-lg cursor-pointer object-contain" 
+                                 onclick="window.uiController.openLightbox('${imageData}', 'image')"
+                                 alt="Image"/>
+                            <button class="absolute top-1 right-1 bg-black/60 hover:bg-black/80 text-white p-1 rounded transition opacity-0 group-hover:opacity-100"
+                                    onclick="event.stopPropagation(); window.uiController.openLightbox('${imageData}', 'image')"
+                                    title="Maximize">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
+                                </svg>
+                            </button>
+                        </div>
+                    `;
+                } else {
+                    // Request image from network (fallback for old messages without embedded data)
+                    const channel = channelManager.getCurrentChannel();
+                    if (channel) {
+                        mediaController.requestImage(channel.streamId, msg.imageId, channel.password);
+                    }
+                    return `
+                        <div data-image-id="${msg.imageId}" class="bg-[#1a1a1a] rounded-lg p-4 max-w-xs">
+                            <div class="flex items-center gap-2">
+                                <div class="animate-spin w-4 h-4 border-2 border-gray-600 border-t-white rounded-full"></div>
+                                <span class="text-gray-500 text-sm">Loading image...</span>
+                            </div>
+                        </div>
+                    `;
+                }
+                
+            case 'video_announce':
+                const metadata = msg.metadata;
+                if (!metadata) return this.escapeHtml(msg.text || '');
+                
+                const currentAddress = authManager.getAddress();
+                const isOwn = msg.sender?.toLowerCase() === currentAddress?.toLowerCase();
+                
+                // Check if video is available (downloaded or local)
+                const videoUrl = mediaController.getFileUrl(metadata.fileId);
+                const isSeeding = mediaController.isSeeding(metadata.fileId);
+                
+                if (videoUrl) {
+                    // Check if video format is playable in browser
+                    const isPlayable = mediaController.isVideoPlayable(metadata.fileType);
+                    
+                    if (isPlayable) {
+                        // Video available and playable - show player with seeding badge
+                        return `
+                            <div data-file-id="${metadata.fileId}" class="video-container">
+                                <div class="relative rounded-lg overflow-hidden bg-black">
+                                    <video src="${videoUrl}" 
+                                           class="w-full max-h-56 cursor-pointer video-player-${metadata.fileId}" 
+                                           controls
+                                           preload="metadata"
+                                           playsinline
+                                           onclick="event.stopPropagation()">
+                                        <source src="${videoUrl}" type="${metadata.fileType}">
+                                    </video>
+                                    <button class="absolute top-1 right-1 bg-black/60 hover:bg-black/80 text-white p-1 rounded transition"
+                                            onclick="event.stopPropagation(); window.uiController.openLightbox('${videoUrl}', 'video')"
+                                            title="Fullscreen">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
+                                        </svg>
+                                    </button>
+                                    ${isSeeding ? `
+                                    <div class="absolute bottom-1 left-1 bg-green-600/80 text-white text-[10px] px-1.5 py-0.5 rounded-full flex items-center gap-1">
+                                        <svg class="w-2.5 h-2.5 animate-pulse" fill="currentColor" viewBox="0 0 20 20">
+                                            <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z"/>
+                                        </svg>
+                                        Seeding
+                                    </div>
+                                    ` : ''}
+                                </div>
+                                <div class="flex items-center gap-2 mt-1 px-0.5 text-[11px] text-gray-500">
+                                    <span class="truncate flex-1">${this.escapeHtml(metadata.fileName)}</span>
+                                    <span class="text-gray-600">${this.formatFileSize(metadata.fileSize)}</span>
+                                    <a href="${videoUrl}" download="${this.escapeHtml(metadata.fileName)}" class="text-blue-400 hover:text-blue-300">Save</a>
+                                </div>
+                            </div>
+                        `;
+                    } else {
+                        // Video available but not playable - show download button
+                        return `
+                            <div data-file-id="${metadata.fileId}" class="video-container">
+                                <div class="flex items-center gap-2 bg-[#1a1a1a] rounded-lg p-2">
+                                    <svg class="w-8 h-8 text-purple-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/>
+                                    </svg>
+                                    <div class="flex-1 min-w-0">
+                                        <div class="text-sm text-white truncate">${this.escapeHtml(metadata.fileName)}</div>
+                                        <div class="text-[10px] text-yellow-500/80">Format not playable · ${this.formatFileSize(metadata.fileSize)}</div>
+                                    </div>
+                                    <a href="${videoUrl}" download="${this.escapeHtml(metadata.fileName)}" class="bg-blue-600 hover:bg-blue-500 text-white px-2.5 py-1 rounded text-xs flex-shrink-0 transition">
+                                        Save
+                                    </a>
+                                </div>
+                                ${isSeeding ? `
+                                <div class="flex items-center gap-1 mt-1 px-0.5">
+                                    <div class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>
+                                    <span class="text-[10px] text-green-400">Seeding</span>
+                                </div>
+                                ` : ''}
+                            </div>
+                        `;
+                    }
+                }
+                
+                // Video not available yet - show preview panel
+                return `
+                    <div data-file-id="${metadata.fileId}" class="video-container">
+                        <!-- Compact Video Preview -->
+                        <div class="relative rounded-lg overflow-hidden bg-[#1a1a1a] cursor-pointer group"
+                             style="aspect-ratio: 16/9; width: 220px;">
+                            
+                            <!-- Video Icon Background -->
+                            <div class="absolute inset-0 flex items-center justify-center">
+                                <svg class="w-10 h-10 text-purple-500/20" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/>
+                                </svg>
+                            </div>
+                            
+                            <!-- Play Button -->
+                            <button class="download-file-btn absolute inset-0 flex items-center justify-center bg-black/30 hover:bg-black/40 transition-all" 
+                                    data-file-id="${metadata.fileId}">
+                                <div class="play-btn-container transform group-hover:scale-105 transition-transform">
+                                    <div class="w-12 h-12 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center border border-white/30">
+                                        <svg class="w-5 h-5 text-white ml-0.5 download-play-icon" fill="currentColor" viewBox="0 0 24 24">
+                                            <path d="M8 5v14l11-7z"/>
+                                        </svg>
+                                        <div class="download-loading-icon hidden">
+                                            <div class="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </button>
+                            
+                            <!-- Progress Overlay -->
+                            <div data-progress-overlay="${metadata.fileId}" class="hidden absolute inset-0 bg-black/70 flex flex-col items-center justify-center">
+                                <div class="text-white text-sm font-medium" data-progress-percent="${metadata.fileId}">0%</div>
+                                <div class="w-2/3 bg-gray-700 rounded-full h-1.5 mt-1.5">
+                                    <div data-progress-fill="${metadata.fileId}" class="bg-blue-500 h-1.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+                                </div>
+                                <div class="text-[10px] text-gray-400 mt-1" data-progress-text="${metadata.fileId}">Starting...</div>
+                            </div>
+                            
+                            <!-- File Size Badge -->
+                            <div class="absolute top-1.5 left-1.5 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1">
+                                <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20">
+                                    <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zm12.553 1.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z"/>
+                                </svg>
+                                ${this.formatFileSize(metadata.fileSize)}
+                            </div>
+                            
+                            <!-- Seeder Badge -->
+                            <div class="absolute top-1.5 right-1.5 bg-black/60 text-gray-400 text-[10px] px-1.5 py-0.5 rounded" data-seeder-count="${metadata.fileId}"></div>
+                        </div>
+                        
+                        <!-- File Name -->
+                        <div class="mt-1 px-0.5 text-[11px] text-gray-500 truncate" title="${this.escapeHtml(metadata.fileName)}">
+                            ${this.escapeHtml(metadata.fileName)}
+                        </div>
+                    </div>
+                `;
+                
+            default:
+                return this.escapeHtml(msg.text || '');
+        }
+    }
+    
+    /**
+     * Format file size for display
+     */
+    formatFileSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+        return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
     }
 
     /**

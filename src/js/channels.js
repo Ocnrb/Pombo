@@ -256,6 +256,9 @@ class ChannelManager {
             // Subscribe to real-time messages
             await this.subscribeToChannel(streamId, password);
 
+            // Notify handlers about channel join (for media seeding re-announcement)
+            this.notifyHandlers('channelJoined', { streamId, password, channel });
+
             Logger.info('Joined channel:', streamId);
             return channel;
         } catch (error) {
@@ -909,12 +912,24 @@ class ChannelManager {
             return;
         }
         
-        // Validate that this looks like a text message (has required properties)
-        if (!data?.id || !data?.text || !data?.sender || !data?.timestamp) {
+        // Validate that this looks like a message (has required properties)
+        // Text messages need: id, text, sender, timestamp
+        // Image messages need: id, imageId, sender, timestamp
+        // Video messages need: id, metadata, sender, timestamp
+        const isTextMessage = data?.text;
+        const isImageMessage = data?.type === 'image' && data?.imageId;
+        const isVideoMessage = data?.type === 'video_announce' && data?.metadata;
+        
+        if (!data?.id || !data?.sender || !data?.timestamp) {
             return;
         }
         
-        Logger.debug('handleTextMessage:', { messageId: data.id, sender: data.sender?.slice(0,10) });
+        if (!isTextMessage && !isImageMessage && !isVideoMessage) {
+            Logger.debug('Unknown message type, skipping:', data?.type);
+            return;
+        }
+        
+        Logger.debug('handleTextMessage:', { messageId: data.id, type: data.type || 'text', sender: data.sender?.slice(0,10) });
         
         // Early deduplication check using processing set (prevents race conditions)
         const messageKey = `${streamId}:${data.id}`;
@@ -1014,11 +1029,11 @@ class ChannelManager {
         }
         
         // Skip if it doesn't look like media
-        if (!data?.id) {
+        if (!data?.type) {
             return;
         }
         
-        Logger.debug('Media message received:', data?.id);
+        Logger.debug('Media message received:', data?.type);
 
         // Notify handlers
         this.notifyHandlers('media', { streamId, media: data });
@@ -1284,6 +1299,15 @@ class ChannelManager {
      */
     getCurrentChannel() {
         return this.currentChannel ? this.channels.get(this.currentChannel) : null;
+    }
+
+    /**
+     * Get channel by stream ID
+     * @param {string} streamId - Stream ID
+     * @returns {Object|null} - Channel object or null
+     */
+    getChannel(streamId) {
+        return this.channels.get(streamId) || null;
     }
 
     /**

@@ -28,6 +28,12 @@
         .message-bubble { padding: 0.5rem 0.75rem; position: relative; }
         .own-message .message-bubble { background-color: #1f2937; color: #f0f0f0; border-radius: 1rem 1rem 0.25rem 1rem; }
         .other-message .message-bubble { background-color: #1e1e1e; color: #d1d5db; border-radius: 1rem 1rem 1rem 0.25rem; }
+        /* Video message styles - compact design */
+        .message-entry[data-type="video_announce"] .message-bubble { padding: 0.25rem; background: transparent; }
+        .message-entry[data-type="video_announce"] .message-content { font-size: inherit; }
+        .message-entry[data-type="video_announce"].own-message .message-bubble { background-color: transparent; }
+        .message-entry[data-type="video_announce"].other-message .message-bubble { background-color: transparent; }
+        .video-container { max-width: 240px; }
         .message-content { font-size: 0.9rem; line-height: 1.4rem; word-wrap: break-word; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
         
@@ -255,6 +261,34 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                         </svg>
                     </button>
+                    
+                    <!-- Attach Button -->
+                    <div class="relative">
+                        <button id="attach-btn" class="input-button text-[#666] hover:text-white transition" title="Attach">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13"/>
+                            </svg>
+                        </button>
+                        <!-- Attach Menu -->
+                        <div id="attach-menu" class="hidden absolute bottom-12 left-0 bg-[#1e1e1e] border border-gray-700 rounded-lg py-1 z-50 min-w-[140px] shadow-xl">
+                            <button id="send-image-btn" class="w-full text-left px-4 py-2 hover:bg-[#2a2a2a] text-sm flex items-center gap-2 text-white">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/>
+                                </svg>
+                                Image
+                            </button>
+                            <button id="send-video-btn" class="w-full text-left px-4 py-2 hover:bg-[#2a2a2a] text-sm flex items-center gap-2 text-white">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/>
+                                </svg>
+                                Video
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Hidden File Inputs -->
+                    <input type="file" id="image-input" class="hidden" accept="image/jpeg,image/png,image/gif,image/webp">
+                    <input type="file" id="video-input" class="hidden" accept="video/mp4,video/webm,video/quicktime">
                     
                     <!-- Input -->
                     <input
@@ -1074,6 +1108,51 @@
 
     <!-- Toast Notifications Container -->
     <div id="toast-container" class="toast-container"></div>
+
+    <!-- Modal: Media Lightbox -->
+    <div id="media-lightbox-modal" class="hidden fixed inset-0 bg-black/95 flex items-center justify-center z-[70]" onclick="window.uiController?.closeLightbox()">
+        <!-- Close button -->
+        <button class="absolute top-4 right-4 text-white/70 hover:text-white p-2 rounded-full bg-white/10 hover:bg-white/20 transition z-10" 
+                onclick="event.stopPropagation(); window.uiController?.closeLightbox()">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+        </button>
+        
+        <!-- Image container -->
+        <img id="lightbox-image" class="hidden max-w-[90vw] max-h-[90vh] object-contain rounded-lg" onclick="event.stopPropagation()" alt="Full size"/>
+        
+        <!-- Video container -->
+        <video id="lightbox-video" class="hidden max-w-[90vw] max-h-[90vh] rounded-lg" controls onclick="event.stopPropagation()"></video>
+    </div>
+
+    <!-- Modal: File Confirm -->
+    <div id="file-confirm-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+        <div class="bg-[#111111] rounded-xl p-5 w-[360px] max-w-full mx-4 border border-[#222]">
+            <h3 class="text-base font-medium mb-4 text-white">Confirm Send</h3>
+            <div class="bg-[#1a1a1a] rounded-lg p-4 border border-[#282828] mb-4">
+                <div class="flex items-center gap-3">
+                    <div id="file-preview-icon" class="w-12 h-12 rounded-lg bg-[#252525] flex items-center justify-center">
+                        <svg class="w-6 h-6 text-[#666]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
+                        </svg>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <p id="confirm-file-name" class="text-sm text-white truncate">filename.jpg</p>
+                        <p id="confirm-file-size" class="text-xs text-[#666]">2.5 MB</p>
+                    </div>
+                </div>
+            </div>
+            <div class="flex gap-3">
+                <button id="cancel-file-btn" class="flex-1 bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] text-[#888] hover:text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                    Cancel
+                </button>
+                <button id="confirm-file-btn" class="flex-1 bg-white hover:bg-[#f0f0f0] text-black px-4 py-2 rounded-lg text-sm font-medium transition">
+                    Send
+                </button>
+            </div>
+        </div>
+    </div>
 
     <!-- Loading Overlay -->
     <div id="loading-overlay" class="loading-overlay">

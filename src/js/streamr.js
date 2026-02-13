@@ -282,8 +282,10 @@ class StreamrController {
         // Add member permissions
         if (options.members && options.members.length > 0) {
             for (const member of options.members) {
+                // Normalize to lowercase (Streamr uses lowercase internally)
+                const normalizedMember = member.toLowerCase();
                 assignments.push({
-                    userId: member,
+                    user: normalizedMember,
                     permissions: ['subscribe', 'publish']
                 });
             }
@@ -384,6 +386,7 @@ class StreamrController {
 
     /**
      * Grant permissions to specific addresses (for native private channels)
+     * Uses client.setPermissions for reliable batch permission updates
      * @param {string} streamId - Stream ID
      * @param {string[]} addresses - Array of Ethereum addresses
      */
@@ -393,26 +396,29 @@ class StreamrController {
         }
 
         try {
-            const stream = await this.client.getStream(streamId);
-            
-            // Get StreamPermission enum (SDK v103+)
-            const StreamPermission = window.StreamPermission || window.StreamrClient?.StreamPermission;
-            const subscribePerm = StreamPermission?.SUBSCRIBE ?? 'subscribe';
-            const publishPerm = StreamPermission?.PUBLISH ?? 'publish';
-
             Logger.debug('Granting permissions to addresses:', addresses);
-            Logger.debug('Using permission values:', { subscribePerm, publishPerm });
 
+            // Build assignments array for batch update
+            const assignments = [];
             for (const address of addresses) {
-                // Ensure checksum address
-                const checksumAddress = ethers.getAddress(address);
-                Logger.debug(`Granting to ${checksumAddress}...`);
-                await stream.grantPermissions({
-                    userId: checksumAddress,
-                    permissions: [subscribePerm, publishPerm]
+                // Normalize to lowercase (Streamr uses lowercase internally)
+                const normalizedAddress = address.toLowerCase();
+                assignments.push({
+                    user: normalizedAddress,
+                    permissions: ['subscribe', 'publish']
                 });
-                Logger.debug(`Granted permissions to ${checksumAddress}`);
             }
+
+            if (assignments.length === 0) {
+                Logger.debug('No addresses to grant permissions to');
+                return;
+            }
+
+            // Use setPermissions for reliable batch update
+            await this.client.setPermissions({
+                streamId: streamId,
+                assignments: assignments
+            });
 
             Logger.info('All permissions granted to addresses:', addresses);
         } catch (error) {
@@ -423,6 +429,7 @@ class StreamrController {
 
     /**
      * Revoke permissions from specific addresses for a stream
+     * Uses client.setPermissions with empty permissions array
      * @param {string} streamId - Stream ID
      * @param {string[]} addresses - Array of Ethereum addresses
      */
@@ -432,22 +439,29 @@ class StreamrController {
         }
 
         try {
-            const stream = await this.client.getStream(streamId);
-            
-            // Get StreamPermission enum (SDK v103+)
-            const StreamPermission = window.StreamPermission || window.StreamrClient?.StreamPermission;
-            const subscribePerm = StreamPermission?.SUBSCRIBE ?? 'subscribe';
-            const publishPerm = StreamPermission?.PUBLISH ?? 'publish';
-            const grantPerm = StreamPermission?.GRANT ?? 'grant';
+            Logger.debug('Revoking permissions from addresses:', addresses);
 
+            // Build assignments array with empty permissions (revoke all)
+            const assignments = [];
             for (const address of addresses) {
-                // Ensure checksum address
-                const checksumAddress = ethers.getAddress(address);
-                await stream.revokePermissions({
-                    userId: checksumAddress,
-                    permissions: [subscribePerm, publishPerm, grantPerm]
+                // Normalize to lowercase
+                const normalizedAddress = address.toLowerCase();
+                assignments.push({
+                    user: normalizedAddress,
+                    permissions: [] // Empty array revokes all permissions
                 });
             }
+
+            if (assignments.length === 0) {
+                Logger.debug('No addresses to revoke permissions from');
+                return;
+            }
+
+            // Use setPermissions with empty permissions to revoke
+            await this.client.setPermissions({
+                streamId: streamId,
+                assignments: assignments
+            });
 
             Logger.debug('Permissions revoked from addresses:', addresses);
         } catch (error) {
@@ -472,42 +486,38 @@ class StreamrController {
             throw new Error('Invalid Ethereum address: ' + address);
         }
 
-        // Ensure checksum address
-        const checksumAddress = ethers.getAddress(address);
-        Logger.debug('Updating permissions for:', checksumAddress, 'canGrant:', permissionsToSet.canGrant);
+        // Normalize to lowercase (Streamr uses lowercase internally)
+        const normalizedAddress = address.toLowerCase();
+        Logger.debug('Updating permissions for:', normalizedAddress, 'canGrant:', permissionsToSet.canGrant);
 
         try {
             const stream = await this.client.getStream(streamId);
             
-            // Get StreamPermission enum (SDK v103+)
-            const StreamPermission = window.StreamPermission || window.StreamrClient?.StreamPermission;
-            Logger.debug('StreamPermission enum:', StreamPermission);
-            
             if (permissionsToSet.canGrant) {
-                // Grant the GRANT permission
-                Logger.debug(`Granting GRANT permission to ${checksumAddress}...`);
+                // Grant the GRANT permission using setPermissions
+                // First get current permissions, then add grant
+                Logger.debug(`Granting GRANT permission to ${normalizedAddress}...`);
                 
-                // Use enum if available, otherwise string
-                const grantPerm = StreamPermission?.GRANT ?? 'grant';
-                Logger.debug('Using permission value:', grantPerm);
-                
-                await stream.grantPermissions({
-                    userId: checksumAddress,
-                    permissions: [grantPerm]
+                await this.client.setPermissions({
+                    streamId: streamId,
+                    assignments: [{
+                        user: normalizedAddress,
+                        permissions: ['subscribe', 'publish', 'grant']
+                    }]
                 });
-                Logger.debug(`GRANT permission added to ${checksumAddress}`);
+                Logger.debug(`GRANT permission added to ${normalizedAddress}`);
             } else {
-                // Revoke the GRANT permission
-                Logger.debug(`Revoking GRANT permission from ${checksumAddress}...`);
+                // Revoke only the GRANT permission, keep subscribe/publish
+                Logger.debug(`Revoking GRANT permission from ${normalizedAddress}...`);
                 
-                const grantPerm = StreamPermission?.GRANT ?? 'grant';
-                Logger.debug('Using permission value:', grantPerm);
-                
-                await stream.revokePermissions({
-                    userId: checksumAddress,
-                    permissions: [grantPerm]
+                await this.client.setPermissions({
+                    streamId: streamId,
+                    assignments: [{
+                        user: normalizedAddress,
+                        permissions: ['subscribe', 'publish'] // Remove grant by not including it
+                    }]
                 });
-                Logger.debug(`GRANT permission removed from ${checksumAddress}`);
+                Logger.debug(`GRANT permission removed from ${normalizedAddress}`);
             }
         } catch (error) {
             Logger.error('Failed to update permissions:', error);
@@ -663,13 +673,18 @@ class StreamrController {
                 partitionSubs[2] = await this.client.subscribe({
                     streamId: streamId,
                     partition: 2
-                }, async (message) => {
+                }, async (message, metadata) => {
                     try {
                         let data = message;
 
                         // Decrypt if password provided
                         if (password && typeof message === 'string') {
                             data = await cryptoManager.decryptJSON(message, password);
+                        }
+                        
+                        // Add sender info from metadata
+                        if (metadata?.publisherId) {
+                            data.senderId = metadata.publisherId;
                         }
 
                         handlers.onMedia(data);
@@ -876,13 +891,18 @@ class StreamrController {
             throw new Error('Client not initialized');
         }
         
-        const messageHandler = async (message) => {
+        const messageHandler = async (message, metadata) => {
             try {
                 let data = message;
                 
                 // Decrypt if password provided
                 if (password && typeof message === 'string') {
                     data = await cryptoManager.decryptJSON(message, password);
+                }
+                
+                // Add sender info from metadata (for media partition)
+                if (metadata?.publisherId && typeof data === 'object') {
+                    data.senderId = metadata.publisherId;
                 }
                 
                 handler(data);
@@ -906,7 +926,8 @@ class StreamrController {
         if (historyCount > 0) {
             // Fetch history separately (may fail due to CORS on localhost)
             // This is non-blocking and fails gracefully
-            this.fetchHistoryAsync(streamId, partition, historyCount, messageHandler);
+            // Pass password for decryption of encrypted channels
+            this.fetchHistoryAsync(streamId, partition, historyCount, handler, password);
         }
         
         return subscription;
@@ -920,11 +941,11 @@ class StreamrController {
      * @param {number} partition - Partition number
      * @param {number} count - Number of messages to fetch
      * @param {Function} handler - Message handler
-     * @param {string} expectedType - Expected message type filter (optional)
+     * @param {string} password - Password for decryption (optional)
      */
-    async fetchHistoryAsync(streamId, partition, count, handler, expectedType = null) {
+    async fetchHistoryAsync(streamId, partition, count, handler, password = null) {
         try {
-            Logger.debug(`Fetching ${count} historical messages for partition ${partition}...`);
+            Logger.debug(`Fetching ${count} historical messages for partition ${partition}${password ? ' (encrypted)' : ''}...`);
             
             // Streamr SDK resend: must await before iterating
             const resend = await this.client.resend(
@@ -954,14 +975,39 @@ class StreamrController {
             // Helper to check if message is a reaction
             const isReaction = (msg) => msg?.type === 'reaction';
             
+            // Helper to check if message is an image
+            const isImageMessage = (msg) => msg?.type === 'image' && msg?.imageId;
+            
+            // Helper to check if message is a video announcement
+            const isVideoMessage = (msg) => msg?.type === 'video_announce' && msg?.metadata;
+            
+            // Valid message types for partition 0 (stored messages)
+            const isValidStoredMessage = (msg) => {
+                return isTextMessage(msg) || isReaction(msg) || isImageMessage(msg) || isVideoMessage(msg);
+            };
+            
             for await (const message of resend) {
                 rawCount++;
                 try {
-                    const content = message.content || message;
+                    let content = message.content || message;
+                    
+                    // Decrypt if password provided (for encrypted channels)
+                    if (password && typeof content === 'string') {
+                        try {
+                            content = await cryptoManager.decryptJSON(content, password);
+                        } catch (decryptError) {
+                            // Log first few decrypt failures for debugging
+                            if (rawCount <= 3) {
+                                Logger.debug(`Failed to decrypt message ${rawCount}:`, decryptError.message);
+                            }
+                            skippedCount++;
+                            continue;
+                        }
+                    }
                     
                     // Log first few messages for debugging
                     if (rawCount <= 3) {
-                        Logger.debug(`Raw message ${rawCount} from partition ${partition}:`, JSON.stringify(content).slice(0, 200));
+                        Logger.debug(`History message ${rawCount} from partition ${partition}:`, JSON.stringify(content).slice(0, 200));
                     }
                     
                     // Skip ephemeral messages (presence, typing) - they don't belong in history
@@ -970,9 +1016,9 @@ class StreamrController {
                         continue;
                     }
                     
-                    // For partition 0 (messages + reactions): only accept text messages and reactions
+                    // For partition 0 (messages): only accept valid stored message types
                     if (partition === 0) {
-                        if (!isTextMessage(content) && !isReaction(content)) {
+                        if (!isValidStoredMessage(content)) {
                             skippedCount++;
                             continue;
                         }

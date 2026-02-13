@@ -10,6 +10,7 @@ import { uiController } from './ui.js';
 import { notificationManager } from './notifications.js';
 import { identityManager } from './identity.js';
 import { secureStorage } from './secureStorage.js';
+import { mediaController } from './media.js';
 import { Logger } from './logger.js';
 
 class App {
@@ -25,8 +26,14 @@ class App {
         Logger.info('Moot - Initializing...');
 
         try {
+            // Initialize media controller
+            await mediaController.init();
+            
             // Initialize UI
             uiController.init();
+            
+            // Expose uiController to window for onclick handlers
+            window.uiController = uiController;
 
             // Note: Channels are loaded after wallet connection (wallet-specific)
 
@@ -1197,6 +1204,12 @@ class App {
                 if (data.streamId === currentStreamId) {
                     uiController.handleIncomingReaction(data.messageId, data.emoji, data.user, data.action || 'add');
                 }
+            } else if (event === 'media') {
+                // Handle media messages (images, file chunks, etc.)
+                mediaController.handleMediaMessage(data.streamId, data.media);
+            } else if (event === 'channelJoined') {
+                // Re-announce as seeder for any persisted files in this channel
+                mediaController.reannounceForChannel(data.streamId, data.password);
             }
         });
         
