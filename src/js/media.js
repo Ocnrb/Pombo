@@ -25,7 +25,7 @@ const CONFIG = {
     // We allow upload but may need to show download link instead of player
     ALLOWED_VIDEO_TYPES: ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-m4v', 'video/ogg'],
     // Browser-playable formats (for showing player vs download link)
-    PLAYABLE_VIDEO_TYPES: ['video/mp4', 'video/webm', 'video/ogg'],
+    PLAYABLE_VIDEO_TYPES: ['video/mp4', 'video/webm', 'video/ogg', 'video/x-m4v', 'video/m4v'],
     PIECE_SIZE: 128 * 1024, // 128KB chunks
     MAX_CONCURRENT_REQUESTS: 8,
     PIECE_REQUEST_TIMEOUT: 10000, // 10 seconds
@@ -724,8 +724,10 @@ class MediaController {
         transfer.pieceStatus[pieceIndex] = 'requested';
         
         const timeoutId = setTimeout(() => {
-            // Request timed out
-            if (transfer.pieceStatus[pieceIndex] === 'requested') {
+            // Request timed out - reset if still waiting or processing
+            const status = transfer.pieceStatus[pieceIndex];
+            if (status === 'requested' || status === 'processing') {
+                Logger.debug(`Piece ${pieceIndex} timed out (was ${status})`);
                 transfer.pieceStatus[pieceIndex] = 'pending';
                 transfer.requestsInFlight.delete(pieceIndex);
                 this.manageDownload(fileId);
@@ -806,7 +808,18 @@ class MediaController {
         
         const { fileId, pieceIndex } = data;
         
-        if (transfer.pieceStatus[pieceIndex] !== 'requested') return;
+        // Skip if piece already done or not requested (prevents race conditions)
+        if (transfer.pieceStatus[pieceIndex] === 'done') {
+            Logger.debug('Piece already done, skipping:', pieceIndex);
+            return;
+        }
+        if (transfer.pieceStatus[pieceIndex] !== 'requested') {
+            Logger.debug('Piece not in requested state:', pieceIndex, transfer.pieceStatus[pieceIndex]);
+            return;
+        }
+        
+        // Mark as processing to prevent race conditions
+        transfer.pieceStatus[pieceIndex] = 'processing';
         
         // Decode piece
         const pieceBuffer = this.base64ToArrayBuffer(data.data);
@@ -849,8 +862,9 @@ class MediaController {
             this.handlers.onFileProgress(fileId, progress, transfer.receivedCount, transfer.metadata.pieceCount, transfer.metadata.fileSize);
         }
         
-        // Check if complete
-        if (transfer.receivedCount === transfer.metadata.pieceCount) {
+        // Check if complete - verify all pieces are done
+        const doneCount = transfer.pieceStatus.filter(s => s === 'done').length;
+        if (doneCount === transfer.metadata.pieceCount) {
             await this.assembleFile(fileId);
         } else {
             this.manageDownload(fileId);
@@ -864,26 +878,53 @@ class MediaController {
         const transfer = this.incomingFiles.get(fileId);
         if (!transfer) return;
         
-        Logger.info('Assembling file:', fileId);
+        // Double-check all pieces are done
+        const doneCount = transfer.pieceStatus.filter(s => s === 'done').length;
+        const expectedCount = transfer.metadata.pieceCount;
+        
+        if (doneCount !== expectedCount) {
+            Logger.error(`Assembly aborted: only ${doneCount}/${expectedCount} pieces done`);
+            // Re-trigger download for missing pieces
+            this.manageDownload(fileId);
+            return;
+        }
+        
+        Logger.info('Assembling file:', fileId, `(${expectedCount} pieces, ${transfer.metadata.fileSize} bytes)`);
         
         let blob;
         
         if (transfer.useIndexedDB) {
             blob = await this.assembleFromIndexedDB(fileId, transfer.metadata);
         } else {
-            // Combine all pieces
+            // Combine all pieces in order
             const totalSize = transfer.pieces.reduce((sum, p) => sum + (p?.length || 0), 0);
+            
+            // Verify total size matches expected
+            if (totalSize !== transfer.metadata.fileSize) {
+                Logger.warn(`Size mismatch: got ${totalSize}, expected ${transfer.metadata.fileSize}`);
+            }
+            
             const combined = new Uint8Array(totalSize);
             let offset = 0;
             
-            for (const piece of transfer.pieces) {
+            for (let i = 0; i < transfer.pieces.length; i++) {
+                const piece = transfer.pieces[i];
                 if (piece) {
                     combined.set(piece, offset);
                     offset += piece.length;
+                } else {
+                    Logger.error(`Missing piece at index ${i} during assembly!`);
                 }
             }
             
             blob = new Blob([combined], { type: transfer.metadata.fileType });
+        }
+        
+        // Verify blob size
+        if (blob.size !== transfer.metadata.fileSize) {
+            Logger.error(`Final blob size mismatch: got ${blob.size}, expected ${transfer.metadata.fileSize}`);
+        } else {
+            Logger.info(`File assembled correctly: ${blob.size} bytes`);
         }
         
         // Create object URL
@@ -1039,29 +1080,48 @@ class MediaController {
         return new Promise((resolve, reject) => {
             const tx = this.db.transaction('pieces', 'readonly');
             const store = tx.objectStore('pieces');
-            const pieces = [];
+            const pieces = new Array(metadata.pieceCount).fill(null);
+            let foundCount = 0;
             
             const request = store.openCursor();
             request.onsuccess = (event) => {
                 const cursor = event.target.result;
                 if (cursor) {
                     if (cursor.value.fileId === fileId) {
-                        pieces[cursor.value.pieceIndex] = cursor.value.data;
+                        const idx = cursor.value.pieceIndex;
+                        if (idx >= 0 && idx < metadata.pieceCount) {
+                            pieces[idx] = cursor.value.data;
+                            foundCount++;
+                        }
                     }
                     cursor.continue();
                 } else {
-                    // All pieces collected
+                    // All pieces collected - verify we have them all
+                    if (foundCount !== metadata.pieceCount) {
+                        Logger.error(`IndexedDB assembly: found ${foundCount}/${metadata.pieceCount} pieces`);
+                    }
+                    
+                    // Calculate total size and assemble
                     const totalSize = pieces.reduce((sum, p) => sum + (p?.length || 0), 0);
+                    
+                    if (totalSize !== metadata.fileSize) {
+                        Logger.warn(`IndexedDB size mismatch: got ${totalSize}, expected ${metadata.fileSize}`);
+                    }
+                    
                     const combined = new Uint8Array(totalSize);
                     let offset = 0;
                     
-                    for (const piece of pieces) {
+                    for (let i = 0; i < pieces.length; i++) {
+                        const piece = pieces[i];
                         if (piece) {
                             combined.set(piece, offset);
                             offset += piece.length;
+                        } else {
+                            Logger.error(`Missing piece at index ${i} in IndexedDB!`);
                         }
                     }
                     
+                    Logger.info(`Assembled from IndexedDB: ${totalSize} bytes, ${foundCount} pieces`);
                     resolve(new Blob([combined], { type: metadata.fileType }));
                 }
             };
@@ -1454,6 +1514,20 @@ class MediaController {
         
         // Check against known playable types
         if (CONFIG.PLAYABLE_VIDEO_TYPES.includes(normalizedMime)) {
+            Logger.debug('Video playable (known type):', normalizedMime);
+            return true;
+        }
+        
+        // MP4 variants that are generally playable
+        const mp4Variants = ['video/mp4', 'video/x-m4v', 'video/m4v', 'video/mpeg4'];
+        if (mp4Variants.some(v => normalizedMime.includes('mp4') || normalizedMime.includes('m4v'))) {
+            Logger.debug('Video playable (MP4 variant):', normalizedMime);
+            return true;
+        }
+        
+        // WebM is generally playable
+        if (normalizedMime.includes('webm')) {
+            Logger.debug('Video playable (WebM variant):', normalizedMime);
             return true;
         }
         
@@ -1464,7 +1538,20 @@ class MediaController {
         Logger.debug('Video playability check:', normalizedMime, 'canPlay:', canPlay);
         
         // Be more permissive - if browser says anything other than empty string, try it
-        return canPlay !== '';
+        // Also, if we can't determine, default to trying (let the browser handle it)
+        if (canPlay !== '') {
+            return true;
+        }
+        
+        // QuickTime (.mov) is NOT playable in most browsers
+        if (normalizedMime.includes('quicktime') || normalizedMime.includes('mov')) {
+            Logger.debug('Video not playable (QuickTime):', normalizedMime);
+            return false;
+        }
+        
+        // Default to trying to play - let the browser figure it out
+        Logger.debug('Video playability unknown, defaulting to playable:', normalizedMime);
+        return true;
     }
 
     /**
