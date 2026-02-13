@@ -1,0 +1,26 @@
+{
+  "name": "moot-p2p-chat",
+  "version": "1.0.0",
+  "description": "P2P Decentralized Chat",
+  "scripts": {
+    "build:css": "npx tailwindcss -i ./src/styles/input.css -o ./css/output.css",
+    "watch:css": "npx tailwindcss -i ./src/styles/input.css -o ./css/output.css --watch",
+    "build:js": "webpack --mode production",
+    "watch:js": "webpack --mode development --watch",
+    "build": "npm run build:css && npm run build:js",
+    "watch": "npm run watch:css & npm run watch:js",
+    "build:minify": "npx tailwindcss -i ./src/styles/input.css -o ./css/output.css --minify && webpack --mode production",
+    "clean": "if exist js rmdir /s /q js && if exist css rmdir /s /q css",
+    "serve": "npm run build && npx serve ."
+  },
+  "dependencies": {
+    "@streamr/sdk": "^103.2.0",
+    "ethers": "^6.9.0",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.1",
+    "webpack": "^5.90.0",
+    "webpack-cli": "^5.1.4"
+  }
+}

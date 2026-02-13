@@ -1,0 +1,1087 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Moot - P2P Decentralized Chat</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Tailwind CSS (built from src/styles/input.css) -->
+    <link href="./css/output.css" rel="stylesheet">
+
+    <!-- Vendor Bundle: Streamr Client + Ethers.js + QRCode -->
+    <script src="./js/vendor.bundle.js"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #121212; color: #e0e0e0; }
+        .chat-container { height: calc(100vh - 4rem); }
+        .messages-area { height: calc(100% - 120px); background-color: #181818; }
+        
+        /* Message styles */
+        .message-entry { animation: fadeIn 0.3s ease-in-out; max-width: 70%; display: flex; flex-direction: column; margin-bottom: 0.5rem; position: relative; }
+        .own-message { margin-left: auto; align-items: flex-end; }
+        .other-message { margin-right: auto; align-items: flex-start; }
+        .message-bubble { padding: 0.5rem 0.75rem; position: relative; }
+        .own-message .message-bubble { background-color: #1f2937; color: #f0f0f0; border-radius: 1rem 1rem 0.25rem 1rem; }
+        .other-message .message-bubble { background-color: #1e1e1e; color: #d1d5db; border-radius: 1rem 1rem 1rem 0.25rem; }
+        .message-content { font-size: 0.9rem; line-height: 1.4rem; word-wrap: break-word; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* Reactions */
+        .reactions-container { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+        .reaction-badge { background-color: #374151; color: #e0e0e0; padding: 2px 8px; border-radius: 12px; font-size: 0.8rem; cursor: pointer; transition: background-color 0.2s; }
+        .reaction-badge:hover { background-color: #4b5563; }
+        .reaction-badge.user-reacted { background-color: #2563eb; }
+        
+        /* Message actions */
+        .message-actions { position: absolute; bottom: -10px; right: 4px; display: none; gap: 2px; background-color: #374151; border-radius: 12px; padding: 2px 4px; z-index: 5; }
+        .message-bubble:hover .message-actions { display: flex; }
+        .action-btn { cursor: pointer; font-size: 14px; padding: 2px 4px; border-radius: 4px; transition: background-color 0.2s; }
+        .action-btn:hover { background-color: #4b5563; }
+        
+        /* Reaction picker */
+        .reaction-picker { position: fixed; background-color: #1e1e1e; border: 1px solid #333; border-radius: 0.5rem; padding: 0.5rem; z-index: 100; display: none; flex-wrap: wrap; gap: 4px; max-width: 220px; }
+        .reaction-picker span { cursor: pointer; font-size: 1.2rem; padding: 2px; border-radius: 4px; transition: background-color 0.2s; }
+        .reaction-picker span:hover { background-color: #374151; }
+        
+        /* Emoji picker */
+        .emoji-picker { position: absolute; bottom: 50px; left: 10px; background-color: #1e1e1e; border: 1px solid #333; border-radius: 0.5rem; padding: 0.5rem; z-index: 10; display: none; flex-wrap: wrap; max-width: 320px; max-height: 200px; overflow-y: auto; }
+        .emoji-picker span { cursor: pointer; margin: 2px; font-size: 1.2rem; }
+        .emoji-picker span:hover { background-color: #374151; border-radius: 4px; }
+        
+        /* Typing indicator */
+        @keyframes bounce { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1.0); } }
+        .typing-dot { width: 8px; height: 8px; background-color: #888; border-radius: 50%; display: inline-block; margin: 0 2px; animation: bounce 1.4s infinite ease-in-out both; }
+        .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+        
+        /* Input buttons */
+        .input-button { background-color: #374151; color: white; width: 2.25rem; height: 2.25rem; border-radius: 9999px; display: flex; align-items: center; justify-content: center; transition: background-color 0.2s; cursor: pointer; }
+        .input-button:hover { background-color: #4b5563; }
+        
+        /* Toast Notifications */
+        .toast-container { position: fixed; bottom: 1rem; left: 1rem; z-index: 9999; display: flex; flex-direction: column-reverse; gap: 0.5rem; max-width: 350px; }
+        .toast { padding: 0.75rem 1rem; border-radius: 0.5rem; color: white; font-size: 0.875rem; display: flex; align-items: center; gap: 0.5rem; animation: slideIn 0.3s ease-out; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+        .toast.success { background-color: #059669; }
+        .toast.error { background-color: #dc2626; }
+        .toast.info { background-color: #2563eb; }
+        .toast.warning { background-color: #d97706; }
+        .toast.invite { background-color: #0891b2; }
+        .toast-exit { animation: slideOut 0.3s ease-in forwards; }
+        @keyframes slideIn { from { opacity: 0; transform: translateX(-100%); } to { opacity: 1; transform: translateX(0); } }
+        @keyframes slideOut { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(-100%); } }
+        
+        /* Loading Spinner Overlay */
+        .loading-overlay { position: fixed; inset: 0; background-color: rgba(0,0,0,0.7); z-index: 9998; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 1rem; }
+        .loading-overlay.active { display: flex; }
+        .spinner { width: 48px; height: 48px; border: 4px solid #333; border-top-color: #22d3ee; border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loading-text { color: #e0e0e0; font-size: 0.9rem; }
+        
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #1f1f1f; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb { background-color: #4b5563; border-radius: 3px; }
+        
+        /* Online users */
+        .user-item { display: flex; align-items: center; margin-bottom: 4px; font-size: 0.8rem; }
+        .user-dot { width: 8px; height: 8px; border-radius: 50%; background-color: #10b981; margin-right: 8px; flex-shrink: 0; }
+        #online-users-list::-webkit-scrollbar { width: 4px; }
+        #online-users-list::-webkit-scrollbar-thumb { background-color: #4b5563; border-radius: 2px; }
+        .rotate-180 { transform: rotate(180deg); }
+    </style>
+</head>
+<body class="min-h-screen">
+    <!-- Header -->
+    <header class="bg-[#1b1b1b] border-b border-[#282828] h-14 flex items-center justify-between px-5">
+        <div class="flex items-center gap-3">
+            <!-- Logo -->
+            <div class="w-9 h-9 rounded-lg bg-white flex items-center justify-center">
+                <span class="text-black font-bold text-base tracking-tight">M</span>
+            </div>
+            <div class="flex flex-col">
+                <span class="text-[17px] font-semibold text-white tracking-tight leading-tight">Moot</span>
+                <!-- Network Status -->
+                <div class="flex items-center gap-1.5" title="Streamr Network">
+                    <div id="network-dot" class="w-1.5 h-1.5 rounded-full bg-[#444] transition-colors"></div>
+                    <span class="text-[10px] text-[#555] uppercase tracking-wider" id="network-status">offline</span>
+                </div>
+            </div>
+        </div>
+        <div class="flex items-center gap-3">
+            <div id="wallet-info" class="text-sm text-[#666] cursor-pointer hover:text-white transition font-mono" title="Click to copy address">Not Connected</div>
+            <button id="connect-wallet" class="bg-white hover:bg-[#f0f0f0] text-black px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center gap-1.5">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 12a2.25 2.25 0 00-2.25-2.25H15a3 3 0 11-6 0H5.25A2.25 2.25 0 003 12m18 0v6a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 18v-6m18 0V9M3 12V9m18 0a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 9m18 0V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v3"/>
+                </svg>
+                Connect
+            </button>
+            <div id="wallet-controls" class="hidden flex items-center gap-1">
+                <button id="switch-wallet" class="hidden bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] p-1.5 rounded-lg transition" title="Switch Wallet">
+                    <svg class="w-3.5 h-3.5 text-[#888]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"/>
+                    </svg>
+                </button>
+                <button id="disconnect-wallet" class="bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] text-[#888] hover:text-white px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9"/>
+                    </svg>
+                    Disconnect
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <div class="flex chat-container">
+        <!-- Sidebar - Channel List -->
+        <aside class="w-80 bg-[#1b1b1b] border-r border-gray-800 flex flex-col">
+            <!-- Sidebar Header -->
+            <div class="p-3 border-b border-[#282828] space-y-2">
+                <button id="new-channel-btn" class="w-full bg-white hover:bg-[#f0f0f0] text-black px-3 py-2 rounded-lg text-sm font-medium transition flex items-center justify-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4.5v15m7.5-7.5h-15"/>
+                    </svg>
+                    New Channel
+                </button>
+                <div class="flex gap-2">
+                    <button id="join-channel-btn" class="flex-1 bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] px-3 py-2 rounded-lg text-sm text-[#888] hover:text-white transition flex items-center justify-center gap-1.5">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244"/>
+                        </svg>
+                        Join
+                    </button>
+                    <button id="browse-channels-btn" class="flex-1 bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] px-3 py-2 rounded-lg text-sm text-[#888] hover:text-white transition flex items-center justify-center gap-1.5">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"/>
+                        </svg>
+                        Browse
+                    </button>
+                </div>
+            </div>
+
+            <!-- Channel List -->
+            <div id="channel-list" class="flex-1 overflow-y-auto">
+                <!-- Channels will be dynamically added here -->
+                <div class="p-4 text-center text-[#555] text-sm">
+                    No channels yet
+                </div>
+            </div>
+
+            <!-- Sidebar Footer -->
+            <div class="p-3 border-t border-[#282828] space-y-1">
+                <button id="contacts-btn" class="hidden w-full px-3 py-2 rounded-lg text-sm text-[#888] hover:text-white hover:bg-[#252525] transition flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                    </svg>
+                    Contacts
+                </button>
+                <button id="settings-btn" class="hidden w-full px-3 py-2 rounded-lg text-sm text-[#888] hover:text-white hover:bg-[#252525] transition flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                    </svg>
+                    Settings
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main class="flex-1 flex flex-col bg-[#121212]">
+            <!-- Chat Header -->
+            <div id="chat-header" class="bg-[#1e1e1e] border-b border-gray-800 p-4 flex items-center justify-between">
+                <div class="flex-1">
+                    <div class="flex items-center gap-2">
+                        <h2 id="current-channel-name" class="text-xl font-semibold">Select a channel</h2>
+                        <button id="channel-menu-btn" class="hidden p-1 hover:bg-gray-700 rounded transition text-gray-400 hover:text-gray-200" title="Channel options">
+                            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <p id="current-channel-info" class="text-sm text-gray-400"></p>
+                </div>
+                <div class="flex items-center space-x-3">
+                    <!-- Online Users Counter -->
+                    <div class="relative hidden" id="online-users-container">
+                        <div id="online-header" class="bg-[#2a2a2a] rounded-lg px-3 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-[#333] transition">
+                            <span class="text-gray-300 text-sm">Online</span>
+                            <span class="bg-emerald-500 text-white px-2 py-0.5 rounded-full text-xs font-medium" id="online-users-count">0</span>
+                            <svg class="w-4 h-4 text-gray-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                        </div>
+                        <div id="online-users-list" class="absolute top-full right-0 mt-1 w-56 bg-[#2a2a2a] border border-gray-700 rounded-lg p-3 z-20 hidden max-h-48 overflow-y-auto">
+                            <div class="text-gray-400 text-sm text-center">No one online</div>
+                        </div>
+                    </div>
+                    <div class="flex space-x-2">
+                    <button id="invite-users-btn" class="p-2 hover:bg-gray-700 rounded-lg transition hidden" title="Invite Users">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path>
+                        </svg>
+                    </button>
+
+                    </div>
+                </div>
+            </div>
+
+            <!-- Messages Area -->
+            <div id="messages-area" class="flex-1 overflow-y-auto p-4 messages-area">
+                <div class="flex items-center justify-center h-full text-gray-500">
+                    Select or create a channel to start chatting
+                </div>
+            </div>
+
+            <!-- Typing Indicator -->
+            <div id="typing-indicator" class="hidden px-4 py-1 text-sm text-gray-400">
+                <span id="typing-users"></span> typing
+                <span class="typing-dot"></span>
+                <span class="typing-dot"></span>
+                <span class="typing-dot"></span>
+            </div>
+
+            <!-- Message Input -->
+            <div id="message-input-container" class="bg-[#1e1e1e] border-t border-gray-800 p-3 hidden">
+                <div class="relative flex items-center gap-2">
+                    <!-- Emoji Picker -->
+                    <div id="emoji-picker" class="emoji-picker"></div>
+                    
+                    <!-- Emoji Button -->
+                    <button id="emoji-btn" class="input-button text-[#666] hover:text-white transition" title="Emoji">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                    </button>
+                    
+                    <!-- Input -->
+                    <input
+                        type="text"
+                        id="message-input"
+                        placeholder="Type a message..."
+                        class="flex-1 bg-[#1a1a1a] text-white px-4 py-2 rounded-full focus:outline-none focus:border-[#444] border border-[#282828] text-sm transition"
+                    />
+                    
+                    <!-- Send Button -->
+                    <button id="send-message-btn" class="bg-white hover:bg-[#f0f0f0] w-9 h-9 rounded-full transition flex items-center justify-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-black" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal: New Channel -->
+    <div id="new-channel-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+        <div class="bg-[#111111] rounded-xl p-5 w-[400px] max-w-full mx-4 border border-[#222]">
+            <h3 class="text-base font-medium mb-4 text-white">Create New Channel</h3>
+
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm text-[#666] mb-1.5 uppercase tracking-wide">Channel Name</label>
+                    <input
+                        type="text"
+                        id="channel-name-input"
+                        placeholder="My Channel"
+                        class="w-full bg-[#1a1a1a] border border-[#282828] text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-[#444] transition"
+                    />
+                </div>
+
+                <!-- Channel Type Tabs -->
+                <div>
+                    <label class="block text-sm text-[#666] mb-2 uppercase tracking-wide">Permissions Type</label>
+                    <div class="flex bg-[#1a1a1a] rounded-lg p-1 gap-1">
+                        <button type="button" data-tab="public" class="channel-tab flex-1 text-sm py-2 px-3 rounded-md transition bg-white text-black font-medium">
+                            Public
+                        </button>
+                        <button type="button" data-tab="password" class="channel-tab flex-1 text-sm py-2 px-3 rounded-md transition text-[#888] hover:text-white hover:bg-[#252525]">
+                            Password
+                        </button>
+                        <button type="button" data-tab="native" class="channel-tab flex-1 text-sm py-2 px-3 rounded-md transition text-[#888] hover:text-white hover:bg-[#252525]">
+                            On-Chain
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Tab Content: Public -->
+                <div id="tab-public" class="channel-tab-content">
+                    <div class="bg-[#1a1a1a] rounded-lg p-3 border border-[#282828]">
+                        <p class="text-sm text-[#888] leading-relaxed">
+                            Open channel that anyone can discover and join. Messages are visible to all participants. 
+                            Ideal for open communities and public discussions.
+                        </p>
+                        <div class="flex items-center gap-2 mt-2 pt-2 border-t border-[#282828]">
+                            <span class="text-sm text-[#666]">Cost:</span>
+                            <span class="text-sm text-white">Channel creation fee only</span>
+                        </div>
+                    </div>
+                    <input type="hidden" name="channel-type" value="public" class="channel-type-input">
+                </div>
+
+                <!-- Tab Content: Password -->
+                <div id="tab-password" class="channel-tab-content hidden">
+                    <div class="bg-[#1a1a1a] rounded-lg p-3 border border-[#282828] mb-3">
+                        <p class="text-sm text-[#888] leading-relaxed">
+                            Only users with the correct password can join and read messages. 
+                            Easy to share access via password.
+                        </p>
+                        <div class="flex items-center gap-2 mt-2 pt-2 border-t border-[#282828]">
+                            <span class="text-sm text-[#666]">Cost:</span>
+                            <span class="text-sm text-white">Channel creation fee only</span>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-[#666] mb-1.5 uppercase tracking-wide">Password</label>
+                        <input
+                            type="password"
+                            id="channel-password-input"
+                            placeholder="Enter a secure password"
+                            class="w-full bg-[#1a1a1a] border border-[#282828] text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-[#444] transition"
+                        />
+                    </div>
+                    <input type="hidden" name="channel-type" value="password" class="channel-type-input">
+                </div>
+
+                <!-- Tab Content: Native (On-Chain) -->
+                <div id="tab-native" class="channel-tab-content hidden">
+                    <div class="bg-[#1a1a1a] rounded-lg p-3 border border-[#282828] mb-3">
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="text-sm bg-[#252525] text-[#888] px-1.5 py-0.5 rounded">Most Secure</span>
+                        </div>
+                        <p class="text-sm text-[#888] leading-relaxed">
+                            Access controlled on-chain via smart contracts. Each member must be explicitly authorized by wallet address. 
+                            Best for high-security channels where membership needs to be cryptographically verified.
+                        </p>
+                        <div class="flex items-center gap-2 mt-2 pt-2 border-t border-[#282828]">
+                            <span class="text-sm text-[#666]">Cost:</span>
+                            <span class="text-sm text-white">Creation + gas fee to add members</span>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-[#666] mb-1.5 uppercase tracking-wide">Member Addresses</label>
+                        <textarea
+                            id="channel-members-input"
+                            placeholder="0x1234...&#10;0x5678...&#10;0xabcd..."
+                            rows="4"
+                            class="w-full bg-[#1a1a1a] border border-[#282828] text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-[#444] transition resize-none font-mono"
+                        ></textarea>
+                    </div>
+                    <input type="hidden" name="channel-type" value="native" class="channel-type-input">
+                </div>
+
+                <!-- Legacy hidden fields for compatibility -->
+                <div id="password-field" class="hidden"></div>
+                <div id="members-field" class="hidden"></div>
+            </div>
+
+            <div class="flex gap-2 mt-5">
+                <button id="cancel-channel-btn" class="flex-1 bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] text-[#888] text-sm font-medium px-3 py-2.5 rounded-lg transition">
+                    Cancel
+                </button>
+                <button id="create-channel-btn" class="flex-1 bg-white hover:bg-[#f0f0f0] text-black text-sm font-medium px-3 py-2.5 rounded-lg transition">
+                    Create
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Join Channel -->
+    <div id="join-channel-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+        <div class="bg-[#111111] rounded-xl p-5 w-[340px] max-w-full mx-4 border border-[#222]">
+            <h3 class="text-base font-medium mb-4 text-white">Join Channel</h3>
+
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-sm text-[#666] mb-1.5 uppercase tracking-wide">Channel ID</label>
+                    <input
+                        type="text"
+                        id="join-stream-id-input"
+                        placeholder="0x.../channel_name_abc123"
+                        class="w-full bg-[#1a1a1a] border border-[#282828] text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-[#444] transition"
+                    />
+                    <p class="text-sm text-[#555] mt-1">Ask the channel creator for the channel ID</p>
+                </div>
+
+                <div class="flex items-center">
+                    <input type="checkbox" id="join-has-password" class="w-3.5 h-3.5 mr-2 accent-white rounded">
+                    <label for="join-has-password" class="text-sm text-[#888]">Channel has password</label>
+                </div>
+
+                <div id="join-password-field" class="hidden">
+                    <label class="block text-sm text-[#666] mb-1.5 uppercase tracking-wide">Password</label>
+                    <input
+                        type="password"
+                        id="join-password-input"
+                        placeholder="password..."
+                        class="w-full bg-[#1a1a1a] border border-[#282828] text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-[#444] transition"
+                    />
+                </div>
+            </div>
+
+            <div class="flex gap-2 mt-5">
+                <button id="cancel-join-btn" class="flex-1 bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] text-[#888] text-sm font-medium px-3 py-2.5 rounded-lg transition">
+                    Cancel
+                </button>
+                <button id="join-btn" class="flex-1 bg-white hover:bg-[#f0f0f0] text-black text-sm font-medium px-3 py-2.5 rounded-lg transition">
+                    Join
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Browse Public Channels -->
+    <div id="browse-channels-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+        <div class="bg-[#111111] rounded-xl p-5 w-[420px] max-w-full mx-4 max-h-[80vh] flex flex-col border border-[#222]">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-base font-medium text-white flex items-center gap-2">
+                    <svg class="w-4 h-4 text-[#888]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"/>
+                    </svg>
+                    Browse Channels
+                </h3>
+            </div>
+
+            <!-- Type Filter Tabs -->
+            <div class="flex bg-[#1a1a1a] rounded-lg p-1 gap-1 mb-3">
+                <button type="button" data-browse-filter="all" class="browse-filter-tab flex-1 text-[11px] py-1.5 px-2 rounded-md transition bg-white text-black font-medium">
+                    All
+                </button>
+                <button type="button" data-browse-filter="public" class="browse-filter-tab flex-1 text-[11px] py-1.5 px-2 rounded-md transition text-[#888] hover:text-white hover:bg-[#252525] flex items-center justify-center gap-1">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"/></svg>
+                    Public
+                </button>
+                <button type="button" data-browse-filter="password" class="browse-filter-tab flex-1 text-[11px] py-1.5 px-2 rounded-md transition text-[#888] hover:text-white hover:bg-[#252525] flex items-center justify-center gap-1">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>
+                    Password
+                </button>
+            </div>
+
+            <!-- Search -->
+            <div class="mb-3">
+                <input
+                    type="text"
+                    id="browse-search-input"
+                    placeholder="Search channels..."
+                    class="w-full bg-[#1a1a1a] border border-[#282828] text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-[#444] transition"
+                />
+            </div>
+
+            <!-- Channel List -->
+            <div id="browse-channels-list" class="flex-1 overflow-y-auto space-y-2 min-h-[180px] max-h-[350px]">
+                <div class="text-center text-[#555] py-8 text-sm">
+                    <div class="spinner mx-auto mb-2" style="width: 24px; height: 24px;"></div>
+                    Loading channels...
+                </div>
+            </div>
+
+            <div class="flex justify-end mt-4">
+                <button id="close-browse-btn" class="bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] text-[#888] text-sm font-medium px-4 py-2 rounded-lg transition">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Invite Users -->
+    <div id="invite-users-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+        <div class="bg-[#111111] rounded-xl p-5 w-[380px] max-w-full mx-4 border border-[#222]">
+            <h3 class="text-base font-medium mb-4 text-white">Invite to Channel</h3>
+
+            <!-- Tabs -->
+            <div class="flex bg-[#1a1a1a] rounded-lg p-1 gap-1 mb-4">
+                <button type="button" data-invite-tab="link" class="invite-tab flex-1 text-sm py-2 px-3 rounded-md transition bg-white text-black font-medium">
+                    Share Link
+                </button>
+                <button type="button" data-invite-tab="address" class="invite-tab flex-1 text-sm py-2 px-3 rounded-md transition text-[#888] hover:text-white hover:bg-[#252525]">
+                    Send to Address
+                </button>
+            </div>
+
+            <!-- Tab Content: Link -->
+            <div id="invite-tab-link" class="invite-tab-content space-y-3">
+                <div class="bg-[#1a1a1a] rounded-lg p-3 border border-[#282828]">
+                    <p class="text-sm text-[#888] leading-relaxed mb-3">
+                        Share this link with anyone you want to invite to the channel.
+                    </p>
+                    <div class="flex gap-2">
+                        <input
+                            type="text"
+                            id="invite-link-display"
+                            readonly
+                            class="flex-1 bg-[#111] border border-[#282828] text-[#888] px-2.5 py-2 rounded-lg text-sm font-mono truncate"
+                            value=""
+                        />
+                        <button id="copy-invite-link-btn" class="bg-white hover:bg-[#f0f0f0] text-black px-4 py-2 rounded-lg text-sm font-medium transition">
+                            Copy
+                        </button>
+                    </div>
+                    <button id="show-qr-btn" class="w-full mt-3 bg-[#252525] hover:bg-[#303030] border border-[#333] px-3 py-2 rounded-lg text-sm text-[#888] transition">
+                        Show QR Code
+                    </button>
+                </div>
+            </div>
+
+            <!-- Tab Content: Address -->
+            <div id="invite-tab-address" class="invite-tab-content hidden space-y-3">
+                <div class="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+                    <p class="text-sm text-amber-400/80 leading-relaxed flex items-start gap-2">
+                        <svg class="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+                        <span>The recipient must be a Moot user with notifications enabled to receive invites.</span>
+                    </p>
+                </div>
+
+                <div>
+                    <label class="block text-sm text-[#666] mb-1.5 uppercase tracking-wide">Ethereum Address</label>
+                    <input
+                        type="text"
+                        id="invite-address-input"
+                        placeholder="0x..."
+                        class="w-full bg-[#1a1a1a] border border-[#282828] text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-[#444] transition"
+                    />
+                </div>
+
+                <button id="send-invite-btn" class="w-full bg-white hover:bg-[#f0f0f0] text-black text-sm font-medium px-3 py-2.5 rounded-lg transition">
+                    Send Invite
+                </button>
+            </div>
+
+            <div class="flex justify-end mt-5">
+                <button id="cancel-invite-btn" class="bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] text-[#888] text-sm font-medium px-4 py-2.5 rounded-lg transition">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Channel Settings (Member Management) -->
+    <!-- Channel Settings Modal - Tabbed Layout -->
+    <div id="channel-settings-modal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div class="bg-[#141414] rounded-2xl w-[580px] max-w-full max-h-[85vh] flex flex-col shadow-2xl border border-white/5 overflow-hidden">
+            <!-- Header -->
+            <div class="flex items-center justify-between px-6 py-4 border-b border-white/5">
+                <div>
+                    <h3 class="text-lg font-medium text-white/90">Channel Settings</h3>
+                    <p id="channel-settings-name" class="text-sm text-white/40 mt-0.5"></p>
+                </div>
+                <button id="close-channel-settings-btn" class="text-white/40 hover:text-white/80 transition p-1">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="flex flex-1 min-h-0">
+                <!-- Sidebar Tabs -->
+                <div class="w-40 bg-[#0a0a0a] border-r border-white/5 py-2 flex-shrink-0">
+                    <nav class="space-y-1 px-2">
+                        <button data-channel-tab="info" class="channel-settings-tab w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-all text-white/60 hover:text-white/90 hover:bg-white/5">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"/></svg>
+                            <span>Info</span>
+                        </button>
+                        <button data-channel-tab="members" class="channel-settings-tab w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-all text-white/60 hover:text-white/90 hover:bg-white/5">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
+                            <span>Members</span>
+                        </button>
+                        <div id="danger-tab-divider" class="hidden my-2 mx-3 border-t border-white/5"></div>
+                        <button id="danger-tab-btn" data-channel-tab="danger" class="hidden channel-settings-tab w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-all text-white/60 hover:text-red-400 hover:bg-red-500/5">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+                            <span>Delete</span>
+                        </button>
+                    </nav>
+                </div>
+
+                <!-- Content Panels -->
+                <div class="flex-1 overflow-y-auto p-6">
+                    <!-- Info Panel -->
+                    <div id="channel-panel-info" class="channel-settings-panel hidden space-y-4">
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-xs font-medium text-white/40 uppercase tracking-wider mb-2">Permissions Type</label>
+                                <div id="channel-settings-type" class="text-sm text-white font-medium"></div>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-white/40 uppercase tracking-wider mb-2">Channel ID</label>
+                                <div class="flex items-center gap-2">
+                                    <code id="channel-settings-id" class="flex-1 text-xs font-mono text-white/60 bg-white/5 px-3 py-2 rounded-lg break-all"></code>
+                                    <button id="copy-stream-id-btn" class="bg-white/5 hover:bg-white/10 border border-white/10 p-2 rounded-lg transition" title="Copy">
+                                        <svg class="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"/></svg>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Non-native message -->
+                        <div id="non-native-message" class="hidden mt-6 text-center py-6 text-white/40 bg-white/5 rounded-xl border border-white/5">
+                            <p class="text-sm">Member management is only available for</p>
+                            <p class="text-sm">channels using on-chain verified membership.</p>
+                        </div>
+                    </div>
+
+                    <!-- Members Panel -->
+                    <div id="channel-panel-members" class="channel-settings-panel hidden">
+                        <div id="members-section" class="space-y-5">
+                            <!-- Current Members -->
+                            <div>
+                                <div class="flex items-center justify-between mb-3">
+                                    <label class="text-xs font-medium text-white/40 uppercase tracking-wider">Current Members</label>
+                                    <button id="refresh-members-btn" class="text-xs text-white/60 hover:text-white transition">
+                                        ↻ Refresh
+                                    </button>
+                                </div>
+                                <div id="members-list" class="space-y-2 max-h-[200px] overflow-y-auto pr-1">
+                                    <div class="text-center text-white/30 py-4 text-sm">Loading...</div>
+                                </div>
+                            </div>
+
+                            <!-- Add Members (Owner only) -->
+                            <div id="add-member-form" class="hidden">
+                                <div class="border-t border-white/5 pt-5">
+                                    <label class="block text-xs font-medium text-white/40 uppercase tracking-wider mb-3">Add Members</label>
+                                    
+                                    <!-- Single address input -->
+                                    <div class="flex gap-2 mb-3">
+                                        <input
+                                            type="text"
+                                            id="add-member-input"
+                                            placeholder="0x... address"
+                                            class="flex-1 bg-white/5 border border-white/10 text-white px-4 py-2.5 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20"
+                                        />
+                                        <button id="add-member-btn" class="bg-white/10 hover:bg-white/20 text-white border border-white/20 px-4 py-2.5 rounded-xl text-sm transition">
+                                            Add
+                                        </button>
+                                    </div>
+
+                                    <!-- Batch add -->
+                                    <details class="group">
+                                        <summary class="text-xs text-white/40 hover:text-white/60 cursor-pointer transition mb-2">
+                                            <span class="group-open:hidden">▸ Batch add multiple addresses</span>
+                                            <span class="hidden group-open:inline">▾ Batch add multiple addresses</span>
+                                        </summary>
+                                        <div class="space-y-2">
+                                            <textarea
+                                                id="batch-members-input"
+                                                placeholder="Paste addresses (one per line)&#10;0x...&#10;0x...&#10;0x..."
+                                                rows="4"
+                                                class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm font-mono focus:outline-none focus:border-white/30 transition placeholder:text-white/20 resize-none"
+                                            ></textarea>
+                                            <button id="batch-add-members-btn" class="w-full bg-white/10 hover:bg-white/20 text-white border border-white/20 px-4 py-2.5 rounded-xl text-sm transition">
+                                                Add All Addresses
+                                            </button>
+                                        </div>
+                                    </details>
+
+                                    <p class="text-xs text-amber-400/60 mt-3 flex items-center gap-1.5">
+                                        <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+                                        <span>Adding members requires on-chain transactions (gas fees)</span>
+                                    </p>
+                                </div>
+                            </div>
+
+                            <!-- Permissions Section (Owner only) -->
+                            <div id="permissions-section" class="hidden">
+                                <div class="border-t border-white/5 pt-5">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <label class="text-xs font-medium text-white/40 uppercase tracking-wider">Stream Permissions</label>
+                                        <button id="refresh-permissions-btn" class="text-xs text-white/60 hover:text-white transition">
+                                            ↻ Refresh
+                                        </button>
+                                    </div>
+                                    <div id="permissions-list" class="text-xs space-y-1 max-h-[120px] overflow-y-auto pr-1">
+                                        <div class="text-white/30">Loading...</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Danger Panel (Owner only) -->
+                    <div id="channel-panel-danger" class="channel-settings-panel hidden">
+                        <div id="delete-channel-section" class="space-y-4">
+                            <div class="p-4 bg-red-500/5 rounded-xl border border-red-500/10">
+                                <h4 class="text-sm font-medium text-white/90 mb-1 flex items-center gap-2">
+                                    <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
+                                    Delete Channel
+                                </h4>
+                                <p class="text-xs text-white/40 mb-4">
+                                    Permanently delete this channel from the Streamr network. This cannot be undone.
+                                </p>
+                                <button id="delete-channel-btn" class="w-full bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 px-4 py-2.5 rounded-xl text-sm transition">
+                                    Delete Channel Forever
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Delete Channel Confirmation -->
+    <div id="delete-channel-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60]">
+        <div class="bg-[#141414] rounded-2xl w-[400px] max-w-[95vw] mx-4 shadow-2xl border border-red-500/20 overflow-hidden">
+            <div class="p-6">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center">
+                        <svg class="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
+                    </div>
+                    <h3 class="text-lg font-medium text-white/90">Delete Channel</h3>
+                </div>
+                <div class="bg-white/5 rounded-xl p-3 mb-4">
+                    <div class="text-xs text-white/40 mb-1">Channel</div>
+                    <div id="delete-channel-name" class="text-sm font-medium text-white/80"></div>
+                </div>
+                <p class="text-sm text-white/50 mb-3">
+                    This will permanently delete the channel from Streamr. All participants will lose access.
+                </p>
+                <p class="text-xs text-red-400/80 bg-red-500/5 rounded-lg px-3 py-2 flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+                    This action cannot be undone.
+                </p>
+            </div>
+            <div class="flex border-t border-white/5">
+                <button id="cancel-delete-btn" class="flex-1 px-4 py-3 text-sm text-white/60 hover:text-white hover:bg-white/5 transition">
+                    Cancel
+                </button>
+                <button id="confirm-delete-btn" class="flex-1 px-4 py-3 text-sm text-red-400 hover:text-red-300 hover:bg-red-500/10 border-l border-white/5 transition">
+                    Delete Forever
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Settings -->
+    <!-- Settings Modal - Tabbed Layout -->
+    <div id="settings-modal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-[#141414] rounded-2xl w-[640px] max-w-[95vw] mx-4 shadow-2xl border border-white/5 overflow-hidden">
+            <!-- Header -->
+            <div class="flex items-center justify-between px-6 py-4 border-b border-white/5">
+                <h3 class="text-lg font-medium text-white/90">Settings</h3>
+                <button id="close-settings-btn" class="text-white/40 hover:text-white/80 transition p-1">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            
+            <div class="flex min-h-[420px]">
+                <!-- Sidebar Tabs -->
+                <div class="w-44 bg-[#0a0a0a] border-r border-white/5 py-2">
+                    <nav class="space-y-1 px-2">
+                        <button data-settings-tab="profile" class="settings-tab w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-all text-white/60 hover:text-white/90 hover:bg-white/5">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/></svg>
+                            <span>Profile</span>
+                        </button>
+                        <button data-settings-tab="notifications" class="settings-tab w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-all text-white/60 hover:text-white/90 hover:bg-white/5">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0"/></svg>
+                            <span>Notifications</span>
+                        </button>
+                        <button data-settings-tab="api" class="settings-tab w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-all text-white/60 hover:text-white/90 hover:bg-white/5">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244"/></svg>
+                            <span>API</span>
+                        </button>
+                        <div class="my-2 mx-3 border-t border-white/5"></div>
+                        <button data-settings-tab="security" class="settings-tab w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-all text-white/60 hover:text-white/90 hover:bg-white/5">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>
+                            <span>Security</span>
+                        </button>
+                    </nav>
+                </div>
+
+                <!-- Content Panels -->
+                <div class="flex-1 p-6 overflow-y-auto">
+                    <!-- Profile Panel -->
+                    <div id="settings-panel-profile" class="settings-panel hidden">
+                        <div class="space-y-6">
+                            <div>
+                                <label class="block text-xs font-medium text-white/40 uppercase tracking-wider mb-2">Display Name</label>
+                                <input
+                                    type="text"
+                                    id="settings-username"
+                                    placeholder="Enter your name"
+                                    class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20"
+                                />
+                                <p class="text-xs text-white/30 mt-2">Visible to other users in chat</p>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-white/40 uppercase tracking-wider mb-2">Wallet Address</label>
+                                <div class="flex gap-2">
+                                    <input
+                                        type="text"
+                                        id="settings-address"
+                                        readonly
+                                        class="flex-1 bg-white/5 border border-white/10 text-white/60 px-4 py-3 rounded-xl text-xs font-mono"
+                                    />
+                                    <button id="copy-own-address-btn" class="bg-white/5 hover:bg-white/10 border border-white/10 px-4 rounded-xl transition flex items-center justify-center" title="Copy">
+                                        <svg class="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"/></svg>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Notifications Panel -->
+                    <div id="settings-panel-notifications" class="settings-panel hidden">
+                        <div class="space-y-6">
+                            <div class="flex items-start justify-between p-4 bg-white/5 rounded-xl border border-white/5">
+                                <div class="flex-1 mr-4">
+                                    <h4 class="text-sm font-medium text-white/90 mb-1">Push Notifications</h4>
+                                    <p class="text-xs text-white/40 leading-relaxed">
+                                        Receive channel invites from other users
+                                    </p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="notifications-enabled" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white/60 after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-white"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center gap-2 text-xs text-amber-400/80">
+                                <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+                                <span>Enabling creates a Streamr stream (requires gas)</span>
+                            </div>
+                            <div id="notifications-status" class="text-xs text-white/40"></div>
+                        </div>
+                    </div>
+
+                    <!-- API Panel -->
+                    <div id="settings-panel-api" class="settings-panel hidden">
+                        <div class="space-y-6">
+                            <div>
+                                <label class="block text-xs font-medium text-white/40 uppercase tracking-wider mb-2">The Graph API Key</label>
+                                <input
+                                    type="password"
+                                    id="settings-graph-api-key"
+                                    placeholder="Optional - uses default if empty"
+                                    class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20"
+                                />
+                                <p class="text-xs text-white/30 mt-2">
+                                    Get yours at <a href="https://thegraph.com/studio/apikeys/" target="_blank" class="text-white/60 hover:text-white transition">thegraph.com/studio</a>
+                                </p>
+                            </div>
+                            <div id="graph-api-status" class="text-xs"></div>
+                        </div>
+                    </div>
+
+                    <!-- Security Panel (combined with Backup) -->
+                    <div id="settings-panel-security" class="settings-panel hidden">
+                        <div class="space-y-6">
+                            <!-- Export Private Key -->
+                            <div class="p-4 bg-red-500/5 rounded-xl border border-red-500/10">
+                                <h4 class="text-sm font-medium text-white/90 mb-1 flex items-center gap-2">
+                                    <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
+                                    Private Key
+                                </h4>
+                                <p class="text-xs text-white/40 mb-4">Anyone with this key has full control of your wallet</p>
+                                
+                                <div id="export-key-step1" class="space-y-3">
+                                    <input
+                                        type="password"
+                                        id="export-key-password"
+                                        placeholder="Enter password to unlock"
+                                        class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-red-500/50 focus:ring-1 focus:ring-red-500/20 transition placeholder:text-white/20"
+                                    />
+                                    <button id="unlock-private-key-btn" class="w-full bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 px-4 py-2.5 rounded-xl text-sm transition">
+                                        Unlock Key
+                                    </button>
+                                </div>
+                                
+                                <div id="export-key-step2" class="hidden space-y-3">
+                                    <div class="flex items-center gap-2">
+                                        <input
+                                            type="password"
+                                            id="private-key-display"
+                                            readonly
+                                            class="flex-1 bg-black/30 border border-red-500/20 text-white/70 px-4 py-3 rounded-xl text-xs font-mono"
+                                        />
+                                        <button id="toggle-key-visibility" class="bg-white/5 hover:bg-white/10 border border-white/10 p-3 rounded-xl transition flex items-center justify-center" title="Show/Hide">
+                                            <svg class="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                                        </button>
+                                    </div>
+                                    <button id="copy-private-key-btn" class="w-full bg-red-600/90 hover:bg-red-600 text-white px-4 py-2.5 rounded-xl text-sm transition relative overflow-hidden">
+                                        <span id="copy-key-text" class="relative z-10">Hold to Copy (2s)</span>
+                                        <div id="copy-key-progress" class="absolute inset-0 bg-red-400 opacity-40 transform -translate-x-full transition-transform duration-[2000ms]"></div>
+                                    </button>
+                                    <button id="lock-private-key-btn" class="w-full bg-white/5 hover:bg-white/10 text-white/60 border border-white/10 px-4 py-2.5 rounded-xl text-sm transition flex items-center justify-center gap-2">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>
+                                        Lock
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Divider -->
+                            <div class="border-t border-white/5"></div>
+
+                            <!-- Backup & Restore -->
+                            <div>
+                                <h4 class="text-sm font-medium text-white/90 mb-1 flex items-center gap-2">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"/></svg>
+                                    Backup & Restore
+                                </h4>
+                                <p class="text-xs text-white/40 mb-4">Export data to restore on another device</p>
+                                
+                                <div class="grid grid-cols-2 gap-3">
+                                    <button id="export-all-data-btn" class="bg-white/10 hover:bg-white/20 text-white border border-white/20 px-4 py-3 rounded-xl text-sm transition flex items-center justify-center gap-2">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
+                                        Export
+                                    </button>
+                                    <input type="file" id="import-data-file" accept=".json" class="hidden" />
+                                    <button id="import-data-btn" class="bg-white/5 hover:bg-white/10 text-white/60 border border-white/10 px-4 py-3 rounded-xl text-sm transition flex items-center justify-center gap-2">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
+                                        Import
+                                    </button>
+                                </div>
+                                <p class="text-xs text-white/30 mt-3">Passwords not included — you'll need them to unlock</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Trusted Contacts -->
+    <div id="contacts-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+        <div class="bg-[#111111] rounded-xl p-5 w-[380px] max-w-full mx-4 max-h-[80vh] flex flex-col border border-[#222]">
+            <div class="flex items-center gap-2 mb-4">
+                <svg class="w-4 h-4 text-[#888]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/>
+                </svg>
+                <h3 class="text-base font-medium text-white">Trusted Contacts</h3>
+            </div>
+            
+            <!-- Add new contact -->
+            <div class="mb-4 p-3 bg-[#1a1a1a] border border-[#282828] rounded-lg">
+                <div class="flex gap-2">
+                    <input
+                        type="text"
+                        id="add-contact-address"
+                        placeholder="0x... or ENS name"
+                        class="flex-1 bg-[#111] border border-[#282828] text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-[#444] transition"
+                    />
+                    <button id="add-contact-btn" class="bg-white hover:bg-[#f0f0f0] text-black px-3 py-2 rounded-lg text-sm font-medium transition">
+                        Add
+                    </button>
+                </div>
+                <input
+                    type="text"
+                    id="add-contact-nickname"
+                    placeholder="Nickname (optional)"
+                    class="w-full mt-2 bg-[#111] border border-[#282828] text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-[#444] transition"
+                />
+            </div>
+
+            <!-- Contacts list -->
+            <div id="contacts-list" class="flex-1 overflow-y-auto space-y-2 min-h-[150px]">
+                <div class="text-center text-[#555] py-8 text-sm">No trusted contacts yet</div>
+            </div>
+
+            <!-- Legend -->
+            <div class="mt-4 p-3 bg-[#1a1a1a] border border-[#282828] rounded-lg text-sm text-[#666]">
+                <div class="font-medium mb-1.5 text-[#888]">Trust Levels:</div>
+                <div class="flex flex-wrap gap-x-4 gap-y-1">
+                    <div class="flex items-center gap-1"><svg class="w-3.5 h-3.5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg> Valid Signature</div>
+                    <div class="flex items-center gap-1"><svg class="w-3.5 h-3.5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z"/></svg> ENS Verified</div>
+                    <div class="flex items-center gap-1"><svg class="w-3.5 h-3.5 text-amber-500" fill="currentColor" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M10.788 3.21c.448-1.077 1.976-1.077 2.424 0l2.082 5.007 5.404.433c1.164.093 1.636 1.545.749 2.305l-4.117 3.527 1.257 5.273c.271 1.136-.964 2.033-1.96 1.425L12 18.354 7.373 21.18c-.996.608-2.231-.29-1.96-1.425l1.257-5.273-4.117-3.527c-.887-.76-.415-2.212.749-2.305l5.404-.433 2.082-5.006z" clip-rule="evenodd"/></svg> Trusted Contact</div>
+                </div>
+            </div>
+
+            <button id="close-contacts-btn" class="mt-4 w-full bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] text-[#888] text-sm font-medium px-4 py-2.5 rounded-lg transition">
+                Close
+            </button>
+        </div>
+    </div>
+
+    <!-- Modal: Add Contact Nickname -->
+    <div id="add-contact-nickname-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[60]">
+        <div class="bg-[#111111] rounded-xl p-5 w-[340px] max-w-full mx-4 border border-[#222]">
+            <h3 class="text-base font-medium mb-4 text-white">Add Contact</h3>
+
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-sm text-[#666] mb-1.5 uppercase tracking-wide">Address</label>
+                    <div id="add-contact-modal-address" class="bg-[#1a1a1a] border border-[#282828] text-[#888] px-3 py-2 rounded-lg text-sm font-mono truncate"></div>
+                </div>
+
+                <div>
+                    <label class="block text-sm text-[#666] mb-1.5 uppercase tracking-wide">Nickname <span class="text-[#555] normal-case">(optional)</span></label>
+                    <input
+                        type="text"
+                        id="add-contact-modal-nickname"
+                        placeholder="Enter a nickname"
+                        class="w-full bg-[#1a1a1a] border border-[#282828] text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-[#444] transition"
+                    />
+                </div>
+            </div>
+
+            <div class="flex gap-2 mt-5">
+                <button id="cancel-add-contact-btn" class="flex-1 bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] text-[#888] text-sm font-medium px-3 py-2.5 rounded-lg transition">
+                    Cancel
+                </button>
+                <button id="confirm-add-contact-btn" class="flex-1 bg-white hover:bg-[#f0f0f0] text-black text-sm font-medium px-3 py-2.5 rounded-lg transition">
+                    Add Contact
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Remove Contact Confirmation -->
+    <div id="remove-contact-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[60]">
+        <div class="bg-[#111111] rounded-xl p-5 w-[340px] max-w-full mx-4 border border-[#222]">
+            <h3 class="text-base font-medium mb-4 text-white">Remove Contact</h3>
+
+            <div class="space-y-3">
+                <p class="text-sm text-[#888]">Are you sure you want to remove this contact?</p>
+                <div id="remove-contact-modal-address" class="bg-[#1a1a1a] border border-[#282828] text-[#888] px-3 py-2 rounded-lg text-sm font-mono truncate"></div>
+            </div>
+
+            <div class="flex gap-2 mt-5">
+                <button id="cancel-remove-contact-btn" class="flex-1 bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] text-[#888] text-sm font-medium px-3 py-2.5 rounded-lg transition">
+                    Cancel
+                </button>
+                <button id="confirm-remove-contact-btn" class="flex-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 text-sm font-medium px-3 py-2.5 rounded-lg transition">
+                    Remove
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Context Menu (for messages) -->
+    <div id="message-context-menu" class="hidden fixed bg-[#1e1e1e] border border-gray-700 rounded-lg shadow-xl py-1 z-50 min-w-[180px]">
+        <button class="context-menu-item w-full text-left px-4 py-2 hover:bg-[#2a2a2a] text-sm flex items-center gap-2" data-action="copy-address">
+            <svg class="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"/></svg>
+            Copy Address
+        </button>
+        <hr class="border-gray-700 my-1">
+        <button class="context-menu-item w-full text-left px-4 py-2 hover:bg-[#2a2a2a] text-sm flex items-center gap-2" data-action="add-contact">
+            <svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM4 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 0110.374 21c-2.331 0-4.512-.645-6.374-1.766z"/></svg>
+            Add to Trusted Contacts
+        </button>
+        <button class="context-menu-item w-full text-left px-4 py-2 hover:bg-[#2a2a2a] text-sm text-red-400 flex items-center gap-2" data-action="remove-contact">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M22 10.5h-6m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM4 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 0110.374 21c-2.331 0-4.512-.645-6.374-1.766z"/></svg>
+            Remove from Contacts
+        </button>
+    </div>
+
+    <!-- Reaction Picker (positioned dynamically) -->
+    <div id="reaction-picker" class="reaction-picker">
+        <span data-emoji="👍">👍</span> <span data-emoji="❤️">❤️</span> <span data-emoji="😂">😂</span> <span data-emoji="🎉">🎉</span>
+        <span data-emoji="😢">😢</span> <span data-emoji="🤔">🤔</span> <span data-emoji="🙏">🙏</span> <span data-emoji="🔥">🔥</span>
+        <span data-emoji="😮">😮</span> <span data-emoji="👏">👏</span> <span data-emoji="🚀">🚀</span> <span data-emoji="💀">💀</span>
+    </div>
+
+    <!-- Toast Notifications Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay">
+        <div class="spinner"></div>
+        <div id="loading-text" class="loading-text">Loading...</div>
+    </div>
+
+    <!-- App Bundle (built from src/js/) -->
+    <script src="./js/app.bundle.js"></script>
+</body>
+</html>
