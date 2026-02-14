@@ -93,6 +93,7 @@ const GasEstimator = {
 class UIController {
     constructor() {
         this.elements = {};
+        this.lastSeenCounts = new Map(); // Track last seen message count per channel
     }
 
     /**
@@ -192,6 +193,7 @@ class UIController {
 
             // Join/Browse channels
             quickJoinInput: document.getElementById('quick-join-input'),
+            quickJoinBtn: document.getElementById('quick-join-btn'),
             browseChannelsBtn: document.getElementById('browse-channels-btn'),
             browseChannelsModal: document.getElementById('browse-channels-modal'),
             browseSearchInput: document.getElementById('browse-search-input'),
@@ -251,6 +253,11 @@ class UIController {
             if (e.key === 'Enter') {
                 this.handleQuickJoin();
             }
+        });
+
+        // Quick join button (sidebar) - Click to join
+        this.elements.quickJoinBtn?.addEventListener('click', () => {
+            this.handleQuickJoin();
         });
 
         // Browse channels button (sidebar)
@@ -648,7 +655,22 @@ class UIController {
             return;
         }
 
-        this.elements.channelList.innerHTML = channels.map(channel => `
+        // Initialize lastSeenCounts for channels that haven't been tracked yet
+        // (on first load, existing messages are considered "seen")
+        for (const channel of channels) {
+            if (!this.lastSeenCounts.has(channel.streamId)) {
+                this.lastSeenCounts.set(channel.streamId, channel.messages.length);
+            }
+        }
+
+        this.elements.channelList.innerHTML = channels.map(channel => {
+            const lastSeen = this.lastSeenCounts.get(channel.streamId) || 0;
+            const hasUnread = channel.messages.length > lastSeen;
+            const countClass = hasUnread 
+                ? 'text-white bg-[#333]' 
+                : 'text-[#666] bg-[#252525]';
+            
+            return `
             <div
                 class="channel-item px-3 py-2.5 mx-2 my-1 rounded-lg cursor-pointer bg-[#151515] border border-[#222] hover:bg-[#1e1e1e] hover:border-[#333] transition"
                 data-stream-id="${channel.streamId}"
@@ -659,14 +681,14 @@ class UIController {
                         <p class="text-[11px] text-[#666]">${this.getChannelTypeLabel(channel.type)}</p>
                     </div>
                     <div class="flex items-center gap-1.5 ml-2">
-                        ${channel.messages.length > 0 ? `<span class="text-[10px] text-[#555] bg-[#252525] px-1.5 py-0.5 rounded">${channel.messages.length}</span>` : ''}
+                        ${channel.messages.length > 0 ? `<span class="channel-msg-count text-[10px] ${countClass} px-1.5 py-0.5 rounded" data-channel-count="${channel.streamId}">${channel.messages.length}</span>` : `<span class="channel-msg-count text-[10px] text-[#666] bg-[#252525] px-1.5 py-0.5 rounded hidden" data-channel-count="${channel.streamId}">0</span>`}
                         <svg class="w-3.5 h-3.5 text-[#444]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.25 4.5l7.5 7.5-7.5 7.5"></path>
                         </svg>
                     </div>
                 </div>
             </div>
-        `).join('');
+        `}).join('');
 
         Logger.debug('Channels rendered, adding click listeners...');
 
@@ -720,6 +742,10 @@ class UIController {
             this.loadChannelReactions(streamId);
 
             this.renderMessages(channel.messages);
+            
+            // Mark channel as seen (update lastSeenCount)
+            this.lastSeenCounts.set(streamId, channel.messages.length);
+            this.updateChannelMessageCount(streamId, channel.messages.length);
             
             // Start presence tracking
             channelManager.startPresenceTracking(streamId);
@@ -2235,6 +2261,42 @@ class UIController {
         const channel = channelManager.getCurrentChannel();
         if (channel) {
             this.renderMessages(channel.messages);
+            // Update message count in sidebar
+            this.updateChannelMessageCount(channel.streamId, channel.messages.length);
+        }
+    }
+
+    /**
+     * Update message count badge for a channel in the sidebar
+     * @param {string} streamId - Channel stream ID
+     * @param {number} count - Message count
+     */
+    updateChannelMessageCount(streamId, count) {
+        const countEl = document.querySelector(`[data-channel-count="${streamId}"]`);
+        if (countEl) {
+            countEl.textContent = count;
+            if (count > 0) {
+                countEl.classList.remove('hidden');
+            }
+            
+            // If user is currently viewing this channel, mark as seen automatically
+            const currentChannel = channelManager.getCurrentChannel();
+            if (currentChannel?.streamId === streamId) {
+                this.lastSeenCounts.set(streamId, count);
+            }
+            
+            // Check if channel has unread messages
+            const lastSeen = this.lastSeenCounts.get(streamId) || 0;
+            const hasUnread = count > lastSeen;
+            
+            // Update styling based on unread state
+            if (hasUnread) {
+                countEl.classList.remove('text-[#666]', 'bg-[#252525]');
+                countEl.classList.add('text-white', 'bg-[#333]');
+            } else {
+                countEl.classList.remove('text-white', 'bg-[#333]');
+                countEl.classList.add('text-[#666]', 'bg-[#252525]');
+            }
         }
     }
 

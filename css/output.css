@@ -1665,6 +1665,11 @@ video {
   background-color: rgb(42 42 42 / var(--tw-bg-opacity, 1));
 }
 
+.bg-\[\#333\] {
+  --tw-bg-opacity: 1;
+  background-color: rgb(51 51 51 / var(--tw-bg-opacity, 1));
+}
+
 .bg-\[\#444\] {
   --tw-bg-opacity: 1;
   background-color: rgb(68 68 68 / var(--tw-bg-opacity, 1));
@@ -1990,8 +1995,8 @@ video {
   padding-right: 4rem;
 }
 
-.pr-3 {
-  padding-right: 0.75rem;
+.pr-8 {
+  padding-right: 2rem;
 }
 
 .pt-2 {

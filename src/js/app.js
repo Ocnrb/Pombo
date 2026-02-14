@@ -1155,6 +1155,12 @@ class App {
             const currentStreamId = currentChannel?.streamId;
             
             if (event === 'message') {
+                // Update message count in sidebar for any channel
+                const channel = channelManager.getChannel(data.streamId);
+                if (channel) {
+                    uiController.updateChannelMessageCount(data.streamId, channel.messages.length);
+                }
+                
                 // Only show message if it's from the current channel
                 if (data.streamId === currentStreamId) {
                     uiController.addMessage(data.message);

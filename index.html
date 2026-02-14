@@ -169,7 +169,7 @@
                 <div class="flex items-center justify-between">
                     <span class="text-xs font-medium text-[#666] uppercase tracking-wider">Channels</span>
                     <button id="new-channel-btn" class="p-1.5 hover:bg-[#252525] rounded-lg transition group" title="New Channel">
-                        <svg class="w-4 h-4 text-[#666] group-hover:text-white transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg class="w-4 h-4 text-[#888] group-hover:text-white transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4.5v15m7.5-7.5h-15"/>
                         </svg>
                     </button>
@@ -182,8 +182,13 @@
                         type="text"
                         id="quick-join-input"
                         placeholder="Join with channel ID..."
-                        class="w-full bg-[#1a1a1a] border border-[#282828] text-white pl-7 pr-3 py-2 rounded-lg text-sm placeholder-[#555] focus:outline-none focus:border-[#444] transition"
+                        class="w-full bg-[#1a1a1a] border border-[#282828] text-white pl-7 pr-8 py-2 rounded-lg text-sm placeholder-[#555] focus:outline-none focus:border-[#444] transition"
                     />
+                    <button id="quick-join-btn" class="absolute right-2 top-1/2 -translate-y-1/2 text-[#555] hover:text-white transition" title="Join channel">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/>
+                        </svg>
+                    </button>
                 </div>
                 
                 <!-- Explore button -->
