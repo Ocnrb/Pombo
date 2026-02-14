@@ -12,6 +12,84 @@ import { secureStorage } from './secureStorage.js';
 import { Logger } from './logger.js';
 import { mediaController } from './media.js';
 
+// Gas estimation for Polygon network
+const GasEstimator = {
+    RPC_URL: 'https://polygon-rpc.com',
+    
+    // Approximate gas units for Streamr operations
+    // Native channels use setPermissions (batch) - single tx regardless of member count
+    GAS_UNITS: {
+        createStream: 250000,           // Creating a new stream
+        setPermissionsBatch: 300000,    // Batch setPermissions (includes ~10 members)
+    },
+    
+    cachedGasPrice: null,
+    cacheTime: 0,
+    CACHE_DURATION: 60000, // 1 minute
+    
+    async getGasPrice() {
+        const now = Date.now();
+        if (this.cachedGasPrice && (now - this.cacheTime) < this.CACHE_DURATION) {
+            return this.cachedGasPrice;
+        }
+        
+        try {
+            const response = await fetch(this.RPC_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    method: 'eth_gasPrice',
+                    params: [],
+                    id: 1
+                })
+            });
+            const data = await response.json();
+            const gasPriceWei = parseInt(data.result, 16);
+            this.cachedGasPrice = gasPriceWei;
+            this.cacheTime = now;
+            return gasPriceWei;
+        } catch (error) {
+            Logger.warn('Failed to fetch gas price:', error);
+            // Fallback to 30 gwei if fetch fails
+            return 30 * 1e9;
+        }
+    },
+    
+    formatPOL(wei) {
+        const pol = wei / 1e18;
+        if (pol < 0.0001) return '< 0.0001 POL';
+        if (pol < 0.01) return `~${pol.toFixed(4)} POL`;
+        return `~${pol.toFixed(3)} POL`;
+    },
+    
+    formatGwei(wei) {
+        const gwei = wei / 1e9;
+        return `${gwei.toFixed(1)} gwei`;
+    },
+    
+    async estimateCosts() {
+        const gasPrice = await this.getGasPrice();
+        
+        const createCost = gasPrice * this.GAS_UNITS.createStream;
+        // Native uses batch setPermissions - single tx for all initial members
+        const nativeCost = gasPrice * (this.GAS_UNITS.createStream + this.GAS_UNITS.setPermissionsBatch);
+        
+        return {
+            public: createCost,
+            password: createCost,
+            native: nativeCost,
+            gasPrice: gasPrice,
+            formatted: {
+                public: this.formatPOL(createCost),
+                password: this.formatPOL(createCost),
+                native: this.formatPOL(nativeCost),
+                gasPrice: this.formatGwei(gasPrice)
+            }
+        };
+    }
+};
+
 class UIController {
     constructor() {
         this.elements = {};
@@ -113,7 +191,7 @@ class UIController {
             confirmDeleteBtn: document.getElementById('confirm-delete-btn'),
 
             // Join/Browse channels
-            joinChannelBtn: document.getElementById('join-channel-btn'),
+            quickJoinInput: document.getElementById('quick-join-input'),
             browseChannelsBtn: document.getElementById('browse-channels-btn'),
             browseChannelsModal: document.getElementById('browse-channels-modal'),
             browseSearchInput: document.getElementById('browse-search-input'),
@@ -168,9 +246,11 @@ class UIController {
             this.hideNewChannelModal();
         });
 
-        // Join channel button (sidebar)
-        this.elements.joinChannelBtn?.addEventListener('click', () => {
-            this.showJoinChannelModal();
+        // Quick join input (sidebar) - Enter to join
+        this.elements.quickJoinInput?.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                this.handleQuickJoin();
+            }
         });
 
         // Browse channels button (sidebar)
@@ -205,7 +285,7 @@ class UIController {
         });
 
         // Browse type filter tabs
-        this.browseTypeFilter = 'all';
+        this.browseTypeFilter = 'public';
         document.querySelectorAll('.browse-filter-tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 this.browseTypeFilter = tab.dataset.browseFilter;
@@ -815,7 +895,7 @@ class UIController {
         dropdown.className = 'fixed bg-[#141414] border border-white/10 rounded-xl shadow-2xl py-1 z-[9999] min-w-[180px] overflow-hidden';
         dropdown.innerHTML = `
             <button class="channel-action w-full text-left px-4 py-2.5 hover:bg-white/5 text-sm text-white/70 hover:text-white transition flex items-center gap-2" data-action="copy-stream-id">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"/></svg>
+                <span class="w-4 h-4 flex items-center justify-center font-semibold text-base">#</span>
                 Copy Channel ID
             </button>
             <button class="channel-action w-full text-left px-4 py-2.5 hover:bg-white/5 text-sm text-white/70 hover:text-white transition flex items-center gap-2" data-action="channel-settings">
@@ -982,10 +1062,20 @@ class UIController {
         }
 
         const currentAddress = authManager.getAddress();
+        let lastDateStr = null;
 
-        this.elements.messagesArea.innerHTML = messages.map(msg => {
+        this.elements.messagesArea.innerHTML = messages.map((msg, index) => {
             const isOwn = msg.sender?.toLowerCase() === currentAddress?.toLowerCase();
-            const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const msgDate = new Date(msg.timestamp);
+            const time = msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            
+            // Check if we need a date separator
+            const dateStr = msgDate.toDateString();
+            let dateSeparator = '';
+            if (dateStr !== lastDateStr) {
+                lastDateStr = dateStr;
+                dateSeparator = this.renderDateSeparator(msgDate);
+            }
             
             // Get verification badge (pass isOwn to show different badge for own messages)
             const badge = this.getVerificationBadge(msg, isOwn);
@@ -1008,6 +1098,7 @@ class UIController {
             const contentHtml = this.renderMessageContent(msg);
 
             return `
+                ${dateSeparator}
                 <div class="message-entry ${isOwn ? 'own-message' : 'other-message'}" data-msg-id="${msgId}" data-sender="${msg.sender || ''}" data-type="${msg.type || 'text'}">
                     <div class="message-bubble">
                         <div class="flex items-center gap-1 mb-1">
@@ -1015,13 +1106,15 @@ class UIController {
                             <span class="text-xs font-medium ${badge.textColor}">${this.escapeHtml(displayName)}</span>
                         </div>
                         <div class="message-content">${contentHtml}</div>
-                        <div class="text-xs text-gray-500 mt-1 ${isOwn ? 'text-right' : 'text-left'}">${time}</div>
+                        <div class="message-footer">
+                            ${reactionsHtml}
+                            <span class="message-time text-xs text-gray-500">${time}</span>
+                        </div>
                         ${!msg.verified?.valid && msg.signature ? '<div class="text-xs text-red-400 mt-1">⚠️ Invalid signature</div>' : ''}
                         <div class="message-actions">
                             <span class="action-btn react-btn" data-msg-id="${msgId}" title="React">😀</span>
                         </div>
                     </div>
-                    ${reactionsHtml}
                 </div>
             `;
         }).join('');
@@ -1031,6 +1124,39 @@ class UIController {
         
         // Attach reaction button listeners
         this.attachReactionListeners();
+    }
+
+    /**
+     * Render date separator pill
+     */
+    renderDateSeparator(date) {
+        const today = new Date();
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        
+        let dateText;
+        if (date.toDateString() === today.toDateString()) {
+            dateText = 'Today';
+        } else if (date.toDateString() === yesterday.toDateString()) {
+            dateText = 'Yesterday';
+        } else {
+            // Format: "February 14" or "February 14, 2025" if different year
+            const month = date.toLocaleDateString('en-US', { month: 'long' });
+            const day = date.getDate();
+            const year = date.getFullYear();
+            
+            if (year === today.getFullYear()) {
+                dateText = `${month} ${day}`;
+            } else {
+                dateText = `${month} ${day}, ${year}`;
+            }
+        }
+        
+        return `
+            <div class="date-separator">
+                <span class="date-pill">${dateText}</span>
+            </div>
+        `;
     }
 
     /**
@@ -1048,7 +1174,7 @@ class UIController {
         for (const [emoji, users] of Object.entries(reactions)) {
             if (users.length > 0) {
                 const userReacted = users.some(u => u.toLowerCase() === currentAddress);
-                html += `<span class="reaction-badge ${userReacted ? 'user-reacted' : ''}" data-emoji="${emoji}" data-msg-id="${msgId}">${emoji} ${users.length}</span>`;
+                html += `<span class="reaction-badge ${userReacted ? 'user-reacted' : ''}" data-emoji="${emoji}" data-msg-id="${msgId}"><span class="reaction-emoji">${emoji}</span>${users.length}</span>`;
             }
         }
         
@@ -1119,7 +1245,7 @@ class UIController {
                     badge.className = `reaction-badge ${userReacted ? 'user-reacted' : ''}`;
                     badge.dataset.emoji = emoji;
                     badge.dataset.msgId = msgId;
-                    badge.textContent = `${emoji} ${users.length}`;
+                    badge.innerHTML = `<span class="reaction-emoji">${emoji}</span>${users.length}`;
                     badge.addEventListener('click', () => this.toggleReaction(msgId, emoji));
                     container.appendChild(badge);
                 }
@@ -2193,6 +2319,52 @@ class UIController {
         this.elements.channelMembersInput.value = '';
         // Reset to public tab
         this.switchChannelTab('public');
+        
+        // Fetch and display gas estimates
+        this.updateGasEstimates();
+    }
+    
+    /**
+     * Update gas cost estimates in the create channel modal
+     */
+    async updateGasEstimates() {
+        const costPublic = document.getElementById('cost-public');
+        const costPassword = document.getElementById('cost-password');
+        const costNative = document.getElementById('cost-native');
+        
+        try {
+            const estimates = await GasEstimator.estimateCosts();
+            const tooltipText = `Gas: ${estimates.formatted.gasPrice}`;
+            
+            if (costPublic) {
+                costPublic.textContent = estimates.formatted.public;
+                costPublic.dataset.tooltip = tooltipText;
+            }
+            if (costPassword) {
+                costPassword.textContent = estimates.formatted.password;
+                costPassword.dataset.tooltip = tooltipText;
+            }
+            if (costNative) {
+                costNative.textContent = estimates.formatted.native;
+                costNative.dataset.tooltip = tooltipText;
+            }
+        } catch (error) {
+            Logger.warn('Failed to estimate gas costs:', error);
+            // Show fallback text
+            const fallbackTooltip = 'Gas: ~30 gwei';
+            if (costPublic) {
+                costPublic.textContent = '~0.01 POL';
+                costPublic.dataset.tooltip = fallbackTooltip;
+            }
+            if (costPassword) {
+                costPassword.textContent = '~0.01 POL';
+                costPassword.dataset.tooltip = fallbackTooltip;
+            }
+            if (costNative) {
+                costNative.textContent = '~0.02 POL';
+                costNative.dataset.tooltip = fallbackTooltip;
+            }
+        }
     }
 
     /**
@@ -2247,6 +2419,107 @@ class UIController {
     }
 
     /**
+     * Handle quick join from sidebar input
+     */
+    async handleQuickJoin() {
+        const streamId = this.elements.quickJoinInput?.value.trim();
+        
+        if (!streamId) {
+            this.showNotification('Please enter a channel ID', 'error');
+            return;
+        }
+
+        // First check cache, then query The Graph for channel info
+        let channelInfo = this.cachedPublicChannels?.find(ch => ch.streamId === streamId);
+        
+        if (!channelInfo) {
+            // Not in cache - query The Graph
+            this.showLoading('Checking channel...');
+            try {
+                channelInfo = await graphAPI.getChannelInfo(streamId);
+            } catch (error) {
+                Logger.warn('Failed to query channel info:', error);
+            }
+            this.hideLoading();
+        }
+        
+        // If we know it's a password-protected channel, show password modal
+        if (channelInfo?.type === 'password') {
+            const password = await this.showPasswordInputModal('Join Password Channel', 
+                `Enter password for "${channelInfo.name}":`);
+            
+            if (!password) {
+                return; // User cancelled
+            }
+            
+            try {
+                this.showLoading('Joining channel...');
+                await channelManager.joinChannel(streamId, password, {
+                    name: channelInfo.name,
+                    type: 'password'
+                });
+                this.hideLoading();
+                
+                // Clear the input
+                if (this.elements.quickJoinInput) {
+                    this.elements.quickJoinInput.value = '';
+                }
+                
+                this.renderChannelList();
+                this.showNotification('Joined channel successfully!', 'success');
+            } catch (error) {
+                this.hideLoading();
+                this.showNotification('Failed to join: ' + error.message, 'error');
+            }
+            return;
+        }
+
+        // For unknown channels or public channels, try direct join
+        try {
+            this.showLoading('Joining channel...');
+            await channelManager.joinChannel(streamId, null, channelInfo ? {
+                name: channelInfo.name,
+                type: channelInfo.type
+            } : undefined);
+            this.hideLoading();
+            
+            // Clear the input
+            if (this.elements.quickJoinInput) {
+                this.elements.quickJoinInput.value = '';
+            }
+            
+            this.renderChannelList();
+            this.showNotification('Joined channel successfully!', 'success');
+        } catch (error) {
+            this.hideLoading();
+            
+            // If channel isn't in cache but might require password, show join modal
+            // This happens when we don't have info about the channel
+            if (!channelInfo) {
+                // Pre-fill the join modal and show it
+                if (this.elements.joinStreamIdInput) {
+                    this.elements.joinStreamIdInput.value = streamId;
+                }
+                // Reset password checkbox
+                const checkbox = document.getElementById('join-has-password');
+                if (checkbox) {
+                    checkbox.checked = false;
+                    this.elements.joinPasswordField?.classList.add('hidden');
+                }
+                this.elements.joinChannelModal?.classList.remove('hidden');
+                this.showNotification('Enter channel details or check if password is required', 'info');
+                
+                // Clear quick join input
+                if (this.elements.quickJoinInput) {
+                    this.elements.quickJoinInput.value = '';
+                }
+            } else {
+                this.showNotification('Failed to join: ' + error.message, 'error');
+            }
+        }
+    }
+
+    /**
      * Handle join channel
      */
     async handleJoinChannel() {
@@ -2281,7 +2554,7 @@ class UIController {
         }
         
         // Reset type filter
-        this.browseTypeFilter = 'all';
+        this.browseTypeFilter = 'public';
         this.updateBrowseFilterTabs();
         
         // Load public channels from registry
@@ -2304,14 +2577,15 @@ class UIController {
         this.elements.browseChannelsList.innerHTML = `
             <div class="text-center text-gray-500 py-8">
                 <div class="spinner mx-auto mb-2" style="width: 32px; height: 32px;"></div>
-                Loading public channels...
+                Loading channels...
             </div>
         `;
 
         try {
             const channels = await channelManager.getPublicChannels();
             this.cachedPublicChannels = channels;
-            this.renderPublicChannelsList(channels);
+            // Apply current filter instead of showing all
+            this.filterBrowseChannels(this.elements.browseSearchInput?.value || '');
         } catch (error) {
             Logger.error('Failed to load public channels:', error);
             this.elements.browseChannelsList.innerHTML = `
@@ -2339,35 +2613,23 @@ class UIController {
         }
 
         this.elements.browseChannelsList.innerHTML = channels.map(ch => {
-            const typeBadge = ch.type === 'password' 
-                ? '<span class="text-[9px] bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded ml-2 inline-flex items-center gap-1"><svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>Password</span>'
-                : '<span class="text-[9px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded ml-2 inline-flex items-center gap-1"><svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"/></svg>Public</span>';
-            
             return `
-            <div class="p-3 bg-[#1a1a1a] border border-[#282828] rounded-lg hover:bg-[#202020] hover:border-[#333] transition cursor-pointer browse-channel-item" data-stream-id="${ch.streamId}" data-type="${ch.type || 'public'}">
-                <div class="flex justify-between items-start">
-                    <div class="flex-1 min-w-0">
-                        <div class="flex items-center">
-                            <h4 class="text-[13px] font-medium text-white truncate">${this.escapeHtml(ch.name)}</h4>
-                            ${typeBadge}
-                        </div>
-                        <p class="text-[10px] text-[#555] truncate font-mono mt-0.5">${ch.streamId}</p>
-                        ${ch.members ? `<p class="text-[10px] text-[#666] mt-1">${ch.members} members</p>` : ''}
-                    </div>
-                    <button class="ml-2 px-2.5 py-1 bg-white hover:bg-[#f0f0f0] text-black rounded text-[11px] font-medium transition join-public-btn">
-                        Join
-                    </button>
+            <div class="px-3 py-2.5 bg-[#1a1a1a] border border-[#282828] rounded-lg hover:bg-[#252525] hover:border-[#333] transition cursor-pointer browse-channel-item flex items-center justify-between" data-stream-id="${ch.streamId}" data-type="${ch.type || 'public'}">
+                <div class="flex-1 min-w-0">
+                    <h4 class="text-[13px] font-medium text-white truncate">${this.escapeHtml(ch.name)}</h4>
+                    ${ch.members ? `<p class="text-[10px] text-[#666] mt-0.5">${ch.members} members</p>` : ''}
                 </div>
+                <svg class="w-4 h-4 text-[#555] flex-shrink-0 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                </svg>
             </div>
             `;
         }).join('');
 
-        // Add click listeners
-        this.elements.browseChannelsList.querySelectorAll('.join-public-btn').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const item = btn.closest('.browse-channel-item');
-                const streamId = item?.dataset.streamId;
+        // Add click listeners to the whole item
+        this.elements.browseChannelsList.querySelectorAll('.browse-channel-item').forEach(item => {
+            item.addEventListener('click', async () => {
+                const streamId = item.dataset.streamId;
                 if (streamId) {
                     await this.joinPublicChannel(streamId);
                 }
@@ -2384,7 +2646,7 @@ class UIController {
         let filtered = this.cachedPublicChannels;
         
         // Apply type filter
-        if (this.browseTypeFilter && this.browseTypeFilter !== 'all') {
+        if (this.browseTypeFilter) {
             filtered = filtered.filter(ch => ch.type === this.browseTypeFilter);
         }
         

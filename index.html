@@ -19,7 +19,7 @@
     <style>
         body { font-family: 'Inter', sans-serif; background-color: #121212; color: #e0e0e0; }
         .chat-container { height: calc(100vh - 4rem); }
-        .messages-area { height: calc(100% - 120px); background-color: #181818; }
+        .messages-area { height: calc(100% - 120px); background-color: #141414; }
         
         /* Message styles */
         .message-entry { animation: fadeIn 0.3s ease-in-out; max-width: 70%; display: flex; flex-direction: column; margin-bottom: 0.5rem; position: relative; }
@@ -33,13 +33,20 @@
         .message-entry[data-type="video_announce"] .message-content { font-size: inherit; }
         .message-entry[data-type="video_announce"].own-message .message-bubble { background-color: transparent; }
         .message-entry[data-type="video_announce"].other-message .message-bubble { background-color: transparent; }
+        /* Image message styles - frameless like video */
+        .message-entry[data-type="image"] .message-bubble { padding: 0.25rem; background: transparent; }
+        .message-entry[data-type="image"].own-message .message-bubble { background-color: transparent; }
+        .message-entry[data-type="image"].other-message .message-bubble { background-color: transparent; }
         .video-container { max-width: 240px; }
         .message-content { font-size: 0.9rem; line-height: 1.4rem; word-wrap: break-word; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
         
         /* Reactions */
-        .reactions-container { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
-        .reaction-badge { background-color: #374151; color: #e0e0e0; padding: 2px 8px; border-radius: 12px; font-size: 0.8rem; cursor: pointer; transition: background-color 0.2s; }
+        .reactions-container { display: flex; gap: 4px; flex-wrap: wrap; }
+        .message-footer { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; margin-top: 4px; }
+        .message-footer .message-time { flex-shrink: 0; }
+        .reaction-badge { background-color: #374151; color: #e0e0e0; padding: 3px 8px; border-radius: 12px; font-size: 0.75rem; cursor: pointer; transition: background-color 0.2s; display: inline-flex; align-items: center; gap: 4px; }
+        .reaction-badge .reaction-emoji { font-size: 1rem; line-height: 1; }
         .reaction-badge:hover { background-color: #4b5563; }
         .reaction-badge.user-reacted { background-color: #2563eb; }
         
@@ -48,6 +55,10 @@
         .message-bubble:hover .message-actions { display: flex; }
         .action-btn { cursor: pointer; font-size: 14px; padding: 2px 4px; border-radius: 4px; transition: background-color 0.2s; }
         .action-btn:hover { background-color: #4b5563; }
+        
+        /* Date separator pill */
+        .date-separator { display: flex; justify-content: center; margin: 1rem 0; }
+        .date-pill { background-color: #252525; color: #888; font-size: 0.75rem; padding: 4px 12px; border-radius: 12px; }
         
         /* Reaction picker */
         .reaction-picker { position: fixed; background-color: #1e1e1e; border: 1px solid #333; border-radius: 0.5rem; padding: 0.5rem; z-index: 100; display: none; flex-wrap: wrap; gap: 4px; max-width: 220px; }
@@ -99,6 +110,12 @@
         #online-users-list::-webkit-scrollbar { width: 4px; }
         #online-users-list::-webkit-scrollbar-thumb { background-color: #4b5563; border-radius: 2px; }
         .rotate-180 { transform: rotate(180deg); }
+        
+        /* Custom Tooltip */
+        .tooltip { position: relative; cursor: help; }
+        .tooltip::after { content: attr(data-tooltip); position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); background-color: #252525; color: #aaa; font-size: 0.7rem; padding: 4px 8px; border-radius: 4px; white-space: nowrap; opacity: 0; visibility: hidden; transition: opacity 0.15s, visibility 0.15s; pointer-events: none; z-index: 100; }
+        .tooltip::before { content: ''; position: absolute; bottom: calc(100% + 2px); left: 50%; transform: translateX(-50%); border: 4px solid transparent; border-top-color: #252525; opacity: 0; visibility: hidden; transition: opacity 0.15s, visibility 0.15s; pointer-events: none; z-index: 100; }
+        .tooltip:hover::after, .tooltip:hover::before { opacity: 1; visibility: visible; }
     </style>
 </head>
 <body class="min-h-screen">
@@ -147,27 +164,35 @@
         <!-- Sidebar - Channel List -->
         <aside class="w-80 bg-[#1b1b1b] border-r border-gray-800 flex flex-col">
             <!-- Sidebar Header -->
-            <div class="p-3 border-b border-[#282828] space-y-2">
-                <button id="new-channel-btn" class="w-full bg-white hover:bg-[#f0f0f0] text-black px-3 py-2 rounded-lg text-sm font-medium transition flex items-center justify-center gap-2">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4.5v15m7.5-7.5h-15"/>
-                    </svg>
-                    New Channel
-                </button>
-                <div class="flex gap-2">
-                    <button id="join-channel-btn" class="flex-1 bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] px-3 py-2 rounded-lg text-sm text-[#888] hover:text-white transition flex items-center justify-center gap-1.5">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244"/>
+            <div class="p-3 border-b border-[#282828] space-y-2.5">
+                <!-- Header with title and + button -->
+                <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-[#666] uppercase tracking-wider">Channels</span>
+                    <button id="new-channel-btn" class="p-1.5 hover:bg-[#252525] rounded-lg transition group" title="New Channel">
+                        <svg class="w-4 h-4 text-[#666] group-hover:text-white transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4.5v15m7.5-7.5h-15"/>
                         </svg>
-                        Join
-                    </button>
-                    <button id="browse-channels-btn" class="flex-1 bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] px-3 py-2 rounded-lg text-sm text-[#888] hover:text-white transition flex items-center justify-center gap-1.5">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"/>
-                        </svg>
-                        Browse
                     </button>
                 </div>
+                
+                <!-- Quick join input -->
+                <div class="relative">
+                    <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm font-medium text-[#555]">#</span>
+                    <input
+                        type="text"
+                        id="quick-join-input"
+                        placeholder="Join with channel ID..."
+                        class="w-full bg-[#1a1a1a] border border-[#282828] text-white pl-7 pr-3 py-2 rounded-lg text-sm placeholder-[#555] focus:outline-none focus:border-[#444] transition"
+                    />
+                </div>
+                
+                <!-- Explore button -->
+                <button id="browse-channels-btn" class="w-full bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] px-3 py-2 rounded-lg text-sm text-[#888] hover:text-white transition flex items-center justify-center gap-1.5">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"/>
+                    </svg>
+                    Explore
+                </button>
             </div>
 
             <!-- Channel List -->
@@ -349,8 +374,8 @@
                             Ideal for open communities and public discussions.
                         </p>
                         <div class="flex items-center gap-2 mt-2 pt-2 border-t border-[#282828]">
-                            <span class="text-sm text-[#666]">Cost:</span>
-                            <span class="text-sm text-white">Channel creation fee only</span>
+                            <span class="text-sm text-[#666]">Est. cost:</span>
+                            <span id="cost-public" class="text-sm text-white tooltip" data-tooltip="Gas: loading...">calculating...</span>
                         </div>
                     </div>
                     <input type="hidden" name="channel-type" value="public" class="channel-type-input">
@@ -364,8 +389,8 @@
                             Easy to share access via password.
                         </p>
                         <div class="flex items-center gap-2 mt-2 pt-2 border-t border-[#282828]">
-                            <span class="text-sm text-[#666]">Cost:</span>
-                            <span class="text-sm text-white">Channel creation fee only</span>
+                            <span class="text-sm text-[#666]">Est. cost:</span>
+                            <span id="cost-password" class="text-sm text-white tooltip" data-tooltip="Gas: loading...">calculating...</span>
                         </div>
                     </div>
                     <div>
@@ -391,8 +416,9 @@
                             Best for high-security channels where membership needs to be cryptographically verified.
                         </p>
                         <div class="flex items-center gap-2 mt-2 pt-2 border-t border-[#282828]">
-                            <span class="text-sm text-[#666]">Cost:</span>
-                            <span class="text-sm text-white">Creation + gas fee to add members</span>
+                            <span class="text-sm text-[#666]">Est. cost:</span>
+                            <span id="cost-native" class="text-sm text-white tooltip" data-tooltip="Gas: loading...">calculating...</span>
+                            <span class="text-xs text-[#555]">(members included)</span>
                         </div>
                     </div>
                     <div>
@@ -475,22 +501,19 @@
                     <svg class="w-4 h-4 text-[#888]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"/>
                     </svg>
-                    Browse Channels
+                    Explore Channels
                 </h3>
             </div>
 
             <!-- Type Filter Tabs -->
             <div class="flex bg-[#1a1a1a] rounded-lg p-1 gap-1 mb-3">
-                <button type="button" data-browse-filter="all" class="browse-filter-tab flex-1 text-[11px] py-1.5 px-2 rounded-md transition bg-white text-black font-medium">
-                    All
-                </button>
-                <button type="button" data-browse-filter="public" class="browse-filter-tab flex-1 text-[11px] py-1.5 px-2 rounded-md transition text-[#888] hover:text-white hover:bg-[#252525] flex items-center justify-center gap-1">
+                <button type="button" data-browse-filter="public" class="browse-filter-tab flex-1 text-[11px] py-1.5 px-2 rounded-md transition bg-white text-black font-medium flex items-center justify-center gap-1">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"/></svg>
                     Public
                 </button>
                 <button type="button" data-browse-filter="password" class="browse-filter-tab flex-1 text-[11px] py-1.5 px-2 rounded-md transition text-[#888] hover:text-white hover:bg-[#252525] flex items-center justify-center gap-1">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>
-                    Password
+                    Private
                 </button>
             </div>
 

@@ -402,6 +402,60 @@ class GraphAPI {
     }
 
     /**
+     * Get channel info by streamId from The Graph
+     * @param {string} streamId - The stream ID to look up
+     * @returns {Promise<Object|null>} - Channel info or null if not found
+     */
+    async getChannelInfo(streamId) {
+        const cacheKey = `channel_info:${streamId}`;
+
+        return this.getCached(cacheKey, async () => {
+            const query = `
+                query GetChannelInfo {
+                    stream(id: "${streamId}") {
+                        id
+                        metadata
+                        createdAt
+                        updatedAt
+                    }
+                }
+            `;
+
+            try {
+                Logger.debug('Querying channel info from The Graph:', streamId);
+                const data = await this.query(query);
+                const stream = data?.stream;
+
+                if (!stream) {
+                    Logger.debug('Channel not found in The Graph:', streamId);
+                    return null;
+                }
+
+                // Parse metadata
+                const outerMetadata = JSON.parse(stream.metadata || '{}');
+                const mootMetadata = JSON.parse(outerMetadata.description || '{}');
+
+                if (mootMetadata.app !== 'moot') {
+                    Logger.debug('Stream is not a Moot channel:', streamId);
+                    return null;
+                }
+
+                return {
+                    streamId: stream.id,
+                    name: mootMetadata.name || stream.id.split('/')[1]?.split('_')[0] || 'Unknown',
+                    type: mootMetadata.type || 'public',
+                    createdAt: mootMetadata.createdAt || parseInt(stream.createdAt) * 1000,
+                    updatedAt: parseInt(stream.updatedAt) * 1000,
+                    createdBy: stream.id.split('/')[0]
+                };
+            } catch (error) {
+                Logger.warn('Failed to get channel info:', error);
+                return null;
+            }
+        }, 60000); // Cache for 1 minute
+    }
+
+    /**
      * Get public Moot channels from The Graph
      * Queries streams with Moot metadata and public permissions
      * @param {Object} options - Query options
