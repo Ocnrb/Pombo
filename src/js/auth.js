@@ -310,6 +310,29 @@ class AuthManager {
     }
 
     /**
+     * Update wallet display name
+     * @param {string} newName - New display name
+     * @param {string} address - Wallet address (optional, defaults to current)
+     * @returns {boolean} - Success
+     */
+    updateWalletName(newName, address = null) {
+        const targetAddress = (address || this.address)?.toLowerCase();
+        if (!targetAddress) return false;
+        
+        const wallets = this.loadAllKeystores();
+        if (!wallets[targetAddress]) return false;
+        
+        wallets[targetAddress].name = newName || `Account ${targetAddress.slice(0, 8)}`;
+        localStorage.setItem(WALLETS_STORAGE_KEY, JSON.stringify(wallets));
+        
+        if (targetAddress === this.address?.toLowerCase()) {
+            this.currentWalletName = wallets[targetAddress].name;
+        }
+        
+        return true;
+    }
+
+    /**
      * Export keystore as JSON string (for backup)
      * @param {string} address - Wallet address to export
      * @returns {string} - Keystore JSON string

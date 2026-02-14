@@ -87,6 +87,37 @@ const GasEstimator = {
                 gasPrice: this.formatGwei(gasPrice)
             }
         };
+    },
+
+    async getBalance(address) {
+        try {
+            const response = await fetch(this.RPC_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    method: 'eth_getBalance',
+                    params: [address, 'latest'],
+                    id: 1
+                })
+            });
+            const data = await response.json();
+            const balanceWei = parseInt(data.result, 16);
+            return balanceWei;
+        } catch (error) {
+            Logger.warn('Failed to fetch balance:', error);
+            return null;
+        }
+    },
+
+    formatBalancePOL(wei) {
+        if (wei === null || wei === undefined) return 'Error';
+        const pol = wei / 1e18;
+        if (pol === 0) return '0 POL';
+        if (pol < 0.0001) return '< 0.0001 POL';
+        if (pol < 1) return `${pol.toFixed(4)} POL`;
+        if (pol < 100) return `${pol.toFixed(3)} POL`;
+        return `${pol.toFixed(2)} POL`;
     }
 };
 
@@ -120,6 +151,7 @@ class UIController {
             currentChannelName: document.getElementById('current-channel-name'),
             currentChannelInfo: document.getElementById('current-channel-info'),
             channelMenuBtn: document.getElementById('channel-menu-btn'),
+            closeChannelBtn: document.getElementById('close-channel-btn'),
             messagesArea: document.getElementById('messages-area'),
             messageInput: document.getElementById('message-input'),
             messageInputContainer: document.getElementById('message-input-container'),
@@ -378,6 +410,13 @@ class UIController {
             this.elements.channelMenuBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 this.showChannelDropdown(e);
+            });
+        }
+
+        // Close channel button (X)
+        if (this.elements.closeChannelBtn) {
+            this.elements.closeChannelBtn.addEventListener('click', () => {
+                this.deselectChannel();
             });
         }
 
@@ -734,6 +773,11 @@ class UIController {
             if (this.elements.channelMenuBtn) {
                 this.elements.channelMenuBtn.classList.remove('hidden');
             }
+
+            // Show close channel button
+            if (this.elements.closeChannelBtn) {
+                this.elements.closeChannelBtn.classList.remove('hidden');
+            }
             
             // Show online users container
             this.elements.onlineUsersContainer?.classList.remove('hidden');
@@ -753,6 +797,106 @@ class UIController {
             // Update online users display
             this.updateOnlineUsers(streamId, channelManager.getOnlineUsers(streamId));
         }
+    }
+
+    /**
+     * Deselect current channel (close it)
+     */
+    deselectChannel() {
+        // Clear typing indicator
+        this.hideTypingIndicator();
+        
+        // Stop presence tracking
+        channelManager.stopPresenceTracking();
+        
+        // Clear current channel
+        channelManager.setCurrentChannel(null);
+        
+        // Reset UI to "connected but no channel" state
+        this.elements.currentChannelName.textContent = 'Select a channel';
+        this.elements.currentChannelInfo.textContent = '';
+        this.elements.messageInputContainer.classList.add('hidden');
+        
+        // Hide channel-specific buttons
+        this.elements.inviteUsersBtn?.classList.add('hidden');
+        this.elements.channelMenuBtn?.classList.add('hidden');
+        this.elements.closeChannelBtn?.classList.add('hidden');
+        this.elements.onlineUsersContainer?.classList.add('hidden');
+        
+        // Reset online users list
+        if (this.elements.onlineUsersList) {
+            this.elements.onlineUsersList.innerHTML = '<div class="text-gray-400 text-sm text-center">No one online</div>';
+        }
+        if (this.elements.onlineUsersCount) {
+            this.elements.onlineUsersCount.textContent = '0';
+        }
+        
+        // Show "select channel" message
+        this.elements.messagesArea.innerHTML = `
+            <div class="flex flex-col items-center justify-center h-full text-gray-500 gap-3">
+                <svg class="w-12 h-12 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                </svg>
+                <span>Select or create a channel to start chatting</span>
+            </div>
+        `;
+        
+        // Remove selection highlight from channel list
+        document.querySelectorAll('.channel-item').forEach(item => {
+            item.classList.remove('bg-[#252525]');
+        });
+    }
+
+    /**
+     * Reset UI to disconnected state
+     */
+    resetToDisconnectedState() {
+        // Clear typing indicator
+        this.hideTypingIndicator();
+        
+        // Reset channel name and info
+        this.elements.currentChannelName.textContent = 'Select a channel';
+        this.elements.currentChannelInfo.textContent = '';
+        this.elements.messageInputContainer.classList.add('hidden');
+        
+        // Hide all channel-specific UI elements
+        this.elements.inviteUsersBtn?.classList.add('hidden');
+        this.elements.channelMenuBtn?.classList.add('hidden');
+        this.elements.closeChannelBtn?.classList.add('hidden');
+        this.elements.onlineUsersContainer?.classList.add('hidden');
+        
+        // Reset online users list
+        if (this.elements.onlineUsersList) {
+            this.elements.onlineUsersList.innerHTML = '<div class="text-gray-400 text-sm text-center">No one online</div>';
+        }
+        if (this.elements.onlineUsersCount) {
+            this.elements.onlineUsersCount.textContent = '0';
+        }
+        
+        // Show "connect account" message
+        this.elements.messagesArea.innerHTML = `
+            <div class="flex flex-col items-center justify-center h-full text-gray-500 gap-3">
+                <svg class="w-12 h-12 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/>
+                </svg>
+                <span>Connect your account to start</span>
+            </div>
+        `;
+    }
+
+    /**
+     * Show connected but no channel selected state
+     */
+    showConnectedNoChannelState() {
+        // Show "select channel" message
+        this.elements.messagesArea.innerHTML = `
+            <div class="flex flex-col items-center justify-center h-full text-gray-500 gap-3">
+                <svg class="w-12 h-12 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                </svg>
+                <span>Select or create a channel to start chatting</span>
+            </div>
+        `;
     }
 
     /**
@@ -3999,7 +4143,10 @@ class UIController {
         // Username change
         if (this.elements.settingsUsername) {
             this.elements.settingsUsername.addEventListener('change', async (e) => {
-                await identityManager.setUsername(e.target.value);
+                const newName = e.target.value;
+                await identityManager.setUsername(newName);
+                // Also update keystore name for unlock modal display
+                authManager.updateWalletName(newName || null);
                 this.showNotification('Username updated!', 'success');
             });
         }
@@ -4007,6 +4154,21 @@ class UIController {
         // Copy address from settings
         if (this.elements.copyOwnAddressBtn) {
             this.elements.copyOwnAddressBtn.addEventListener('click', () => this.copyOwnAddress());
+        }
+
+        // Refresh balance button
+        const refreshBalanceBtn = document.getElementById('refresh-balance-btn');
+        if (refreshBalanceBtn) {
+            refreshBalanceBtn.addEventListener('click', () => {
+                const address = authManager.getAddress();
+                this.updateBalanceDisplay(address);
+            });
+        }
+
+        // Fund with MetaMask button
+        const fundMetaMaskBtn = document.getElementById('fund-metamask-btn');
+        if (fundMetaMaskBtn) {
+            fundMetaMaskBtn.addEventListener('click', () => this.handleFundWithMetaMask());
         }
 
         // Graph API key change
@@ -4029,6 +4191,9 @@ class UIController {
 
         // Initialize backup/restore functionality
         this.initBackupRestoreUI();
+
+        // Initialize delete account functionality
+        this.initDeleteAccountUI();
     }
 
     /**
@@ -4177,7 +4342,7 @@ class UIController {
             exportBtn.addEventListener('click', async () => {
                 try {
                     if (!secureStorage.isStorageUnlocked()) {
-                        this.showNotification('Please unlock wallet first', 'error');
+                        this.showNotification('Please unlock account first', 'error');
                         return;
                     }
 
@@ -4277,6 +4442,141 @@ class UIController {
     }
 
     /**
+     * Initialize delete account UI handlers
+     */
+    initDeleteAccountUI() {
+        const deletePasswordInput = document.getElementById('delete-account-password');
+        const verifyBtn = document.getElementById('verify-delete-account-btn');
+        const step1 = document.getElementById('delete-account-step1');
+        const step2 = document.getElementById('delete-account-step2');
+        const deleteBtn = document.getElementById('delete-account-btn');
+        const deleteProgress = document.getElementById('delete-account-progress');
+        const deleteText = document.getElementById('delete-account-text');
+        const cancelBtn = document.getElementById('cancel-delete-account-btn');
+
+        let isPasswordVerified = false;
+        let holdTimer = null;
+
+        // Verify password
+        if (verifyBtn) {
+            verifyBtn.addEventListener('click', async () => {
+                const password = deletePasswordInput?.value;
+                if (!password) {
+                    this.showNotification('Please enter your password', 'error');
+                    return;
+                }
+
+                try {
+                    verifyBtn.disabled = true;
+                    verifyBtn.textContent = '🔄 Verifying...';
+                    
+                    // Verify password by trying to decrypt
+                    await authManager.getPrivateKey(password);
+                    
+                    isPasswordVerified = true;
+                    
+                    // Show step 2 (confirmation)
+                    step1?.classList.add('hidden');
+                    step2?.classList.remove('hidden');
+                    
+                    this.showNotification('Password verified', 'success');
+                } catch (error) {
+                    this.showNotification('Incorrect password', 'error');
+                } finally {
+                    verifyBtn.disabled = false;
+                    verifyBtn.textContent = 'Verify Password';
+                    if (deletePasswordInput) deletePasswordInput.value = '';
+                }
+            });
+        }
+
+        // Cancel - back to step 1
+        if (cancelBtn) {
+            cancelBtn.addEventListener('click', () => {
+                isPasswordVerified = false;
+                step2?.classList.add('hidden');
+                step1?.classList.remove('hidden');
+            });
+        }
+
+        // Long press to delete (2 seconds)
+        if (deleteBtn) {
+            const startHold = () => {
+                if (!isPasswordVerified) return;
+                
+                // Start progress animation
+                deleteProgress?.classList.remove('-translate-x-full');
+                deleteProgress?.classList.add('translate-x-0');
+                if (deleteText) deleteText.textContent = 'Keep holding...';
+
+                holdTimer = setTimeout(async () => {
+                    try {
+                        const currentAddress = authManager.getAddress();
+                        if (!currentAddress) {
+                            throw new Error('No account connected');
+                        }
+
+                        // Leave all channels first (disconnect from Streamr)
+                        await channelManager.leaveAllChannels();
+
+                        // Delete the wallet keystore
+                        authManager.deleteWallet(currentAddress);
+                        
+                        // Delete encrypted storage data for this address
+                        const storageKey = `moot_secure_${currentAddress.toLowerCase()}`;
+                        localStorage.removeItem(storageKey);
+                        
+                        // Lock storage
+                        secureStorage.lock();
+                        
+                        this.showNotification('Account deleted successfully', 'success');
+                        
+                        // Close settings modal
+                        document.getElementById('settings-modal')?.classList.add('hidden');
+                        
+                        // Update UI - clear wallet info and status
+                        this.updateWalletInfo(null);
+                        this.updateNetworkStatus('Disconnected', false);
+                        this.renderChannelList(); // Clear channel list
+                        this.resetToDisconnectedState();
+                        
+                        // Check if there are other accounts
+                        if (authManager.hasSavedWallet()) {
+                            // Show unlock modal for remaining accounts
+                            setTimeout(() => {
+                                window.ethChat?.connectWallet();
+                            }, 500);
+                        }
+                    } catch (e) {
+                        Logger.error('Failed to delete account:', e);
+                        this.showNotification('Failed to delete: ' + e.message, 'error');
+                    }
+                    resetProgress();
+                }, 2000);
+            };
+
+            const resetProgress = () => {
+                if (holdTimer) {
+                    clearTimeout(holdTimer);
+                    holdTimer = null;
+                }
+                deleteProgress?.classList.remove('translate-x-0');
+                deleteProgress?.classList.add('-translate-x-full');
+                if (deleteText && deleteText.textContent === 'Keep holding...') {
+                    deleteText.textContent = 'Hold to Delete (2s)';
+                }
+            };
+
+            deleteBtn.addEventListener('mousedown', startHold);
+            deleteBtn.addEventListener('touchstart', startHold);
+            deleteBtn.addEventListener('mouseup', resetProgress);
+            deleteBtn.addEventListener('mouseleave', resetProgress);
+            deleteBtn.addEventListener('touchend', resetProgress);
+            deleteBtn.addEventListener('touchcancel', resetProgress);
+        }
+    }
+
+    /**
      * Handle encrypted full backup import
      */
     async handleEncryptedImport(data) {
@@ -4292,7 +4592,7 @@ class UIController {
         if (!password) return;
 
         if (!secureStorage.isStorageUnlocked()) {
-            this.showNotification('Please unlock wallet to import data', 'error');
+            this.showNotification('Please unlock account to import data', 'error');
             return;
         }
 
@@ -4331,7 +4631,7 @@ class UIController {
         if (!password) return;
 
         if (!secureStorage.isStorageUnlocked()) {
-            this.showNotification('Please unlock wallet to import data', 'error');
+            this.showNotification('Please unlock account to import data', 'error');
             return;
         }
 
@@ -4534,6 +4834,9 @@ class UIController {
                 this.elements.settingsAddress.value = address || '';
             }
 
+            // Update balance field
+            this.updateBalanceDisplay(address);
+
             // Update checkbox state
             const enabled = notificationManager.isEnabled();
             if (this.elements.notificationsEnabled) {
@@ -4555,6 +4858,18 @@ class UIController {
 
             // Select first tab by default
             this.selectSettingsTab('profile');
+
+            // Reset private key export UI to step 1
+            document.getElementById('export-key-step1')?.classList.remove('hidden');
+            document.getElementById('export-key-step2')?.classList.add('hidden');
+            const exportKeyPassword = document.getElementById('export-key-password');
+            if (exportKeyPassword) exportKeyPassword.value = '';
+
+            // Reset delete account UI to step 1
+            document.getElementById('delete-account-step1')?.classList.remove('hidden');
+            document.getElementById('delete-account-step2')?.classList.add('hidden');
+            const deleteAccountPassword = document.getElementById('delete-account-password');
+            if (deleteAccountPassword) deleteAccountPassword.value = '';
 
             this.elements.settingsModal.classList.remove('hidden');
         }
@@ -4613,6 +4928,222 @@ class UIController {
                 this.elements.graphApiStatus.innerHTML = '<span class="text-red-500 inline-flex items-center gap-1"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>Invalid key or connection failed</span>';
             }
         }
+    }
+
+    /**
+     * Update POL balance display
+     */
+    async updateBalanceDisplay(address) {
+        const balanceEl = document.getElementById('settings-balance');
+        if (!balanceEl) return;
+        
+        if (!address) {
+            balanceEl.textContent = 'Not connected';
+            return;
+        }
+        
+        balanceEl.textContent = 'Loading...';
+        
+        const balanceWei = await GasEstimator.getBalance(address);
+        balanceEl.textContent = GasEstimator.formatBalancePOL(balanceWei);
+    }
+
+    /**
+     * Handle funding from MetaMask
+     */
+    async handleFundWithMetaMask() {
+        const localAddress = authManager.getAddress();
+        if (!localAddress) {
+            this.showNotification('No account connected', 'error');
+            return;
+        }
+
+        // Check if MetaMask is available
+        if (typeof window.ethereum === 'undefined') {
+            this.showNotification('MetaMask not detected. Please install MetaMask.', 'error');
+            window.open('https://metamask.io/download/', '_blank');
+            return;
+        }
+
+        try {
+            // Request MetaMask account access
+            const accounts = await window.ethereum.request({ 
+                method: 'eth_requestAccounts' 
+            });
+            
+            if (!accounts || accounts.length === 0) {
+                this.showNotification('MetaMask connection cancelled', 'error');
+                return;
+            }
+
+            const metamaskAddress = accounts[0];
+
+            // Check if on Polygon network (chainId 137)
+            const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+            if (chainId !== '0x89') {
+                // Try to switch to Polygon
+                try {
+                    await window.ethereum.request({
+                        method: 'wallet_switchEthereumChain',
+                        params: [{ chainId: '0x89' }],
+                    });
+                } catch (switchError) {
+                    // If Polygon not added, add it
+                    if (switchError.code === 4902) {
+                        await window.ethereum.request({
+                            method: 'wallet_addEthereumChain',
+                            params: [{
+                                chainId: '0x89',
+                                chainName: 'Polygon Mainnet',
+                                nativeCurrency: { name: 'POL', symbol: 'POL', decimals: 18 },
+                                rpcUrls: ['https://polygon-rpc.com'],
+                                blockExplorerUrls: ['https://polygonscan.com']
+                            }],
+                        });
+                    } else {
+                        throw switchError;
+                    }
+                }
+            }
+
+            // Show amount prompt
+            const amount = await this.showFundAmountPrompt();
+            if (!amount) return;
+
+            // Convert to wei (hex)
+            const amountWei = BigInt(Math.floor(parseFloat(amount) * 1e18));
+            const amountHex = '0x' + amountWei.toString(16);
+
+            // Send transaction
+            this.showNotification('Confirm transaction in MetaMask...', 'info');
+            
+            const txHash = await window.ethereum.request({
+                method: 'eth_sendTransaction',
+                params: [{
+                    from: metamaskAddress,
+                    to: localAddress,
+                    value: amountHex,
+                }],
+            });
+
+            this.showNotification('Transaction sent! Waiting for confirmation...', 'info');
+
+            // Wait for transaction receipt
+            let receipt = null;
+            while (!receipt) {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                receipt = await window.ethereum.request({
+                    method: 'eth_getTransactionReceipt',
+                    params: [txHash],
+                });
+            }
+
+            if (receipt.status === '0x1') {
+                this.showNotification(`Funded ${amount} POL successfully!`, 'success');
+                // Refresh balance
+                this.updateBalanceDisplay(localAddress);
+            } else {
+                this.showNotification('Transaction failed', 'error');
+            }
+
+        } catch (error) {
+            Logger.error('MetaMask funding error:', error);
+            if (error.code === 4001) {
+                this.showNotification('Transaction cancelled', 'error');
+            } else {
+                this.showNotification('Error: ' + (error.message || 'Unknown error'), 'error');
+            }
+        }
+    }
+
+    /**
+     * Show amount prompt for MetaMask funding
+     */
+    async showFundAmountPrompt() {
+        return new Promise((resolve) => {
+            const modal = document.createElement('div');
+            modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50';
+            modal.innerHTML = `
+                <div class="bg-[#111111] rounded-xl w-[320px] overflow-hidden shadow-2xl border border-[#222]">
+                    <div class="px-5 pt-5 pb-4">
+                        <div class="flex items-center justify-between">
+                            <h3 class="text-[15px] font-medium text-white">Fund Account</h3>
+                            <button id="close-fund-modal" class="text-[#666] hover:text-white transition p-1 -mr-1">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="px-5 pb-5">
+                        <input
+                            type="number"
+                            id="fund-amount"
+                            placeholder="Amount in POL"
+                            step="1"
+                            min="1"
+                            class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-[#8247E5]/50 transition placeholder:text-white/30 mb-3"
+                        />
+                        <div class="flex gap-2 mb-4">
+                            <button class="fund-preset flex-1 bg-white/5 hover:bg-white/10 text-white/60 px-2 py-1.5 rounded-lg text-xs transition whitespace-nowrap" data-amount="5">5 POL</button>
+                            <button class="fund-preset flex-1 bg-white/5 hover:bg-white/10 text-white/60 px-2 py-1.5 rounded-lg text-xs transition whitespace-nowrap" data-amount="10">10 POL</button>
+                            <button class="fund-preset flex-1 bg-white/5 hover:bg-white/10 text-white/60 px-2 py-1.5 rounded-lg text-xs transition whitespace-nowrap" data-amount="15">15 POL</button>
+                            <button class="fund-preset flex-1 bg-white/5 hover:bg-white/10 text-white/60 px-2 py-1.5 rounded-lg text-xs transition whitespace-nowrap" data-amount="20">20 POL</button>
+                        </div>
+                        <button id="confirm-fund-btn" class="w-full bg-[#F6851B]/10 hover:bg-[#F6851B]/20 text-[#F6851B] border border-[#F6851B]/30 px-4 py-3 rounded-xl text-sm font-medium transition flex items-center justify-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 12a2.25 2.25 0 00-2.25-2.25H15a3 3 0 11-6 0H5.25A2.25 2.25 0 003 12m18 0v6a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 18v-6m18 0V9M3 12V9m18 0a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 9m18 0V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v3"/></svg>
+                            Continue to MetaMask
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(modal);
+
+            const amountInput = modal.querySelector('#fund-amount');
+            const confirmBtn = modal.querySelector('#confirm-fund-btn');
+            const closeBtn = modal.querySelector('#close-fund-modal');
+            const presetBtns = modal.querySelectorAll('.fund-preset');
+
+            const cleanup = (result) => {
+                modal.remove();
+                resolve(result);
+            };
+
+            // Preset buttons - fill input
+            presetBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    amountInput.value = btn.dataset.amount;
+                    amountInput.focus();
+                });
+            });
+
+            // Confirm amount
+            confirmBtn.addEventListener('click', () => {
+                const amount = parseFloat(amountInput.value);
+                if (!amount || amount <= 0) {
+                    amountInput.classList.add('border-red-500/50');
+                    return;
+                }
+                cleanup(amountInput.value);
+            });
+
+            // Enter key on input
+            amountInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    confirmBtn.click();
+                }
+            });
+
+            // Close
+            closeBtn.addEventListener('click', () => cleanup(null));
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) cleanup(null);
+            });
+
+            // Focus input
+            setTimeout(() => amountInput.focus(), 100);
+        });
     }
 
     /**

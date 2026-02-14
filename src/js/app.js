@@ -108,8 +108,8 @@ class App {
 
             // Get password to unlock new wallet
             const password = await this.showSecureInput(
-                'Unlock Wallet',
-                'Enter password to unlock wallet:',
+                'Unlock Account',
+                'Enter password to unlock account:',
                 'password'
             );
             if (!password) return;
@@ -119,9 +119,9 @@ class App {
 
             // Load selected wallet
             await this.loadWalletWithProgress(password, selectedAddress);
-            uiController.showNotification('Wallet switched!', 'success');
+            uiController.showNotification('Account switched!', 'success');
         } catch (error) {
-            uiController.showNotification(error.message || 'Failed to switch wallet', 'error');
+            uiController.showNotification(error.message || 'Failed to switch account', 'error');
         }
     }
 
@@ -143,22 +143,10 @@ class App {
             uiController.updateWalletInfo(null);
             uiController.updateNetworkStatus('Disconnected', false);
             uiController.renderChannelList(); // Clear channel list
-            uiController.showNotification('Wallet disconnected', 'info');
+            uiController.resetToDisconnectedState(); // Reset all UI state
+            uiController.showNotification('Account disconnected', 'info');
             
-            // Reset chat area
-            const messagesArea = document.getElementById('messages-area');
-            if (messagesArea) {
-                messagesArea.innerHTML = `
-                    <div class="flex items-center justify-center h-full text-gray-500">
-                        Select or create a channel to start chatting
-                    </div>
-                `;
-            }
-            document.getElementById('message-input-container')?.classList.add('hidden');
-            document.getElementById('current-channel-name').textContent = 'Select a channel';
-            document.getElementById('current-channel-info').textContent = '';
-            
-            Logger.info('Wallet disconnected');
+            Logger.info('Account disconnected');
         } catch (error) {
             Logger.error('Error disconnecting:', error);
             uiController.showNotification('Error disconnecting: ' + error.message, 'error');
@@ -196,6 +184,13 @@ class App {
             const singleWallet = wallets.length === 1;
             const wallet = singleWallet ? wallets[0] : null;
             
+            // Helper to get display name - use stored name or fallback to "Account N"
+            const getDisplayName = (w, index) => {
+                // If name looks like auto-generated default, show "Account N"
+                const isDefaultName = !w.name || w.name.startsWith('Wallet ') || w.name.startsWith('Imported ') || w.name.startsWith('Account ');
+                return isDefaultName ? `Account ${index + 1}` : w.name;
+            };
+            
             const modal = document.createElement('div');
             modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 animate-fadeIn';
             modal.innerHTML = `
@@ -203,7 +198,7 @@ class App {
                     <!-- Header -->
                     <div class="px-5 pt-5 pb-3">
                         <div class="flex items-center justify-between">
-                            <h3 class="text-[15px] font-medium text-white">Unlock Wallet</h3>
+                            <h3 class="text-[15px] font-medium text-white">Unlock Account</h3>
                             <button id="close-modal" class="text-[#666] hover:text-white transition p-1 -mr-1">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
@@ -219,12 +214,12 @@ class App {
                             <div class="flex items-center gap-3">
                                 <div class="w-9 h-9 rounded-lg bg-[#252525] flex items-center justify-center">
                                     <svg class="w-4 h-4 text-[#888]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 12a2.25 2.25 0 00-2.25-2.25H15a3 3 0 11-6 0H5.25A2.25 2.25 0 003 12m18 0v6a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 18v-6m18 0V9M3 12V9m18 0a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 9m18 0V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v3"/>
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/>
                                     </svg>
                                 </div>
                                 <div class="flex-1 min-w-0">
-                                    <div class="text-[13px] font-medium text-white truncate">${wallet.name}</div>
-                                    <div class="text-[11px] text-[#666] font-mono">${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}</div>
+                                    <div class="text-[13px] font-medium text-white truncate">${getDisplayName(wallet, 0)}</div>
+                                    <div class="text-[11px] text-[#888] font-mono">${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}</div>
                                 </div>
                             </div>
                         </div>
@@ -238,12 +233,12 @@ class App {
                                     <div class="flex items-center gap-3">
                                         <div class="w-8 h-8 rounded-lg bg-[#252525] flex items-center justify-center flex-shrink-0">
                                             <svg class="w-4 h-4 text-[#888]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 12a2.25 2.25 0 00-2.25-2.25H15a3 3 0 11-6 0H5.25A2.25 2.25 0 003 12m18 0v6a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 18v-6m18 0V9M3 12V9m18 0a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 9m18 0V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v3"/>
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/>
                                             </svg>
                                         </div>
                                         <div class="flex-1 min-w-0">
-                                            <div class="text-[13px] font-medium text-white truncate">${w.name}</div>
-                                            <div class="text-[11px] text-[#666] font-mono">${w.address.slice(0, 6)}...${w.address.slice(-4)}</div>
+                                            <div class="text-[13px] font-medium text-white truncate">${getDisplayName(w, i)}</div>
+                                            <div class="text-[11px] text-[#888] font-mono">${w.address.slice(0, 6)}...${w.address.slice(-4)}</div>
                                         </div>
                                         <div class="w-4 h-4 rounded-full border border-[#444] group-[.selected]:bg-white flex items-center justify-center">
                                             <div class="w-2 h-2 rounded-full bg-white opacity-0 selected-dot"></div>
@@ -282,7 +277,7 @@ class App {
                     <!-- Footer -->
                     <div class="border-t border-[#222] px-5 py-3 bg-[#0d0d0d]">
                         <div class="flex items-center justify-center gap-3 text-[12px]">
-                            <button id="create-new-btn" class="text-[#666] hover:text-white transition">New wallet</button>
+                            <button id="create-new-btn" class="text-[#666] hover:text-white transition">New account</button>
                             <span class="text-[#333]">·</span>
                             <button id="import-btn" class="text-[#666] hover:text-white transition">Import</button>
                         </div>
@@ -431,7 +426,7 @@ class App {
                     <!-- Header -->
                     <div class="px-5 pt-5 pb-3">
                         <div class="flex items-center justify-between">
-                            <h3 class="text-[15px] font-medium text-white">Connect Wallet</h3>
+                            <h3 class="text-[15px] font-medium text-white">Connect Account</h3>
                             <button id="close-modal" class="text-[#666] hover:text-white transition p-1 -mr-1">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
@@ -450,8 +445,8 @@ class App {
                                     </svg>
                                 </div>
                                 <div>
-                                    <div class="text-[13px] font-medium text-black">Create New Wallet</div>
-                                    <div class="text-[11px] text-[#666]">Generate a new wallet</div>
+                                    <div class="text-[13px] font-medium text-black">Create New Account</div>
+                                    <div class="text-[11px] text-[#666]">Generate a new private key</div>
                                 </div>
                             </div>
                         </button>
@@ -465,7 +460,7 @@ class App {
                                 </div>
                                 <div>
                                     <div class="text-[13px] font-medium text-white">Import Private Key</div>
-                                    <div class="text-[11px] text-[#666]">Use existing wallet</div>
+                                    <div class="text-[11px] text-[#666]">Use existing account</div>
                                 </div>
                             </div>
                         </button>
@@ -533,19 +528,19 @@ class App {
             modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50';
             modal.innerHTML = `
                 <div class="bg-[#111111] rounded-xl p-5 w-[340px] border border-[#222]">
-                    <h3 class="text-[15px] font-medium mb-3 text-white">Connect Wallet</h3>
+                    <h3 class="text-[15px] font-medium mb-3 text-white">Connect Account</h3>
                     <div class="space-y-2">
                         <button class="w-full bg-white hover:bg-[#f0f0f0] text-black px-3 py-2.5 rounded-lg text-left transition" data-choice="local">
-                            <div class="text-[13px] font-medium">Generate New Wallet</div>
-                            <div class="text-[11px] text-[#666]">Create a new wallet</div>
+                            <div class="text-[13px] font-medium">Generate New Account</div>
+                            <div class="text-[11px] text-[#666]">Create a new account</div>
                         </button>
                         <button class="w-full bg-[#1a1a1a] hover:bg-[#202020] border border-[#282828] px-3 py-2.5 rounded-lg text-left transition" data-choice="import">
                             <div class="text-[13px] font-medium text-white">Import Private Key</div>
-                            <div class="text-[11px] text-[#666]">Use existing wallet</div>
+                            <div class="text-[11px] text-[#666]">Use existing account</div>
                         </button>
                         ${authManager.hasSavedWallet() ? `
                         <button class="w-full bg-[#1a1a1a] hover:bg-[#202020] border border-[#282828] px-3 py-2.5 rounded-lg text-left transition" data-choice="load">
-                            <div class="text-[13px] font-medium text-white">Load Saved Wallet</div>
+                            <div class="text-[13px] font-medium text-white">Load Saved Account</div>
                             <div class="text-[11px] text-[#666]">Decrypt from storage</div>
                         </button>
                         ` : ''}
@@ -664,14 +659,14 @@ class App {
 
             // Ask if user wants to save encrypted
             const saveChoice = await this.showConfirmModal(
-                'Save Wallet?',
-                'Would you like to save this wallet encrypted with a password?'
+                'Save Account?',
+                'Would you like to save this account encrypted with a password?'
             );
 
             if (saveChoice) {
                 const password = await this.showSecureInput(
-                    'Encrypt Wallet',
-                    'Enter a password to encrypt your wallet:',
+                    'Encrypt Account',
+                    'Enter a password to encrypt your account:',
                     'password'
                 );
                 if (password) {
@@ -680,7 +675,7 @@ class App {
             }
 
             await this.onWalletConnected(result.address, result.signer);
-            uiController.showNotification('Wallet created!', 'success');
+            uiController.showNotification('Account created!', 'success');
         } catch (error) {
             throw error;
         }
@@ -704,7 +699,7 @@ class App {
                                 </svg>
                             </div>
                             <div>
-                                <h3 class="text-[15px] font-medium text-white">Wallet Created</h3>
+                                <h3 class="text-[15px] font-medium text-white">Account Created</h3>
                                 <p class="text-[11px] text-[#666]">Save your private key</p>
                             </div>
                         </div>
@@ -747,7 +742,7 @@ class App {
                             </svg>
                             <div>
                                 <p class="text-[#f59e0b] text-[12px] font-medium">Save your private key!</p>
-                                <p class="text-[#a67c00] text-[10px] mt-0.5">Store it safely offline. This is the only way to recover your wallet.</p>
+                                <p class="text-[#a67c00] text-[10px] mt-0.5">Store it safely offline. This is the only way to recover your account.</p>
                             </div>
                         </div>
                     </div>
@@ -865,7 +860,7 @@ class App {
      * @param {string} name - Optional wallet name
      */
     async saveWalletWithProgress(password, name = null) {
-        const modal = this.showProgressModal('Encrypting Wallet', 'Using Keystore V3 with scrypt (n=262144)...');
+        const modal = this.showProgressModal('Encrypting Account', 'Using Keystore V3 with scrypt (n=262144)...');
         
         try {
             const result = await authManager.saveWalletEncrypted(password, name, (progress) => {
@@ -873,7 +868,7 @@ class App {
             });
             
             this.hideProgressModal(modal);
-            uiController.showNotification(`Wallet "${result.name}" saved securely!`, 'success');
+            uiController.showNotification(`Account "${result.name}" saved securely!`, 'success');
             return result;
         } catch (error) {
             this.hideProgressModal(modal);
@@ -887,7 +882,7 @@ class App {
      * @param {string} address - Optional specific wallet address
      */
     async loadWalletWithProgress(password, address = null) {
-        const modal = this.showProgressModal('Decrypting Wallet', 'Verifying Keystore V3...');
+        const modal = this.showProgressModal('Decrypting Account', 'Verifying Keystore V3...');
         
         try {
             const result = await authManager.loadWalletEncrypted(password, address, (progress) => {
@@ -961,12 +956,12 @@ class App {
             modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50';
             modal.innerHTML = `
                 <div class="bg-[#111111] rounded-xl p-5 w-[340px] border border-[#222]">
-                    <h3 class="text-[15px] font-medium mb-3 text-white">Select Wallet</h3>
+                    <h3 class="text-[15px] font-medium mb-3 text-white">Select Account</h3>
                     <div class="space-y-2 max-h-60 overflow-y-auto">
                         ${wallets.map(w => `
                             <button class="wallet-option w-full bg-[#1a1a1a] hover:bg-[#202020] border border-[#282828] px-3 py-2.5 rounded-lg text-left transition" data-address="${w.address}">
                                 <div class="text-[13px] font-medium text-white">${w.name}</div>
-                                <div class="text-[11px] text-[#666] font-mono">${w.address.slice(0, 10)}...${w.address.slice(-8)}</div>
+                                <div class="text-[11px] text-[#888] font-mono">${w.address.slice(0, 10)}...${w.address.slice(-8)}</div>
                                 <div class="text-[10px] text-[#555]">Last used: ${w.lastUsed ? new Date(w.lastUsed).toLocaleDateString() : 'Never'}</div>
                             </button>
                         `).join('')}
@@ -1010,12 +1005,12 @@ class App {
 
             // Ask if user wants to save encrypted
             const save = await this.showConfirmModal(
-                'Save Wallet?',
-                'Would you like to save this wallet encrypted with a password?'
+                'Save Account?',
+                'Would you like to save this account encrypted with a password?'
             );
             if (save) {
                 const password = await this.showSecureInput(
-                    'Encrypt Wallet',
+                    'Encrypt Account',
                     'Enter a password:',
                     'password'
                 );
@@ -1025,7 +1020,7 @@ class App {
             }
 
             await this.onWalletConnected(result.address, result.signer);
-            uiController.showNotification('Wallet imported!', 'success');
+            uiController.showNotification('Account imported!', 'success');
         } catch (error) {
             throw error;
         }
@@ -1046,8 +1041,8 @@ class App {
             }
             
             const password = await this.showSecureInput(
-                'Unlock Wallet',
-                'Enter your wallet password:',
+                'Unlock Account',
+                'Enter your account password:',
                 'password'
             );
             if (!password) return;
@@ -1102,6 +1097,9 @@ class App {
 
             // Render saved channels
             uiController.renderChannelList();
+
+            // Show "select a channel" state (connected but no channel open)
+            uiController.showConnectedNoChannelState();
 
             // Re-subscribe to all channels
             for (const channel of channelManager.getAllChannels()) {
@@ -1247,7 +1245,7 @@ class App {
                 } else {
                     // Store for later when wallet connects
                     this.pendingInvite = inviteData;
-                    uiController.showNotification('Please connect your wallet to join the channel', 'info');
+                    uiController.showNotification('Please connect your account to join the channel', 'info');
                 }
             }
         }
@@ -1351,7 +1349,7 @@ class App {
     async joinChannelFromInvite(inviteData) {
         try {
             if (!authManager.isConnected()) {
-                alert('Please connect your wallet first!');
+                alert('Please connect your account first!');
                 return;
             }
 
