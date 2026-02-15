@@ -122,6 +122,7 @@
         .user-dot { width: 8px; height: 8px; border-radius: 50%; background-color: #10b981; margin-right: 8px; flex-shrink: 0; }
         #online-users-list::-webkit-scrollbar { width: 4px; }
         #online-users-list::-webkit-scrollbar-thumb { background-color: #4b5563; border-radius: 2px; }
+        .rotate-90 { transform: rotate(90deg); display: inline-block; }
         .rotate-180 { transform: rotate(180deg); }
         
         /* Custom Tooltip */
@@ -253,20 +254,22 @@
                             </svg>
                         </button>
                     </div>
-                    <p id="current-channel-info" class="text-sm text-gray-400"></p>
-                </div>
-                <div class="flex items-center space-x-3">
-                    <!-- Online Users Counter -->
-                    <div class="relative hidden" id="online-users-container">
-                        <div id="online-header" class="bg-[#2a2a2a] rounded-lg px-3 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-[#333] transition">
-                            <span class="text-gray-300 text-sm">Online</span>
-                            <span class="bg-emerald-500 text-white px-2 py-0.5 rounded-full text-xs font-medium" id="online-users-count">0</span>
-                            <svg class="w-4 h-4 text-gray-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
-                        </div>
-                        <div id="online-users-list" class="absolute top-full right-0 mt-1 w-56 bg-[#2a2a2a] border border-gray-700 rounded-lg p-3 z-20 hidden max-h-48 overflow-y-auto">
-                            <div class="text-gray-400 text-sm text-center">No one online</div>
+                    <div class="flex items-center gap-1.5 text-sm text-gray-400">
+                        <span id="current-channel-info" class="inline-flex items-center"></span>
+                        <span id="online-separator" class="hidden leading-none">·</span>
+                        <div class="relative inline-flex items-center">
+                            <button id="online-header" class="hidden items-center gap-1 hover:text-gray-300 transition">
+                                <span id="online-users-count">0</span>
+                                <span>Online</span>
+                                <span class="text-xs leading-none rotate-90">›</span>
+                            </button>
+                            <div id="online-users-list" class="absolute top-full left-0 mt-1 w-56 bg-[#2a2a2a] border border-gray-700 rounded-lg p-3 z-20 hidden max-h-48 overflow-y-auto">
+                                <div class="text-gray-400 text-sm text-center">No one online</div>
+                            </div>
                         </div>
                     </div>
+                </div>
+                <div class="flex items-center space-x-3">
                     <div class="flex space-x-2">
                     <button id="invite-users-btn" class="p-2 hover:bg-gray-700 rounded-lg transition hidden" title="Invite Users">
                         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
