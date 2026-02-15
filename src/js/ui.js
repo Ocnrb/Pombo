@@ -1266,10 +1266,15 @@ class UIController {
             
             // Render message content based on type
             const contentHtml = this.renderMessageContent(msg);
+            
+            // Check for emoji-only messages (only for text type)
+            const msgType = msg.type || 'text';
+            const emojiOnly = msgType === 'text' ? this.isEmojiOnly(msg.text) : false;
+            const emojiAttr = emojiOnly ? ` data-emoji-only="${emojiOnly}"` : '';
 
             return `
                 ${dateSeparator}
-                <div class="message-entry ${isOwn ? 'own-message' : 'other-message'}" data-msg-id="${msgId}" data-sender="${msg.sender || ''}" data-type="${msg.type || 'text'}">
+                <div class="message-entry ${isOwn ? 'own-message' : 'other-message'}" data-msg-id="${msgId}" data-sender="${msg.sender || ''}" data-type="${msgType}"${emojiAttr}>
                     <div class="message-bubble">
                         <div class="flex items-center gap-1 mb-1">
                             ${badge.html}
@@ -2109,6 +2114,38 @@ class UIController {
     }
     
     /**
+     * Check if text is emoji-only (no other characters)
+     * @param {string} text - Text to check
+     * @returns {boolean|string} - false if not emoji-only, 'true' for 1-3 emojis, 'many' for 4+ emojis
+     */
+    isEmojiOnly(text) {
+        if (!text) return false;
+        // Regex for emoji detection (covers most emoji including compound ones)
+        const emojiRegex = /[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu;
+        const stripped = text.replace(/\s/g, '');
+        const emojis = stripped.match(emojiRegex);
+        if (!emojis || emojis.length === 0) return false;
+        
+        // Check if only emojis remain after removing them
+        const withoutEmojis = stripped.replace(emojiRegex, '').replace(/[\uFE0F\u200D]/g, '');
+        if (withoutEmojis.length > 0) return false;
+        
+        // Return 'true' for 1-3 emojis, 'many' for 4+
+        return emojis.length <= 3 ? 'true' : 'many';
+    }
+
+    /**
+     * Wrap emojis in text with span for styling
+     * @param {string} html - Escaped HTML text
+     * @returns {string} - HTML with emojis wrapped in spans
+     */
+    wrapInlineEmojis(html) {
+        // Regex for emoji detection
+        const emojiRegex = /([\p{Emoji_Presentation}\p{Extended_Pictographic}][\uFE0F\u200D]?)/gu;
+        return html.replace(emojiRegex, '<span class="inline-emoji">$1</span>');
+    }
+
+    /**
      * Render message content based on type
      */
     renderMessageContent(msg) {
@@ -2293,7 +2330,9 @@ class UIController {
                 `;
                 
             default:
-                return this.escapeHtml(msg.text || '');
+                // For text messages, wrap emojis for inline styling
+                const escapedText = this.escapeHtml(msg.text || '');
+                return this.wrapInlineEmojis(escapedText);
         }
     }
     
