@@ -86,6 +86,12 @@
         /* Input buttons */
         .input-button { background-color: #374151; color: white; width: 2.25rem; height: 2.25rem; border-radius: 9999px; display: flex; align-items: center; justify-content: center; transition: background-color 0.2s; cursor: pointer; }
         .input-button:hover { background-color: #4b5563; }
+
+        /* Send button (icon-only, dark orange) */
+            #send-message-btn { background-color: transparent; color: #FF5C00; width: 2.25rem; height: 2.25rem; border-radius: 9999px; display: inline-flex; align-items: center; justify-content: center; padding: 0; transition: background-color 0.12s, color 0.12s, transform 0.08s; }
+            #send-message-btn svg { display: block; }
+            #send-message-btn:hover { color: #FF7A33; background-color: rgba(255,92,0,0.08); }
+        #send-message-btn:active { transform: translateY(1px); }
         
         /* Toast Notifications */
         .toast-container { position: fixed; bottom: 1rem; left: 1rem; z-index: 9999; display: flex; flex-direction: column-reverse; gap: 0.5rem; max-width: 350px; }
@@ -344,10 +350,10 @@
                         class="flex-1 bg-[#1a1a1a] text-white px-4 py-2 rounded-full focus:outline-none focus:border-[#444] border border-[#282828] text-sm transition"
                     />
                     
-                    <!-- Send Button -->
-                    <button id="send-message-btn" class="bg-white hover:bg-[#f0f0f0] w-9 h-9 rounded-full transition flex items-center justify-center">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-black" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+                    <!-- Send Button: transparent, dark-orange arrow icon -->
+                    <button id="send-message-btn" class="bg-transparent w-9 h-9 transition flex items-center justify-center p-0" aria-label="Send message">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6.5 w-6.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
                         </svg>
                     </button>
                 </div>
