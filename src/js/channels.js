@@ -258,7 +258,7 @@ class ChannelManager {
             Logger.debug('Total channels:', this.channels.size);
 
             // Note: Permissions are now set in createStream (single transaction)
-            // Public channels: discoverable via The Graph (metadata contains app: 'moot')
+            // Public channels: discoverable via The Graph (metadata contains app: 'pombo')
             // Native channels: permissions already set in createStream
             // Password channels: public with client-side encryption
 
@@ -1742,17 +1742,17 @@ class ChannelManager {
     // ==================== PUBLIC CHANNEL DISCOVERY ====================
 
     /**
-     * Get public Moot channels
-     * Queries The Graph for streams with Moot metadata and public permissions
+     * Get public Pombo channels
+     * Queries The Graph for streams with Pombo metadata and public permissions
      * @returns {Promise<Array>} - List of public channels
      */
     async getPublicChannels() {
         const channelsMap = new Map(); // Use map to deduplicate by streamId
 
-        // 1. Query The Graph for public Moot channels
+        // 1. Query The Graph for public Pombo channels
         try {
             Logger.debug('Fetching public channels from The Graph...');
-            const graphChannels = await graphAPI.getPublicMootChannels();
+            const graphChannels = await graphAPI.getPublicPomboChannels();
             
             for (const ch of graphChannels) {
                 channelsMap.set(ch.streamId, ch);

@@ -154,10 +154,10 @@ class StreamrController {
             Logger.debug('   Original name:', channelName, '-> Sanitized:', sanitizedName);
 
             // Build metadata for The Graph indexing
-            // This allows querying Moot channels via The Graph API
+            // This allows querying Pombo channels via The Graph API
             // Store ORIGINAL name in metadata (for display)
             const metadata = JSON.stringify({
-                app: 'moot',
+                app: 'pombo',
                 version: '1',
                 name: channelName, // Original name with special chars
                 type: type,

@@ -4975,7 +4975,7 @@ class UIController {
                     const keystores = authManager.exportKeystores();
                     
                     const fullBackup = {
-                        format: 'moot-full-backup',
+                        format: 'pombo-full-backup',
                         version: 2,
                         exportedAt: new Date().toISOString(),
                         keystores: keystores,
@@ -4989,7 +4989,7 @@ class UIController {
                     const timestamp = new Date().toISOString().slice(0, 10);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = `moot-backup-encrypted-${timestamp}.json`;
+                    a.download = `pombo-backup-encrypted-${timestamp}.json`;
                     a.click();
                     
                     URL.revokeObjectURL(url);
@@ -5016,15 +5016,15 @@ class UIController {
                     const data = JSON.parse(text);
                     
                     // Handle new encrypted format
-                    if (data.format === 'moot-full-backup' && data.version === 2) {
+                    if (data.format === 'pombo-full-backup' && data.version === 2) {
                         await this.handleEncryptedImport(data);
                     } 
                     // Handle encrypted data only
-                    else if (data.format === 'moot-encrypted-backup') {
+                    else if (data.format === 'pombo-encrypted-backup') {
                         await this.handleEncryptedDataImport(data);
                     }
                     // Handle keystores only
-                    else if (data.format === 'moot-keystores') {
+                    else if (data.format === 'pombo-keystores') {
                         await this.handleKeystoresImport(data);
                     }
                     else {
@@ -5131,7 +5131,7 @@ class UIController {
                         mediaController.reset();
 
                         // 6. Delete encrypted storage data for this address
-                        const storageKey = `moot_secure_${currentAddress.toLowerCase()}`;
+                        const storageKey = `pombo_secure_${currentAddress.toLowerCase()}`;
                         localStorage.removeItem(storageKey);
 
                         // 7. Lock secure storage

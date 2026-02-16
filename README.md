@@ -1,11 +1,11 @@
-# Moot - P2P Decentralized Chat
+# Pombo - P2P Decentralized Chat
 
 P2P decentralized chat using the Streamr Network, Ethereum and Web3.
 
 ## Project Structure
 
 ```
-Moot/
+Pombo/
 ├── index.html              # Main UI (references dist/* bundles)
 ├── src/
 │   ├── js/                 # Source JavaScript modules

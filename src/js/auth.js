@@ -560,7 +560,7 @@ class AuthManager {
      */
     exportKeystores() {
         const data = {
-            format: 'moot-keystores',
+            format: 'pombo-keystores',
             version: 1,
             exportedAt: new Date().toISOString(),
             keystores: {}
@@ -586,7 +586,7 @@ class AuthManager {
      * @returns {Object} - Import summary
      */
     importKeystores(data, merge = true) {
-        if (!data || data.format !== 'moot-keystores') {
+        if (!data || data.format !== 'pombo-keystores') {
             throw new Error('Invalid keystores backup format');
         }
 

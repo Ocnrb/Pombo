@@ -203,11 +203,11 @@ class GraphAPI {
                 const stream = await this.getStream(streamId);
                 if (stream?.metadata) {
                     const outerMetadata = JSON.parse(stream.metadata || '{}');
-                    const mootMetadata = JSON.parse(outerMetadata.description || '{}');
+                    const pomboMetadata = JSON.parse(outerMetadata.description || '{}');
                     
-                    if (mootMetadata.app === 'moot' && mootMetadata.type) {
-                        Logger.debug('Type from metadata:', mootMetadata.type);
-                        return mootMetadata.type;
+                    if (pomboMetadata.app === 'pombo' && pomboMetadata.type) {
+                        Logger.debug('Type from metadata:', pomboMetadata.type);
+                        return pomboMetadata.type;
                     }
                 }
             } catch (metaError) {
@@ -433,18 +433,18 @@ class GraphAPI {
 
                 // Parse metadata
                 const outerMetadata = JSON.parse(stream.metadata || '{}');
-                const mootMetadata = JSON.parse(outerMetadata.description || '{}');
+                const pomboMetadata = JSON.parse(outerMetadata.description || '{}');
 
-                if (mootMetadata.app !== 'moot') {
-                    Logger.debug('Stream is not a Moot channel:', streamId);
+                if (pomboMetadata.app !== 'pombo') {
+                    Logger.debug('Stream is not a Pombo channel:', streamId);
                     return null;
                 }
 
                 return {
                     streamId: stream.id,
-                    name: mootMetadata.name || stream.id.split('/')[1]?.split('_')[0] || 'Unknown',
-                    type: mootMetadata.type || 'public',
-                    createdAt: mootMetadata.createdAt || parseInt(stream.createdAt) * 1000,
+                    name: pomboMetadata.name || stream.id.split('/')[1]?.split('_')[0] || 'Unknown',
+                    type: pomboMetadata.type || 'public',
+                    createdAt: pomboMetadata.createdAt || parseInt(stream.createdAt) * 1000,
                     updatedAt: parseInt(stream.updatedAt) * 1000,
                     createdBy: stream.id.split('/')[0]
                 };
@@ -456,21 +456,21 @@ class GraphAPI {
     }
 
     /**
-     * Get public Moot channels from The Graph
-     * Queries streams with Moot metadata and public permissions
+     * Get public Pombo channels from The Graph
+     * Queries streams with Pombo metadata and public permissions
      * @param {Object} options - Query options
      * @param {number} options.first - Number of results (default: 50)
      * @param {number} options.skip - Offset for pagination (default: 0)
-     * @returns {Promise<Array>} - Array of public Moot channels
+     * @returns {Promise<Array>} - Array of public Pombo channels
      */
-    async getPublicMootChannels(options = {}) {
+    async getPublicPomboChannels(options = {}) {
         const { first = 50, skip = 0 } = options;
-        const cacheKey = `moot_public:${first}:${skip}`;
+        const cacheKey = `pombo_public:${first}:${skip}`;
 
         return this.getCached(cacheKey, async () => {
             // Query streams that have public permissions (userAddress is 0x0...0 for public)
             const query = `
-                query GetPublicMootChannels {
+                query GetPublicPomboChannels {
                     streams(
                         first: ${first}, 
                         skip: ${skip}, 
@@ -488,40 +488,40 @@ class GraphAPI {
             `;
 
             try {
-                Logger.debug('Querying public Moot channels from The Graph...');
+                Logger.debug('Querying public Pombo channels from The Graph...');
                 const data = await this.query(query);
                 const streams = data?.streams || [];
                 
-                // Filter and transform to Moot channel format
+                // Filter and transform to Pombo channel format
                 const channels = [];
                 for (const stream of streams) {
                     try {
                         // Parse metadata - Streamr stores { partitions, description }
-                        // Our Moot JSON is inside the description field
+                        // Our Pombo JSON is inside the description field
                         const outerMetadata = JSON.parse(stream.metadata || '{}');
-                        const mootMetadata = JSON.parse(outerMetadata.description || '{}');
+                        const pomboMetadata = JSON.parse(outerMetadata.description || '{}');
                         
-                        if (mootMetadata.app === 'moot') {
+                        if (pomboMetadata.app === 'pombo') {
                             channels.push({
                                 streamId: stream.id,
-                                name: mootMetadata.name || stream.id.split('/')[1]?.split('_')[0] || 'Unknown',
-                                type: mootMetadata.type || 'public',
-                                createdAt: mootMetadata.createdAt || parseInt(stream.createdAt) * 1000,
+                                name: pomboMetadata.name || stream.id.split('/')[1]?.split('_')[0] || 'Unknown',
+                                type: pomboMetadata.type || 'public',
+                                createdAt: pomboMetadata.createdAt || parseInt(stream.createdAt) * 1000,
                                 updatedAt: parseInt(stream.updatedAt) * 1000,
                                 // Owner is the first part of streamId (address/path format)
                                 createdBy: stream.id.split('/')[0]
                             });
                         }
                     } catch (parseError) {
-                        // Not a valid Moot channel, skip
+                        // Not a valid Pombo channel, skip
                         continue;
                     }
                 }
 
-                Logger.debug(`Found ${channels.length} public Moot channels`);
+                Logger.debug(`Found ${channels.length} public Pombo channels`);
                 return channels;
             } catch (error) {
-                Logger.warn('Failed to get public Moot channels:', error);
+                Logger.warn('Failed to get public Pombo channels:', error);
                 return [];
             }
         });

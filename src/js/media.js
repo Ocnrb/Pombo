@@ -174,7 +174,7 @@ class MediaController {
     async initIndexedDB() {
         return new Promise((resolve, reject) => {
             // Upgrade to version 2 for seedFiles store
-            const request = indexedDB.open('MootMediaDB', 2);
+            const request = indexedDB.open('PomboMediaDB', 2);
             
             request.onerror = () => {
                 Logger.warn('IndexedDB not available, using memory only');

@@ -141,7 +141,7 @@ class IdentityManager {
     createMessageHash(id, text, sender, timestamp, channelId) {
         // Use structured data encoding to prevent delimiter injection attacks
         const data = JSON.stringify({
-            protocol: 'MOOT',
+            protocol: 'POMBO',
             version: 1,
             id: id,
             text: text,

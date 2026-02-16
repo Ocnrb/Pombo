@@ -22,18 +22,18 @@ class NotificationManager {
      */
     getStorageKey() {
         const address = authManager.getAddress();
-        if (!address) return 'moot_notifications_default';
-        return `moot_notifications_${address.toLowerCase()}`;
+        if (!address) return 'pombo_notifications_default';
+        return `pombo_notifications_${address.toLowerCase()}`;
     }
 
     /**
      * Get the notification stream ID for an address
-     * Format: {address}/moot_notifications
+     * Format: {address}/pombo_notifications
      * @param {string} address - Ethereum address
      * @returns {string} - Stream ID
      */
     getStreamId(address) {
-        return `${address.toLowerCase()}/moot_notifications`;
+        return `${address.toLowerCase()}/pombo_notifications`;
     }
 
     /**
@@ -94,7 +94,7 @@ class NotificationManager {
             const stream = await streamrController.client.createStream({
                 id: streamId,
                 partitions: 1,
-                description: 'Moot notification channel'
+                description: 'Pombo notification channel'
             });
 
             // Make it publicly writable (anyone can send invites)
@@ -390,7 +390,7 @@ class NotificationManager {
             const address = authManager.getAddress();
             if (!address) return;
             
-            const key = `moot_invites_${address.toLowerCase()}`;
+            const key = `pombo_invites_${address.toLowerCase()}`;
             const saved = localStorage.getItem(key);
             if (saved) {
                 const invites = JSON.parse(saved);
@@ -412,7 +412,7 @@ class NotificationManager {
             const address = authManager.getAddress();
             if (!address) return;
             
-            const key = `moot_invites_${address.toLowerCase()}`;
+            const key = `pombo_invites_${address.toLowerCase()}`;
             const invites = Array.from(this.pendingInvites.values());
             localStorage.setItem(key, JSON.stringify(invites));
         } catch (error) {

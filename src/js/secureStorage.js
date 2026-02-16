@@ -17,7 +17,7 @@ class SecureStorage {
         this.address = null;          // Current wallet address
         this.isUnlocked = false;      // Whether storage is decrypted
         this.cache = null;            // Decrypted data cache
-        this.STORAGE_PREFIX = 'moot_secure_';
+        this.STORAGE_PREFIX = 'pombo_secure_';
         this.PBKDF2_ITERATIONS = 100000;
     }
 
@@ -33,7 +33,7 @@ class SecureStorage {
         
         // Create a deterministic message for signing
         // This ensures the same key is derived each time
-        const message = `Moot Secure Storage\n\nUnlock encrypted storage for:\n${normalizedAddress}\n\nThis signature is used to derive an encryption key.`;
+        const message = `Pombo Secure Storage\n\nUnlock encrypted storage for:\n${normalizedAddress}\n\nThis signature is used to derive an encryption key.`;
         
         Logger.debug('Deriving storage encryption key...');
         
@@ -41,7 +41,7 @@ class SecureStorage {
         const signature = await signer.signMessage(message);
         
         // Create deterministic salt from address
-        const salt = new TextEncoder().encode(`moot_salt_${normalizedAddress}`);
+        const salt = new TextEncoder().encode(`pombo_salt_${normalizedAddress}`);
         
         // Import signature as key material
         const keyMaterial = await crypto.subtle.importKey(
@@ -531,7 +531,7 @@ class SecureStorage {
         Logger.info('📤 Exported encrypted backup');
         
         return {
-            format: 'moot-encrypted-backup',
+            format: 'pombo-encrypted-backup',
             version: 2,
             salt: Array.from(salt),
             iv: Array.from(iv),
@@ -551,7 +551,7 @@ class SecureStorage {
             throw new Error('Storage not unlocked');
         }
 
-        if (backup.format !== 'moot-encrypted-backup') {
+        if (backup.format !== 'pombo-encrypted-backup') {
             throw new Error('Invalid backup format');
         }
 

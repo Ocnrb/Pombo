@@ -24,7 +24,7 @@ class App {
      * Initialize the application
      */
     async init() {
-        Logger.info('Moot - Initializing...');
+        Logger.info('Pombo - Initializing...');
 
         try {
             // Initialize media controller
@@ -50,7 +50,7 @@ class App {
             uiController.updateNetworkStatus('Ready to connect', false);
 
             this.initialized = true;
-            Logger.info('Moot - Ready!');
+            Logger.info('Pombo - Ready!');
             
             // Auto-show wallet modal if saved wallets exist
             if (authManager.hasSavedWallet()) {
