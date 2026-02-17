@@ -287,7 +287,7 @@ class StreamrController {
             const createTime = ((Date.now() - startTime) / 1000).toFixed(1);
             Logger.info(`✓ Both streams created in ${createTime}s`);
 
-            // Step 3: Set permissions on both streams (can be parallel - different operations)
+            // Step 3: Set permissions on both streams (SEQUENTIAL - blockchain tx nonce conflicts if parallel)
             Logger.info('Setting permissions on both streams...');
             const permStartTime = Date.now();
             
@@ -297,37 +297,41 @@ class StreamrController {
                     ? (stream) => this.grantPublicReadOnlyPermissions(stream)
                     : (stream) => this.grantPublicPermissions(stream);
                 
-                const permResults = await Promise.allSettled([
-                    grantFn(messageStream),
-                    grantFn(ephemeralStream)
-                ]);
+                // Sequential to avoid nonce conflicts
+                try {
+                    await grantFn(messageStream);
+                    Logger.info('✓ Message stream: public permissions set');
+                } catch (e) {
+                    Logger.error('✗ Message stream permissions failed:', e.message);
+                }
+                
+                try {
+                    await grantFn(ephemeralStream);
+                    Logger.info('✓ Ephemeral stream: public permissions set');
+                } catch (e) {
+                    Logger.error('✗ Ephemeral stream permissions failed:', e.message);
+                }
                 
                 const permTime = ((Date.now() - permStartTime) / 1000).toFixed(1);
-                permResults.forEach((result, i) => {
-                    const name = i === 0 ? 'Message' : 'Ephemeral';
-                    if (result.status === 'fulfilled') {
-                        Logger.info(`✓ ${name} stream: public permissions set`);
-                    } else {
-                        Logger.error(`✗ ${name} stream permissions failed:`, result.reason?.message);
-                    }
-                });
                 Logger.info(`Permissions configured in ${permTime}s`);
                 
             } else if (type === 'native') {
-                const permResults = await Promise.allSettled([
-                    this.setStreamPermissions(messageStream.id, { public: false, members }),
-                    this.setStreamPermissions(ephemeralStream.id, { public: false, members })
-                ]);
+                // Sequential to avoid nonce conflicts
+                try {
+                    await this.setStreamPermissions(messageStream.id, { public: false, members });
+                    Logger.info('✓ Message stream: permissions set');
+                } catch (e) {
+                    Logger.error('✗ Message stream permissions failed:', e.message);
+                }
+                
+                try {
+                    await this.setStreamPermissions(ephemeralStream.id, { public: false, members });
+                    Logger.info('✓ Ephemeral stream: permissions set');
+                } catch (e) {
+                    Logger.error('✗ Ephemeral stream permissions failed:', e.message);
+                }
                 
                 const permTime = ((Date.now() - permStartTime) / 1000).toFixed(1);
-                permResults.forEach((result, i) => {
-                    const name = i === 0 ? 'Message' : 'Ephemeral';
-                    if (result.status === 'fulfilled') {
-                        Logger.info(`✓ ${name} stream: permissions set`);
-                    } else {
-                        Logger.error(`✗ ${name} stream permissions failed:`, result.reason?.message);
-                    }
-                });
                 Logger.info(`Permissions configured in ${permTime}s`);
             }
             
