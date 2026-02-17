@@ -7,7 +7,7 @@
  */
 
 import { Logger } from './logger.js';
-import { streamrController } from './streamr.js';
+import { streamrController, deriveEphemeralId } from './streamr.js';
 import { authManager } from './auth.js';
 import { identityManager } from './identity.js';
 import { channelManager } from './channels.js';
@@ -45,14 +45,11 @@ const CONFIG = {
     SEED_FILES_EXPIRE_DAYS: 7,             // Auto-clean after 7 days
     AUTO_SEED_ON_JOIN: true,               // Re-announce as seeder when joining channel
     PERSIST_PUBLIC_CHANNELS: true,         // Persist files from public channels
-    PERSIST_PRIVATE_CHANNELS: false,       // Don't persist files from private channels (privacy)
+    PERSIST_PRIVATE_CHANNELS: false        // Don't persist files from private channels (privacy)
     
-    // Partitions
-    PARTITIONS: {
-        MESSAGES: 0,  // Text messages (stored)
-        CONTROL: 1,   // Presence, typing (ephemeral)
-        MEDIA: 2      // Images, file chunks
-    }
+    // Note: Partitions removed - now using dual-stream architecture
+    // - messageStreamId: for persistent content (images, video announcements)
+    // - ephemeralStreamId: for P2P data (chunks, requests, seeder announcements)
 };
 
 class MediaController {
@@ -308,12 +305,12 @@ class MediaController {
 
     /**
      * Send an image
-     * @param {string} streamId - Channel stream ID
+     * @param {string} messageStreamId - Channel message stream ID
      * @param {File} file - Image file
      * @param {string} password - Channel password (optional)
      * @returns {Promise<Object>} - Image message info
      */
-    async sendImage(streamId, file, password = null) {
+    async sendImage(messageStreamId, file, password = null) {
         // Validate file type
         if (!CONFIG.ALLOWED_IMAGE_TYPES.includes(file.type)) {
             throw new Error(`Invalid image type. Allowed: ${CONFIG.ALLOWED_IMAGE_TYPES.join(', ')}`);
@@ -329,8 +326,8 @@ class MediaController {
         this.imageCache.set(imageId, base64Data);
         
         // Create image message with data embedded (for LogStore persistence)
-        // This goes to partition 0 so it's stored and retrievable from history
-        const announcement = await identityManager.createSignedMessage('', streamId);
+        // This goes to messageStream so it's stored and retrievable from history
+        const announcement = await identityManager.createSignedMessage('', messageStreamId);
         announcement.type = 'image';
         announcement.imageId = imageId;
         announcement.imageData = base64Data; // Include data for persistence
@@ -344,14 +341,14 @@ class MediaController {
         };
         
         // Add to local channel messages & notify UI immediately (for sender)
-        const channel = channelManager.getChannel(streamId);
+        const channel = channelManager.getChannel(messageStreamId);
         if (channel) {
             channel.messages.push(announcement);
-            channelManager.notifyHandlers('message', { streamId, message: announcement });
+            channelManager.notifyHandlers('message', { streamId: messageStreamId, message: announcement });
         }
         
-        // Publish announcement with embedded data
-        await streamrController.publishMessage(streamId, announcement, password);
+        // Publish announcement with embedded data to messageStream (stored)
+        await streamrController.publishMessage(messageStreamId, announcement, password);
         Logger.debug('Image message sent with data:', imageId);
         
         return { messageId, imageId, data: base64Data };
@@ -493,16 +490,17 @@ class MediaController {
 
     /**
      * Request image data from network
-     * @param {string} streamId - Channel stream ID
+     * @param {string} messageStreamId - Channel message stream ID
      * @param {string} imageId - Image ID to request
      * @param {string} password - Channel password (optional)
      */
-    async requestImage(streamId, imageId, password = null) {
+    async requestImage(messageStreamId, imageId, password = null) {
+        const ephemeralStreamId = deriveEphemeralId(messageStreamId);
         const request = {
             type: 'image_request',
             imageId: imageId
         };
-        await streamrController.publishMedia(streamId, request, password);
+        await streamrController.publishMedia(ephemeralStreamId, request, password);
         Logger.debug('Image requested:', imageId);
     }
 
@@ -510,12 +508,12 @@ class MediaController {
 
     /**
      * Send a video file (chunked transfer)
-     * @param {string} streamId - Channel stream ID
+     * @param {string} messageStreamId - Channel message stream ID
      * @param {File} file - Video file
      * @param {string} password - Channel password (optional)
      * @returns {Promise<Object>} - File metadata
      */
-    async sendVideo(streamId, file, password = null) {
+    async sendVideo(messageStreamId, file, password = null) {
         // Validate file type
         if (!CONFIG.ALLOWED_VIDEO_TYPES.includes(file.type)) {
             throw new Error(`Invalid video type. Allowed: ${CONFIG.ALLOWED_VIDEO_TYPES.join(', ')}`);
@@ -533,12 +531,12 @@ class MediaController {
             // Store temp reference with callback
             this.localFiles.set(tempId, {
                 file: file,
-                streamId: streamId,
+                streamId: messageStreamId, // Store messageStreamId for seeding
                 isPrivateChannel: isPrivateChannel,
                 callback: async (metadata) => {
                     try {
                         // Create file announcement message
-                        const announcement = await identityManager.createSignedMessage('', streamId);
+                        const announcement = await identityManager.createSignedMessage('', messageStreamId);
                         announcement.type = 'video_announce';
                         announcement.metadata = metadata;
                         // Keep the id from createSignedMessage (signed)
@@ -550,14 +548,14 @@ class MediaController {
                         };
                         
                         // Add to local channel messages & notify UI immediately (for sender)
-                        const channel = channelManager.getChannel(streamId);
+                        const channel = channelManager.getChannel(messageStreamId);
                         if (channel) {
                             channel.messages.push(announcement);
-                            channelManager.notifyHandlers('message', { streamId, message: announcement });
+                            channelManager.notifyHandlers('message', { streamId: messageStreamId, message: announcement });
                         }
                         
-                        // Publish announcement (partition 0 - messages)
-                        await streamrController.publishMessage(streamId, announcement, password);
+                        // Publish announcement to messageStream (stored)
+                        await streamrController.publishMessage(messageStreamId, announcement, password);
                         Logger.info('Video announced:', metadata.fileId, metadata.fileName);
                         
                         resolve({ messageId: announcement.id, metadata });
@@ -574,10 +572,10 @@ class MediaController {
 
     /**
      * Handle incoming media message (dispatch to appropriate handler)
-     * @param {string} streamId - Channel stream ID
+     * @param {string} messageStreamId - Channel message stream ID
      * @param {Object} data - Media data
      */
-    handleMediaMessage(streamId, data) {
+    handleMediaMessage(messageStreamId, data) {
         if (!data || !data.type) return;
         
         switch (data.type) {
@@ -586,19 +584,19 @@ class MediaController {
                 break;
                 
             case 'image_request':
-                this.handleImageRequest(streamId, data);
+                this.handleImageRequest(messageStreamId, data);
                 break;
                 
             case 'piece_request':
-                this.handlePieceRequest(streamId, data);
+                this.handlePieceRequest(messageStreamId, data);
                 break;
                 
             case 'file_piece':
-                this.handleFilePiece(streamId, data);
+                this.handleFilePiece(messageStreamId, data);
                 break;
                 
             case 'source_request':
-                this.handleSourceRequest(streamId, data);
+                this.handleSourceRequest(messageStreamId, data);
                 break;
                 
             case 'source_announce':
@@ -613,32 +611,36 @@ class MediaController {
     /**
      * Handle image request (from another peer)
      * Response is encrypted with channel password for private channels
+     * Response goes to ephemeralStream (not stored)
      */
-    async handleImageRequest(streamId, data) {
+    async handleImageRequest(messageStreamId, data) {
         const imageData = this.imageCache.get(data.imageId);
         if (!imageData) return;
         
         // Get channel password for encryption
-        const channel = channelManager.getChannel(streamId);
+        const channel = channelManager.getChannel(messageStreamId);
         const password = channel?.password || null;
         
-        // Send the image data (encrypted if password channel)
+        // Derive ephemeral stream ID for response
+        const ephemeralStreamId = deriveEphemeralId(messageStreamId);
+        
+        // Send the image data to ephemeralStream (encrypted if password channel)
         const payload = {
             type: 'image_data',
             imageId: data.imageId,
             data: imageData
         };
-        await streamrController.publishMedia(streamId, payload, password);
+        await streamrController.publishMedia(ephemeralStreamId, payload, password);
         Logger.debug('Image data sent in response to request:', data.imageId, password ? '(encrypted)' : '');
     }
 
     /**
      * Start downloading a file
-     * @param {string} streamId - Channel stream ID
+     * @param {string} messageStreamId - Channel message stream ID
      * @param {Object} metadata - File metadata from announcement
      * @param {string} password - Channel password (optional)
      */
-    async startDownload(streamId, metadata, password = null) {
+    async startDownload(messageStreamId, metadata, password = null) {
         const { fileId, fileName, fileSize, fileType, pieceCount, pieceHashes } = metadata;
         
         if (this.incomingFiles.has(fileId)) {
@@ -649,7 +651,7 @@ class MediaController {
         // Initialize transfer state
         const transfer = {
             metadata,
-            streamId,
+            streamId: messageStreamId, // Store messageStreamId for channel lookup and seeding
             password,
             isPrivateChannel: !!password, // Password presence indicates private channel
             pieceStatus: new Array(pieceCount).fill('pending'),
@@ -784,6 +786,7 @@ class MediaController {
 
     /**
      * Request a specific piece from a seeder
+     * Requests go to ephemeralStream (not stored)
      */
     async requestPiece(fileId, pieceIndex, seederId) {
         const transfer = this.incomingFiles.get(fileId);
@@ -804,6 +807,9 @@ class MediaController {
         
         transfer.requestsInFlight.set(pieceIndex, { seederId, timeoutId });
         
+        // Derive ephemeral stream ID for P2P request
+        const ephemeralStreamId = deriveEphemeralId(transfer.streamId);
+        
         const request = {
             type: 'piece_request',
             fileId,
@@ -811,15 +817,16 @@ class MediaController {
             targetSeederId: seederId
         };
         
-        await streamrController.publishMedia(transfer.streamId, request, transfer.password);
+        await streamrController.publishMedia(ephemeralStreamId, request, transfer.password);
     }
 
     /**
      * Handle piece request (we are a seeder)
      * Note: Addresses must be normalized to lowercase for comparison
      * because Streamr metadata.publisherId is always lowercase
+     * @param {string} messageStreamId - Channel message stream ID
      */
-    async handlePieceRequest(streamId, data) {
+    async handlePieceRequest(messageStreamId, data) {
         const myAddress = authManager.getAddress()?.toLowerCase();
         const targetAddress = data.targetSeederId?.toLowerCase();
         
@@ -829,17 +836,19 @@ class MediaController {
         if (!localFile) return;
         
         Logger.debug('Responding to piece request:', data.pieceIndex, 'for file:', data.fileId);
-        await this.sendPiece(streamId, data.fileId, data.pieceIndex);
+        await this.sendPiece(messageStreamId, data.fileId, data.pieceIndex);
     }
 
     /**
      * Send a file piece (queued with throttling)
      * Piece data is encrypted with channel password for private channels
+     * Pieces go to ephemeralStream (not stored)
+     * @param {string} messageStreamId - Channel message stream ID
      */
-    async sendPiece(streamId, fileId, pieceIndex) {
+    async sendPiece(messageStreamId, fileId, pieceIndex) {
         // Queue the piece send request
         return new Promise((resolve) => {
-            this.pieceSendQueue.push({ streamId, fileId, pieceIndex, resolve });
+            this.pieceSendQueue.push({ messageStreamId, fileId, pieceIndex, resolve });
             this.processPieceQueue();
         });
     }
@@ -854,7 +863,7 @@ class MediaController {
         this.isSendingPieces = true;
         
         while (this.pieceSendQueue.length > 0) {
-            const { streamId, fileId, pieceIndex, resolve } = this.pieceSendQueue.shift();
+            const { messageStreamId, fileId, pieceIndex, resolve } = this.pieceSendQueue.shift();
             
             // Throttle: wait for minimum delay since last send
             const now = Date.now();
@@ -864,7 +873,7 @@ class MediaController {
             }
             
             // Send the piece
-            await this._sendPieceImmediate(streamId, fileId, pieceIndex);
+            await this._sendPieceImmediate(messageStreamId, fileId, pieceIndex);
             this.lastPieceSentTime = Date.now();
             resolve();
         }
@@ -874,8 +883,10 @@ class MediaController {
 
     /**
      * Actually send a file piece (internal, called by queue processor)
+     * Pieces go to ephemeralStream (not stored)
+     * @param {string} messageStreamId - Channel message stream ID
      */
-    async _sendPieceImmediate(streamId, fileId, pieceIndex) {
+    async _sendPieceImmediate(messageStreamId, fileId, pieceIndex) {
         const localFile = this.localFiles.get(fileId);
         if (!localFile) return;
         
@@ -888,8 +899,11 @@ class MediaController {
         const base64 = this.arrayBufferToBase64(arrayBuffer);
         
         // Get channel password for encryption
-        const channel = channelManager.getChannel(streamId);
+        const channel = channelManager.getChannel(messageStreamId);
         const password = channel?.password || null;
+        
+        // Derive ephemeral stream ID for P2P data
+        const ephemeralStreamId = deriveEphemeralId(messageStreamId);
         
         const payload = {
             type: 'file_piece',
@@ -898,14 +912,15 @@ class MediaController {
             data: base64
         };
         
-        await streamrController.publishMedia(streamId, payload, password);
+        await streamrController.publishMedia(ephemeralStreamId, payload, password);
         Logger.debug('Sent piece', pieceIndex, 'of', fileId, password ? '(encrypted)' : '');
     }
 
     /**
      * Handle received file piece
+     * @param {string} messageStreamId - Channel message stream ID
      */
-    async handleFilePiece(streamId, data) {
+    async handleFilePiece(messageStreamId, data) {
         // Skip our own pieces (self-filtering)
         const myAddress = authManager.getAddress()?.toLowerCase();
         if (data.senderId?.toLowerCase() === myAddress) return;
@@ -1085,38 +1100,45 @@ class MediaController {
 
     /**
      * Request file sources (seeders)
+     * Requests go to ephemeralStream (not stored)
+     * @param {string} messageStreamId - Channel message stream ID
      */
-    async requestFileSources(streamId, fileId, password = null) {
+    async requestFileSources(messageStreamId, fileId, password = null) {
+        const ephemeralStreamId = deriveEphemeralId(messageStreamId);
         const request = {
             type: 'source_request',
             fileId
         };
-        await streamrController.publishMedia(streamId, request, password);
+        await streamrController.publishMedia(ephemeralStreamId, request, password);
         Logger.debug('Requested sources for:', fileId);
     }
 
     /**
      * Handle source request
      * Respond with seeder announcement (encrypted if private channel)
+     * Response goes to ephemeralStream (not stored)
      */
-    async handleSourceRequest(streamId, data) {
+    async handleSourceRequest(messageStreamId, data) {
         if (this.localFiles.has(data.fileId)) {
             // Get channel password for encryption
-            const channel = channelManager.getChannel(streamId);
+            const channel = channelManager.getChannel(messageStreamId);
             const password = channel?.password || null;
-            await this.announceFileSource(streamId, data.fileId, password);
+            await this.announceFileSource(messageStreamId, data.fileId, password);
         }
     }
 
     /**
      * Announce as file source (seeder)
+     * Announcements go to ephemeralStream (not stored)
+     * @param {string} messageStreamId - Channel message stream ID
      */
-    async announceFileSource(streamId, fileId, password = null) {
+    async announceFileSource(messageStreamId, fileId, password = null) {
+        const ephemeralStreamId = deriveEphemeralId(messageStreamId);
         const announce = {
             type: 'source_announce',
             fileId
         };
-        await streamrController.publishMedia(streamId, announce, password);
+        await streamrController.publishMedia(ephemeralStreamId, announce, password);
         Logger.debug('Announced as source for:', fileId);
     }
 
@@ -1492,15 +1514,17 @@ class MediaController {
     /**
      * Re-announce as seeder for all persisted files in a channel
      * Called when joining a channel
+     * @param {string} messageStreamId - Channel message stream ID
      */
-    async reannounceForChannel(streamId, password = null) {
+    async reannounceForChannel(messageStreamId, password = null) {
         if (!CONFIG.AUTO_SEED_ON_JOIN) return;
         
         let reannounced = 0;
         
         for (const [fileId, fileInfo] of this.localFiles) {
-            if (fileInfo.streamId === streamId) {
-                await this.announceFileSource(streamId, fileId, password);
+            // Check against messageStreamId (stored as streamId in localFiles)
+            if (fileInfo.streamId === messageStreamId) {
+                await this.announceFileSource(messageStreamId, fileId, password);
                 reannounced++;
             }
         }

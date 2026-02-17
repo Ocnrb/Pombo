@@ -244,51 +244,11 @@ class AuthManager {
         try {
             const saved = localStorage.getItem(WALLETS_STORAGE_KEY);
             if (!saved) {
-                // Check for legacy single wallet format
-                const legacyWallet = localStorage.getItem('eth_chat_wallet');
-                if (legacyWallet) {
-                    return this.migrateLegacyWallet(legacyWallet);
-                }
                 return {};
             }
             return JSON.parse(saved);
         } catch (error) {
             Logger.error('Failed to load keystores:', error);
-            return {};
-        }
-    }
-
-    /**
-     * Migrate legacy single wallet to new format
-     * @param {string} legacyJson - Legacy encrypted wallet JSON
-     * @returns {Object} - Migrated wallets object
-     */
-    migrateLegacyWallet(legacyJson) {
-        try {
-            const keystore = JSON.parse(legacyJson);
-            const address = keystore.address ? `0x${keystore.address}` : 'unknown';
-            
-            const wallets = {
-                [address.toLowerCase()]: {
-                    name: 'Migrated Wallet',
-                    keystore: keystore,
-                    createdAt: Date.now(),
-                    lastUsed: Date.now(),
-                    migrated: true
-                }
-            };
-            
-            // Save in new format
-            localStorage.setItem(WALLETS_STORAGE_KEY, JSON.stringify(wallets));
-            
-            // Remove legacy key
-            localStorage.removeItem('eth_chat_wallet');
-            
-            Logger.info('Migrated legacy wallet to Keystore V3 format');
-            
-            return wallets;
-        } catch (error) {
-            Logger.error('Failed to migrate legacy wallet:', error);
             return {};
         }
     }

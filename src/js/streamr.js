@@ -1,23 +1,27 @@
 /**
  * Streamr Controller
  * Manages Streamr client connection, subscriptions, and publishing
- * Implements partition-based communication (0=Control, 1=Messages, 2=Media)
  * 
- * Partition Structure:
- * - 0: Control (presence, reactions)
- * - 1: Messages (text messages)
- * - 2: Media (images, files, streams)
+ * DUAL-STREAM ARCHITECTURE (v0):
+ * Each channel uses 2 streams:
+ * 
+ * Message Stream (suffix -1): WITH STORAGE
+ * - Partition 0: Text messages, reactions, images, video announcements
+ * 
+ * Ephemeral Stream (suffix -2): NO STORAGE
+ * - Partition 0: Control/Metadata (presence, typing)
+ * - Partition 1: Media chunks (P2P file transfer)
+ * 
+ * This solves the privacy problem where Streamr storage is per-stream,
+ * not per-partition, causing presence metadata to be persisted.
  */
 
 import { Logger } from './logger.js';
 import { cryptoManager } from './crypto.js';
 
-// === STORAGE CONFIG ===
-// Using Streamr's official storage node for message history/persistence
-// Fallback: LogStore node if Streamr storage unavailable
-const LOGSTORE_CONFIG = {
+// === STREAM CONFIG (DUAL-STREAM ARCHITECTURE) ===
+const STREAM_CONFIG = {
     // Streamr's official storage node (will be set from SDK after load)
-    // Fallback to LogStore if SDK constant not available
     NODE_ADDRESS: null, // Set dynamically in init()
     
     // LogStore Virtual Storage Node (backup option)
@@ -29,13 +33,60 @@ const LOGSTORE_CONFIG = {
     // Number of messages to load on scroll (pagination)
     LOAD_MORE_COUNT: 30,
     
-    // Partitions (swapped: messages on 0 for storage compatibility)
-    PARTITIONS: {
-        MESSAGES: 0,  // Text messages (partition 0 = stored reliably)
-        CONTROL: 1,   // Presence, typing (ephemeral - no history needed)
-        MEDIA: 2      // Images, files
+    // Message Stream (with storage): only 1 partition needed
+    MESSAGE_STREAM: {
+        SUFFIX: '-1',
+        PARTITIONS: 1,
+        MESSAGES: 0  // Text, reactions, images, video announcements
+    },
+    
+    // Ephemeral Stream (no storage): 2 partitions
+    EPHEMERAL_STREAM: {
+        SUFFIX: '-2',
+        PARTITIONS: 2,
+        CONTROL: 0,  // Presence, typing
+        MEDIA: 1     // File chunks (P2P transfer)
     }
 };
+
+// === ID DERIVATION FUNCTIONS ===
+/**
+ * Derive ephemeral stream ID from message stream ID
+ * @param {string} messageStreamId - Message stream ID (ends with -1)
+ * @returns {string} - Ephemeral stream ID (ends with -2)
+ */
+function deriveEphemeralId(messageStreamId) {
+    if (!messageStreamId) return null;
+    return messageStreamId.replace(/-1$/, '-2');
+}
+
+/**
+ * Derive message stream ID from ephemeral stream ID
+ * @param {string} ephemeralStreamId - Ephemeral stream ID (ends with -2)
+ * @returns {string} - Message stream ID (ends with -1)
+ */
+function deriveMessageId(ephemeralStreamId) {
+    if (!ephemeralStreamId) return null;
+    return ephemeralStreamId.replace(/-2$/, '-1');
+}
+
+/**
+ * Check if a stream ID is a message stream (ends with -1)
+ * @param {string} streamId - Stream ID to check
+ * @returns {boolean}
+ */
+function isMessageStream(streamId) {
+    return streamId && streamId.endsWith('-1');
+}
+
+/**
+ * Check if a stream ID is an ephemeral stream (ends with -2)
+ * @param {string} streamId - Stream ID to check
+ * @returns {boolean}
+ */
+function isEphemeralStream(streamId) {
+    return streamId && streamId.endsWith('-2');
+}
 
 class StreamrController {
     constructor() {
@@ -68,10 +119,10 @@ class StreamrController {
             
             // Set storage node address from SDK (prefer Streamr's official node)
             if (window.STREAMR_STORAGE_NODE_GERMANY) {
-                LOGSTORE_CONFIG.NODE_ADDRESS = window.STREAMR_STORAGE_NODE_GERMANY;
+                STREAM_CONFIG.NODE_ADDRESS = window.STREAMR_STORAGE_NODE_GERMANY;
                 Logger.debug('Using Streamr official storage node');
             } else {
-                LOGSTORE_CONFIG.NODE_ADDRESS = LOGSTORE_CONFIG.LOGSTORE_NODE;
+                STREAM_CONFIG.NODE_ADDRESS = STREAM_CONFIG.LOGSTORE_NODE;
                 Logger.debug('Using LogStore storage node (fallback)');
             }
             
@@ -126,14 +177,17 @@ class StreamrController {
     }
 
     /**
-     * Create a new stream with partitions
+     * Create a new channel with dual-stream architecture
+     * Creates 2 streams: Message stream (with storage) and Ephemeral stream (no storage)
+     * 
      * @param {string} channelName - Name of the channel
      * @param {string} creatorAddress - Creator's Ethereum address
      * @param {string} type - Channel type: 'public', 'password', 'native'
      * @param {string[]} members - Array of member addresses (for native channels)
-     * @returns {Promise<Object>} - Stream info
+     * @param {Object} options - Additional options { exposure: 'visible'|'hidden' }
+     * @returns {Promise<Object>} - Stream info with messageStreamId and ephemeralStreamId
      */
-    async createStream(channelName, creatorAddress, type = 'public', members = []) {
+    async createStream(channelName, creatorAddress, type = 'public', members = [], options = {}) {
         if (!this.client) {
             throw new Error('Streamr client not initialized');
         }
@@ -141,107 +195,245 @@ class StreamrController {
         // Use the address for the stream namespace
         const ownerAddress = this.address;
         
-        // Sanitize channel name for Streamr path (only alphanumeric, hyphen, underscore)
-        const sanitizedName = this.sanitizeStreamPath(channelName);
-        
-        // Generate unique stream ID ONCE
+        // Generate unique base ID (8 char random hex)
         const randomHash = cryptoManager.generateRandomHex(8);
-        const streamId = `${ownerAddress}/${sanitizedName}_${randomHash}`;
+        const baseStreamPath = `${ownerAddress}/${randomHash}`;
+        
+        // Dual-stream IDs
+        const messageStreamId = `${baseStreamPath}-1`;
+        const ephemeralStreamId = `${baseStreamPath}-2`;
 
         try {
-            Logger.debug('Creating stream:', streamId, '- Type:', type);
+            Logger.debug('Creating dual-stream channel:', { messageStreamId, ephemeralStreamId });
             Logger.debug('   Owner address:', ownerAddress);
-            Logger.debug('   Original name:', channelName, '-> Sanitized:', sanitizedName);
+            Logger.debug('   Original name:', channelName);
+            Logger.debug('   Type:', type);
 
-            // Build metadata for The Graph indexing
-            // This allows querying Pombo channels via The Graph API
-            // Store ORIGINAL name in metadata (for display)
+            // Build metadata for The Graph indexing (abbreviated keys per MIGRATION_PLAN)
+            // Native channels are always hidden; others default to hidden unless specified
+            const exposure = options.exposure || 'hidden';
+            const readOnly = options.readOnly || false;
             const metadata = JSON.stringify({
-                app: 'pombo',
-                version: '1',
-                name: channelName, // Original name with special chars
-                type: type,
-                createdAt: Date.now()
+                a: 'pombo',           // app
+                v: '1',               // version
+                n: exposure === 'hidden' ? null : channelName,  // name
+                t: type,              // type: public|private|native
+                e: exposure,          // exposure: visible|hidden
+                r: readOnly,          // readOnly
+                // Only include metadata if visible
+                d: exposure === 'visible' ? (options.description || '') : undefined,  // description
+                l: exposure === 'visible' ? (options.language || 'en') : undefined,   // language
+                c: exposure === 'visible' ? (options.category || 'general') : undefined,  // category
+                ts: Date.now()        // createdAt
             });
 
-            // Create stream with metadata
-            const stream = await this.client.createStream({
-                id: streamId,
-                description: metadata,
-                partitions: 3
+            const ephemeralMetadata = JSON.stringify({
+                a: 'pombo',           // app
+                v: '1',               // version
+                ln: messageStreamId   // linkedTo (parentStream)
             });
 
-            Logger.debug('Stream created:', stream.id);
+            // === SERIAL CREATION: Streams must be created one after another ===
+            // Note: Parallel creation causes REPLACEMENT_UNDERPRICED error due to nonce conflicts
+            
+            // Helper function to create stream with retry
+            const createStreamWithRetry = async (streamId, streamMetadata, streamDescription, maxRetries = 3) => {
+                for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                    try {
+                        Logger.info(`Creating stream (attempt ${attempt}/${maxRetries})...`);
+                        const stream = await this.client.createStream({
+                            id: streamId,
+                            description: streamMetadata,
+                            partitions: STREAM_CONFIG.MESSAGE_STREAM.PARTITIONS
+                        });
+                        Logger.info(`✓ Stream created: ${stream.id}`);
+                        return stream;
+                    } catch (error) {
+                        Logger.warn(`Stream creation attempt ${attempt} failed:`, error.message);
+                        
+                        // Check if stream was actually created despite error
+                        try {
+                            const existingStream = await this.client.getStream(streamId);
+                            if (existingStream) {
+                                Logger.info(`✓ Stream exists (created despite error): ${existingStream.id}`);
+                                return existingStream;
+                            }
+                        } catch (e) {
+                            // Stream doesn't exist, continue retry
+                        }
+                        
+                        if (attempt < maxRetries) {
+                            // Wait before retry with exponential backoff
+                            const delay = attempt * 3000;
+                            Logger.info(`Retrying in ${delay/1000}s...`);
+                            await new Promise(r => setTimeout(r, delay));
+                        } else {
+                            throw error;
+                        }
+                    }
+                }
+            };
+            
+            // Step 1: Create MESSAGE STREAM first
+            Logger.info('Creating message stream...');
+            const startTime = Date.now();
+            
+            const messageStream = await createStreamWithRetry(messageStreamId, metadata, 'message');
+            
+            // Step 2: Create EPHEMERAL STREAM
+            Logger.info('Creating ephemeral stream...');
+            const ephemeralStream = await createStreamWithRetry(ephemeralStreamId, ephemeralMetadata, 'ephemeral');
+            
+            const createTime = ((Date.now() - startTime) / 1000).toFixed(1);
+            Logger.info(`✓ Both streams created in ${createTime}s`);
 
-            // Configure permissions based on channel type
+            // Step 3: Set permissions on both streams (can be parallel - different operations)
+            Logger.info('Setting permissions on both streams...');
+            const permStartTime = Date.now();
+            
             if (type === 'public' || type === 'password') {
-                // Public/Password streams: grant public permissions (anyone can pub/sub)
-                // Password channels are public at network level, encryption is client-side
-                try {
-                    Logger.debug('Configuring public permissions for', type, 'channel...');
-                    await this.grantPublicPermissions(stream);
-                    Logger.debug('Public permissions granted');
-                } catch (permError) {
-                    Logger.error('Failed to grant public permissions:', permError.message);
-                }
+                // For read-only channels, grant only subscribe permissions to public
+                const grantFn = readOnly 
+                    ? (stream) => this.grantPublicReadOnlyPermissions(stream)
+                    : (stream) => this.grantPublicPermissions(stream);
+                
+                const permResults = await Promise.allSettled([
+                    grantFn(messageStream),
+                    grantFn(ephemeralStream)
+                ]);
+                
+                const permTime = ((Date.now() - permStartTime) / 1000).toFixed(1);
+                permResults.forEach((result, i) => {
+                    const name = i === 0 ? 'Message' : 'Ephemeral';
+                    if (result.status === 'fulfilled') {
+                        Logger.info(`✓ ${name} stream: public permissions set`);
+                    } else {
+                        Logger.error(`✗ ${name} stream permissions failed:`, result.reason?.message);
+                    }
+                });
+                Logger.info(`Permissions configured in ${permTime}s`);
+                
             } else if (type === 'native') {
-                // Private (native) streams: set all permissions in single transaction
-                try {
-                    Logger.debug('Private channel - setting permissions (single transaction)...');
-                    await this.setStreamPermissions(stream.id, {
-                        public: false,
-                        members: members
-                    });
-                    Logger.debug('All permissions set in single transaction');
-                } catch (e) {
-                    Logger.warn('Failed to set permissions:', e.message);
-                }
+                const permResults = await Promise.allSettled([
+                    this.setStreamPermissions(messageStream.id, { public: false, members }),
+                    this.setStreamPermissions(ephemeralStream.id, { public: false, members })
+                ]);
+                
+                const permTime = ((Date.now() - permStartTime) / 1000).toFixed(1);
+                permResults.forEach((result, i) => {
+                    const name = i === 0 ? 'Message' : 'Ephemeral';
+                    if (result.status === 'fulfilled') {
+                        Logger.info(`✓ ${name} stream: permissions set`);
+                    } else {
+                        Logger.error(`✗ ${name} stream permissions failed:`, result.reason?.message);
+                    }
+                });
+                Logger.info(`Permissions configured in ${permTime}s`);
             }
+            
+            const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+            Logger.info(`✓ Channel creation complete in ${totalTime}s total`);
 
             return {
-                streamId: stream.id,
+                messageStreamId: messageStream.id,
+                ephemeralStreamId: ephemeralStream.id,
                 type: type,
                 name: channelName
             };
         } catch (error) {
-            // Check if stream was actually created despite error
             Logger.warn('Create stream error:', error.message);
             
+            // Check if streams were actually created despite error
+            // Handle partial creation - message stream might exist even if ephemeral failed
             try {
-                const existingStream = await this.client.getStream(streamId);
-                if (existingStream) {
-                    Logger.debug('Stream exists (created despite error):', streamId);
+                let existingMessageStream = null;
+                let existingEphemeralStream = null;
+                
+                try {
+                    existingMessageStream = await this.client.getStream(messageStreamId);
+                    Logger.debug('Message stream exists');
+                } catch (e) {
+                    Logger.debug('Message stream does not exist');
+                }
+                
+                try {
+                    existingEphemeralStream = await this.client.getStream(ephemeralStreamId);
+                    Logger.debug('Ephemeral stream exists');
+                } catch (e) {
+                    Logger.debug('Ephemeral stream does not exist');
+                }
+                
+                // If at least message stream exists, configure permissions
+                if (existingMessageStream) {
+                    Logger.info('Configuring permissions on existing stream(s)...');
                     
-                    // Configure permissions based on type (same logic as above)
+                    // Use correct permission function based on readOnly flag
+                    const grantFn = readOnly 
+                        ? (stream) => this.grantPublicReadOnlyPermissions(stream)
+                        : (stream) => this.grantPublicPermissions(stream);
+                    
                     if (type === 'public' || type === 'password') {
-                        try {
-                            await this.grantPublicPermissions(existingStream);
-                        } catch (e) {
-                            Logger.error('Could not grant public permissions:', e.message);
+                        await grantFn(existingMessageStream).catch(e => Logger.warn('Message perm error:', e.message));
+                        if (existingEphemeralStream) {
+                            await grantFn(existingEphemeralStream).catch(e => Logger.warn('Ephemeral perm error:', e.message));
                         }
                     } else if (type === 'native') {
-                        // Private channel - set all permissions in single transaction
-                        try {
-                            await this.setStreamPermissions(existingStream.id, {
-                                public: false,
-                                members: members
-                            });
-                        } catch (e) {
-                            Logger.warn('Could not set permissions:', e.message);
+                        await this.setStreamPermissions(messageStreamId, { public: false, members }).catch(e => Logger.warn('Perm error:', e.message));
+                        if (existingEphemeralStream) {
+                            await this.setStreamPermissions(ephemeralStreamId, { public: false, members }).catch(e => Logger.warn('Perm error:', e.message));
                         }
                     }
                     
-                    return {
-                        streamId: existingStream.id,
-                        type: type,
-                        name: channelName
-                    };
+                    // If both streams exist, return success
+                    if (existingEphemeralStream) {
+                        Logger.info('Both streams exist with permissions configured');
+                        return {
+                            messageStreamId: existingMessageStream.id,
+                            ephemeralStreamId: existingEphemeralStream.id,
+                            type: type,
+                            name: channelName
+                        };
+                    }
+                    
+                    // Only message stream exists - try to create ephemeral again
+                    Logger.info('Attempting to create missing ephemeral stream...');
+                    try {
+                        const newEphemeralStream = await this.client.createStream({
+                            id: ephemeralStreamId,
+                            description: ephemeralMetadata,
+                            partitions: STREAM_CONFIG.EPHEMERAL_STREAM.PARTITIONS
+                        });
+                        
+                        if (type === 'public' || type === 'password') {
+                            await grantFn(newEphemeralStream).catch(e => Logger.warn('Ephemeral perm error:', e.message));
+                        } else if (type === 'native') {
+                            await this.setStreamPermissions(ephemeralStreamId, { public: false, members }).catch(e => Logger.warn('Perm error:', e.message));
+                        }
+                        
+                        Logger.info('✓ Ephemeral stream created successfully on retry');
+                        return {
+                            messageStreamId: existingMessageStream.id,
+                            ephemeralStreamId: newEphemeralStream.id,
+                            type: type,
+                            name: channelName
+                        };
+                    } catch (retryError) {
+                        Logger.warn('Failed to create ephemeral stream on retry:', retryError.message);
+                        // Return with just the message stream - channel will work in degraded mode
+                        Logger.warn('Channel created in degraded mode (no ephemeral stream)');
+                        return {
+                            messageStreamId: existingMessageStream.id,
+                            ephemeralStreamId: null,
+                            type: type,
+                            name: channelName
+                        };
+                    }
                 }
             } catch (e) {
-                // Stream really doesn't exist
+                Logger.debug('Recovery attempt failed:', e.message);
             }
             
-            Logger.error('Failed to create stream:', error);
+            Logger.error('Failed to create streams:', error);
             throw error;
         }
     }
@@ -307,20 +499,77 @@ class StreamrController {
      * Uses setPermissions for single transaction
      * @param {Object} stream - Stream object (or streamId string)
      */
-    async grantPublicPermissions(stream) {
+    async grantPublicPermissions(stream, retries = 2) {
         // If string passed, get the stream object
         const streamId = typeof stream === 'string' ? stream : stream.id;
 
-        // Use setPermissions for consistent single-transaction behavior
-        await this.client.setPermissions({
-            streamId: streamId,
-            assignments: [{
-                public: true,
-                permissions: ['subscribe', 'publish']
-            }]
-        });
-        
-        Logger.debug('Public permissions granted (batch)');
+        for (let attempt = 1; attempt <= retries; attempt++) {
+            try {
+                Logger.debug(`Granting public permissions (attempt ${attempt}/${retries})...`);
+                
+                // Use setPermissions for consistent single-transaction behavior
+                await this.client.setPermissions({
+                    streamId: streamId,
+                    assignments: [{
+                        public: true,
+                        permissions: ['subscribe', 'publish']
+                    }]
+                });
+                
+                Logger.debug('Public permissions granted successfully');
+                return; // Success - exit
+                
+            } catch (error) {
+                Logger.warn(`Permission attempt ${attempt} failed:`, error.message);
+                
+                if (attempt < retries) {
+                    // Wait before retry (exponential backoff)
+                    const delay = attempt * 3000;
+                    Logger.debug(`Retrying in ${delay/1000}s...`);
+                    await new Promise(r => setTimeout(r, delay));
+                } else {
+                    Logger.error('All permission attempts failed for:', streamId);
+                    throw error;
+                }
+            }
+        }
+    }
+
+    /**
+     * Grant public SUBSCRIBE only permissions (read-only channel)
+     * @param {Object} stream - Stream object (or streamId string)
+     */
+    async grantPublicReadOnlyPermissions(stream, retries = 2) {
+        const streamId = typeof stream === 'string' ? stream : stream.id;
+
+        for (let attempt = 1; attempt <= retries; attempt++) {
+            try {
+                Logger.debug(`Granting public read-only permissions (attempt ${attempt}/${retries})...`);
+                
+                await this.client.setPermissions({
+                    streamId: streamId,
+                    assignments: [{
+                        public: true,
+                        permissions: ['subscribe']  // Only subscribe, no publish
+                    }]
+                });
+                
+                Logger.debug('Public read-only permissions granted successfully');
+                return;
+                
+            } catch (error) {
+                Logger.warn(`Read-only permission attempt ${attempt} failed:`, error.message);
+                
+                if (attempt < retries) {
+                    const delay = attempt * 3000;
+                    Logger.debug(`Retrying in ${delay/1000}s...`);
+                    await new Promise(r => setTimeout(r, delay));
+                } else {
+                    Logger.error('All read-only permission attempts failed for:', streamId);
+                    throw error;
+                }
+            }
+        }
     }
 
     /**
@@ -583,9 +832,8 @@ class StreamrController {
 
     /**
      * Delete a stream (only owner can delete)
-    /**
-     * Delete a stream
-     * @param {string} streamId - Stream ID
+     * For dual-stream architecture, deletes BOTH messageStream and ephemeralStream
+     * @param {string} streamId - Stream ID (can be either messageStreamId or ephemeralStreamId)
      * @returns {Promise<void>}
      */
     async deleteStream(streamId) {
@@ -593,16 +841,53 @@ class StreamrController {
             throw new Error('Streamr client not initialized');
         }
 
+        // Derive both stream IDs (v0 dual-stream architecture)
+        let messageStreamId, ephemeralStreamId;
+        
+        if (isMessageStream(streamId)) {
+            messageStreamId = streamId;
+            ephemeralStreamId = deriveEphemeralId(streamId);
+        } else if (isEphemeralStream(streamId)) {
+            ephemeralStreamId = streamId;
+            messageStreamId = deriveMessageId(streamId);
+        } else {
+            throw new Error('Invalid stream ID format - must end with -1 or -2');
+        }
+
         try {
-            // Unsubscribe first
-            await this.unsubscribe(streamId);
+            Logger.info('Deleting channel streams...', { messageStreamId, ephemeralStreamId });
             
-            // Delete stream
-            await this.client.deleteStream(streamId);
+            // Unsubscribe from both streams first
+            await this.unsubscribeFromDualStream(messageStreamId).catch(e => 
+                Logger.warn('Unsubscribe warning:', e.message)
+            );
             
-            Logger.debug('Stream deleted:', streamId);
+            // Delete both streams in parallel
+            const deleteResults = await Promise.allSettled([
+                this.client.deleteStream(messageStreamId),
+                ephemeralStreamId ? this.client.deleteStream(ephemeralStreamId) : Promise.resolve()
+            ]);
+            
+            // Log results
+            if (deleteResults[0].status === 'fulfilled') {
+                Logger.info('✓ Message stream deleted:', messageStreamId);
+            } else {
+                Logger.error('✗ Failed to delete message stream:', deleteResults[0].reason?.message);
+            }
+            
+            if (ephemeralStreamId && deleteResults[1].status === 'fulfilled') {
+                Logger.info('✓ Ephemeral stream deleted:', ephemeralStreamId);
+            } else if (ephemeralStreamId) {
+                Logger.error('✗ Failed to delete ephemeral stream:', deleteResults[1].reason?.message);
+            }
+            
+            // Throw if message stream failed (primary stream)
+            if (deleteResults[0].status === 'rejected') {
+                throw deleteResults[0].reason;
+            }
+            
         } catch (error) {
-            Logger.error('Failed to delete stream:', error);
+            Logger.error('Failed to delete streams:', error);
             throw error;
         }
     }
@@ -740,45 +1025,49 @@ class StreamrController {
     }
 
     /**
-     * Publish a text message (partition 0 - stored)
-     * @param {string} streamId - Stream ID
+     * Publish a text message to MESSAGE STREAM (partition 0 - stored)
+     * In dual-stream architecture: caller must pass messageStreamId
+     * @param {string} messageStreamId - Message Stream ID (ends with -1)
      * @param {Object} message - Message object
      * @param {string} password - Password for encrypted channels (optional)
      */
-    async publishMessage(streamId, message, password = null) {
-        Logger.debug('publishMessage called - sending to partition 0:', { streamId, messageId: message?.id });
-        return await this.publish(streamId, 0, message, password);
+    async publishMessage(messageStreamId, message, password = null) {
+        Logger.debug('publishMessage called - sending to messageStream partition 0:', { messageStreamId, messageId: message?.id });
+        return await this.publish(messageStreamId, STREAM_CONFIG.MESSAGE_STREAM.MESSAGES, message, password);
     }
 
     /**
-     * Publish control/metadata (partition 1 - ephemeral)
-     * @param {string} streamId - Stream ID
-     * @param {Object} control - Control data
+     * Publish control/metadata to EPHEMERAL STREAM (partition 0 - ephemeral)
+     * In dual-stream architecture: caller must pass ephemeralStreamId
+     * @param {string} ephemeralStreamId - Ephemeral Stream ID (ends with -2)
+     * @param {Object} control - Control data (presence, typing)
      * @param {string} password - Password for encrypted channels (optional)
      */
-    async publishControl(streamId, control, password = null) {
-        return await this.publish(streamId, 1, control, password);
+    async publishControl(ephemeralStreamId, control, password = null) {
+        return await this.publish(ephemeralStreamId, STREAM_CONFIG.EPHEMERAL_STREAM.CONTROL, control, password);
     }
 
     /**
-     * Publish reaction (partition 0 - stored with messages)
-     * @param {string} streamId - Stream ID
+     * Publish reaction to MESSAGE STREAM (partition 0 - stored with messages)
+     * In dual-stream architecture: caller must pass messageStreamId
+     * @param {string} messageStreamId - Message Stream ID (ends with -1)
      * @param {Object} reaction - Reaction data
      * @param {string} password - Password for encrypted channels (optional)
      */
-    async publishReaction(streamId, reaction, password = null) {
-        Logger.debug('publishReaction called - sending to partition 0:', { streamId, messageId: reaction?.messageId });
-        return await this.publish(streamId, 0, reaction, password);
+    async publishReaction(messageStreamId, reaction, password = null) {
+        Logger.debug('publishReaction called - sending to messageStream partition 0:', { messageStreamId, messageId: reaction?.messageId });
+        return await this.publish(messageStreamId, STREAM_CONFIG.MESSAGE_STREAM.MESSAGES, reaction, password);
     }
 
     /**
-     * Publish media (partition 2)
-     * @param {string} streamId - Stream ID
-     * @param {Object} media - Media data
+     * Publish media to EPHEMERAL STREAM (partition 1 - ephemeral chunks)
+     * In dual-stream architecture: caller must pass ephemeralStreamId
+     * @param {string} ephemeralStreamId - Ephemeral Stream ID (ends with -2)
+     * @param {Object} media - Media data (chunks, requests)
      * @param {string} password - Password for encrypted channels (optional)
      */
-    async publishMedia(streamId, media, password = null) {
-        return await this.publish(streamId, 2, media, password);
+    async publishMedia(ephemeralStreamId, media, password = null) {
+        return await this.publish(ephemeralStreamId, STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA, media, password);
     }
 
     /**
@@ -886,15 +1175,17 @@ class StreamrController {
 
     /**
      * Ensure media partition is subscribed (lazy load when needed)
-     * @param {string} streamId - Stream ID
+     * In dual-stream architecture: subscribes to ephemeralStream partition 1
+     * @param {string} ephemeralStreamId - Ephemeral Stream ID (ends with -2)
      * @param {Function} handler - Media message handler
      * @param {string} password - Optional password
      */
-    async ensureMediaSubscription(streamId, handler, password = null) {
-        if (this.isSubscribedToPartition(streamId, 2)) {
+    async ensureMediaSubscription(ephemeralStreamId, handler, password = null) {
+        const mediaPartition = STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA;
+        if (this.isSubscribedToPartition(ephemeralStreamId, mediaPartition)) {
             return;
         }
-        return this.subscribeToPartition(streamId, 2, handler, password);
+        return this.subscribeToPartition(ephemeralStreamId, mediaPartition, handler, password);
     }
 
     /**
@@ -918,23 +1209,31 @@ class StreamrController {
     // ==================== Storage Methods ====================
 
     /**
-     * Enable storage for a stream (uses Streamr official node or LogStore fallback)
-     * This allows message history/persistence via the Storage Node
-     * @param {string} streamId - Stream ID
+     * Enable storage for a MESSAGE STREAM only
+     * In dual-stream architecture, storage is ONLY enabled for messageStream (-1)
+     * The ephemeralStream (-2) is intentionally NOT stored for privacy
+     * 
+     * @param {string} messageStreamId - Message Stream ID (must end with -1)
      * @returns {Promise<boolean>} - Success status
      */
-    async enableStorage(streamId) {
+    async enableStorage(messageStreamId) {
         if (!this.client) {
             throw new Error('Client not initialized');
         }
         
+        // Safety check: only enable storage for message streams
+        if (!isMessageStream(messageStreamId)) {
+            Logger.warn('enableStorage called on non-message stream, ignoring:', messageStreamId);
+            return false;
+        }
+        
         // Ensure NODE_ADDRESS is set
-        const nodeAddress = LOGSTORE_CONFIG.NODE_ADDRESS || LOGSTORE_CONFIG.LOGSTORE_NODE;
+        const nodeAddress = STREAM_CONFIG.NODE_ADDRESS || STREAM_CONFIG.LOGSTORE_NODE;
         
         try {
-            const stream = await this.client.getStream(streamId);
+            const stream = await this.client.getStream(messageStreamId);
             await stream.addToStorageNode(nodeAddress);
-            Logger.info('Storage enabled for stream:', streamId, '(node:', nodeAddress.slice(0, 10) + '...)');
+            Logger.info('Storage enabled for message stream:', messageStreamId, '(node:', nodeAddress.slice(0, 10) + '...)');
             return true;
         } catch (error) {
             Logger.warn('Failed to enable storage:', error.message);
@@ -943,13 +1242,15 @@ class StreamrController {
     }
 
     /**
-     * Fetch historical messages from a stream partition
-     * @param {string} streamId - Stream ID
-     * @param {number} partition - Partition number
+     * Fetch historical messages from MESSAGE STREAM
+     * In dual-stream architecture, only messageStream has storage
+     * 
+     * @param {string} messageStreamId - Message Stream ID (must end with -1)
+     * @param {number} partition - Partition number (should be 0 for messages)
      * @param {number} count - Number of messages to fetch
      * @returns {Promise<Array>} - Array of message contents
      */
-    async fetchHistory(streamId, partition = 1, count = LOGSTORE_CONFIG.INITIAL_MESSAGES) {
+    async fetchHistory(messageStreamId, partition = 0, count = STREAM_CONFIG.INITIAL_MESSAGES) {
         if (!this.client) {
             throw new Error('Client not initialized');
         }
@@ -960,7 +1261,7 @@ class StreamrController {
             // Streamr SDK resend: await before iterating
             // Format: await client.resend(streamId, { last: N, partition: P })
             const resend = await this.client.resend(
-                streamId,
+                messageStreamId,
                 { last: count, partition: partition }
             );
             
@@ -978,16 +1279,18 @@ class StreamrController {
     }
 
     /**
-     * Fetch older historical messages (for lazy loading / pagination)
+     * Fetch older historical messages from MESSAGE STREAM (for lazy loading / pagination)
      * Uses timestamp-based pagination to get messages older than a given point
-     * @param {string} streamId - Stream ID
-     * @param {number} partition - Partition number
+     * In dual-stream architecture, only messageStream has stored history
+     * 
+     * @param {string} messageStreamId - Message Stream ID (should end with -1)
+     * @param {number} partition - Partition number (should be 0)
      * @param {number} beforeTimestamp - Unix timestamp (ms) - fetch messages before this
      * @param {number} count - Number of messages to fetch
      * @param {string} password - Password for encrypted channels (optional)
      * @returns {Promise<{messages: Array, hasMore: boolean}>} - Messages and pagination info
      */
-    async fetchOlderHistory(streamId, partition = 0, beforeTimestamp, count = LOGSTORE_CONFIG.LOAD_MORE_COUNT, password = null) {
+    async fetchOlderHistory(messageStreamId, partition = 0, beforeTimestamp, count = STREAM_CONFIG.LOAD_MORE_COUNT, password = null) {
         if (!this.client) {
             throw new Error('Client not initialized');
         }
@@ -1013,7 +1316,7 @@ class StreamrController {
             // Streamr SDK resend with range: from epoch to beforeTimestamp
             // We request more than needed to account for filtered messages
             const resend = await this.client.resend(
-                streamId,
+                messageStreamId,
                 { 
                     partition: partition,
                     from: { timestamp: 0 },
@@ -1083,7 +1386,7 @@ class StreamrController {
      * @param {string} password - Password for encrypted channels (optional)
      * @returns {Promise<Object>} - Subscription object
      */
-    async subscribeWithHistory(streamId, partition, handler, historyCount = LOGSTORE_CONFIG.INITIAL_MESSAGES, password = null) {
+    async subscribeWithHistory(streamId, partition, handler, historyCount = STREAM_CONFIG.INITIAL_MESSAGES, password = null) {
         if (!this.client) {
             throw new Error('Client not initialized');
         }
@@ -1243,76 +1546,111 @@ class StreamrController {
     }
 
     /**
-     * Subscribe to all partitions with history support
-     * @param {string} streamId - Stream ID
-     * @param {Object} handlers - Event handlers for each partition
+     * Subscribe to dual-stream channel (message + ephemeral streams)
+     * 
+     * Message Stream (-1):
+     *   - Partition 0: Text messages, reactions, images, video announcements (WITH history)
+     * 
+     * Ephemeral Stream (-2):
+     *   - Partition 0: Control/metadata (presence, typing) - NO history
+     *   - Partition 1: Media chunks (P2P transfer) - NO history
+     * 
+     * @param {string} messageStreamId - Message Stream ID (ends with -1)
+     * @param {string} ephemeralStreamId - Ephemeral Stream ID (ends with -2)
+     * @param {Object} handlers - { onMessage, onControl, onMedia }
      * @param {string} password - Password for encrypted channels (optional)
      * @param {number} historyCount - Number of historical messages to fetch
+     * @returns {Promise<boolean>} - Success
      */
-    async subscribeWithHistoryAll(streamId, handlers, password = null, historyCount = LOGSTORE_CONFIG.INITIAL_MESSAGES) {
+    async subscribeToDualStream(messageStreamId, ephemeralStreamId, handlers, password = null, historyCount = STREAM_CONFIG.INITIAL_MESSAGES) {
         if (!this.client) {
             throw new Error('Streamr client not initialized');
         }
 
-        // Check if already subscribed to this stream
-        if (this.subscriptions.has(streamId)) {
-            Logger.debug('Already subscribed to stream:', streamId);
-            return true;
+        // Validate stream IDs
+        if (!isMessageStream(messageStreamId)) {
+            Logger.warn('Invalid messageStreamId (should end with -1):', messageStreamId);
+        }
+        if (!isEphemeralStream(ephemeralStreamId)) {
+            Logger.warn('Invalid ephemeralStreamId (should end with -2):', ephemeralStreamId);
         }
 
         try {
-            const partitionSubs = {};
-
-            // Subscribe to partition 0 (Text Messages) WITH HISTORY
-            // This is the main stored partition
-            if (handlers.onMessage) {
-                Logger.debug('Subscribing to partition 0 (messages) with history for:', streamId);
-                partitionSubs[0] = await this.subscribeWithHistory(
-                    streamId,
-                    0,
-                    handlers.onMessage,
-                    historyCount,
-                    password
-                );
-                Logger.debug('Subscribed to partition 0 with history');
+            // 1. Subscribe to MESSAGE STREAM (with storage)
+            if (!this.subscriptions.has(messageStreamId)) {
+                const msgSubs = {};
+                
+                // Partition 0: Messages WITH history
+                if (handlers.onMessage) {
+                    Logger.debug('Subscribing to messageStream partition 0 (messages) with history');
+                    msgSubs[STREAM_CONFIG.MESSAGE_STREAM.MESSAGES] = await this.subscribeWithHistory(
+                        messageStreamId,
+                        STREAM_CONFIG.MESSAGE_STREAM.MESSAGES,
+                        handlers.onMessage,
+                        historyCount,
+                        password
+                    );
+                }
+                
+                this.subscriptions.set(messageStreamId, msgSubs);
+                Logger.info('Subscribed to message stream:', messageStreamId);
             }
 
-            // Subscribe to partition 1 (Control/Metadata) - NO HISTORY
-            // Presence and typing are ephemeral - they don't need history
-            if (handlers.onControl) {
-                partitionSubs[1] = await this.subscribeWithHistory(
-                    streamId,
-                    1,
-                    handlers.onControl,
-                    0, // NO history for control partition - presence/typing are ephemeral
-                    password
-                );
+            // 2. Subscribe to EPHEMERAL STREAM (no storage)
+            if (!this.subscriptions.has(ephemeralStreamId)) {
+                const ephSubs = {};
+                
+                // Partition 0: Control (presence, typing) - NO history
+                if (handlers.onControl) {
+                    Logger.debug('Subscribing to ephemeralStream partition 0 (control) - no history');
+                    ephSubs[STREAM_CONFIG.EPHEMERAL_STREAM.CONTROL] = await this.subscribeWithHistory(
+                        ephemeralStreamId,
+                        STREAM_CONFIG.EPHEMERAL_STREAM.CONTROL,
+                        handlers.onControl,
+                        0, // NO history - ephemeral
+                        password
+                    );
+                }
+                
+                // Partition 1: Media chunks - NO history
+                if (handlers.onMedia) {
+                    Logger.debug('Subscribing to ephemeralStream partition 1 (media) - no history');
+                    ephSubs[STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA] = await this.subscribeWithHistory(
+                        ephemeralStreamId,
+                        STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA,
+                        handlers.onMedia,
+                        0, // NO history - ephemeral P2P
+                        password
+                    );
+                }
+                
+                this.subscriptions.set(ephemeralStreamId, ephSubs);
+                Logger.info('Subscribed to ephemeral stream:', ephemeralStreamId);
             }
-
-            // Subscribe to partition 2 (Media) with history
-            if (handlers.onMedia) {
-                partitionSubs[2] = await this.subscribeWithHistory(
-                    streamId,
-                    2,
-                    handlers.onMedia,
-                    historyCount,
-                    password
-                );
-            }
-
-            this.subscriptions.set(streamId, partitionSubs);
-            Logger.info('Subscribed to stream with history:', streamId);
 
             return true;
         } catch (error) {
-            Logger.error('Failed to subscribe with history to stream:', error);
+            Logger.error('Failed to subscribe to dual-stream:', error);
             throw error;
         }
     }
 
-    // ==================== End LogStore Methods ====================
+    /**
+     * Unsubscribe from dual-stream channel
+     * @param {string} messageStreamId - Message Stream ID
+     * @param {string} ephemeralStreamId - Ephemeral Stream ID
+     */
+    async unsubscribeFromDualStream(messageStreamId, ephemeralStreamId) {
+        await Promise.allSettled([
+            this.unsubscribe(messageStreamId),
+            this.unsubscribe(ephemeralStreamId)
+        ]);
+        Logger.debug('Unsubscribed from dual-stream:', messageStreamId);
+    }
+
+    // ==================== End Storage/Subscription Methods ====================
 }
 
 // Export singleton instance and config
 export const streamrController = new StreamrController();
-export { LOGSTORE_CONFIG };
+export { STREAM_CONFIG, deriveEphemeralId, deriveMessageId, isMessageStream, isEphemeralStream };

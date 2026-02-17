@@ -2,29 +2,29 @@
  * Subscription Manager
  * Handles dynamic subscription lifecycle for performance optimization
  * 
- * Strategy:
- * - Active channel: Full subscription (all partitions + presence + history)
- * - Background channels: Lightweight polling for activity detection
+ * DUAL-STREAM ARCHITECTURE:
+ * - Active channel: Full subscription to BOTH streams (message + ephemeral)
+ * - Background channels: Lightweight polling for activity detection (message stream only)
  * - Lazy partition loading: Media partition only subscribed when needed
  * 
  * This reduces WebSocket connections and network traffic significantly
  * when users have many channels but only actively use one at a time.
  */
 
-import { streamrController, LOGSTORE_CONFIG } from './streamr.js';
+import { streamrController, STREAM_CONFIG, deriveEphemeralId } from './streamr.js';
 import { channelManager } from './channels.js';
 import { secureStorage } from './secureStorage.js';
 import { Logger } from './logger.js';
 
 class SubscriptionManager {
     constructor() {
-        // Active channel state
-        this.activeChannelId = null;
+        // Active channel state (keyed by messageStreamId)
+        this.activeChannelId = null;  // messageStreamId of active channel
         this.activeSubscriptionHandlers = null;
         
-        // Background activity tracking
+        // Background activity tracking (keyed by messageStreamId)
         this.backgroundPoller = null;
-        this.channelActivity = new Map(); // streamId -> { lastMessageTime, unreadCount, lastChecked }
+        this.channelActivity = new Map(); // messageStreamId -> { lastMessageTime, unreadCount, lastChecked }
         
         // Activity change handlers
         this.activityHandlers = [];
@@ -47,36 +47,37 @@ class SubscriptionManager {
     /**
      * Set the active channel - full subscription with all partitions and history
      * Downgrades previous active channel to background mode
-     * @param {string} streamId - Stream ID to activate
+     * In dual-stream architecture, subscribes to BOTH message and ephemeral streams
+     * @param {string} messageStreamId - Message Stream ID to activate (channel key)
      * @param {string} password - Optional password for encrypted channels
      * @param {Object} handlers - Message handlers { onControl, onMessage, onMedia }
      */
-    async setActiveChannel(streamId, password = null, handlers = null) {
-        if (!streamId) {
+    async setActiveChannel(messageStreamId, password = null, handlers = null) {
+        if (!messageStreamId) {
             Logger.warn('setActiveChannel called with null streamId');
             return;
         }
 
         // If same channel, just ensure subscription is active
-        if (this.activeChannelId === streamId) {
-            Logger.debug('Channel already active:', streamId);
+        if (this.activeChannelId === messageStreamId) {
+            Logger.debug('Channel already active:', messageStreamId);
             return;
         }
 
-        Logger.info('Setting active channel:', streamId);
+        Logger.info('Setting active channel:', messageStreamId);
 
-        // Downgrade previous active channel (unsubscribe to save resources)
+        // Downgrade previous active channel (unsubscribe BOTH streams to save resources)
         if (this.activeChannelId) {
             await this.downgradeToBackground(this.activeChannelId);
         }
 
-        this.activeChannelId = streamId;
+        this.activeChannelId = messageStreamId;
         this.activeSubscriptionHandlers = handlers;
 
-        // Full subscription with history for active channel
+        // Full subscription with history for active channel (BOTH streams)
         try {
-            await channelManager.subscribeToChannel(streamId, password);
-            Logger.info('Active channel subscription complete:', streamId);
+            await channelManager.subscribeToChannel(messageStreamId, password);
+            Logger.info('Active channel subscription complete:', messageStreamId);
         } catch (error) {
             Logger.error('Failed to subscribe to active channel:', error);
             throw error;
@@ -84,29 +85,32 @@ class SubscriptionManager {
     }
 
     /**
-     * Downgrade channel to background mode (unsubscribe to free resources)
-     * @param {string} streamId - Stream ID to downgrade
+     * Downgrade channel to background mode (unsubscribe BOTH streams to free resources)
+     * @param {string} messageStreamId - Message Stream ID to downgrade
      */
-    async downgradeToBackground(streamId) {
-        if (!streamId) return;
+    async downgradeToBackground(messageStreamId) {
+        if (!messageStreamId) return;
 
         try {
             // Store current activity state before unsubscribing
-            const channel = channelManager.getChannel(streamId);
+            const channel = channelManager.getChannel(messageStreamId);
             if (channel && channel.messages?.length > 0) {
                 const latestMsg = channel.messages[channel.messages.length - 1];
-                this.channelActivity.set(streamId, {
+                this.channelActivity.set(messageStreamId, {
                     lastMessageTime: latestMsg.timestamp || Date.now(),
                     unreadCount: 0,
                     lastChecked: Date.now()
                 });
             }
 
-            // Unsubscribe from stream
-            await streamrController.unsubscribe(streamId);
-            Logger.debug('Downgraded to background:', streamId);
+            // Get ephemeral stream ID
+            const ephemeralStreamId = channel?.ephemeralStreamId || deriveEphemeralId(messageStreamId);
+
+            // Unsubscribe from BOTH streams
+            await streamrController.unsubscribeFromDualStream(messageStreamId, ephemeralStreamId);
+            Logger.debug('Downgraded to background:', messageStreamId);
         } catch (error) {
-            Logger.warn('Failed to downgrade channel:', streamId, error.message);
+            Logger.warn('Failed to downgrade channel:', messageStreamId, error.message);
         }
     }
 
@@ -147,16 +151,20 @@ class SubscriptionManager {
 
     /**
      * Initialize activity tracking state from stored data
+     * Uses messageStreamId as key (dual-stream architecture)
      */
     initializeActivityState() {
         const channels = channelManager.getAllChannels();
         const lastAccessMap = secureStorage.getAllChannelLastAccess();
 
         for (const channel of channels) {
-            if (!this.channelActivity.has(channel.streamId)) {
+            // Use messageStreamId as key (dual-stream)
+            const messageStreamId = channel.messageStreamId || channel.streamId;
+            
+            if (!this.channelActivity.has(messageStreamId)) {
                 // Initialize with last known access time
-                const lastAccess = lastAccessMap[channel.streamId] || 0;
-                this.channelActivity.set(channel.streamId, {
+                const lastAccess = lastAccessMap[messageStreamId] || lastAccessMap[channel.streamId] || 0;
+                this.channelActivity.set(messageStreamId, {
                     lastMessageTime: lastAccess,
                     unreadCount: 0,
                     lastChecked: 0
@@ -201,8 +209,11 @@ class SubscriptionManager {
             for (let i = 0; i < channelsToPoll.length; i++) {
                 const channel = channelsToPoll[i];
                 
+                // Use messageStreamId as key (dual-stream architecture)
+                const messageStreamId = channel.messageStreamId || channel.streamId;
+                
                 // Check if enough time has passed since last check
-                const activity = this.channelActivity.get(channel.streamId);
+                const activity = this.channelActivity.get(messageStreamId);
                 const timeSinceLastCheck = Date.now() - (activity?.lastChecked || 0);
                 
                 if (timeSinceLastCheck < this.config.MIN_POLL_INTERVAL) {
@@ -212,7 +223,7 @@ class SubscriptionManager {
                 try {
                     await this.checkChannelActivity(channel);
                 } catch (error) {
-                    Logger.debug('Activity check failed for:', channel.streamId, error.message);
+                    Logger.debug('Activity check failed for:', messageStreamId, error.message);
                 }
 
                 // Stagger delay between checks
@@ -227,24 +238,27 @@ class SubscriptionManager {
 
     /**
      * Check activity for a single channel without full subscription
+     * In dual-stream architecture, only queries MESSAGE stream (the one with storage)
      * @param {Object} channel - Channel object
      */
     async checkChannelActivity(channel) {
-        const streamId = channel.streamId;
+        // Use messageStreamId as the identifier (dual-stream)
+        const messageStreamId = channel.messageStreamId || channel.streamId;
         const password = channel.password || null;
 
         // Get current activity state
-        const currentActivity = this.channelActivity.get(streamId) || {
+        const currentActivity = this.channelActivity.get(messageStreamId) || {
             lastMessageTime: 0,
             unreadCount: 0,
             lastChecked: 0
         };
 
         try {
-            // Fetch recent messages from LogStore (lightweight - no subscription needed)
+            // Fetch recent messages from MESSAGE stream (lightweight - no subscription needed)
+            // Note: Only messageStream has storage, so we can only query it
             const result = await streamrController.fetchOlderHistory(
-                streamId,
-                0, // Messages partition
+                messageStreamId,
+                STREAM_CONFIG.MESSAGE_STREAM.MESSAGES, // partition 0
                 Date.now(),
                 this.config.ACTIVITY_CHECK_MESSAGES,
                 password
@@ -271,18 +285,18 @@ class SubscriptionManager {
                 unreadCount: currentActivity.unreadCount + newCount,
                 lastChecked: Date.now()
             };
-            this.channelActivity.set(streamId, newActivity);
+            this.channelActivity.set(messageStreamId, newActivity);
 
             // Notify handlers if new messages detected
             if (newCount > 0) {
-                Logger.debug('New activity detected:', streamId, newCount, 'messages');
-                this.notifyActivityHandlers(streamId, newActivity);
+                Logger.debug('New activity detected:', messageStreamId, newCount, 'messages');
+                this.notifyActivityHandlers(messageStreamId, newActivity);
             }
 
         } catch (error) {
             // Update lastChecked even on error to prevent rapid retries
             currentActivity.lastChecked = Date.now();
-            this.channelActivity.set(streamId, currentActivity);
+            this.channelActivity.set(messageStreamId, currentActivity);
             throw error;
         }
     }
@@ -353,23 +367,23 @@ class SubscriptionManager {
 
     /**
      * Remove a channel from tracking (when leaving or deleting)
-     * @param {string} streamId - Stream ID
+     * @param {string} messageStreamId - Message Stream ID (channel key)
      */
-    async removeChannel(streamId) {
-        Logger.debug('Removing channel from subscription manager:', streamId);
+    async removeChannel(messageStreamId) {
+        Logger.debug('Removing channel from subscription manager:', messageStreamId);
         
-        // Clear from activity tracking
-        this.channelActivity.delete(streamId);
+        // Clear from activity tracking (keyed by messageStreamId)
+        this.channelActivity.delete(messageStreamId);
         
         // If this was the active channel, clear it
-        if (this.activeChannelId === streamId) {
+        if (this.activeChannelId === messageStreamId) {
             this.activeChannelId = null;
             this.activeSubscriptionHandlers = null;
         }
         
         // Clear lastOpenedChannel if it points to this channel
         const lastOpened = secureStorage.getLastOpenedChannel();
-        if (lastOpened === streamId) {
+        if (lastOpened === messageStreamId) {
             await secureStorage.setLastOpenedChannel(null);
         }
     }
@@ -409,7 +423,7 @@ class SubscriptionManager {
 
     /**
      * Check if a channel is currently the active channel
-     * @param {string} streamId - Stream ID
+     * @param {string} streamId - Stream ID to check (messageStreamId)
      * @returns {boolean}
      */
     isActiveChannel(streamId) {
@@ -417,7 +431,7 @@ class SubscriptionManager {
     }
 
     /**
-     * Get the active channel ID
+     * Get the active channel ID (messageStreamId)
      * @returns {string|null}
      */
     getActiveChannelId() {
@@ -427,18 +441,18 @@ class SubscriptionManager {
     /**
      * Force poll a specific channel immediately
      * Useful when user hovers over channel in sidebar
-     * @param {string} streamId - Stream ID to poll
+     * @param {string} messageStreamId - Message Stream ID to poll
      */
-    async forcePollChannel(streamId) {
-        const channel = channelManager.getChannel(streamId);
-        if (!channel || streamId === this.activeChannelId) {
+    async forcePollChannel(messageStreamId) {
+        const channel = channelManager.getChannel(messageStreamId);
+        if (!channel || messageStreamId === this.activeChannelId) {
             return;
         }
 
         try {
             await this.checkChannelActivity(channel);
         } catch (error) {
-            Logger.debug('Force poll failed:', streamId, error.message);
+            Logger.debug('Force poll failed:', messageStreamId, error.message);
         }
     }
 

@@ -128,7 +128,6 @@ const GasEstimator = {
 class UIController {
     constructor() {
         this.elements = {};
-        // Note: lastSeenCounts removed - using secureStorage.channelLastAccess timestamps instead
         
         // Lazy loading state
         this.isLoadingMore = false;
@@ -181,6 +180,12 @@ class UIController {
             channelMembersInput: document.getElementById('channel-members-input'),
             passwordField: document.getElementById('password-field'),
             membersField: document.getElementById('members-field'),
+            // Exposure/visibility fields
+            exposureSection: document.getElementById('exposure-section'),
+            visibleFields: document.getElementById('visible-fields'),
+            channelDescriptionInput: document.getElementById('channel-description-input'),
+            channelLanguageInput: document.getElementById('channel-language-input'),
+            channelCategoryInput: document.getElementById('channel-category-input'),
             createChannelBtn: document.getElementById('create-channel-btn'),
             cancelChannelBtn: document.getElementById('cancel-channel-btn'),
 
@@ -301,6 +306,20 @@ class UIController {
             });
         });
 
+        // Exposure tabs - switch between hidden/visible
+        document.querySelectorAll('.exposure-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const exposure = tab.dataset.exposure;
+                this.switchExposureTab(exposure);
+            });
+        });
+
+        // Read-only toggle
+        const readOnlyToggle = document.getElementById('read-only-toggle');
+        readOnlyToggle?.addEventListener('click', () => {
+            this.toggleReadOnly();
+        });
+
         // Online users dropdown toggle
         this.elements.onlineHeader?.addEventListener('click', () => {
             this.elements.onlineUsersList?.classList.toggle('hidden');
@@ -323,6 +342,22 @@ class UIController {
         // Cancel channel creation
         this.elements.cancelChannelBtn.addEventListener('click', () => {
             this.hideNewChannelModal();
+        });
+
+        // Footer cancel button (new design)
+        document.getElementById('cancel-channel-btn-footer')?.addEventListener('click', () => {
+            this.hideNewChannelModal();
+        });
+
+        // Channel types info modal
+        document.getElementById('channel-info-help-btn')?.addEventListener('click', () => {
+            document.getElementById('channel-types-modal')?.classList.remove('hidden');
+        });
+        document.getElementById('close-channel-types-btn')?.addEventListener('click', () => {
+            document.getElementById('channel-types-modal')?.classList.add('hidden');
+        });
+        document.getElementById('close-channel-types-btn-footer')?.addEventListener('click', () => {
+            document.getElementById('channel-types-modal')?.classList.add('hidden');
         });
 
         // Quick join input (sidebar) - Enter to join
@@ -809,7 +844,7 @@ class UIController {
                     </div>
                     <div class="flex-1 min-w-0">
                         <h3 class="text-[13px] font-medium text-white truncate">${this.escapeHtml(channel.name)}</h3>
-                        <p class="text-[11px] text-[#666]">${this.getChannelTypeLabel(channel.type)}</p>
+                        <p class="text-[11px] text-[#666]">${this.getChannelTypeLabel(channel.type, channel.readOnly)}</p>
                     </div>
                     <div class="flex items-center gap-1.5 ml-2">
                         ${hasUnread ? `<span class="channel-msg-count text-[10px] ${countClass} px-1.5 py-0.5 rounded" data-channel-count="${channel.streamId}">${unreadCount}</span>` : `<span class="channel-msg-count text-[10px] text-[#666] bg-[#252525] px-1.5 py-0.5 rounded hidden" data-channel-count="${channel.streamId}">0</span>`}
@@ -985,8 +1020,11 @@ class UIController {
             subscriptionManager.clearUnreadCount(streamId);
             
             this.elements.currentChannelName.textContent = channel.name;
-            this.elements.currentChannelInfo.innerHTML = this.getChannelTypeLabel(channel.type);
+            this.elements.currentChannelInfo.innerHTML = this.getChannelTypeLabel(channel.type, channel.readOnly);
             this.elements.messageInputContainer.classList.remove('hidden');
+
+            // Handle read-only channels
+            this.updateReadOnlyUI(channel);
 
             // Show invite button
             this.elements.inviteUsersBtn.classList.remove('hidden');
@@ -1984,16 +2022,10 @@ class UIController {
             return;
         }
         
-        // Show immediate feedback - new video panel UI
+        // Show progress overlay
         const progressOverlay = document.querySelector(`[data-progress-overlay="${fileId}"]`);
         if (progressOverlay) {
             progressOverlay.classList.remove('hidden');
-        }
-        
-        // Legacy progress bar support
-        const progressBar = document.querySelector(`[data-progress-bar="${fileId}"]`);
-        if (progressBar) {
-            progressBar.classList.remove('hidden');
         }
         
         const progressText = document.querySelector(`[data-progress-text="${fileId}"]`);
@@ -2001,20 +2033,13 @@ class UIController {
             progressText.textContent = 'Starting...';
         }
         
+        // Update download button to show loading state
         const downloadBtn = document.querySelector(`.download-file-btn[data-file-id="${fileId}"]`);
         if (downloadBtn) {
-            // New video panel UI - swap play icon for loading
             const playIcon = downloadBtn.querySelector('.download-play-icon');
             const loadingIcon = downloadBtn.querySelector('.download-loading-icon');
             if (playIcon) playIcon.classList.add('hidden');
             if (loadingIcon) loadingIcon.classList.remove('hidden');
-            
-            // Legacy button UI
-            const btnText = downloadBtn.querySelector('.download-btn-text');
-            const btnLoading = downloadBtn.querySelector('.download-btn-loading');
-            if (btnText) btnText.classList.add('hidden');
-            if (btnLoading) btnLoading.classList.remove('hidden');
-            
             downloadBtn.disabled = true;
             downloadBtn.classList.add('cursor-not-allowed');
         }
@@ -2037,23 +2062,12 @@ class UIController {
             progressOverlay.classList.add('hidden');
         }
         
-        const progressBar = document.querySelector(`[data-progress-bar="${fileId}"]`);
-        if (progressBar) {
-            progressBar.classList.add('hidden');
-        }
-        
         const downloadBtn = document.querySelector(`.download-file-btn[data-file-id="${fileId}"]`);
         if (downloadBtn) {
             const playIcon = downloadBtn.querySelector('.download-play-icon');
             const loadingIcon = downloadBtn.querySelector('.download-loading-icon');
             if (playIcon) playIcon.classList.remove('hidden');
             if (loadingIcon) loadingIcon.classList.add('hidden');
-            
-            const btnText = downloadBtn.querySelector('.download-btn-text');
-            const btnLoading = downloadBtn.querySelector('.download-btn-loading');
-            if (btnText) btnText.classList.remove('hidden');
-            if (btnLoading) btnLoading.classList.add('hidden');
-            
             downloadBtn.disabled = false;
             downloadBtn.classList.remove('cursor-not-allowed', 'opacity-50');
         }
@@ -2381,16 +2395,10 @@ class UIController {
                 progressOverlay.classList.remove('hidden');
             }
             
-            // Update progress percentage text (new UI)
+            // Update progress percentage text
             const progressPercent = document.querySelector(`[data-progress-percent="${fileId}"]`);
             if (progressPercent) {
                 progressPercent.textContent = `${percent}%`;
-            }
-            
-            // Legacy: Show progress bar
-            const progressBar = document.querySelector(`[data-progress-bar="${fileId}"]`);
-            if (progressBar) {
-                progressBar.classList.remove('hidden');
             }
             
             // Update progress fill
@@ -2410,17 +2418,10 @@ class UIController {
             // Update download button to show loading state
             const downloadBtn = document.querySelector(`.download-file-btn[data-file-id="${fileId}"]`);
             if (downloadBtn) {
-                // New video panel UI
                 const playIcon = downloadBtn.querySelector('.download-play-icon');
                 const loadingIcon = downloadBtn.querySelector('.download-loading-icon');
                 if (playIcon) playIcon.classList.add('hidden');
                 if (loadingIcon) loadingIcon.classList.remove('hidden');
-                
-                // Legacy UI
-                const btnText = downloadBtn.querySelector('.download-btn-text');
-                const btnLoading = downloadBtn.querySelector('.download-btn-loading');
-                if (btnText) btnText.classList.add('hidden');
-                if (btnLoading) btnLoading.classList.remove('hidden');
                 downloadBtn.disabled = true;
                 downloadBtn.classList.add('cursor-not-allowed');
             }
@@ -2879,10 +2880,10 @@ class UIController {
             };
         }
 
-        // No signature (old message format or system message)
+        // No signature (system message or unsigned)
         if (!msg.signature) {
             return {
-                html: '',  // No badge for legacy messages
+                html: '',
                 textColor: 'text-gray-400',
                 bgColor: 'bg-gray-700',
                 border: ''
@@ -2987,6 +2988,12 @@ class UIController {
         const type = activeTab?.querySelector('.channel-type-input')?.value || 'public';
         const password = this.elements.channelPasswordInput.value;
         const membersText = this.elements.channelMembersInput.value;
+        
+        // Exposure and metadata (for visible channels)
+        const exposure = type === 'native' ? 'hidden' : (this.currentExposure || 'hidden');
+        const description = exposure === 'visible' ? (this.elements.channelDescriptionInput?.value?.trim() || '') : '';
+        const language = exposure === 'visible' ? (this.elements.channelLanguageInput?.value || 'en') : '';
+        const category = exposure === 'visible' ? (this.elements.channelCategoryInput?.value || 'general') : '';
 
         if (!name) {
             alert('Please enter a channel name');
@@ -3001,12 +3008,21 @@ class UIController {
         const members = type === 'native'
             ? membersText.split('\n').map(m => m.trim()).filter(m => m)
             : [];
+        
+        // Build options object with all metadata
+        const options = {
+            exposure,
+            description,
+            language,
+            category,
+            readOnly: this.currentReadOnly || false
+        };
 
-        Logger.debug('Creating channel:', { name, type, password: password ? '***' : null, members });
+        Logger.debug('Creating channel:', { name, type, password: password ? '***' : null, members, options });
 
         try {
             this.showLoading('Creating channel...');
-            const channel = await channelManager.createChannel(name, type, password, members);
+            const channel = await channelManager.createChannel(name, type, password, members, options);
             Logger.debug('Channel created in UI:', channel);
 
             this.hideLoading();
@@ -3075,8 +3091,16 @@ class UIController {
         this.elements.channelNameInput.value = '';
         this.elements.channelPasswordInput.value = '';
         this.elements.channelMembersInput.value = '';
+        // Reset exposure fields
+        if (this.elements.channelDescriptionInput) this.elements.channelDescriptionInput.value = '';
+        if (this.elements.channelLanguageInput) this.elements.channelLanguageInput.value = 'en';
+        if (this.elements.channelCategoryInput) this.elements.channelCategoryInput.value = 'general';
         // Reset to public tab
         this.switchChannelTab('public');
+        // Reset to hidden exposure (default)
+        this.switchExposureTab('hidden');
+        // Reset read-only toggle
+        this.setReadOnly(false);
         
         // Fetch and display gas estimates
         this.updateGasEstimates();
@@ -3129,20 +3153,156 @@ class UIController {
      * Switch channel type tab
      */
     switchChannelTab(tabType) {
-        // Update tab buttons
+        // Update sidebar tab buttons (new design)
         document.querySelectorAll('.channel-tab').forEach(tab => {
             const isActive = tab.dataset.tab === tabType;
-            tab.classList.toggle('bg-white', isActive);
-            tab.classList.toggle('text-black', isActive);
-            tab.classList.toggle('font-medium', isActive);
-            tab.classList.toggle('text-[#888]', !isActive);
-            tab.classList.toggle('hover:text-white', !isActive);
-            tab.classList.toggle('hover:bg-[#252525]', !isActive);
+            // Active: bg-white/10 text-white
+            // Inactive: text-white/60 hover:text-white/90 hover:bg-white/5
+            tab.classList.toggle('bg-white/10', isActive);
+            tab.classList.toggle('text-white', isActive);
+            tab.classList.toggle('text-white/60', !isActive);
+            tab.classList.toggle('hover:text-white/90', !isActive);
+            tab.classList.toggle('hover:bg-white/5', !isActive);
         });
         // Update tab content
         document.querySelectorAll('.channel-tab-content').forEach(content => {
             content.classList.toggle('hidden', content.id !== `tab-${tabType}`);
         });
+        
+        // Update cost display in footer
+        document.querySelectorAll('.channel-cost-display').forEach(cost => {
+            cost.classList.add('hidden');
+        });
+        const activeCost = document.getElementById(`cost-${tabType}`);
+        if (activeCost) activeCost.classList.remove('hidden');
+        
+        // Native (on-chain) channels are forced to hidden exposure
+        if (tabType === 'native') {
+            this.switchExposureTab('hidden');
+            this.elements.exposureSection?.classList.add('opacity-50', 'pointer-events-none');
+        } else {
+            this.elements.exposureSection?.classList.remove('opacity-50', 'pointer-events-none');
+        }
+    }
+
+    /**
+     * Switch exposure tab (hidden/visible)
+     */
+    switchExposureTab(exposure) {
+        // Update exposure buttons (new card-style design)
+        document.querySelectorAll('.exposure-tab').forEach(tab => {
+            const isActive = tab.dataset.exposure === exposure;
+            // Active: border-white/20 bg-white/5 text-white
+            // Inactive: border-white/10 text-white/50
+            tab.classList.toggle('border-white/20', isActive);
+            tab.classList.toggle('bg-white/5', isActive);
+            tab.classList.toggle('text-white', isActive);
+            tab.classList.toggle('border-white/10', !isActive);
+            tab.classList.toggle('text-white/50', !isActive);
+            // Cursor feedback
+            tab.style.cursor = isActive ? 'default' : 'pointer';
+        });
+        
+        // Show/hide visible fields
+        if (exposure === 'visible') {
+            this.elements.visibleFields?.classList.remove('hidden');
+        } else {
+            this.elements.visibleFields?.classList.add('hidden');
+        }
+        
+        // Store current exposure
+        this.currentExposure = exposure;
+    }
+
+    /**
+     * Toggle read-only mode
+     */
+    toggleReadOnly() {
+        const toggle = document.getElementById('read-only-toggle');
+        if (!toggle) return;
+        const isEnabled = toggle.dataset.enabled === 'true';
+        this.setReadOnly(!isEnabled);
+    }
+
+    /**
+     * Set read-only mode state
+     */
+    setReadOnly(enabled) {
+        const toggle = document.getElementById('read-only-toggle');
+        if (!toggle) return;
+        
+        toggle.dataset.enabled = enabled ? 'true' : 'false';
+        const knob = toggle.querySelector('span');
+        
+        if (enabled) {
+            toggle.classList.remove('bg-white/10');
+            toggle.classList.add('bg-[#F6851B]');
+            if (knob) {
+                knob.classList.remove('left-1', 'bg-white/40');
+                knob.classList.add('left-6', 'bg-white');
+            }
+        } else {
+            toggle.classList.remove('bg-[#F6851B]');
+            toggle.classList.add('bg-white/10');
+            if (knob) {
+                knob.classList.remove('left-6', 'bg-white');
+                knob.classList.add('left-1', 'bg-white/40');
+            }
+        }
+        
+        this.currentReadOnly = enabled;
+    }
+
+    /**
+     * Update UI for read-only channel state
+     * @param {Object} channel - Channel object
+     */
+    updateReadOnlyUI(channel) {
+        const messageInput = this.elements.messageInput;
+        const sendBtn = document.querySelector('#send-btn');
+        
+        if (!channel.readOnly) {
+            // Not read-only - enable input
+            if (messageInput) {
+                messageInput.disabled = false;
+                messageInput.placeholder = 'Type a message...';
+                messageInput.classList.remove('cursor-not-allowed', 'opacity-50');
+            }
+            if (sendBtn) {
+                sendBtn.disabled = false;
+                sendBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+            return;
+        }
+        
+        // Check if current user is the creator
+        const currentAddress = window.identityManager?.getAddress()?.toLowerCase();
+        const creatorAddress = channel.createdBy?.toLowerCase();
+        const isCreator = currentAddress === creatorAddress;
+        
+        if (isCreator) {
+            // Creator can still send
+            if (messageInput) {
+                messageInput.disabled = false;
+                messageInput.placeholder = 'Type a message (broadcast)...';
+                messageInput.classList.remove('cursor-not-allowed', 'opacity-50');
+            }
+            if (sendBtn) {
+                sendBtn.disabled = false;
+                sendBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+        } else {
+            // Non-creator - disable input
+            if (messageInput) {
+                messageInput.disabled = true;
+                messageInput.placeholder = 'This channel is read-only';
+                messageInput.classList.add('cursor-not-allowed', 'opacity-50');
+            }
+            if (sendBtn) {
+                sendBtn.disabled = true;
+                sendBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            }
+        }
     }
 
     /**
@@ -3403,10 +3563,13 @@ class UIController {
         }
 
         this.elements.browseChannelsList.innerHTML = channels.map(ch => {
+            const readOnlyBadge = ch.readOnly 
+                ? '<span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-amber-500/20 text-amber-400 text-[9px] font-medium rounded ml-1.5"><svg class="w-2 h-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>RO</span>' 
+                : '';
             return `
             <div class="px-3 py-2.5 bg-[#1a1a1a] border border-[#282828] rounded-lg hover:bg-[#252525] hover:border-[#333] transition cursor-pointer browse-channel-item flex items-center justify-between" data-stream-id="${ch.streamId}" data-type="${ch.type || 'public'}">
                 <div class="flex-1 min-w-0">
-                    <h4 class="text-[13px] font-medium text-white truncate">${this.escapeHtml(ch.name)}</h4>
+                    <h4 class="text-[13px] font-medium text-white truncate">${this.escapeHtml(ch.name)}${readOnlyBadge}</h4>
                     ${ch.members ? `<p class="text-[10px] text-[#666] mt-0.5">${ch.members} members</p>` : ''}
                 </div>
                 <svg class="w-4 h-4 text-[#555] flex-shrink-0 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3487,13 +3650,17 @@ class UIController {
                 this.showLoading('Joining channel...');
                 await channelManager.joinChannel(streamId, password, {
                     name: channelInfo?.name,
-                    type: 'password'
+                    type: 'password',
+                    readOnly: channelInfo?.readOnly || false,
+                    createdBy: channelInfo?.createdBy
                 });
             } else {
                 this.showLoading('Joining channel...');
                 await channelManager.joinChannel(streamId, null, {
                     name: channelInfo?.name,
-                    type: channelInfo?.type || 'public'
+                    type: channelInfo?.type || 'public',
+                    readOnly: channelInfo?.readOnly || false,
+                    createdBy: channelInfo?.createdBy
                 });
             }
             
@@ -3771,15 +3938,23 @@ class UIController {
     /**
      * Get channel type label with icon
      * @param {string} type - Channel type
+     * @param {boolean} readOnly - Whether channel is read-only
      * @returns {string} - HTML with icon and label
      */
-    getChannelTypeLabel(type) {
+    getChannelTypeLabel(type, readOnly = false) {
         const labels = {
             'public': '<span class="inline-flex items-center gap-1"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>Public</span>',
             'password': '<span class="inline-flex items-center gap-1"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>Password</span>',
             'native': '<span class="inline-flex items-center gap-1"><svg class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.5l-8 13.5 8 4.5 8-4.5-8-13.5zm0 18l-8-4.5 8 9 8-9-8 4.5z"/></svg>Verified</span>'
         };
-        return labels[type] || type;
+        let label = labels[type] || type;
+        
+        // Add read-only badge if applicable
+        if (readOnly) {
+            label += ' <span class="inline-flex items-center gap-0.5 ml-1 px-1.5 py-0.5 bg-amber-500/20 text-amber-400 text-[10px] font-medium rounded"><svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>Read-Only</span>';
+        }
+        
+        return label;
     }
 
     /**
@@ -3929,7 +4104,7 @@ class UIController {
 
         // Update channel info
         this.elements.channelSettingsName.textContent = currentChannel.name;
-        this.elements.channelSettingsType.innerHTML = this.getChannelTypeLabel(currentChannel.type);
+        this.elements.channelSettingsType.innerHTML = this.getChannelTypeLabel(currentChannel.type, currentChannel.readOnly);
         this.elements.channelSettingsId.textContent = currentChannel.streamId;
 
         // Determine channel type
@@ -4186,7 +4361,7 @@ class UIController {
     }
     
     /**
-     * Handle leave channel (legacy - now uses modal)
+     * Handle leave channel - shows confirmation modal
      */
     async handleLeaveChannel() {
         this.showLeaveChannelModal();
@@ -4571,7 +4746,7 @@ class UIController {
     }
 
     /**
-     * Handle remove member (legacy - now uses modal)
+     * Handle remove member - shows confirmation modal
      */
     async handleRemoveMember(address) {
         this.showRemoveMemberModal(address);

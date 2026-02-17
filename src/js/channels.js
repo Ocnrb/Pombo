@@ -1,10 +1,15 @@
 /**
  * Channel Manager
  * Manages channel creation, joining, and local storage
+ * 
+ * DUAL-STREAM ARCHITECTURE (v2):
+ * Each channel now has two streams:
+ * - messageStreamId (-1): Stored messages, reactions, images
+ * - ephemeralStreamId (-2): Presence, typing, media chunks (not stored)
  */
 
 import { Logger } from './logger.js';
-import { streamrController, LOGSTORE_CONFIG } from './streamr.js';
+import { streamrController, STREAM_CONFIG, deriveEphemeralId, deriveMessageId } from './streamr.js';
 import { authManager } from './auth.js';
 import { cryptoManager } from './crypto.js';
 import { identityManager } from './identity.js';
@@ -117,14 +122,16 @@ class ChannelManager {
 
             if (channelsData && channelsData.length > 0) {
                 for (const channel of channelsData) {
-                    // Initialize empty arrays - messages loaded from LogStore on demand
+                    // Initialize empty arrays - messages loaded from storage on demand
                     channel.messages = [];
                     channel.reactions = {};
                     channel.historyLoaded = false;  // Track if initial history was loaded
                     channel.hasMoreHistory = true;  // Assume there's more until proven otherwise
                     channel.loadingHistory = false; // Prevent concurrent loads
                     channel.oldestTimestamp = null; // For pagination
-                    this.channels.set(channel.streamId, channel);
+                    
+                    // Key by messageStreamId
+                    this.channels.set(channel.messageStreamId, channel);
                 }
 
                 Logger.debug(`Loaded ${channelsData.length} channels from secure storage (metadata only)`);
@@ -139,7 +146,7 @@ class ChannelManager {
 
     /**
      * Save channels to secure storage (encrypted)
-     * NOTE: messages and reactions are NOT persisted - they come from LogStore
+     * NOTE: messages and reactions are NOT persisted - they come from storage
      */
     async saveChannels() {
         try {
@@ -149,18 +156,24 @@ class ChannelManager {
             }
             
             // Strip messages and reactions from persistence - only save metadata
-            // Messages are loaded from LogStore on demand (lazy loading)
+            // Messages are loaded from storage on demand (lazy loading)
             const channelsData = Array.from(this.channels.values()).map(ch => ({
-                streamId: ch.streamId,
+                messageStreamId: ch.messageStreamId,
+                ephemeralStreamId: ch.ephemeralStreamId,
                 name: ch.name,
                 type: ch.type,
                 createdAt: ch.createdAt,
                 createdBy: ch.createdBy,
                 password: ch.password,
                 members: ch.members || [],
-                storageEnabled: ch.storageEnabled
-                // messages: excluded - loaded from LogStore
-                // reactions: excluded - loaded from LogStore
+                storageEnabled: ch.storageEnabled,
+                // Exposure and metadata
+                exposure: ch.exposure || 'hidden',
+                description: ch.description || '',
+                language: ch.language || '',
+                category: ch.category || ''
+                // messages: excluded - loaded from storage
+                // reactions: excluded - loaded from storage
             }));
             Logger.debug('Saving channels to secure storage:', channelsData.length);
 
@@ -191,46 +204,54 @@ class ChannelManager {
      * @param {string} type - Channel type: 'public', 'password', 'native'
      * @param {string} password - Password for encrypted channels (optional)
      * @param {string[]} members - Member addresses for native private channels (optional)
+     * @param {Object} options - Additional options { exposure: 'visible'|'hidden' }
      * @returns {Promise<Object>} - Created channel
      */
-    async createChannel(name, type, password = null, members = []) {
+    async createChannel(name, type, password = null, members = [], options = {}) {
         try {
             const realAddress = authManager.getAddress();
             if (!realAddress) {
                 throw new Error('Not authenticated');
             }
 
-            Logger.debug('Creating channel:', { name, type, realAddress, members: type === 'native' ? members : [] });
+            Logger.debug('Creating dual-stream channel:', { name, type, realAddress, members: type === 'native' ? members : [] });
 
-            // Create the stream - streamrController handles on-chain operations
-            // Stream will be created in the namespace of the wallet
-            // For native channels, pass members to createStream for single-transaction permission setup
+            // Create dual-stream channel - streamrController handles on-chain operations
+            // Returns: { messageStreamId, ephemeralStreamId, type, name }
             const streamInfo = await streamrController.createStream(
                 name, 
                 realAddress, 
                 type, 
-                type === 'native' ? members : []
+                type === 'native' ? members : [],
+                options
             );
-            Logger.debug('Stream created:', streamInfo.streamId);
+            Logger.debug('Dual-stream created:', { 
+                messageStreamId: streamInfo.messageStreamId, 
+                ephemeralStreamId: streamInfo.ephemeralStreamId 
+            });
 
-            // Enable LogStore for message history/persistence
+            // Enable storage ONLY for message stream (ephemeral stream intentionally not stored)
             let storageEnabled = false;
             try {
-                storageEnabled = await streamrController.enableStorage(streamInfo.streamId);
-                Logger.debug('LogStore enabled:', storageEnabled);
+                storageEnabled = await streamrController.enableStorage(streamInfo.messageStreamId);
+                Logger.debug('Storage enabled for messageStream:', storageEnabled);
             } catch (storageError) {
-                Logger.warn('Failed to enable LogStore (continuing without history):', storageError.message);
+                Logger.warn('Failed to enable storage (continuing without history):', storageError.message);
             }
 
-            // Create channel object FIRST (so it appears in UI even if permissions fail)
-            // Store realAddress as createdBy for identity verification
+            // Create channel object with dual-stream IDs
             // Include owner in members array for native channels
             const channelMembers = type === 'native' 
                 ? [realAddress, ...members.filter(m => m.toLowerCase() !== realAddress.toLowerCase())]
                 : [];
             
+            // Extract exposure and metadata from options
+            const exposure = options.exposure || (type === 'native' ? 'hidden' : 'hidden');
+            
             const channel = {
-                streamId: streamInfo.streamId,
+                messageStreamId: streamInfo.messageStreamId,
+                ephemeralStreamId: streamInfo.ephemeralStreamId,
+                streamId: streamInfo.messageStreamId,  // Alias for convenience
                 name: name,
                 type: type,
                 createdAt: Date.now(),
@@ -239,7 +260,13 @@ class ChannelManager {
                 members: channelMembers,
                 messages: [],
                 reactions: {}, // messageId -> { emoji -> [users] }
-                storageEnabled: storageEnabled, // Track if LogStore is enabled
+                storageEnabled: storageEnabled,
+                // Exposure and metadata (for visible channels)
+                exposure: exposure,
+                description: exposure === 'visible' ? (options.description || '') : '',
+                language: exposure === 'visible' ? (options.language || 'en') : '',
+                category: exposure === 'visible' ? (options.category || 'general') : '',
+                readOnly: options.readOnly || false,
                 // Lazy loading state (not persisted)
                 historyLoaded: false,
                 hasMoreHistory: true,
@@ -247,30 +274,25 @@ class ChannelManager {
                 oldestTimestamp: null
             };
 
-            // Add to channels map and save
-            this.channels.set(channel.streamId, channel);
+            // Add to channels map (keyed by messageStreamId)
+            this.channels.set(channel.messageStreamId, channel);
             await this.saveChannels();
             
             // Add to channel order (new channels go to top)
-            await secureStorage.addToChannelOrder(channel.streamId);
+            await secureStorage.addToChannelOrder(channel.messageStreamId);
             
-            Logger.debug('Channel saved to localStorage:', channel.streamId);
+            Logger.debug('Channel saved to localStorage:', channel.messageStreamId);
             Logger.debug('Total channels:', this.channels.size);
 
-            // Note: Permissions are now set in createStream (single transaction)
-            // Public channels: discoverable via The Graph (metadata contains app: 'pombo')
-            // Native channels: permissions already set in createStream
-            // Password channels: public with client-side encryption
-
-            // Subscribe to the channel
+            // Subscribe to both streams
             try {
-                await this.subscribeToChannel(channel.streamId);
-                Logger.debug('Subscribed to channel');
+                await this.subscribeToChannel(channel.messageStreamId);
+                Logger.debug('Subscribed to dual-stream channel');
             } catch (subError) {
                 Logger.warn('Failed to subscribe (can retry later):', subError);
             }
 
-            Logger.info('Channel created successfully:', channel.streamId);
+            Logger.info('Dual-stream channel created successfully:', channel.messageStreamId);
             return channel;
         } catch (error) {
             Logger.error('Failed to create channel:', error);
@@ -281,18 +303,21 @@ class ChannelManager {
     }
 
     /**
-     * Join an existing channel
-     * @param {string} streamId - Stream ID to join
+     * Join an existing channel (dual-stream architecture)
+     * @param {string} messageStreamId - Message Stream ID to join (ends with -1)
      * @param {string} password - Password for encrypted channels (optional)
      * @param {Object} options - Additional options (name, type from invite)
      * @returns {Promise<Object>} - Joined channel
      */
-    async joinChannel(streamId, password = null, options = {}) {
+    async joinChannel(messageStreamId, password = null, options = {}) {
         try {
-            // Check if already joined
-            if (this.channels.has(streamId)) {
+            // Derive ephemeral stream ID from message stream ID
+            const ephemeralStreamId = deriveEphemeralId(messageStreamId);
+            
+            // Check if already joined (use messageStreamId as key)
+            if (this.channels.has(messageStreamId)) {
                 Logger.debug('Already in this channel');
-                return this.channels.get(streamId);
+                return this.channels.get(messageStreamId);
             }
 
             // Determine type: use provided, detect via Graph API, or infer from password
@@ -308,12 +333,12 @@ class ChannelManager {
                     graphAPI.clearCache();
                     
                     if (!channelType) {
-                        channelType = await graphAPI.detectStreamType(streamId);
+                        channelType = await graphAPI.detectStreamType(messageStreamId);
                         Logger.debug('Detected type:', channelType);
                     }
                     
                     // Always get stream members to find owner (for storage enabling)
-                    const streamMembers = await graphAPI.getStreamMembers(streamId);
+                    const streamMembers = await graphAPI.getStreamMembers(messageStreamId);
                     if (streamMembers && streamMembers.length > 0) {
                         const owner = streamMembers.find(m => m.isOwner);
                         if (!createdBy && owner) {
@@ -340,12 +365,13 @@ class ChannelManager {
                 channelType = password ? 'password' : 'native';
             }
             
-            // Extract name from streamId if not provided
-            let channelName = options.name || streamId.split('/')[1]?.split('_')[0] || streamId;
+            // Extract name from streamId if not provided (simplified ID format)
+            let channelName = options.name || messageStreamId.split('/')[1]?.replace(/-\d$/, '') || messageStreamId;
 
-            // Create channel object
             const channel = {
-                streamId: streamId,
+                messageStreamId: messageStreamId,
+                ephemeralStreamId: ephemeralStreamId,
+                streamId: messageStreamId,  // Alias for convenience
                 name: channelName,
                 type: channelType,
                 createdAt: Date.now(),
@@ -354,6 +380,7 @@ class ChannelManager {
                 members: members,
                 messages: [],
                 reactions: {}, // messageId -> { emoji -> [users] }
+                readOnly: options.readOnly || false,
                 // Lazy loading state (not persisted)
                 historyLoaded: false,
                 hasMoreHistory: true,
@@ -361,20 +388,26 @@ class ChannelManager {
                 oldestTimestamp: null
             };
 
-            // Add to channels map
-            this.channels.set(streamId, channel);
+            // Add to channels map (keyed by messageStreamId)
+            this.channels.set(messageStreamId, channel);
             await this.saveChannels();
             
             // Add to channel order (new channels go to top)
-            await secureStorage.addToChannelOrder(streamId);
+            await secureStorage.addToChannelOrder(messageStreamId);
 
-            // Subscribe to real-time messages
-            await this.subscribeToChannel(streamId, password);
+            // Subscribe to both streams
+            await this.subscribeToChannel(messageStreamId, password);
 
             // Notify handlers about channel join (for media seeding re-announcement)
-            this.notifyHandlers('channelJoined', { streamId, password, channel });
+            this.notifyHandlers('channelJoined', { 
+                streamId: messageStreamId, 
+                messageStreamId,
+                ephemeralStreamId,
+                password, 
+                channel 
+            });
 
-            Logger.info('Joined channel:', streamId);
+            Logger.info('Joined dual-stream channel:', messageStreamId);
             return channel;
         } catch (error) {
             Logger.error('Failed to join channel:', error);
@@ -385,11 +418,11 @@ class ChannelManager {
     /**
      * Sync channel info from The Graph (members, type, owner)
      * Use this to refresh on-chain data for a channel
-     * @param {string} streamId - Stream ID
+     * @param {string} messageStreamId - Message Stream ID
      * @returns {Promise<Object|null>} - Updated channel or null if not found
      */
-    async syncChannelFromGraph(streamId) {
-        const channel = this.channels.get(streamId);
+    async syncChannelFromGraph(messageStreamId) {
+        const channel = this.channels.get(messageStreamId);
         if (!channel) {
             Logger.warn('Channel not found for sync:', streamId);
             return null;
@@ -452,13 +485,13 @@ class ChannelManager {
     }
 
     /**
-     * Add a member to a native encrypted channel
-     * @param {string} streamId - Stream ID
+     * Add a member to a native encrypted channel (grants access to BOTH streams)
+     * @param {string} messageStreamId - Message Stream ID (channel key)
      * @param {string} address - Ethereum address to add
      * @returns {Promise<boolean>} - Success status
      */
-    async addMember(streamId, address) {
-        const channel = this.channels.get(streamId);
+    async addMember(messageStreamId, address) {
+        const channel = this.channels.get(messageStreamId);
         if (!channel) {
             throw new Error('Channel not found');
         }
@@ -475,9 +508,15 @@ class ChannelManager {
             throw new Error('Address is already a member');
         }
 
+        // Get ephemeral stream ID
+        const ephemeralStreamId = channel.ephemeralStreamId || deriveEphemeralId(messageStreamId);
+
         try {
-            // Grant permissions on Streamr
-            await streamrController.grantPermissionsToAddresses(streamId, [address]);
+            // Grant permissions on BOTH streams (messageStream and ephemeralStream)
+            await Promise.all([
+                streamrController.grantPermissionsToAddresses(messageStreamId, [address]),
+                streamrController.grantPermissionsToAddresses(ephemeralStreamId, [address])
+            ]);
             
             // Clear Graph cache to refresh member list
             graphAPI.clearCache();
@@ -486,7 +525,7 @@ class ChannelManager {
             channel.members.push(address);
             await this.saveChannels();
             
-            Logger.info('Member added to channel:', address);
+            Logger.info('Member added to dual-stream channel:', address);
             return true;
         } catch (error) {
             Logger.error('Failed to add member:', error);
@@ -496,13 +535,13 @@ class ChannelManager {
     }
 
     /**
-     * Remove a member from a native encrypted channel
-     * @param {string} streamId - Stream ID
+     * Remove a member from a native encrypted channel (revokes access to BOTH streams)
+     * @param {string} messageStreamId - Message Stream ID (channel key)
      * @param {string} address - Ethereum address to remove
      * @returns {Promise<boolean>} - Success status
      */
-    async removeMember(streamId, address) {
-        const channel = this.channels.get(streamId);
+    async removeMember(messageStreamId, address) {
+        const channel = this.channels.get(messageStreamId);
         if (!channel) {
             throw new Error('Channel not found');
         }
@@ -525,9 +564,15 @@ class ChannelManager {
             throw new Error('Cannot remove the channel creator');
         }
 
+        // Get ephemeral stream ID
+        const ephemeralStreamId = channel.ephemeralStreamId || deriveEphemeralId(messageStreamId);
+
         try {
-            // Revoke permissions on Streamr
-            await streamrController.revokePermissionsFromAddresses(streamId, [address]);
+            // Revoke permissions on BOTH streams (messageStream and ephemeralStream)
+            await Promise.all([
+                streamrController.revokePermissionsFromAddresses(messageStreamId, [address]),
+                streamrController.revokePermissionsFromAddresses(ephemeralStreamId, [address])
+            ]);
             
             // Clear Graph cache to refresh member list
             graphAPI.clearCache();
@@ -536,7 +581,7 @@ class ChannelManager {
             channel.members.splice(memberIndex, 1);
             await this.saveChannels();
             
-            Logger.info('Member removed from channel:', address);
+            Logger.info('Member removed from dual-stream channel:', address);
             return true;
         } catch (error) {
             Logger.error('Failed to remove member:', error);
@@ -798,28 +843,36 @@ class ChannelManager {
     }
 
     /**
-     * Subscribe to a channel's stream with message history
-     * @param {string} streamId - Stream ID
+     * Subscribe to a channel's dual-stream with message history
+     * In dual-stream architecture:
+     * - messageStream: messages with history
+     * - ephemeralStream: control/media without history
+     * 
+     * @param {string} messageStreamId - Message Stream ID (ends with -1)
      * @param {string} password - Password for encrypted channels (optional)
      */
-    async subscribeToChannel(streamId, password = null) {
-        const channel = this.channels.get(streamId);
+    async subscribeToChannel(messageStreamId, password = null) {
+        const channel = this.channels.get(messageStreamId);
         const pwd = password || (channel ? channel.password : null);
+        
+        // Get or derive ephemeral stream ID
+        const ephemeralStreamId = channel?.ephemeralStreamId || deriveEphemeralId(messageStreamId);
 
         // Try to enable storage if user is owner and storage not already enabled
         // Only the stream owner can add a stream to a storage node
+        // Storage is ONLY for messageStream (ephemeral is never stored)
         if (channel && !channel.storageEnabled) {
             const currentAddress = authManager.getAddress()?.toLowerCase();
             const ownerAddress = channel.createdBy?.toLowerCase();
             
             if (currentAddress && ownerAddress && currentAddress === ownerAddress) {
-                Logger.debug('Owner subscribing - trying to enable storage for:', streamId);
+                Logger.debug('Owner subscribing - trying to enable storage for messageStream:', messageStreamId);
                 try {
-                    const enabled = await streamrController.enableStorage(streamId);
+                    const enabled = await streamrController.enableStorage(messageStreamId);
                     if (enabled) {
                         channel.storageEnabled = true;
                         await this.saveChannels();
-                        Logger.info('Storage enabled by owner for existing channel');
+                        Logger.info('Storage enabled by owner for messageStream');
                     }
                 } catch (e) {
                     Logger.debug('Could not enable storage (may already be enabled):', e.message);
@@ -827,19 +880,20 @@ class ChannelManager {
             }
         }
 
-        // Use subscribe with history to load past messages
-        await streamrController.subscribeWithHistoryAll(
-            streamId,
+        // Use dual-stream subscription
+        await streamrController.subscribeToDualStream(
+            messageStreamId,
+            ephemeralStreamId,
             {
-                onControl: (data) => this.handleControlMessage(streamId, data),
-                onMessage: (data) => this.handleTextMessage(streamId, data),
-                onMedia: (data) => this.handleMediaMessage(streamId, data)
+                onMessage: (data) => this.handleTextMessage(messageStreamId, data),
+                onControl: (data) => this.handleControlMessage(messageStreamId, data),
+                onMedia: (data) => this.handleMediaMessage(messageStreamId, data)
             },
             pwd,
-            LOGSTORE_CONFIG.INITIAL_MESSAGES
+            STREAM_CONFIG.INITIAL_MESSAGES
         );
         
-        Logger.debug('Subscribed to channel with history:', streamId);
+        Logger.debug('Subscribed to dual-stream channel:', messageStreamId);
     }
 
     /**
@@ -966,12 +1020,16 @@ class ChannelManager {
     }
 
     /**
-     * Publish presence to channel
-     * @param {string} streamId - Stream ID
+     * Publish presence to channel's EPHEMERAL stream
+     * Presence goes to ephemeralStreamId (not stored)
+     * @param {string} messageStreamId - Message Stream ID (channel key)
      */
-    async publishPresence(streamId) {
-        const channel = this.channels.get(streamId);
+    async publishPresence(messageStreamId) {
+        const channel = this.channels.get(messageStreamId);
         if (!channel) return;
+        
+        // Use ephemeral stream for presence (not stored)
+        const ephemeralStreamId = channel.ephemeralStreamId || deriveEphemeralId(messageStreamId);
         
         const myAddress = authManager.getAddress();
         const myNickname = identityManager.getUsername?.() || null;
@@ -985,8 +1043,8 @@ class ChannelManager {
         };
         
         try {
-            // Use partition 1 (Control) for presence
-            await streamrController.publishControl(streamId, presenceData, channel.password);
+            // Publish to ephemeral stream (partition 0 = control)
+            await streamrController.publishControl(ephemeralStreamId, presenceData, channel.password);
         } catch (e) {
             Logger.warn('Failed to publish presence:', e.message);
         }
@@ -1240,27 +1298,36 @@ class ChannelManager {
     }
 
     /**
-     * Send a text message
-     * @param {string} streamId - Stream ID
+     * Send a text message to MESSAGE stream
+     * @param {string} messageStreamId - Message Stream ID (channel key)
      * @param {string} text - Message text
      * @param {Object|null} replyTo - Reply context (optional)
      */
-    async sendMessage(streamId, text, replyTo = null) {
+    async sendMessage(messageStreamId, text, replyTo = null) {
         let message = null;
         let sendKey = null;
         
         try {
-            const channel = this.channels.get(streamId);
+            const channel = this.channels.get(messageStreamId);
             if (!channel) {
                 throw new Error('Channel not found');
             }
 
+            // Check if channel is read-only and user is not the creator
+            if (channel.readOnly) {
+                const currentAddress = identityManager.getAddress()?.toLowerCase();
+                const creatorAddress = channel.createdBy?.toLowerCase();
+                if (currentAddress !== creatorAddress) {
+                    throw new Error('This channel is read-only. Only the creator can send messages.');
+                }
+            }
+
             // Create signed message using identity manager
-            message = await identityManager.createSignedMessage(text, streamId, replyTo);
+            message = await identityManager.createSignedMessage(text, messageStreamId, replyTo);
             
             // DEDUPLICATION: Check if this message is already being sent
             // This prevents double-sends from rapid clicks or retry loops
-            sendKey = `${streamId}:${message.id}`;
+            sendKey = `${messageStreamId}:${message.id}`;
             if (this.sendingMessages.has(sendKey)) {
                 Logger.warn('Message already being sent, skipping duplicate:', message.id);
                 return; // Don't throw - just silently skip duplicate
@@ -1281,24 +1348,24 @@ class ChannelManager {
             // NOTE: No saveChannels() - messages are not persisted
 
             // Notify handlers to update UI immediately (with pending indicator)
-            this.notifyHandlers('message', { streamId, message: message });
+            this.notifyHandlers('message', { streamId: messageStreamId, message: message });
 
-            // Then publish to network with retry
-            await this.publishWithRetry(streamId, message, channel.password);
+            // Publish to MESSAGE stream (stored)
+            await this.publishWithRetry(messageStreamId, message, channel.password);
             
             // Mark as sent (remove pending flag)
             message.pending = false;
             // NOTE: No saveChannels() - messages are not persisted
             
             // Notify UI that message is confirmed
-            this.notifyHandlers('message_confirmed', { streamId, messageId: message.id });
+            this.notifyHandlers('message_confirmed', { streamId: messageStreamId, messageId: message.id });
 
-            Logger.debug('Message sent (signed):', message.id);
+            Logger.debug('Message sent to messageStream:', message.id);
         } catch (error) {
             Logger.error('Failed to send message:', error);
             // Message stays in local storage with pending flag
             // User can see it failed and retry manually
-            this.notifyHandlers('message_failed', { streamId, messageId: message?.id, error: error.message });
+            this.notifyHandlers('message_failed', { streamId: messageStreamId, messageId: message?.id, error: error.message });
             throw error;
         } finally {
             // Always clean up the sending lock
@@ -1310,20 +1377,20 @@ class ChannelManager {
     
     /**
      * Publish message with retry mechanism
-     * @param {string} streamId - Stream ID
+     * @param {string} messageStreamId - Message Stream ID
      * @param {Object} message - Message to publish
      * @param {string} password - Channel password (optional)
      * @param {number} retryCount - Current retry attempt
      */
-    async publishWithRetry(streamId, message, password = null, retryCount = 0) {
+    async publishWithRetry(messageStreamId, message, password = null, retryCount = 0) {
         try {
-            await streamrController.publishMessage(streamId, message, password);
-            Logger.info('Text message published to partition 0:', message.id);
+            await streamrController.publishMessage(messageStreamId, message, password);
+            Logger.info('Text message published to messageStream:', message.id);
         } catch (error) {
             if (retryCount < this.MAX_RETRIES) {
                 Logger.warn(`Publish failed, retrying (${retryCount + 1}/${this.MAX_RETRIES})...`);
                 await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
-                return this.publishWithRetry(streamId, message, password, retryCount + 1);
+                return this.publishWithRetry(messageStreamId, message, password, retryCount + 1);
             }
             throw error;
         }
@@ -1366,14 +1433,15 @@ class ChannelManager {
     }
 
     /**
-     * Load more (older) history from LogStore - for lazy loading / infinite scroll
-     * @param {string} streamId - Stream ID
+     * Load more (older) history from MESSAGE stream - for lazy loading / infinite scroll
+     * In dual-stream architecture, only messageStream has storage
+     * @param {string} messageStreamId - Message Stream ID (channel key)
      * @returns {Promise<{loaded: number, hasMore: boolean}>} - Number of messages loaded and if more exist
      */
-    async loadMoreHistory(streamId) {
-        const channel = this.channels.get(streamId);
+    async loadMoreHistory(messageStreamId) {
+        const channel = this.channels.get(messageStreamId);
         if (!channel) {
-            Logger.warn('Channel not found for loadMoreHistory:', streamId);
+            Logger.warn('Channel not found for loadMoreHistory:', messageStreamId);
             return { loaded: 0, hasMore: false };
         }
         
@@ -1398,16 +1466,17 @@ class ChannelManager {
         const beforeTimestamp = channel.oldestTimestamp || Date.now();
         
         channel.loadingHistory = true;
-        this.notifyHandlers('history_loading', { streamId, loading: true });
+        this.notifyHandlers('history_loading', { streamId: messageStreamId, loading: true });
         
         try {
             Logger.debug('Loading more history before:', new Date(beforeTimestamp).toISOString());
             
+            // Fetch from MESSAGE stream (messageStreamId ends with -1)
             const result = await streamrController.fetchOlderHistory(
-                streamId,
-                LOGSTORE_CONFIG.PARTITIONS.MESSAGES,
+                messageStreamId,
+                STREAM_CONFIG.MESSAGE_STREAM.MESSAGES, // partition 0
                 beforeTimestamp,
-                LOGSTORE_CONFIG.LOAD_MORE_COUNT,
+                STREAM_CONFIG.LOAD_MORE_COUNT,
                 channel.password
             );
             
@@ -1421,8 +1490,8 @@ class ChannelManager {
                     
                     // Verify signature (skip timestamp check for historical)
                     try {
-                        if (!msg.channelId) msg.channelId = streamId;
-                        const verification = await identityManager.verifyMessage(msg, streamId, {
+                        if (!msg.channelId) msg.channelId = messageStreamId;
+                        const verification = await identityManager.verifyMessage(msg, messageStreamId, {
                             skipTimestampCheck: true
                         });
                         msg.verified = verification;
@@ -1446,7 +1515,7 @@ class ChannelManager {
             channel.loadingHistory = false;
             
             this.notifyHandlers('history_loaded', { 
-                streamId, 
+                streamId: messageStreamId, 
                 loaded: result.messages.length, 
                 hasMore: result.hasMore 
             });
@@ -1457,19 +1526,22 @@ class ChannelManager {
         } catch (error) {
             Logger.error('Failed to load more history:', error);
             channel.loadingHistory = false;
-            this.notifyHandlers('history_loading', { streamId, loading: false });
+            this.notifyHandlers('history_loading', { streamId: messageStreamId, loading: false });
             return { loaded: 0, hasMore: channel.hasMoreHistory };
         }
     }
 
     /**
-     * Send typing indicator
-     * @param {string} streamId - Stream ID
+     * Send typing indicator to EPHEMERAL stream
+     * @param {string} messageStreamId - Message Stream ID (channel key)
      */
-    async sendTypingIndicator(streamId) {
+    async sendTypingIndicator(messageStreamId) {
         try {
-            const channel = this.channels.get(streamId);
+            const channel = this.channels.get(messageStreamId);
             if (!channel) return;
+
+            // Use ephemeral stream for typing (not stored)
+            const ephemeralStreamId = channel.ephemeralStreamId || deriveEphemeralId(messageStreamId);
 
             const control = {
                 type: 'typing',
@@ -1478,7 +1550,7 @@ class ChannelManager {
             };
 
             await streamrController.publishControl(
-                streamId,
+                ephemeralStreamId,
                 control,
                 channel.password
             );
@@ -1499,7 +1571,7 @@ class ChannelManager {
         
         // DEDUPLICATION: Create unique key for this reaction operation
         // Prevents duplicate sends on rapid clicks
-        const reactionKey = `${streamId}:${messageId}:${emoji}:${action}`;
+        const reactionKey = `${messageStreamId}:${messageId}:${emoji}:${action}`;
         
         if (this.pendingReactions.has(reactionKey)) {
             Logger.debug('Reaction already pending, skipping duplicate:', reactionKey);
@@ -1509,7 +1581,7 @@ class ChannelManager {
         this.pendingReactions.add(reactionKey);
         
         try {
-            const channel = this.channels.get(streamId);
+            const channel = this.channels.get(messageStreamId);
             if (!channel) return;
 
             const reaction = {
@@ -1521,9 +1593,9 @@ class ChannelManager {
                 timestamp: Date.now()
             };
 
-            // Send to partition 0 (stored) via publishReaction
+            // Send to MESSAGE stream (stored) via publishReaction
             await streamrController.publishReaction(
-                streamId,
+                messageStreamId,
                 reaction,
                 channel.password
             );
@@ -1540,23 +1612,28 @@ class ChannelManager {
     }
 
     /**
-     * Leave a channel
-     * @param {string} streamId - Stream ID
+     * Leave a channel (unsubscribe from both streams)
+     * @param {string} messageStreamId - Message Stream ID (channel key)
      */
-    async leaveChannel(streamId) {
+    async leaveChannel(messageStreamId) {
         try {
-            await streamrController.unsubscribe(streamId);
-            this.channels.delete(streamId);
+            const channel = this.channels.get(messageStreamId);
+            const ephemeralStreamId = channel?.ephemeralStreamId || deriveEphemeralId(messageStreamId);
+            
+            // Unsubscribe from both streams
+            await streamrController.unsubscribeFromDualStream(messageStreamId, ephemeralStreamId);
+            
+            this.channels.delete(messageStreamId);
             await this.saveChannels();
             
             // Remove from channel order
-            await secureStorage.removeFromChannelOrder(streamId);
+            await secureStorage.removeFromChannelOrder(messageStreamId);
 
-            if (this.currentChannel === streamId) {
+            if (this.currentChannel === messageStreamId) {
                 this.currentChannel = null;
             }
 
-            Logger.debug('Left channel:', streamId);
+            Logger.debug('Left channel:', messageStreamId);
         } catch (error) {
             Logger.error('Failed to leave channel:', error);
             throw error;
@@ -1726,12 +1803,12 @@ class ChannelManager {
             const decoded = atob(inviteCode);
             const data = JSON.parse(decoded);
             
-            // Support both compact (s,n,t,p) and legacy (streamId,name,type,password) formats
+            // Compact format: s=streamId, n=name, t=type, p=password
             return {
-                streamId: data.s || data.streamId,
-                name: data.n || data.name,
-                type: data.t || data.type,
-                password: data.p || data.password
+                streamId: data.s,
+                name: data.n,
+                type: data.t,
+                password: data.p
             };
         } catch (error) {
             Logger.error('Failed to parse invite link:', error);

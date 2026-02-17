@@ -431,20 +431,20 @@ class GraphAPI {
                     return null;
                 }
 
-                // Parse metadata
+                // Parse metadata (abbreviated keys: a=app, v=version, n=name, t=type, etc.)
                 const outerMetadata = JSON.parse(stream.metadata || '{}');
                 const pomboMetadata = JSON.parse(outerMetadata.description || '{}');
 
-                if (pomboMetadata.app !== 'pombo') {
+                if (pomboMetadata.a !== 'pombo') {
                     Logger.debug('Stream is not a Pombo channel:', streamId);
                     return null;
                 }
 
                 return {
                     streamId: stream.id,
-                    name: pomboMetadata.name || stream.id.split('/')[1]?.split('_')[0] || 'Unknown',
-                    type: pomboMetadata.type || 'public',
-                    createdAt: pomboMetadata.createdAt || parseInt(stream.createdAt) * 1000,
+                    name: pomboMetadata.n || stream.id.split('/')[1]?.split('_')[0] || 'Unknown',
+                    type: pomboMetadata.t || 'public',
+                    createdAt: pomboMetadata.ts || parseInt(stream.createdAt) * 1000,
                     updatedAt: parseInt(stream.updatedAt) * 1000,
                     createdBy: stream.id.split('/')[0]
                 };
@@ -493,20 +493,30 @@ class GraphAPI {
                 const streams = data?.streams || [];
                 
                 // Filter and transform to Pombo channel format
+                // Only includes channels with exposure: "visible" and message streams (ending in -1)
                 const channels = [];
                 for (const stream of streams) {
                     try {
+                        // Skip ephemeral streams (they end with -2)
+                        if (stream.id.endsWith('-2')) continue;
+                        
                         // Parse metadata - Streamr stores { partitions, description }
-                        // Our Pombo JSON is inside the description field
+                        // Our Pombo JSON is inside the description field (abbreviated keys)
                         const outerMetadata = JSON.parse(stream.metadata || '{}');
                         const pomboMetadata = JSON.parse(outerMetadata.description || '{}');
                         
-                        if (pomboMetadata.app === 'pombo') {
+                        // Only include Pombo channels with exposure: "visible" (e='visible')
+                        if (pomboMetadata.a === 'pombo' && pomboMetadata.e === 'visible') {
                             channels.push({
                                 streamId: stream.id,
-                                name: pomboMetadata.name || stream.id.split('/')[1]?.split('_')[0] || 'Unknown',
-                                type: pomboMetadata.type || 'public',
-                                createdAt: pomboMetadata.createdAt || parseInt(stream.createdAt) * 1000,
+                                name: pomboMetadata.n || stream.id.split('/')[1]?.split('_')[0] || 'Unknown',
+                                type: pomboMetadata.t || 'public',
+                                exposure: pomboMetadata.e,
+                                readOnly: pomboMetadata.r || false,
+                                description: pomboMetadata.d || '',
+                                language: pomboMetadata.l || 'en',
+                                category: pomboMetadata.c || 'general',
+                                createdAt: pomboMetadata.ts || parseInt(stream.createdAt) * 1000,
                                 updatedAt: parseInt(stream.updatedAt) * 1000,
                                 // Owner is the first part of streamId (address/path format)
                                 createdBy: stream.id.split('/')[0]
