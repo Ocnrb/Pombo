@@ -180,12 +180,13 @@
                 </g>
             </svg>
             <div class="flex flex-col">
-                <span class="text-[17px] font-semibold text-white tracking-tight leading-tight">Pombo</span>
-                <!-- Network Status -->
+                <!-- Show only the status dot in front of the brand; keep the textual status hidden for JS compatibility -->
                 <div class="flex items-center gap-1.5" title="Streamr Network">
-                    <div id="network-dot" class="w-1.5 h-1.5 rounded-full bg-[#444] transition-colors"></div>
-                    <span class="text-[10px] text-[#555] uppercase tracking-wider" id="network-status">offline</span>
+                    <div id="network-dot" class="w-2.5 h-2.5 rounded-full bg-[#444] transition-colors"></div>
+                    <span class="text-[17px] font-extrabold text-white tracking-tight leading-tight ml-1">Pombo</span>
                 </div>
+                <!-- Hidden textual status preserved so JS can update it without errors -->
+                <span id="network-status" class="hidden text-[10px] text-[#555] uppercase tracking-wider" aria-hidden="true">offline</span>
             </div>
         </div>
         <div class="flex items-center gap-3">
