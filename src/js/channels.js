@@ -129,6 +129,7 @@ class ChannelManager {
                     channel.hasMoreHistory = true;  // Assume there's more until proven otherwise
                     channel.loadingHistory = false; // Prevent concurrent loads
                     channel.oldestTimestamp = null; // For pagination
+                    channel.streamId = channel.messageStreamId;  // Alias for convenience
                     
                     // Key by messageStreamId
                     this.channels.set(channel.messageStreamId, channel);
