@@ -23,6 +23,7 @@ import { onlineUsersUI } from './ui/OnlineUsersUI.js';
 import { dropdownManager } from './ui/DropdownManager.js';
 import { mediaHandler } from './ui/MediaHandler.js';
 import { messageRenderer } from './ui/MessageRenderer.js';
+import { analyzeMessageGroups, getGroupPositionClass, analyzeSpacing, getSpacingClass } from './ui/MessageGrouper.js';
 import { modalManager } from './ui/ModalManager.js';
 import { settingsUI } from './ui/SettingsUI.js';
 import { exploreUI } from './ui/ExploreUI.js';
@@ -114,7 +115,7 @@ class UIController {
         // ExploreUI
         exploreUI.setDependencies({
             getPublicChannels: () => channelManager.getPublicChannels(),
-            joinPublicChannel: (streamId) => this.joinPublicChannel(streamId),
+            joinPublicChannel: (streamId, channelInfo) => this.joinPublicChannel(streamId, channelInfo),
             getNsfwEnabled: () => secureStorage.getNsfwEnabled()
         });
     }
@@ -1489,6 +1490,11 @@ class UIController {
             `;
         }
 
+        // Analyze message groups for Stack Effect
+        const groupPositions = analyzeMessageGroups(messages);
+        // Analyze spacing for 3-level margin system
+        const spacingTypes = analyzeSpacing(messages, currentAddress);
+
         this.elements.messagesArea.innerHTML = messages.map((msg, index) => {
             const isOwn = msg.sender?.toLowerCase() === currentAddress?.toLowerCase();
             const msgDate = new Date(msg.timestamp);
@@ -1507,7 +1513,12 @@ class UIController {
                 displayName = this.formatAddress(msg.sender);
             }
             
-            return dateSeparator + messageRenderer.buildMessageHTML(msg, isOwn, time, badge, displayName);
+            // Get group position class for Stack Effect
+            const groupClass = getGroupPositionClass(groupPositions[index]);
+            // Get spacing class for margin
+            const spacingClass = getSpacingClass(spacingTypes[index]);
+            
+            return dateSeparator + messageRenderer.buildMessageHTML(msg, isOwn, time, badge, displayName, groupClass, groupPositions[index], spacingClass);
         }).join('');
 
         this.elements.messagesArea.innerHTML = historyStartIndicator + this.elements.messagesArea.innerHTML;
@@ -2138,13 +2149,13 @@ class UIController {
         
         // Trust level badges (simplified and intuitive):
         // 0 = Valid signature, unknown sender: ✓ (green check)
-        // 1 = ENS verified: verified badge
-        // 2 = Trusted contact: star
+        // 1 = ENS verified: ✓✓ (double check)
+        // 2 = Trusted contact: ★ (star)
         
         const badges = {
-            0: { icon: '<svg class="w-3.5 h-3.5 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>', color: 'text-green-400', label: 'Valid signature' },
-            1: { icon: '<svg class="w-3.5 h-3.5 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z"/></svg>', color: 'text-green-400', label: 'ENS verified' },
-            2: { icon: '<svg class="w-3.5 h-3.5 inline" fill="currentColor" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M10.788 3.21c.448-1.077 1.976-1.077 2.424 0l2.082 5.007 5.404.433c1.164.093 1.636 1.545.749 2.305l-4.117 3.527 1.257 5.273c.271 1.136-.964 2.033-1.96 1.425L12 18.354 7.373 21.18c-.996.608-2.231-.29-1.96-1.425l1.257-5.273-4.117-3.527c-.887-.76-.415-2.212.749-2.305l5.404-.433 2.082-5.006z" clip-rule="evenodd"/></svg>', color: 'text-yellow-400', label: 'Trusted contact' }
+            0: { icon: '✓', color: 'text-green-400', label: 'Valid signature' },
+            1: { icon: '✓✓', color: 'text-green-400', label: 'ENS verified' },
+            2: { icon: '★', color: 'text-yellow-400', label: 'Trusted contact' }
         };
         
         const badge = badges[trustLevel] || badges[0];
@@ -3180,17 +3191,19 @@ class UIController {
     }
 
     /**
-     * Join a public channel from browse
+     * Join a public channel from browse/explore
+     * @param {string} streamId - Channel stream ID
+     * @param {Object} channelInfo - Channel metadata (optional, will fallback to cache)
      */
-    async joinPublicChannel(streamId) {
+    async joinPublicChannel(streamId, channelInfo = null) {
         try {
-            // Find channel info from cache
-            const channelInfo = this.cachedPublicChannels?.find(ch => ch.streamId === streamId);
+            // Use passed channelInfo or fallback to local cache
+            const info = channelInfo || this.cachedPublicChannels?.find(ch => ch.streamId === streamId);
             
             // If password-protected, ask for password
-            if (channelInfo?.type === 'password') {
+            if (info?.type === 'password') {
                 const password = await this.showPasswordInputModal('Join Password Channel', 
-                    `Enter password for "${channelInfo.name}":`);
+                    `Enter password for "${info.name}":`);
                 
                 if (!password) {
                     return; // User cancelled
@@ -3198,18 +3211,18 @@ class UIController {
                 
                 this.showLoadingToast('Joining channel...', 'This may take a moment');
                 await channelManager.joinChannel(streamId, password, {
-                    name: channelInfo?.name,
+                    name: info?.name,
                     type: 'password',
-                    readOnly: channelInfo?.readOnly || false,
-                    createdBy: channelInfo?.createdBy
+                    readOnly: info?.readOnly || false,
+                    createdBy: info?.createdBy
                 });
             } else {
                 this.showLoadingToast('Joining channel...', 'This may take a moment');
                 await channelManager.joinChannel(streamId, null, {
-                    name: channelInfo?.name,
-                    type: channelInfo?.type || 'public',
-                    readOnly: channelInfo?.readOnly || false,
-                    createdBy: channelInfo?.createdBy
+                    name: info?.name,
+                    type: info?.type || 'public',
+                    readOnly: info?.readOnly || false,
+                    createdBy: info?.createdBy
                 });
             }
             

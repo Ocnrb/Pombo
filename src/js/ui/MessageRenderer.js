@@ -3,7 +3,8 @@
  * Handles rendering of messages, content types, and related UI
  */
 
-import { escapeHtml, escapeAttr, formatAddress } from './utils.js';
+import { escapeHtml, escapeAttr, formatAddress, addressToColor } from './utils.js';
+import { GroupPosition, shouldShowSenderName } from './MessageGrouper.js';
 
 class MessageRenderer {
     constructor() {
@@ -348,9 +349,12 @@ class MessageRenderer {
      * @param {string} time - Formatted time string
      * @param {Object} badge - Verification badge info
      * @param {string} displayName - Display name
+     * @param {string} groupClass - CSS class for group position (optional)
+     * @param {string} groupPosition - Group position enum value (optional)
+     * @param {string} spacingClass - CSS class for spacing (optional)
      * @returns {string} - HTML for message
      */
-    buildMessageHTML(msg, isOwn, time, badge, displayName) {
+    buildMessageHTML(msg, isOwn, time, badge, displayName, groupClass = 'msg-group-single', groupPosition = GroupPosition.SINGLE, spacingClass = '') {
         const msgId = msg.id || msg.timestamp;
         const reactionsHtml = this.renderReactions(msgId, isOwn);
         const contentHtml = this.renderMessageContent(msg);
@@ -359,14 +363,20 @@ class MessageRenderer {
         const msgType = msg.type || 'text';
         const emojiOnly = msgType === 'text' ? this.isEmojiOnly(msg.text) : false;
         const emojiAttr = emojiOnly ? ` data-emoji-only="${emojiOnly}"` : '';
+        
+        // Only show sender row for first/single messages in group
+        const showSender = shouldShowSenderName(groupPosition);
+        const senderColor = addressToColor(msg.sender);
+        const senderRowHtml = showSender ? `
+                    <div class="message-sender-row flex items-center gap-1 mb-1">
+                        ${badge.html}
+                        <span class="text-xs font-medium" style="color: ${senderColor}">${escapeHtml(displayName)}</span>
+                    </div>` : '';
 
         return `
-            <div class="message-entry ${isOwn ? 'own-message' : 'other-message'}" data-msg-id="${msgId}" data-sender="${msg.sender || ''}" data-type="${msgType}"${emojiAttr}>
+            <div class="message-entry ${isOwn ? 'own-message' : 'other-message'} ${groupClass} ${spacingClass}" data-msg-id="${msgId}" data-sender="${msg.sender || ''}" data-type="${msgType}"${emojiAttr}>
                 <div class="message-bubble">
-                    <div class="flex items-center gap-1 mb-1">
-                        ${badge.html}
-                        <span class="text-xs font-medium ${badge.textColor}">${escapeHtml(displayName)}</span>
-                    </div>
+                    ${senderRowHtml}
                     ${replyPreviewHtml}
                     <div class="message-content">${contentHtml}</div>
                     <div class="message-footer">

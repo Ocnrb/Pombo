@@ -20,7 +20,7 @@ class ExploreUI {
 
     /**
      * Set dependencies
-     * @param {Object} deps - { getPublicChannels, joinPublicChannel, getNsfwEnabled }
+     * @param {Object} deps - { getPublicChannels, joinPublicChannel(streamId, channelInfo), getNsfwEnabled }
      */
     setDependencies(deps) {
         this.deps = { ...this.deps, ...deps };
@@ -344,7 +344,9 @@ class ExploreUI {
             item.addEventListener('click', async () => {
                 const streamId = item.dataset.streamId;
                 if (streamId && this.deps.joinPublicChannel) {
-                    await this.deps.joinPublicChannel(streamId);
+                    // Pass channel info from our cache
+                    const channelInfo = this.cachedPublicChannels?.find(ch => ch.streamId === streamId);
+                    await this.deps.joinPublicChannel(streamId, channelInfo);
                 }
             });
         });
