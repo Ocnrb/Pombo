@@ -230,10 +230,6 @@ npm run build:js
 - [ ] Multi-network support (Polygon, Gnosis, etc.)
 - [ ] PWA (Progressive Web App)
 
-## License
-
-MIT
-
 ## Support
 
 For issues and bugs, open an issue in the repository.
