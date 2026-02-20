@@ -56,22 +56,30 @@ export function isValidMediaUrl(url) {
 }
 
 /**
- * Minimalist color palette for username colors
- * Carefully selected for readability on dark backgrounds (#161616)
- * Excludes green (badge color) and orange (UI accent)
+ * color palette for username colors
  */
 const USERNAME_COLORS = [
-    '#E879F9', // Fuchsia
-    '#818CF8', // Indigo
-    '#38BDF8', // Sky
-    '#FBBF24', // Amber
-    '#F87171', // Red
-    '#A78BFA', // Violet
-    '#2DD4BF', // Teal
-    '#F472B6', // Pink
-    '#60A5FA', // Blue
-    '#67E8F9', // Cyan
-    '#FDA4AF', // Rose
+  // --- Vermelhos & Rosas (Quentes mas não laranjas) ---
+  '#F87171', // Red 400 (Vermelho suave)
+  '#FB7185', // Rose 400 (Rosa avermelhado)
+  '#F472B6', // Pink 400 (Rosa clássico)
+  '#F9A8D4', // Pink 300 (Rosa claro pastel)
+  
+  // --- Roxos & Magentas (Excelentes para Dark Mode) ---
+  '#E879F9', // Fuchsia 400 (Magenta vibrante)
+  '#D946EF', // Fuchsia 500 (Magenta profundo)
+  '#C084FC', // Purple 400 (Roxo claro)
+  '#A78BFA', // Violet 400 (Violeta)
+
+  // --- Azuis & Cianos (Frios e tecnológicos) ---
+  '#818CF8', // Indigo 400 (Azul arroxeado)
+  '#60A5FA', // Blue 400 (Azul royal claro)
+  '#93C5FD', // Blue 300 (Azul bebé)
+  '#38BDF8', // Sky 400 (Azul céu vibrante)
+  '#7DD3FC', // Sky 300 (Azul céu pastel)
+  '#22D3EE', // Cyan 400 (Ciano)
+  '#67E8F9', // Cyan 300 (Ciano claro)
+  '#2DD4BF', // Teal 400 
 ];
 
 /**
