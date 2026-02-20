@@ -4,6 +4,7 @@
  */
 
 import { escapeHtml, escapeAttr, formatAddress } from './utils.js';
+import { getAvatar } from './AvatarGenerator.js';
 
 class OnlineUsersUI {
     constructor() {
@@ -56,10 +57,12 @@ class OnlineUsersUI {
                         subtitle = '(you)';
                     }
                     
+                    const avatarSvg = getAvatar(address, 28, 0.22);
+                    
                     return `
                         <div class="user-item-wrapper" data-user-address="${escapeAttr(address)}">
-                            <div class="user-item cursor-pointer hover:bg-[#2a2a2a] rounded px-2 py-1 -mx-2">
-                                <div class="user-dot ${isMe ? 'bg-white' : ''}"></div>
+                            <div class="user-item cursor-pointer hover:bg-[#2a2a2a] rounded px-2 py-1.5 -mx-2">
+                                <div class="user-avatar-small flex-shrink-0" style="width:28px;height:28px;border-radius:6px;overflow:hidden;">${avatarSvg}</div>
                                 <div class="flex flex-col min-w-0 flex-1">
                                     <span class="text-gray-300 truncate text-sm ${isMe ? 'font-semibold' : ''}">${displayName}</span>
                                     ${subtitle ? `<span class="text-gray-500 text-xs truncate">${subtitle}</span>` : ''}

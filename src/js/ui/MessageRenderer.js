@@ -5,6 +5,7 @@
 
 import { escapeHtml, escapeAttr, formatAddress, addressToColor } from './utils.js';
 import { GroupPosition, shouldShowSenderName } from './MessageGrouper.js';
+import { getAvatar } from './AvatarGenerator.js';
 
 class MessageRenderer {
     constructor() {
@@ -372,9 +373,16 @@ class MessageRenderer {
                         ${badge.html}
                         <span class="text-xs font-medium" style="color: ${senderColor}">${escapeHtml(displayName)}</span>
                     </div>` : '';
+        
+        // Avatar visible only on last/single messages in group, but placeholder for alignment
+        const showAvatar = groupPosition === GroupPosition.LAST || groupPosition === GroupPosition.SINGLE;
+        const avatarSvg = getAvatar(msg.sender, 46, 0.22);
+        const avatarClass = showAvatar ? 'message-avatar' : 'message-avatar message-avatar-hidden';
+        const avatarHtml = `<div class="${avatarClass}">${avatarSvg}</div>`;
 
         return `
             <div class="message-entry ${isOwn ? 'own-message' : 'other-message'} ${groupClass} ${spacingClass}" data-msg-id="${msgId}" data-sender="${msg.sender || ''}" data-type="${msgType}"${emojiAttr}>
+                ${!isOwn ? avatarHtml : ''}
                 <div class="message-bubble">
                     ${senderRowHtml}
                     ${replyPreviewHtml}
@@ -387,6 +395,7 @@ class MessageRenderer {
                     <span class="reply-trigger reply-btn" data-msg-id="${msgId}" title="Reply"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17l-5-5 5-5"/><path d="M4 12h11a4 4 0 0 1 4 4v4"/></svg></span>
                     <span class="react-trigger react-btn" data-msg-id="${msgId}" title="React"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></span>
                 </div>
+                ${isOwn ? avatarHtml : ''}
             </div>
         `;
     }

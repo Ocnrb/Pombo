@@ -31,9 +31,9 @@
         .messages-area { height: calc(100% - 120px); background-color: #161616; }
         
         /* Message styles */
-        .message-entry { animation: fadeIn 0.3s ease-in-out; max-width: 60%; display: flex; flex-direction: column; position: relative; }
-        .own-message { margin-left: auto; align-items: flex-end; }
-        .other-message { margin-right: auto; align-items: flex-start; }
+        .message-entry { animation: fadeIn 0.3s ease-in-out; max-width: 60%; display: flex; flex-direction: row; align-items: flex-end; gap: 8px; position: relative; width: fit-content; }
+        .own-message { margin-left: auto; }
+        .other-message { margin-right: auto; }
         .message-bubble { padding: 0.2rem 0.7rem; position: relative; }
         
         /* Message grouping - Stack Effect */
@@ -68,9 +68,11 @@
         /* Hide sender name in middle/last of group */
         .msg-group-middle .message-sender-row, .msg-group-last .message-sender-row { display: none; }
         
-        /* Legacy fallback for non-grouped messages (bottom-anchor) */
-        .own-message .message-bubble { background-color: #272a2e; color: #f0f0f0; border-radius: 1rem 0.25rem 0 1rem; }
-        .other-message .message-bubble { background-color: #1e1e1e; color: #d1d5db; border-radius: 0.25rem 1rem 1rem 0; }
+        /* Message avatars - positioned at bottom corner */
+        .message-avatar { width: 46px; height: 46px; flex-shrink: 0; align-self: flex-end; border-radius: 10px; overflow: hidden; }
+        .message-avatar svg { width: 100%; height: 100%; display: block; }
+        .message-avatar-hidden { opacity: 0; }
+        
         /* Video message styles - compact design */
         .message-entry[data-type="video_announce"] .message-bubble { padding: 0.25rem; background: transparent; }
         .message-entry[data-type="video_announce"] .message-content { font-size: inherit; }
@@ -251,7 +253,6 @@
         
         /* Online users */
         .user-item { display: flex; align-items: center; margin-bottom: 4px; font-size: 0.8rem; }
-        .user-dot { width: 8px; height: 8px; border-radius: 50%; background-color: #10b981; margin-right: 8px; flex-shrink: 0; }
         #online-users-list::-webkit-scrollbar { width: 4px; }
         #online-users-list::-webkit-scrollbar-thumb { background-color: #4b5563; border-radius: 2px; }
         .rotate-90 { transform: rotate(90deg); display: inline-block; }

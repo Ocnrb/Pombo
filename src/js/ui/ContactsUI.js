@@ -5,6 +5,7 @@
 
 import { modalManager } from './ModalManager.js';
 import { escapeHtml } from './utils.js';
+import { getAvatar } from './AvatarGenerator.js';
 
 class ContactsUI {
     constructor() {
@@ -97,14 +98,15 @@ class ContactsUI {
         }
 
         this.elements.contactsList.innerHTML = contacts.map(contact => {
+            const avatarSvg = getAvatar(contact.address, 32, 0.22);
             return `
                 <div class="flex items-center justify-between p-3 bg-[#1a1a1a] border border-[#282828] rounded-lg">
-                    <div class="flex-1 min-w-0">
-                        <div class="flex items-center gap-2">
-                            <span class="w-2 h-2 bg-emerald-500 rounded-full"></span>
-                            <span class="text-[13px] font-medium text-white truncate">${escapeHtml(contact.nickname)}</span>
+                    <div class="flex items-center gap-3 flex-1 min-w-0">
+                        <div class="flex-shrink-0" style="width:32px;height:32px;border-radius:6px;overflow:hidden;">${avatarSvg}</div>
+                        <div class="flex-1 min-w-0">
+                            <span class="text-[13px] font-medium text-white truncate block">${escapeHtml(contact.nickname)}</span>
+                            <div class="text-[10px] text-[#666] font-mono truncate mt-0.5">${contact.address}</div>
                         </div>
-                        <div class="text-[10px] text-[#666] font-mono truncate mt-0.5">${contact.address}</div>
                     </div>
                     <button 
                         class="remove-contact-btn ml-2 text-[#555] hover:text-red-400 p-1.5 transition"
