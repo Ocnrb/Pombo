@@ -996,6 +996,10 @@ video {
   height: 100%;
 }
 
+.h-screen {
+  height: 100vh;
+}
+
 .max-h-40 {
   max-height: 10rem;
 }
@@ -1066,10 +1070,6 @@ video {
 
 .min-h-\[460px\] {
   min-height: 460px;
-}
-
-.min-h-screen {
-  min-height: 100vh;
 }
 
 .w-1\.5 {
@@ -1694,6 +1694,11 @@ video {
 .bg-\[\#1a2f1a\] {
   --tw-bg-opacity: 1;
   background-color: rgb(26 47 26 / var(--tw-bg-opacity, 1));
+}
+
+.bg-\[\#1d1d1d\] {
+  --tw-bg-opacity: 1;
+  background-color: rgb(29 29 29 / var(--tw-bg-opacity, 1));
 }
 
 .bg-\[\#1e1e1e\] {
