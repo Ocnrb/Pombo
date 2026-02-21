@@ -13,6 +13,7 @@ import { Logger } from './logger.js';
 import { mediaController } from './media.js';
 import { streamrController } from './streamr.js';
 import { subscriptionManager } from './subscriptionManager.js';
+import { historyManager } from './historyManager.js';
 
 // UI Modules
 import { GasEstimator } from './ui/GasEstimator.js';
@@ -311,6 +312,9 @@ class UIController {
         
         // Register activity handler for background channel updates
         this.setupActivityHandler();
+        
+        // Initialize history manager for browser back/forward navigation
+        historyManager.init((state) => this.navigateToState(state));
 
         Logger.info('UI Controller initialized');
     }
@@ -968,6 +972,9 @@ class UIController {
             this.elements.onlineHeader?.classList.remove('hidden');
             this.elements.onlineHeader?.classList.add('flex');
             this.elements.onlineSeparator?.classList.remove('hidden');
+            
+            // Push to browser history for back/forward navigation
+            historyManager.pushState({ view: 'channel', streamId });
 
             // Load reactions from channel state
             this.loadChannelReactions(streamId);
@@ -1127,6 +1134,205 @@ class UIController {
         document.querySelectorAll('.channel-item').forEach(item => {
             item.classList.remove('bg-[#252525]');
         });
+        
+        // Push to browser history
+        historyManager.pushState({ view: 'explore' });
+    }
+
+    /**
+     * Navigate to a state (called by historyManager on popstate)
+     * Does not push to history - used for back/forward navigation
+     * @param {Object} state - State object { view, streamId?, channelInfo? }
+     */
+    async navigateToState(state) {
+        if (!state || !state.view) {
+            await this.showExploreView();
+            return;
+        }
+
+        Logger.debug('Navigating to state:', state);
+
+        switch (state.view) {
+            case 'channel':
+                if (state.streamId) {
+                    // Check if channel is in user's list
+                    const channel = channelManager.getChannel(state.streamId);
+                    if (channel) {
+                        await this._selectChannelWithoutHistory(state.streamId);
+                    } else {
+                        // Channel not in list - show explore
+                        await this.showExploreView();
+                        this.showNotification('Channel not found in your list', 'warning');
+                    }
+                }
+                break;
+
+            case 'preview':
+                if (state.streamId) {
+                    await this._enterPreviewWithoutHistory(state.streamId, state.channelInfo);
+                }
+                break;
+
+            case 'explore':
+            default:
+                await this.showExploreView();
+                break;
+        }
+    }
+
+    /**
+     * Process initial URL on app load (deep link handling)
+     * Called after wallet connection when channels are loaded
+     */
+    async processInitialUrl() {
+        const state = historyManager.getInitialState();
+        
+        if (!state || state.view === 'explore') {
+            // Default view - replace state to set initial history entry
+            historyManager.replaceState({ view: 'explore' });
+            return;
+        }
+
+        Logger.info('Processing deep link:', state);
+
+        switch (state.view) {
+            case 'channel':
+                if (state.streamId) {
+                    const channel = channelManager.getChannel(state.streamId);
+                    if (channel) {
+                        await this._selectChannelWithoutHistory(state.streamId);
+                        historyManager.replaceState(state);
+                    } else {
+                        // Channel not in list - try preview mode
+                        await this._enterPreviewWithoutHistory(state.streamId, null);
+                        historyManager.replaceState({ view: 'preview', streamId: state.streamId });
+                    }
+                }
+                break;
+
+            case 'preview':
+                if (state.streamId) {
+                    await this._enterPreviewWithoutHistory(state.streamId, state.channelInfo);
+                    historyManager.replaceState(state);
+                }
+                break;
+
+            default:
+                historyManager.replaceState({ view: 'explore' });
+                break;
+        }
+    }
+
+    /**
+     * Select channel without pushing to history (for popstate handling)
+     * @private
+     */
+    async _selectChannelWithoutHistory(streamId) {
+        // Same as selectChannel but without history push
+        this.hideTypingIndicator();
+        this.cancelReply();
+
+        if (this.previewChannel) {
+            await this.exitPreviewMode(false);
+        }
+
+        this.elements.messagesArea.innerHTML = '';
+        this.elements.messagesArea?.classList.add('p-4');
+
+        channelManager.setCurrentChannel(streamId);
+        const channel = channelManager.getCurrentChannel();
+
+        if (channel) {
+            this.elements.joinChannelBtn?.classList.add('hidden');
+
+            try {
+                await subscriptionManager.setActiveChannel(streamId, channel.password);
+            } catch (e) {
+                Logger.warn('Subscribe error:', e.message);
+            }
+
+            await secureStorage.setLastOpenedChannel(streamId);
+            subscriptionManager.clearUnreadCount(streamId);
+
+            this.elements.currentChannelName.textContent = channel.name;
+            this.elements.currentChannelInfo.innerHTML = this.getChannelTypeLabel(channel.type, channel.readOnly);
+            this.elements.currentChannelInfo.parentElement.classList.remove('hidden');
+            this.elements.messageInputContainer.classList.remove('hidden');
+            this.elements.exploreTypeTabs?.classList.add('hidden');
+            this.elements.chatHeaderRight?.classList.remove('hidden');
+
+            await this.updateReadOnlyUI(channel);
+            this.elements.inviteUsersBtn.classList.remove('hidden');
+            this.elements.channelMenuBtn?.classList.remove('hidden');
+            this.elements.closeChannelBtn?.classList.remove('hidden');
+            this.elements.closeChannelBtnDesktop?.classList.remove('hidden');
+            this.elements.onlineHeader?.classList.remove('hidden');
+            this.elements.onlineHeader?.classList.add('flex');
+            this.elements.onlineSeparator?.classList.remove('hidden');
+
+            // Load reactions and render messages
+            this.loadChannelReactions(streamId);
+            this.renderMessages(channel.messages);
+            
+            // Mark channel as read
+            await secureStorage.setChannelLastAccess(streamId, Date.now());
+            
+            // Update sidebar to clear unread indicator
+            this.renderChannelList();
+            
+            // Start presence tracking
+            channelManager.startPresenceTracking(streamId);
+            
+            // Update online users display
+            this.updateOnlineUsers(streamId, channelManager.getOnlineUsers(streamId));
+            
+            // Pre-load DELETE permission in background
+            channelManager.preloadDeletePermission(streamId);
+            
+            this.openChatView();
+            this.highlightSelectedChannel(streamId);
+        }
+    }
+
+    /**
+     * Enter preview mode without pushing to history (for popstate handling)
+     * @private
+     */
+    async _enterPreviewWithoutHistory(streamId, channelInfo) {
+        try {
+            if (channelManager.getChannel(streamId)) {
+                await this._selectChannelWithoutHistory(streamId);
+                return;
+            }
+
+            if (this.previewChannel) {
+                await this.exitPreviewMode(false);
+            }
+
+            channelManager.setCurrentChannel(null);
+            this.showLoadingToast('Loading channel...', 'Connecting to stream');
+
+            this.previewChannel = {
+                streamId,
+                channelInfo,
+                name: channelInfo?.name || streamId.split('/')[1]?.replace(/-\d$/, '') || streamId,
+                type: channelInfo?.type || 'public',
+                readOnly: channelInfo?.readOnly || false,
+                messages: []
+            };
+
+            await subscriptionManager.setPreviewChannel(streamId);
+            this.hideLoadingToast();
+            this._showPreviewUI();
+            this.openChatView();
+
+            Logger.info('Entered preview mode for:', streamId);
+        } catch (error) {
+            this.hideLoadingToast();
+            this.previewChannel = null;
+            Logger.error('Failed to enter preview mode:', error);
+            this.showNotification('Failed to load channel: ' + error.message, 'error');
+        }
     }
 
     /**
@@ -3009,6 +3215,9 @@ class UIController {
 
             // Mobile: navigate to chat view
             this.openChatView();
+            
+            // Push to browser history
+            historyManager.pushState({ view: 'preview', streamId });
 
             Logger.info('Entered preview mode for:', streamId);
         } catch (error) {

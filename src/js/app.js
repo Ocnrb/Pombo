@@ -1145,16 +1145,15 @@ class App {
             // Render saved channels
             uiController.renderChannelList();
 
-            // Show Explore view as front-page (connected but no channel open)
-            uiController.showConnectedNoChannelState();
+            // Process URL deep link or show Explore view as default
+            await uiController.processInitialUrl();
 
             // Start background activity poller for all channels
             // This detects new messages without full subscriptions
             subscriptionManager.startBackgroundPoller();
             
-            // NOTE: We no longer auto-restore last opened channel
-            // User starts at Explore view and can choose a channel from there
-            // The lastOpenedChannel is still saved for other uses (e.g., quick access)
+            // Deep links allow direct navigation to channels via URL
+            // e.g., pombo.cc/#/channel/0x123.../channelname-1
             
             Logger.info('Dynamic subscription management active (background poller started)');
 

@@ -84,16 +84,33 @@ export function linkify(escapedText) {
     
     return escapedText.replace(urlPattern, (url) => {
         // Decode HTML entities for the href (browser will encode as needed)
-        const decodedUrl = url
+        let decodedUrl = url
             .replace(/&amp;/g, '&')
             .replace(/&lt;/g, '<')
             .replace(/&gt;/g, '>')
             .replace(/&quot;/g, '"')
             .replace(/&#39;/g, "'");
         
+        // Validate URL to prevent javascript: or other dangerous protocols
+        try {
+            const parsed = new URL(decodedUrl);
+            if (!['http:', 'https:'].includes(parsed.protocol)) {
+                return url; // Return original escaped text, not a link
+            }
+        } catch {
+            return url; // Invalid URL, return as plain text
+        }
+        
+        // Escape for href attribute (quotes and special chars)
+        const safeHref = decodedUrl
+            .replace(/"/g, '%22')
+            .replace(/'/g, '%27')
+            .replace(/</g, '%3C')
+            .replace(/>/g, '%3E');
+        
         // Truncate display text if too long
         const displayUrl = url.length > 50 ? url.substring(0, 47) + '...' : url;
         
-        return `<a href="${decodedUrl}" target="_blank" rel="noopener noreferrer" class="text-[#F6851B] hover:underline break-all">${displayUrl}</a>`;
+        return `<a href="${safeHref}" target="_blank" rel="noopener noreferrer" class="text-[#F6851B] hover:underline break-all">${displayUrl}</a>`;
     });
 }
