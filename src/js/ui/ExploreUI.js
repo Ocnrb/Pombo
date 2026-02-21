@@ -323,10 +323,22 @@ class ExploreUI {
         listEl.querySelectorAll('.explore-channel-item').forEach(item => {
             item.addEventListener('click', async () => {
                 const streamId = item.dataset.streamId;
-                if (streamId && this.deps.joinPublicChannel) {
-                    // Pass channel info from our cache
-                    const channelInfo = this.cachedPublicChannels?.find(ch => ch.streamId === streamId);
-                    await this.deps.joinPublicChannel(streamId, channelInfo);
+                const channelType = item.dataset.type;
+                
+                if (!streamId) return;
+                
+                // Get channel info from cache
+                const channelInfo = this.cachedPublicChannels?.find(ch => ch.streamId === streamId);
+                
+                // For password-protected and native (closed) channels: join directly (add to list)
+                // These require immediate commitment (password entry or permission check)
+                if (channelType === 'password' || channelType === 'native') {
+                    if (this.deps.joinPublicChannel) {
+                        await this.deps.joinPublicChannel(streamId, channelInfo);
+                    }
+                } else {
+                    // For public/open channels: enter preview mode (try before adding)
+                    await this.deps.enterPreviewMode(streamId, channelInfo);
                 }
             });
         });

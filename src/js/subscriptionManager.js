@@ -13,12 +13,18 @@
 import { streamrController, STREAM_CONFIG, deriveEphemeralId } from './streamr.js';
 import { channelManager } from './channels.js';
 import { secureStorage } from './secureStorage.js';
+import { authManager } from './auth.js';
+import { identityManager } from './identity.js';
 import { Logger } from './logger.js';
 
 class SubscriptionManager {
     constructor() {
         // Active channel state (keyed by messageStreamId)
         this.activeChannelId = null;  // messageStreamId of active channel
+        
+        // Preview channel state (temporary subscription, not persisted)
+        this.previewChannelId = null;  // messageStreamId of channel being previewed
+        this.previewPresenceInterval = null;  // Interval for presence broadcasting in preview
         
         // Background activity tracking (keyed by messageStreamId)
         this.backgroundPoller = null;
@@ -118,6 +124,222 @@ class SubscriptionManager {
             await this.downgradeToBackground(this.activeChannelId);
             this.activeChannelId = null;
         }
+    }
+
+    /**
+     * Set a preview channel - temporary subscription without persistence
+     * Used for browsing/exploring channels before committing to join
+     * @param {string} messageStreamId - Message Stream ID to preview
+     */
+    async setPreviewChannel(messageStreamId) {
+        if (!messageStreamId) {
+            Logger.warn('setPreviewChannel called with null streamId');
+            return;
+        }
+
+        // If same channel, already previewing
+        if (this.previewChannelId === messageStreamId) {
+            Logger.debug('Already previewing this channel:', messageStreamId);
+            return;
+        }
+
+        Logger.info('Setting preview channel:', messageStreamId);
+
+        // Clear any existing preview first
+        if (this.previewChannelId) {
+            await this.clearPreviewChannel();
+        }
+
+        // Also clear active channel if any (preview takes precedence in UI)
+        if (this.activeChannelId) {
+            await this.downgradeToBackground(this.activeChannelId);
+            this.activeChannelId = null;
+        }
+
+        this.previewChannelId = messageStreamId;
+
+        // Subscribe to both streams with proper handler object format
+        // Using streamrController directly since channel is not in channelManager yet
+        try {
+            const ephemeralStreamId = deriveEphemeralId(messageStreamId);
+            await streamrController.subscribeToDualStream(
+                messageStreamId,
+                ephemeralStreamId,
+                {
+                    onMessage: (msg) => this._handlePreviewMessage(msg),
+                    onControl: (ephMsg) => this._handlePreviewEphemeral(ephMsg),
+                    onMedia: null
+                },
+                null, // password
+                STREAM_CONFIG.INITIAL_MESSAGES // historyCount - load recent messages
+            );
+            Logger.info('Preview subscription active:', messageStreamId);
+            
+            // Start presence broadcasting for preview channel
+            this._startPreviewPresence(messageStreamId, ephemeralStreamId);
+        } catch (error) {
+            Logger.error('Failed to subscribe to preview channel:', error);
+            this.previewChannelId = null;
+            throw error;
+        }
+    }
+
+    /**
+     * Handle message received on preview channel
+     * @private
+     */
+    _handlePreviewMessage(msg) {
+        Logger.debug('Preview message callback:', msg?.id, msg?.type || 'text');
+        // Forward to UI controller for rendering
+        if (window.uiController && window.uiController.handlePreviewMessage) {
+            window.uiController.handlePreviewMessage(msg);
+        } else {
+            Logger.warn('uiController.handlePreviewMessage not available');
+        }
+    }
+
+    /**
+     * Handle ephemeral message on preview channel (typing, presence)
+     * @private
+     */
+    _handlePreviewEphemeral(msg) {
+        if (!this.previewChannelId) return;
+        
+        Logger.debug('Preview ephemeral:', msg.type);
+        
+        // Process presence messages so online users work in preview mode
+        if (msg.type === 'presence') {
+            channelManager.handlePresenceMessage(this.previewChannelId, msg);
+        } else if (msg.type === 'typing') {
+            // Could notify UI of typing indicators if needed
+            channelManager.notifyHandlers('typing', { 
+                streamId: this.previewChannelId, 
+                user: msg.user 
+            });
+        }
+    }
+
+    /**
+     * Start presence broadcasting for preview channel
+     * @private
+     */
+    _startPreviewPresence(messageStreamId, ephemeralStreamId) {
+        // Stop any existing preview presence interval
+        this._stopPreviewPresence();
+        
+        const publishPresence = async () => {
+            if (this.previewChannelId !== messageStreamId) return;
+            
+            const myAddress = authManager.getAddress();
+            const myNickname = identityManager?.getUsername?.() || null;
+            
+            const presenceData = {
+                type: 'presence',
+                userId: myAddress,
+                address: myAddress,
+                nickname: myNickname,
+                lastActive: Date.now()
+            };
+            
+            try {
+                await streamrController.publishControl(ephemeralStreamId, presenceData);
+            } catch (e) {
+                Logger.warn('Failed to publish preview presence:', e.message);
+            }
+        };
+        
+        // Publish immediately
+        publishPresence();
+        
+        // Then periodically (every 20 seconds)
+        this.previewPresenceInterval = setInterval(publishPresence, 20000);
+    }
+
+    /**
+     * Stop presence broadcasting for preview channel
+     * @private
+     */
+    _stopPreviewPresence() {
+        if (this.previewPresenceInterval) {
+            clearInterval(this.previewPresenceInterval);
+            this.previewPresenceInterval = null;
+        }
+    }
+
+    /**
+     * Clear preview channel (unsubscribe without saving)
+     */
+    async clearPreviewChannel() {
+        if (!this.previewChannelId) return;
+
+        const streamId = this.previewChannelId;
+        Logger.info('Clearing preview channel:', streamId);
+        
+        // Stop presence broadcasting
+        this._stopPreviewPresence();
+
+        try {
+            const ephemeralStreamId = deriveEphemeralId(streamId);
+            await streamrController.unsubscribeFromDualStream(streamId, ephemeralStreamId);
+        } catch (error) {
+            Logger.warn('Error unsubscribing from preview:', error.message);
+        }
+
+        this.previewChannelId = null;
+    }
+
+    /**
+     * Promote preview channel to active (after user joins)
+     * Keeps subscription alive, just changes state
+     * @param {string} messageStreamId - The preview channel to promote
+     */
+    async promotePreviewToActive(messageStreamId) {
+        if (this.previewChannelId !== messageStreamId) {
+            Logger.warn('Cannot promote - not the current preview channel');
+            return;
+        }
+
+        Logger.info('Promoting preview to active:', messageStreamId);
+
+        // Stop preview presence broadcasting
+        this._stopPreviewPresence();
+
+        // IMPORTANT: Unsubscribe from preview first so channelManager can 
+        // re-subscribe with proper handlers (handleTextMessage, handleControlMessage)
+        const ephemeralStreamId = deriveEphemeralId(messageStreamId);
+        try {
+            await streamrController.unsubscribeFromDualStream(messageStreamId, ephemeralStreamId);
+        } catch (error) {
+            Logger.warn('Error unsubscribing preview streams:', error.message);
+        }
+
+        // Transfer state
+        this.activeChannelId = messageStreamId;
+        this.previewChannelId = null;
+
+        // Re-subscribe through channelManager with proper handlers
+        // The channel should now exist in channelManager after join
+        try {
+            await channelManager.subscribeToChannel(messageStreamId, null);
+        } catch (error) {
+            Logger.warn('Re-subscribe after promote:', error.message);
+        }
+    }
+
+    /**
+     * Check if currently in preview mode
+     * @returns {boolean}
+     */
+    isInPreviewMode() {
+        return this.previewChannelId !== null;
+    }
+
+    /**
+     * Get the preview channel ID
+     * @returns {string|null}
+     */
+    getPreviewChannelId() {
+        return this.previewChannelId;
     }
 
     /**
@@ -405,6 +627,11 @@ class SubscriptionManager {
         
         // Stop background polling
         this.stopBackgroundPoller();
+        
+        // Clear preview channel
+        if (this.previewChannelId) {
+            await this.clearPreviewChannel();
+        }
         
         // Clear active channel
         this.activeChannelId = null;

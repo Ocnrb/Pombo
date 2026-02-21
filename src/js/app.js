@@ -1405,7 +1405,8 @@ class App {
             'password': 'Password Protected',
             'native': 'Native Encryption'
         };
-        return labels[type] || type;
+        // Security: escape unknown types to prevent XSS
+        return labels[type] || escapeHtml(String(type || 'Unknown'));
     }
 
     /**

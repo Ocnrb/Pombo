@@ -48,6 +48,9 @@ class UIController {
         // Channel filter state (sidebar tabs: all/personal/community)
         this.currentChannelFilter = 'all';
         
+        // Preview mode state - channel being previewed without being added to list
+        this.previewChannel = null; // { streamId, channelInfo }
+        
         // Setup callbacks for UI modules
         this._setupModuleCallbacks();
     }
@@ -119,6 +122,7 @@ class UIController {
         exploreUI.setDependencies({
             getPublicChannels: () => channelManager.getPublicChannels(),
             joinPublicChannel: (streamId, channelInfo) => this.joinPublicChannel(streamId, channelInfo),
+            enterPreviewMode: (streamId, channelInfo) => this.enterPreviewMode(streamId, channelInfo),
             getNsfwEnabled: () => secureStorage.getNsfwEnabled()
         });
         
@@ -228,6 +232,9 @@ class UIController {
             joinBtn: document.getElementById('join-btn'),
             cancelJoinBtn: document.getElementById('cancel-join-btn'),
 
+            // Join button (preview mode)
+            joinChannelBtn: document.getElementById('join-channel-btn'),
+            
             // Invite modal
             inviteUsersBtn: document.getElementById('invite-users-btn'),
             inviteUsersModal: document.getElementById('invite-users-modal'),
@@ -551,6 +558,11 @@ class UIController {
         // Invite users button
         this.elements.inviteUsersBtn.addEventListener('click', () => {
             this.showInviteModal();
+        });
+
+        // Join channel button (preview mode)
+        this.elements.joinChannelBtn?.addEventListener('click', () => {
+            this.addPreviewToList();
         });
 
         // Send invite
@@ -891,6 +903,11 @@ class UIController {
         // Clear any pending reply from previous channel
         this.cancelReply();
         
+        // Exit preview mode if active (selecting a real channel)
+        if (this.previewChannel) {
+            await this.exitPreviewMode(false); // Don't navigate away
+        }
+        
         // Immediately clear messages area to prevent flash of explore view with wrong padding
         this.elements.messagesArea.innerHTML = '';
         
@@ -901,6 +918,9 @@ class UIController {
         const channel = channelManager.getCurrentChannel();
 
         if (channel) {
+            // Hide Join button, show Invite button (this is a joined channel)
+            this.elements.joinChannelBtn?.classList.add('hidden');
+            
             // Use subscriptionManager for dynamic subscription (only active channel is fully subscribed)
             try {
                 await subscriptionManager.setActiveChannel(streamId, channel.password);
@@ -987,6 +1007,12 @@ class UIController {
         // Stop presence tracking
         channelManager.stopPresenceTracking();
         
+        // If in preview mode, exit preview instead
+        if (this.previewChannel) {
+            await this.exitPreviewMode(true);
+            return;
+        }
+        
         // Clear active channel in subscription manager (downgrades to background)
         await subscriptionManager.clearActiveChannel();
         
@@ -998,6 +1024,7 @@ class UIController {
         
         // Hide channel-specific buttons
         this.elements.inviteUsersBtn?.classList.add('hidden');
+        this.elements.joinChannelBtn?.classList.add('hidden');
         this.elements.channelMenuBtn?.classList.add('hidden');
         this.elements.closeChannelBtn?.classList.add('hidden');
         this.elements.closeChannelBtnDesktop?.classList.add('hidden');
@@ -1157,8 +1184,15 @@ class UIController {
      * @param {Array} users - Array of online users
      */
     updateOnlineUsers(streamId, users) {
+        // Check if this is for the current channel
         const currentChannel = channelManager.getCurrentChannel();
-        if (!currentChannel || currentChannel.streamId !== streamId) return;
+        const isCurrentChannel = currentChannel && currentChannel.streamId === streamId;
+        
+        // Also check if this is for the preview channel
+        const isPreviewChannel = this.previewChannel && this.previewChannel.streamId === streamId;
+        
+        if (!isCurrentChannel && !isPreviewChannel) return;
+        
         onlineUsersUI.updateOnlineUsers(this.elements.onlineUsersCount, this.elements.onlineUsersList, users);
     }
     
@@ -2193,8 +2227,11 @@ class UIController {
         const text = this.elements.messageInput.value.trim();
         if (!text) return;
 
+        // Check if in preview mode or normal channel mode
         const currentChannel = channelManager.getCurrentChannel();
-        if (!currentChannel) return;
+        const isPreviewMode = this.previewChannel !== null;
+        
+        if (!currentChannel && !isPreviewMode) return;
 
         // Lock sending state
         this.isSending = true;
@@ -2208,14 +2245,50 @@ class UIController {
             this.elements.messageInput.style.height = 'auto'; // Reset textarea height
             this.cancelReply(); // Clear reply state
             
-            await channelManager.sendMessage(currentChannel.streamId, text, replyTo);
-            // UI update happens via notifyHandlers -> addMessage
+            if (isPreviewMode) {
+                // Send message in preview mode via streamrController directly
+                await this._sendPreviewMessage(text, replyTo);
+            } else {
+                await channelManager.sendMessage(currentChannel.streamId, text, replyTo);
+            }
+            // UI update happens via notifyHandlers -> addMessage (or handlePreviewMessage)
         } catch (error) {
             this.showNotification('Failed to send message: ' + error.message, 'error');
         } finally {
             // Always unlock sending state
             this.isSending = false;
         }
+    }
+
+    /**
+     * Send a message in preview mode (directly to stream without channelManager)
+     * @private
+     */
+    async _sendPreviewMessage(text, replyTo = null) {
+        if (!this.previewChannel) return;
+        
+        const messagePayload = {
+            type: 'message',
+            text: text,
+            sender: authManager.getAddress(),
+            senderName: identityManager.getDisplayName(authManager.getAddress()),
+            timestamp: Date.now(),
+            id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+        };
+        
+        if (replyTo) {
+            messagePayload.replyTo = {
+                id: replyTo.id,
+                text: replyTo.text,
+                sender: replyTo.sender,
+                senderName: replyTo.senderName
+            };
+        }
+        
+        // Publish directly to the message stream
+        await streamrController.publishMessage(this.previewChannel.streamId, messagePayload);
+        
+        // The message will come back via subscription and be handled by handlePreviewMessage
     }
 
     // =========================================
@@ -2892,16 +2965,276 @@ class UIController {
     }
 
     /**
+     * Enter preview mode for a channel (view without adding to list)
+     * For public/open channels - allows users to try before committing
+     * @param {string} streamId - Channel stream ID
+     * @param {Object} channelInfo - Channel metadata
+     */
+    async enterPreviewMode(streamId, channelInfo = null) {
+        try {
+            // Check if channel is already in user's list
+            if (channelManager.getChannel(streamId)) {
+                // Already joined - just select it normally
+                await this.selectChannel(streamId);
+                return;
+            }
+
+            // Exit any existing preview first (only one preview at a time)
+            if (this.previewChannel) {
+                await this.exitPreviewMode(false); // Don't navigate away
+            }
+
+            this.showLoadingToast('Loading channel...', 'Connecting to stream');
+
+            // Store preview state
+            this.previewChannel = {
+                streamId,
+                channelInfo,
+                name: channelInfo?.name || streamId.split('/')[1]?.replace(/-\d$/, '') || streamId,
+                type: channelInfo?.type || 'public',
+                readOnly: channelInfo?.readOnly || false,
+                messages: []
+            };
+
+            // Subscribe to channel stream temporarily (without persisting)
+            await subscriptionManager.setPreviewChannel(streamId);
+
+            this.hideLoadingToast();
+
+            // Update UI for preview mode
+            this._showPreviewUI();
+
+            // Mobile: navigate to chat view
+            this.openChatView();
+
+            Logger.info('Entered preview mode for:', streamId);
+        } catch (error) {
+            this.hideLoadingToast();
+            this.previewChannel = null;
+            Logger.error('Failed to enter preview mode:', error);
+            this.showNotification('Failed to load channel: ' + error.message, 'error');
+        }
+    }
+
+    /**
+     * Update UI to show preview mode state
+     * @private
+     */
+    _showPreviewUI() {
+        if (!this.previewChannel) return;
+
+        // Clear messages area first and show loading spinner
+        this.elements.messagesArea.innerHTML = `
+            <div class="flex flex-col items-center justify-center h-full text-gray-500">
+                <div class="spinner mb-3" style="width: 24px; height: 24px;"></div>
+                <span class="text-sm">Loading messages...</span>
+            </div>
+        `;
+        this.elements.messagesArea?.classList.add('p-4');
+        
+        // Set a flag to track if we're still loading
+        this.previewChannel.isLoading = true;
+        
+        // After a short delay, if still no messages, show empty state
+        setTimeout(() => {
+            if (this.previewChannel && this.previewChannel.isLoading && this.previewChannel.messages.length === 0) {
+                this.previewChannel.isLoading = false;
+                this.elements.messagesArea.innerHTML = `
+                    <div class="flex items-center justify-center h-full text-gray-500">
+                        No messages yet. Start the conversation!
+                    </div>
+                `;
+            }
+        }, 3000); // 3 seconds timeout
+
+        // Update header
+        this.elements.currentChannelName.textContent = this.previewChannel.name;
+        this.elements.currentChannelInfo.innerHTML = this.getChannelTypeLabel(this.previewChannel.type, this.previewChannel.readOnly);
+        this.elements.currentChannelInfo.parentElement.classList.remove('hidden');
+
+        // Show message input (full functionality in preview)
+        this.elements.messageInputContainer.classList.remove('hidden');
+
+        // Hide explore type tabs
+        this.elements.exploreTypeTabs?.classList.add('hidden');
+
+        // Restore right header buttons
+        this.elements.chatHeaderRight?.classList.remove('hidden');
+
+        // Show JOIN button, hide INVITE button
+        this.elements.joinChannelBtn?.classList.remove('hidden');
+        this.elements.inviteUsersBtn?.classList.add('hidden');
+
+        // Show channel menu button
+        if (this.elements.channelMenuBtn) {
+            this.elements.channelMenuBtn.classList.remove('hidden');
+        }
+
+        // Show close channel buttons
+        if (this.elements.closeChannelBtn) {
+            this.elements.closeChannelBtn.classList.remove('hidden');
+        }
+        if (this.elements.closeChannelBtnDesktop) {
+            this.elements.closeChannelBtnDesktop.classList.remove('hidden');
+        }
+
+        // Show online users container
+        this.elements.onlineHeader?.classList.remove('hidden');
+        this.elements.onlineHeader?.classList.add('flex');
+        this.elements.onlineSeparator?.classList.remove('hidden');
+
+        // Don't render messages yet - wait for history to arrive
+        // The loading spinner is already shown above
+    }
+
+    /**
+     * Add preview channel to user's list (convert preview to joined)
+     */
+    async addPreviewToList() {
+        if (!this.previewChannel) {
+            Logger.warn('No preview channel to add');
+            return;
+        }
+
+        try {
+            const { streamId, channelInfo, name, type, readOnly } = this.previewChannel;
+
+            this.showLoadingToast('Adding channel...', 'Saving to your list');
+
+            // Add channel to channelManager (this persists it)
+            await channelManager.joinChannel(streamId, null, {
+                name: name,
+                type: type,
+                readOnly: readOnly,
+                createdBy: channelInfo?.createdBy
+            });
+
+            // Clear preview state
+            const previewStreamId = streamId;
+            this.previewChannel = null;
+
+            // Transfer subscription from preview to active
+            await subscriptionManager.promotePreviewToActive(previewStreamId);
+
+            this.hideLoadingToast();
+
+            // Update UI - hide Join, show Invite
+            this.elements.joinChannelBtn?.classList.add('hidden');
+            this.elements.inviteUsersBtn?.classList.remove('hidden');
+
+            // Update channel list in sidebar
+            this.renderChannelList();
+
+            // Select the now-joined channel
+            await this.selectChannel(previewStreamId);
+
+            this.showNotification('Channel added to your list!', 'success');
+            Logger.info('Preview channel added to list:', previewStreamId);
+        } catch (error) {
+            this.hideLoadingToast();
+            Logger.error('Failed to add preview to list:', error);
+            this.showNotification('Failed to add channel: ' + error.message, 'error');
+        }
+    }
+
+    /**
+     * Exit preview mode and return to Explore
+     * @param {boolean} navigateToExplore - Whether to navigate back to Explore view (default: true)
+     */
+    async exitPreviewMode(navigateToExplore = true) {
+        if (!this.previewChannel) return;
+
+        try {
+            const streamId = this.previewChannel.streamId;
+
+            // Unsubscribe from preview channel
+            await subscriptionManager.clearPreviewChannel();
+
+            // Clear preview state
+            this.previewChannel = null;
+
+            // Hide Join button
+            this.elements.joinChannelBtn?.classList.add('hidden');
+
+            Logger.info('Exited preview mode for:', streamId);
+
+            // Navigate back to Explore if requested
+            if (navigateToExplore) {
+                await this.openExploreView();
+            }
+        } catch (error) {
+            Logger.error('Error exiting preview mode:', error);
+            this.previewChannel = null;
+        }
+    }
+
+    /**
+     * Handle message received in preview mode
+     * @param {Object} message - Message object
+     */
+    handlePreviewMessage(message) {
+        if (!this.previewChannel) return;
+
+        // Filter out non-content messages (presence, typing, reactions)
+        if (message?.type === 'presence' || message?.type === 'typing' || message?.type === 'reaction') {
+            return;
+        }
+
+        // Validate message has required properties
+        const isTextMessage = message?.text;
+        const isImageMessage = message?.type === 'image' && message?.imageId;
+        const isVideoMessage = message?.type === 'video_announce' && message?.metadata;
+
+        if (!message?.id || !message?.sender || !message?.timestamp) {
+            return;
+        }
+
+        if (!isTextMessage && !isImageMessage && !isVideoMessage) {
+            Logger.debug('Preview: Unknown message type, skipping:', message?.type);
+            return;
+        }
+
+        // Deduplication: skip if message already exists
+        const exists = this.previewChannel.messages.some(m => m.id === message.id);
+        if (exists) {
+            Logger.debug('Preview: Message already exists, skipping:', message.id);
+            return;
+        }
+
+        Logger.debug('Preview message received:', message.id, message.text?.slice(0, 30));
+
+        // Mark as no longer loading (we got at least one message)
+        this.previewChannel.isLoading = false;
+
+        // Add message to preview channel
+        this.previewChannel.messages.push(message);
+
+        // Sort by timestamp to ensure correct order (history might arrive out of order)
+        this.previewChannel.messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+        // Re-render messages
+        this.renderMessages(this.previewChannel.messages);
+
+        // Scroll to bottom
+        if (this.elements.messagesArea) {
+            this.elements.messagesArea.scrollTop = this.elements.messagesArea.scrollHeight;
+        }
+    }
+
+    /**
      * Show password input modal for joining password-protected channels
      */
     showPasswordInputModal(title, message) {
         return new Promise((resolve) => {
             const modal = document.createElement('div');
             modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-[60]';
+            // Security: escape user-provided content to prevent XSS
+            const safeTitle = this.escapeHtml(title);
+            const safeMessage = this.escapeHtml(message);
             modal.innerHTML = `
                 <div class="bg-[#111111] rounded-xl p-5 w-[340px] max-w-full mx-4 border border-[#222]">
-                    <h3 class="text-[15px] font-medium mb-2 text-white">${title}</h3>
-                    <p class="text-[12px] text-[#888] mb-4">${message}</p>
+                    <h3 class="text-[15px] font-medium mb-2 text-white">${safeTitle}</h3>
+                    <p class="text-[12px] text-[#888] mb-4">${safeMessage}</p>
                     <input type="password" id="browse-password-input" placeholder="Password" 
                         class="w-full bg-[#1a1a1a] border border-[#282828] text-white px-3 py-2.5 rounded-lg text-[13px] focus:outline-none focus:border-[#444] transition mb-4"
                         autocomplete="off">
@@ -3112,7 +3445,8 @@ class UIController {
             'password': `<span class="inline-flex items-center gap-1"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>Protected${roIcon}</span>`,
             'native': `<span class="inline-flex items-center gap-1"><svg class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.5l-8 13.5 8 4.5 8-4.5-8-13.5zm0 18l-8-4.5 8 9 8-9-8 4.5z"/></svg>Closed${roIcon}</span>`
         };
-        return labels[type] || type;
+        // Security: escape unknown types to prevent XSS
+        return labels[type] || this.escapeHtml(String(type || 'Unknown'));
     }
 
     /**

@@ -1557,6 +1557,10 @@ video {
   border-color: rgb(246 133 27 / 0.3);
 }
 
+.border-\[\#F6851B\]\/40 {
+  border-color: rgb(246 133 27 / 0.4);
+}
+
 .border-amber-500\/20 {
   border-color: rgb(245 158 11 / 0.2);
 }
@@ -1716,6 +1720,10 @@ video {
 
 .bg-\[\#F6851B\]\/10 {
   background-color: rgb(246 133 27 / 0.1);
+}
+
+.bg-\[\#F6851B\]\/15 {
+  background-color: rgb(246 133 27 / 0.15);
 }
 
 .bg-\[\#F6851B\]\/20 {
@@ -2682,6 +2690,10 @@ select option {
 
 .hover\:bg-\[\#F6851B\]\/20:hover {
   background-color: rgb(246 133 27 / 0.2);
+}
+
+.hover\:bg-\[\#F6851B\]\/25:hover {
+  background-color: rgb(246 133 27 / 0.25);
 }
 
 .hover\:bg-\[\#e5e5e5\]:hover {
