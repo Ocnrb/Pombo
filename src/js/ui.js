@@ -1336,10 +1336,6 @@ class UIController {
      * Enter preview mode without pushing to history (for popstate handling)
      * @private
      */
-    /**
-     * Enter preview mode without pushing to history (for popstate handling)
-     * @private
-     */
     async _enterPreviewWithoutHistory(streamId, channelInfo) {
         // Delegate to enterPreviewMode with history disabled
         if (channelManager.getChannel(streamId)) {

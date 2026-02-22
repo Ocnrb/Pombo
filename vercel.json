@@ -10,7 +10,7 @@
         { "key": "X-XSS-Protection", "value": "1; mode=block" },
         { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
         { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()" },
-        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://*.streamr.network https://*.streamr.network:8002 wss://*.streamr.network wss://*.streamr.network:40402 wss://*.streamr-nodes.xyz wss://*.streamr-nodes.xyz:32200 wss://*.streamr-nodes.xyz:32201 wss://*.streamr-nodes.xyz:32202 wss://*.streamr-nodes.xyz:35555 https://rpc.ankr.com https://polygon.drpc.org https://polygon-bor-rpc.publicnode.com https://*.thegraph.com https://*.ens.domains https://euc.li; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" }
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://polygon-bor-rpc.publicnode.com https://*.thegraph.com https://*.ens.domains https://euc.li; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" }
       ]
     }
   ]
