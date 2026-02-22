@@ -15,7 +15,7 @@ import { secureStorage } from './secureStorage.js';
 import { Logger } from './logger.js';
 
 // Default API key (fallback if user doesn't provide their own)
-const DEFAULT_API_KEY = 'a637f5422fb071df7782cd6e3580f614';
+const DEFAULT_API_KEY = 'f56ddaf00b5cbe1eeb1bc003072b5422';
 
 // Subgraph ID on Arbitrum One
 const SUBGRAPH_ID = 'EGWFdhhiWypDuz22Uy7b3F69E9MEkyfU9iAQMttkH5Rj';
@@ -488,3 +488,4 @@ class GraphAPI {
 
 // Export singleton instance
 export const graphAPI = new GraphAPI();
+
