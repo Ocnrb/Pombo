@@ -15,6 +15,7 @@ import { channelManager } from './channels.js';
 import { secureStorage } from './secureStorage.js';
 import { authManager } from './auth.js';
 import { identityManager } from './identity.js';
+import { mediaController } from './media.js';
 import { Logger } from './logger.js';
 
 class SubscriptionManager {
@@ -168,7 +169,7 @@ class SubscriptionManager {
                 {
                     onMessage: (msg) => this._handlePreviewMessage(msg),
                     onControl: (ephMsg) => this._handlePreviewEphemeral(ephMsg),
-                    onMedia: null
+                    onMedia: (mediaMsg) => this._handlePreviewMedia(messageStreamId, mediaMsg)
                 },
                 null, // password
                 STREAM_CONFIG.INITIAL_MESSAGES // historyCount - load recent messages
@@ -228,6 +229,21 @@ class SubscriptionManager {
                 user: msg.user 
             });
         }
+    }
+
+    /**
+     * Handle media message on preview channel (piece requests, file chunks, etc.)
+     * Essential for P2P file transfers to work in preview mode
+     * @private
+     */
+    _handlePreviewMedia(messageStreamId, msg) {
+        if (!msg?.type) return;
+        
+        Logger.debug('Preview media:', msg.type);
+        
+        // Forward to mediaController for processing
+        // This enables piece_request handling, file_piece reception, etc.
+        mediaController.handleMediaMessage(messageStreamId, msg);
     }
 
     /**

@@ -1540,11 +1540,6 @@ video {
   border-color: rgb(51 51 51 / var(--tw-border-opacity, 1));
 }
 
-.border-\[\#3d3215\] {
-  --tw-border-opacity: 1;
-  border-color: rgb(61 50 21 / var(--tw-border-opacity, 1));
-}
-
 .border-\[\#444\] {
   --tw-border-opacity: 1;
   border-color: rgb(68 68 68 / var(--tw-border-opacity, 1));
@@ -1686,6 +1681,11 @@ video {
   background-color: rgb(26 26 26 / var(--tw-bg-opacity, 1));
 }
 
+.bg-\[\#1a1f2e\] {
+  --tw-bg-opacity: 1;
+  background-color: rgb(26 31 46 / var(--tw-bg-opacity, 1));
+}
+
 .bg-\[\#1a2f1a\] {
   --tw-bg-opacity: 1;
   background-color: rgb(26 47 26 / var(--tw-bg-opacity, 1));
@@ -1694,11 +1694,6 @@ video {
 .bg-\[\#1e1e1e\] {
   --tw-bg-opacity: 1;
   background-color: rgb(30 30 30 / var(--tw-bg-opacity, 1));
-}
-
-.bg-\[\#1f1a0f\] {
-  --tw-bg-opacity: 1;
-  background-color: rgb(31 26 15 / var(--tw-bg-opacity, 1));
 }
 
 .bg-\[\#252525\] {
@@ -1790,28 +1785,14 @@ video {
   background-color: rgb(52 211 153 / var(--tw-bg-opacity, 1));
 }
 
-.bg-emerald-500\/10 {
-  background-color: rgb(16 185 129 / 0.1);
-}
-
 .bg-gray-700 {
   --tw-bg-opacity: 1;
   background-color: rgb(55 65 81 / var(--tw-bg-opacity, 1));
 }
 
-.bg-gray-800 {
-  --tw-bg-opacity: 1;
-  background-color: rgb(31 41 55 / var(--tw-bg-opacity, 1));
-}
-
 .bg-green-500 {
   --tw-bg-opacity: 1;
   background-color: rgb(34 197 94 / var(--tw-bg-opacity, 1));
-}
-
-.bg-green-600 {
-  --tw-bg-opacity: 1;
-  background-color: rgb(22 163 74 / var(--tw-bg-opacity, 1));
 }
 
 .bg-green-600\/80 {
@@ -1886,11 +1867,6 @@ video {
 
 .bg-yellow-500\/20 {
   background-color: rgb(234 179 8 / 0.2);
-}
-
-.bg-\[\#1a1f2e\] {
-  --tw-bg-opacity: 1;
-  background-color: rgb(26 31 46 / var(--tw-bg-opacity, 1));
 }
 
 .bg-gradient-to-l {
@@ -2279,16 +2255,6 @@ video {
 .text-\[\#F6851B\] {
   --tw-text-opacity: 1;
   color: rgb(246 133 27 / var(--tw-text-opacity, 1));
-}
-
-.text-\[\#a67c00\] {
-  --tw-text-opacity: 1;
-  color: rgb(166 124 0 / var(--tw-text-opacity, 1));
-}
-
-.text-\[\#f59e0b\] {
-  --tw-text-opacity: 1;
-  color: rgb(245 158 11 / var(--tw-text-opacity, 1));
 }
 
 .text-amber-400 {

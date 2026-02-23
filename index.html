@@ -2,7 +2,7 @@
 <html lang="pt">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://polygon-bor-rpc.publicnode.com https://gasstation.polygon.technology https://eth.llamarpc.com https://*.thegraph.com https://*.ens.domains https://euc.li https://*.logstore.usher.so; base-uri 'self'; form-action 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://polygon-bor-rpc.publicnode.com https://gasstation.polygon.technology https://eth.llamarpc.com https://*.thegraph.com https://*.ens.domains https://euc.li https://*.logstore.usher.so; base-uri 'self'; form-action 'self'">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pombo - P2P Decentralized Chat</title>
 
@@ -1367,9 +1367,9 @@
                             <div>
                                 <h4 class="text-sm font-medium text-white/90 mb-1 flex items-center gap-2">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"/></svg>
-                                    Account Backup
+                                    Backup & Restore
                                 </h4>
-                                <p class="text-xs text-white/40 mb-4">Full account backup encrypted with your password</p>
+                                <p class="text-xs text-white/40 mb-4">Export data to restore on another device</p>
                                 
                                 <div class="grid grid-cols-2 gap-3">
                                     <button id="export-all-data-btn" class="bg-white/10 hover:bg-white/20 text-white border border-white/20 px-4 py-3 rounded-xl text-sm transition flex items-center justify-center gap-2">
@@ -1382,7 +1382,7 @@
                                         Import
                                     </button>
                                 </div>
-                                <p class="text-xs text-white/30 mt-3">Uses your account password — scrypt encryption</p>
+                                <p class="text-xs text-white/30 mt-3">Passwords not included — you'll need them to unlock</p>
                             </div>
 
                             <!-- Divider -->
