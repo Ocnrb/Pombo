@@ -1156,7 +1156,14 @@ class StreamrController {
      */
     async publishMessage(messageStreamId, message, password = null) {
         Logger.debug('publishMessage called - sending to messageStream partition 0:', { messageStreamId, messageId: message?.id });
-        return await this.publish(messageStreamId, STREAM_CONFIG.MESSAGE_STREAM.MESSAGES, message, password);
+        
+        // Strip local-only fields before publishing
+        // These are UI state that should not be sent over the network:
+        // - verified: each receiver must verify independently
+        // - pending: only meaningful to the sender
+        const { verified, pending, ...networkMessage } = message;
+        
+        return await this.publish(messageStreamId, STREAM_CONFIG.MESSAGE_STREAM.MESSAGES, networkMessage, password);
     }
 
     /**

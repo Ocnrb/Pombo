@@ -2527,28 +2527,31 @@ class UIController {
     async _sendPreviewMessage(text, replyTo = null) {
         if (!this.previewChannel) return;
         
-        const messagePayload = {
-            type: 'message',
-            text: text,
-            sender: authManager.getAddress(),
-            senderName: await identityManager.getDisplayName(authManager.getAddress()),
-            timestamp: Date.now(),
-            id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+        const streamId = this.previewChannel.streamId;
+        
+        // Create signed message using identity manager (same as channelManager)
+        const message = await identityManager.createSignedMessage(text, streamId, replyTo);
+        
+        // Add verification info for local display
+        message.verified = {
+            valid: true,
+            trustLevel: await identityManager.getTrustLevel(message.sender)
         };
         
-        if (replyTo) {
-            messagePayload.replyTo = {
-                id: replyTo.id,
-                text: replyTo.text,
-                sender: replyTo.sender,
-                senderName: replyTo.senderName
-            };
+        // Add to local preview messages immediately
+        this.previewChannel.messages.push(message);
+        this.previewChannel.messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+        this.renderMessages(this.previewChannel.messages);
+        
+        // Scroll to bottom
+        if (this.elements.messagesArea) {
+            this.elements.messagesArea.scrollTop = this.elements.messagesArea.scrollHeight;
         }
         
-        // Publish directly to the message stream
-        await streamrController.publishMessage(this.previewChannel.streamId, messagePayload);
+        // Publish to the message stream
+        await streamrController.publishMessage(streamId, message);
         
-        // The message will come back via subscription and be handled by handlePreviewMessage
+        Logger.debug('Preview message sent:', message.id);
     }
 
     // =========================================
@@ -3441,7 +3444,7 @@ class UIController {
                     </div>
                 `;
             }
-        }, 3000); // 3 seconds timeout
+        }, 7000); // 7 seconds timeout
 
         // Update header
         this.elements.currentChannelName.textContent = this.previewChannel.name;
@@ -3574,7 +3577,7 @@ class UIController {
      * Handle message received in preview mode
      * @param {Object} message - Message object
      */
-    handlePreviewMessage(message) {
+    async handlePreviewMessage(message) {
         if (!this.previewChannel) return;
 
         // Filter out non-content messages (presence, typing)
@@ -3615,6 +3618,25 @@ class UIController {
         }
 
         Logger.debug('Preview message received:', message.id, message.text?.slice(0, 30));
+
+        // Verify message signature (same as channel mode)
+        const streamId = this.previewChannel.streamId;
+        const isRecentMessage = Date.now() - message.timestamp < 30000;
+        
+        try {
+            // Add channelId if missing
+            if (!message.channelId) {
+                message.channelId = streamId;
+            }
+            
+            const verification = await identityManager.verifyMessage(message, streamId, {
+                skipTimestampCheck: !isRecentMessage
+            });
+            message.verified = verification;
+        } catch (error) {
+            Logger.error('Preview verification error:', error);
+            message.verified = { valid: false, error: error.message, trustLevel: -1 };
+        }
 
         // Mark as no longer loading (we got at least one message)
         this.previewChannel.isLoading = false;
