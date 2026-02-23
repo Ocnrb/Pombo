@@ -893,10 +893,6 @@ video {
   margin-top: 1.5rem;
 }
 
-.mt-auto {
-  margin-top: auto;
-}
-
 .line-clamp-2 {
   overflow: hidden;
   display: -webkit-box;
@@ -1044,6 +1040,10 @@ video {
   max-height: 90vh;
 }
 
+.max-h-\[95vh\] {
+  max-height: 95vh;
+}
+
 .min-h-0 {
   min-height: 0px;
 }
@@ -1054,10 +1054,6 @@ video {
 
 .min-h-\[20px\] {
   min-height: 20px;
-}
-
-.min-h-\[400px\] {
-  min-height: 400px;
 }
 
 .min-h-\[420px\] {
@@ -1166,10 +1162,6 @@ video {
 
 .w-\[42\%\] {
   width: 42%;
-}
-
-.w-\[480px\] {
-  width: 480px;
 }
 
 .w-\[520px\] {
@@ -2771,10 +2763,6 @@ select option {
   background-color: rgb(255 255 255 / 0.05);
 }
 
-.hover\:bg-white\/90:hover {
-  background-color: rgb(255 255 255 / 0.9);
-}
-
 .hover\:bg-white\/\[0\.07\]:hover {
   background-color: rgb(255 255 255 / 0.07);
 }
@@ -2817,10 +2805,6 @@ select option {
 .hover\:text-white:hover {
   --tw-text-opacity: 1;
   color: rgb(255 255 255 / var(--tw-text-opacity, 1));
-}
-
-.hover\:text-white\/50:hover {
-  color: rgb(255 255 255 / 0.5);
 }
 
 .hover\:text-white\/60:hover {
@@ -2945,4 +2929,18 @@ select option {
 .peer:focus ~ .peer-focus\:outline-none {
   outline: 2px solid transparent;
   outline-offset: 2px;
+}
+
+@media (min-width: 768px) {
+  .md\:block {
+    display: block;
+  }
+
+  .md\:max-h-\[90vh\] {
+    max-height: 90vh;
+  }
+
+  .md\:p-4 {
+    padding: 1rem;
+  }
 }

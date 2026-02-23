@@ -6,153 +6,377 @@
 
 // Muted, darker color palette - pairs of [background, shape]
 const COLOR_PAIRS = [
-    // --- AZUIS E ÍNDIGOS (Vivos e profundos) ---
+    // --- AZUIS PROFUNDOS & SLATE BLUES ---
     ['#12182B', '#3B6BE3'],  // Royal Blue
     ['#151C33', '#4A81D9'],  // Strong Cerulean
     ['#1D1F2E', '#5C7CFA'],  // Clear Cobalt
     ['#181536', '#5D5FE3'],  // Rich Indigo
+    ['#141A2F', '#4C6EDB'],  // Muted Sapphire
+    ['#101726', '#4462C9'],  // Deep Atlantic
+    ['#171C2B', '#6A7FDB'],  // Soft Periwinkle
 
-    // --- ROXOS E MAGENTAS (Ricos e sofisticados) ---
+    // --- ÍNDIGO & VIOLETAS (Mais ricos, menos acinzentados) ---
+    ['#19142A', '#6C5DD3'],  // Soft Indigo
+    ['#1C1633', '#7A6CE0'],  // Muted Electric Violet
+    ['#1A1230', '#5F55B5'],  // Deep Night Indigo
+    ['#201238', '#7B4FE0'],  // Deep Violet
+    ['#23113A', '#8A4BD6'],  // Royal Iris
+
+    // --- ROXOS & MAGENTAS (Saturação controlada mas viva) ---
     ['#1D122B', '#8E46E6'],  // Vibrant Amethyst
     ['#211529', '#8952D9'],  // Royal Purple
     ['#241024', '#B33DB3'],  // Deep Magenta
     ['#291425', '#C44994'],  // Rich Orchid
+    ['#2A1028', '#A93FA0'],  // Velvet Plum
 
-    // --- VERMELHOS E ROSAS (Quentes e marcantes, sem tocar no laranja) ---
+    // --- VERMELHOS & VINHOS (Sem laranja) ---
     ['#2B1212', '#D93838'],  // Strong Crimson
     ['#2E151A', '#D94160'],  // Vibrant Ruby
     ['#2E1622', '#C93C75'],  // Deep Berry
     ['#261518', '#C44B5A'],  // Rich Rose
+    ['#2A1416', '#B5424D'],  // Muted Garnet
+    ['#241012', '#A63A44'],  // Deep Wine
 
-    // --- NEUTROS COM TOQUE DE COR (Para elementos secundários) ---
-    ['#1A1C23', '#7382A6'],  // Steel Blue (Mais saturado que o slate anterior)
-    ['#1E1A24', '#8E77A6'],  // Vibrant Taupe
-    ['#241A1E', '#A66B7C']   // Rich Dusty Rose
+    // --- VERDES ESCUROS PROFUNDOS (Elegantes e frios) ---
+    ['#0F1F1A', '#1F8A70'],  // Deep Teal
+    ['#0E1B17', '#1C7C68'],  // Muted Emerald
+    ['#0C1A16', '#207561'],  // Forest Teal
+    ['#0F201C', '#2C8C6A'],  // Dark Sea Green
+    ['#101C18', '#3A7F66'],  // Dusty Pine
+
+    // --- NEUTROS FRIOS (Sem roxos acinzentados) ---
+    ['#1A1C23', '#7382A6'],  // Steel Blue
+    ['#181B22', '#6F7C99'],  // Cool Slate
+    ['#161A20', '#5F6B85']   // Deep Blue Grey
 ];
 
 // Shape generators - complex polygons
 const SHAPES = {
-    // Arrow pointing right
-    arrow: (cx, cy, size) => {
+
+    // ---------- ARROWS / CHEVRONS ----------
+    arrowRight: (cx, cy, size) => {
         const s = size * 0.35;
-        return `M${cx - s},${cy - s * 0.6} L${cx + s * 0.4},${cy} L${cx - s},${cy + s * 0.6} L${cx - s * 0.5},${cy} Z`;
+        return `M${cx - s},${cy - s * 0.6}
+                L${cx + s * 0.4},${cy}
+                L${cx - s},${cy + s * 0.6}
+                L${cx - s * 0.5},${cy}
+                Z`;
     },
-    
-    // Diamond/rhombus
-    diamond: (cx, cy, size) => {
-        const s = size * 0.38;
-        return `M${cx},${cy - s} L${cx + s},${cy} L${cx},${cy + s} L${cx - s},${cy} Z`;
+
+    chevronRight: (cx, cy, size) => {
+        const s = size * 0.3;
+        const w = size * 0.15;
+        return `M${cx - s},${cy - s}
+                L${cx + s * 0.3},${cy}
+                L${cx - s},${cy + s}
+                L${cx - s + w},${cy + s}
+                L${cx + s * 0.3 + w},${cy}
+                L${cx - s + w},${cy - s}
+                Z`;
     },
-    
-    // Triangle pointing up
+
+    chevronLeft: (cx, cy, size) => {
+        const s = size * 0.3;
+        const w = size * 0.15;
+        return `M${cx + s},${cy - s}
+                L${cx - s * 0.3},${cy}
+                L${cx + s},${cy + s}
+                L${cx + s - w},${cy + s}
+                L${cx - s * 0.3 - w},${cy}
+                L${cx + s - w},${cy - s}
+                Z`;
+    },
+
+
+    // ---------- TRIANGLES ----------
     triangleUp: (cx, cy, size) => {
         const s = size * 0.4;
-        return `M${cx},${cy - s} L${cx + s * 0.9},${cy + s * 0.7} L${cx - s * 0.9},${cy + s * 0.7} Z`;
+        return `M${cx},${cy - s}
+                L${cx + s * 0.9},${cy + s * 0.7}
+                L${cx - s * 0.9},${cy + s * 0.7}
+                Z`;
     },
-    
-    // Triangle pointing down
+
     triangleDown: (cx, cy, size) => {
         const s = size * 0.4;
-        return `M${cx},${cy + s} L${cx + s * 0.9},${cy - s * 0.7} L${cx - s * 0.9},${cy - s * 0.7} Z`;
+        return `M${cx},${cy + s}
+                L${cx + s * 0.9},${cy - s * 0.7}
+                L${cx - s * 0.9},${cy - s * 0.7}
+                Z`;
     },
-    
-    // Hexagon
-    hexagon: (cx, cy, size) => {
+
+    triangleLeft: (cx, cy, size) => {
+        const s = size * 0.4;
+        return `M${cx - s},${cy} L${cx + s * 0.7},${cy - s * 0.9} L${cx + s * 0.7},${cy + s * 0.9} Z`;
+    },
+
+    triangleRight: (cx, cy, size) => {
+        const s = size * 0.4;
+        return `M${cx + s},${cy} L${cx - s * 0.7},${cy - s * 0.9} L${cx - s * 0.7},${cy + s * 0.9} Z`;
+    },
+
+
+    // ---------- BASIC POLYGONS ----------
+    diamond: (cx, cy, size) => {
+        const s = size * 0.38;
+        return `M${cx},${cy - s}
+                L${cx + s},${cy}
+                L${cx},${cy + s}
+                L${cx - s},${cy}
+                Z`;
+    },
+
+    square: (cx, cy, size) => {
         const s = size * 0.35;
-        const points = [];
-        for (let i = 0; i < 6; i++) {
-            const angle = (Math.PI / 3) * i - Math.PI / 6;
-            points.push(`${cx + s * Math.cos(angle)},${cy + s * Math.sin(angle)}`);
-        }
-        return `M${points.join(' L')} Z`;
+        return `M${cx - s},${cy - s}
+                L${cx + s},${cy - s}
+                L${cx + s},${cy + s}
+                L${cx - s},${cy + s}
+                Z`;
     },
-    
-    // Pentagon
+
     pentagon: (cx, cy, size) => {
         const s = size * 0.35;
-        const points = [];
+        const p = [];
         for (let i = 0; i < 5; i++) {
-            const angle = (Math.PI * 2 / 5) * i - Math.PI / 2;
+            const a = (Math.PI * 2 / 5) * i - Math.PI / 2;
+            p.push(`${cx + s * Math.cos(a)},${cy + s * Math.sin(a)}`);
+        }
+        return `M${p.join(' L')} Z`;
+    },
+
+    hexagon: (cx, cy, size) => {
+        const s = size * 0.35;
+        const p = [];
+        for (let i = 0; i < 6; i++) {
+            const a = (Math.PI / 3) * i - Math.PI / 6;
+            p.push(`${cx + s * Math.cos(a)},${cy + s * Math.sin(a)}`);
+        }
+        return `M${p.join(' L')} Z`;
+    },
+
+    heptagon: (cx, cy, size) => {
+        const s = size * 0.35;
+        const points = [];
+        for (let i = 0; i < 7; i++) {
+            const angle = (Math.PI * 2 / 7) * i - Math.PI / 2;
             points.push(`${cx + s * Math.cos(angle)},${cy + s * Math.sin(angle)}`);
         }
         return `M${points.join(' L')} Z`;
     },
-    
-    // Star (4 points)
+
+    octagon: (cx, cy, size) => {
+        const s = size * 0.33;
+        const p = [];
+        for (let i = 0; i < 8; i++) {
+            const a = (Math.PI / 4) * i;
+            p.push(`${cx + s * Math.cos(a)},${cy + s * Math.sin(a)}`);
+        }
+        return `M${p.join(' L')} Z`;
+    },
+
+
+
+    // ---------- STARS ----------
     star4: (cx, cy, size) => {
         const outer = size * 0.38;
-        const inner = size * 0.15;
-        const points = [];
+        const inner = size * 0.16;
+        const p = [];
         for (let i = 0; i < 8; i++) {
-            const angle = (Math.PI / 4) * i - Math.PI / 2;
+            const a = (Math.PI / 4) * i - Math.PI / 2;
+            const r = i % 2 === 0 ? outer : inner;
+            p.push(`${cx + r * Math.cos(a)},${cy + r * Math.sin(a)}`);
+        }
+        return `M${p.join(' L')} Z`;
+    },
+
+    star5: (cx, cy, size) => {
+        const outer = size * 0.38;
+        const inner = size * 0.16;
+        const points = [];
+        for (let i = 0; i < 10; i++) {
+            const angle = (Math.PI / 5) * i - Math.PI / 2;
             const r = i % 2 === 0 ? outer : inner;
             points.push(`${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`);
         }
         return `M${points.join(' L')} Z`;
     },
-    
-    // Chevron pointing right
-    chevronRight: (cx, cy, size) => {
-        const s = size * 0.3;
-        const w = size * 0.15;
-        return `M${cx - s},${cy - s} L${cx + s * 0.3},${cy} L${cx - s},${cy + s} L${cx - s + w},${cy + s} L${cx + s * 0.3 + w},${cy} L${cx - s + w},${cy - s} Z`;
-    },
-    
-    // Chevron pointing left
-    chevronLeft: (cx, cy, size) => {
-        const s = size * 0.3;
-        const w = size * 0.15;
-        return `M${cx + s},${cy - s} L${cx - s * 0.3},${cy} L${cx + s},${cy + s} L${cx + s - w},${cy + s} L${cx - s * 0.3 - w},${cy} L${cx + s - w},${cy - s} Z`;
-    },
-    
-    // Parallelogram
-    parallelogram: (cx, cy, size) => {
-        const s = size * 0.35;
-        const skew = size * 0.12;
-        return `M${cx - s + skew},${cy - s * 0.6} L${cx + s + skew},${cy - s * 0.6} L${cx + s - skew},${cy + s * 0.6} L${cx - s - skew},${cy + s * 0.6} Z`;
-    },
-    
-    // Cross/Plus
-    cross: (cx, cy, size) => {
-        const s = size * 0.35;
-        const w = size * 0.12;
-        return `M${cx - w},${cy - s} L${cx + w},${cy - s} L${cx + w},${cy - w} L${cx + s},${cy - w} L${cx + s},${cy + w} L${cx + w},${cy + w} L${cx + w},${cy + s} L${cx - w},${cy + s} L${cx - w},${cy + w} L${cx - s},${cy + w} L${cx - s},${cy - w} L${cx - w},${cy - w} Z`;
-    },
-    
-    // Octagon
-    octagon: (cx, cy, size) => {
-        const s = size * 0.35;
+
+    star6: (cx, cy, size) => {
+        const outer = size * 0.38;
+        const inner = size * 0.18;
         const points = [];
-        for (let i = 0; i < 8; i++) {
-            const angle = (Math.PI / 4) * i;
-            points.push(`${cx + s * Math.cos(angle)},${cy + s * Math.sin(angle)}`);
+        for (let i = 0; i < 12; i++) {
+            const angle = (Math.PI / 6) * i - Math.PI / 2;
+            const r = i % 2 === 0 ? outer : inner;
+            points.push(`${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`);
         }
         return `M${points.join(' L')} Z`;
     },
-    
-    // House shape
-    house: (cx, cy, size) => {
-        const s = size * 0.32;
-        return `M${cx},${cy - s} L${cx + s},${cy - s * 0.2} L${cx + s},${cy + s} L${cx - s},${cy + s} L${cx - s},${cy - s * 0.2} Z`;
-    },
-    
-    // Shield
-    shield: (cx, cy, size) => {
+
+
+    // ---------- STRUCTURAL / UI ----------
+    parallelogram: (cx, cy, size) => {
         const s = size * 0.35;
-        return `M${cx},${cy - s} L${cx + s},${cy - s * 0.5} L${cx + s * 0.8},${cy + s * 0.3} L${cx},${cy + s} L${cx - s * 0.8},${cy + s * 0.3} L${cx - s},${cy - s * 0.5} Z`;
+        const skew = size * 0.12;
+        return `M${cx - s + skew},${cy - s * 0.6}
+                L${cx + s + skew},${cy - s * 0.6}
+                L${cx + s - skew},${cy + s * 0.6}
+                L${cx - s - skew},${cy + s * 0.6}
+                Z`;
     },
-    
-    // Trapezoid
+
     trapezoid: (cx, cy, size) => {
         const s = size * 0.38;
-        return `M${cx - s * 0.6},${cy - s * 0.5} L${cx + s * 0.6},${cy - s * 0.5} L${cx + s},${cy + s * 0.5} L${cx - s},${cy + s * 0.5} Z`;
+        return `M${cx - s * 0.6},${cy - s * 0.5}
+                L${cx + s * 0.6},${cy - s * 0.5}
+                L${cx + s},${cy + s * 0.5}
+                L${cx - s},${cy + s * 0.5}
+                Z`;
     },
-    
-    // Kite
+
+    cross: (cx, cy, size) => {
+        const s = size * 0.35;
+        const w = size * 0.12;
+        return `M${cx - w},${cy - s}
+                L${cx + w},${cy - s}
+                L${cx + w},${cy - w}
+                L${cx + s},${cy - w}
+                L${cx + s},${cy + w}
+                L${cx + w},${cy + w}
+                L${cx + w},${cy + s}
+                L${cx - w},${cy + s}
+                L${cx - w},${cy + w}
+                L${cx - s},${cy + w}
+                L${cx - s},${cy - w}
+                Z`;
+    },
+
+    house: (cx, cy, size) => {
+        const s = size * 0.32;
+        return `M${cx},${cy - s}
+                L${cx + s},${cy - s * 0.2}
+                L${cx + s},${cy + s}
+                L${cx - s},${cy + s}
+                L${cx - s},${cy - s * 0.2}
+                Z`;
+    },
+
+    shield: (cx, cy, size) => {
+        const s = size * 0.35;
+        return `M${cx},${cy - s}
+                L${cx + s},${cy - s * 0.5}
+                L${cx + s * 0.8},${cy + s * 0.3}
+                L${cx},${cy + s}
+                L${cx - s * 0.8},${cy + s * 0.3}
+                L${cx - s},${cy - s * 0.5}
+                Z`;
+    },
+
     kite: (cx, cy, size) => {
         const s = size * 0.38;
-        return `M${cx},${cy - s} L${cx + s * 0.5},${cy - s * 0.1} L${cx},${cy + s} L${cx - s * 0.5},${cy - s * 0.1} Z`;
+        return `M${cx},${cy - s}
+                L${cx + s * 0.5},${cy - s * 0.1}
+                L${cx},${cy + s}
+                L${cx - s * 0.5},${cy - s * 0.1}
+                Z`;
     },
+
+    step: (cx, cy, size) => {
+        const s = size * 0.35;
+        return `M${cx - s},${cy - s}
+                L${cx},${cy - s}
+                L${cx},${cy}
+                L${cx + s},${cy}
+                L${cx + s},${cy + s}
+                L${cx - s},${cy + s}
+                Z`;
+    },
+
+    doubleBlock: (cx, cy, size) => {
+        const w = size * 0.25;
+        const h = size * 0.28;
+        const gap = size * 0.08;
+        return `M${cx - w - gap},${cy - h}
+                L${cx - gap},${cy - h}
+                L${cx - gap},${cy + h}
+                L${cx - w - gap},${cy + h}
+                Z
+                M${cx + gap},${cy - h}
+                L${cx + w + gap},${cy - h}
+                L${cx + w + gap},${cy + h}
+                L${cx + gap},${cy + h}
+                Z`;
+    },
+
+    splitPill: (cx, cy, size) => {
+        const w = size * 0.4;
+        const h = size * 0.22;
+        const r = h;
+        const d = size * 0.02;
+        return `M${cx - w + r},${cy - h}
+                L${cx + w - r},${cy - h}
+                Q${cx + w},${cy - h} ${cx + w},${cy}
+                Q${cx + w},${cy + h} ${cx + w - r},${cy + h}
+                L${cx - w + r},${cy + h}
+                Q${cx - w},${cy + h} ${cx - w},${cy}
+                Q${cx - w},${cy - h} ${cx - w + r},${cy - h}
+                Z
+                M${cx - d},${cy - h}
+                L${cx + d},${cy - h}
+                L${cx + d},${cy + h}
+                L${cx - d},${cy + h}
+                Z`;
+    },
+
+    roundedRect: (cx, cy, size) => {
+        const s = size * 0.35;
+        const r = size * 0.12;
+        return `
+            M${cx - s + r},${cy - s}
+            L${cx + s - r},${cy - s}
+            Q${cx + s},${cy - s} ${cx + s},${cy - s + r}
+            L${cx + s},${cy + s - r}
+            Q${cx + s},${cy + s} ${cx + s - r},${cy + s}
+            L${cx - s + r},${cy + s}
+            Q${cx - s},${cy + s} ${cx - s},${cy + s - r}
+            L${cx - s},${cy - s + r}
+            Q${cx - s},${cy - s} ${cx - s + r},${cy - s}
+            Z`.replace(/\s+/g, ' ');
+    },
+
+    pill: (cx, cy, size) => {
+        const w = size * 0.4;
+        const h = size * 0.22;
+        const r = h;
+        return `
+            M${cx - w + r},${cy - h}
+            L${cx + w - r},${cy - h}
+            Q${cx + w},${cy - h} ${cx + w},${cy}
+            Q${cx + w},${cy + h} ${cx + w - r},${cy + h}
+            L${cx - w + r},${cy + h}
+            Q${cx - w},${cy + h} ${cx - w},${cy}
+            Q${cx - w},${cy - h} ${cx - w + r},${cy - h}
+            Z`.replace(/\s+/g, ' ');
+    },
+
+    bookmark: (cx, cy, size) => {
+        const s = size * 0.35;
+        return `M${cx - s},${cy - s} L${cx + s},${cy - s} L${cx + s},${cy + s} L${cx},${cy + s * 0.4} L${cx - s},${cy + s} Z`;
+    },
+
+    hourglass: (cx, cy, size) => {
+        const s = size * 0.35;
+        return `
+            M${cx - s},${cy - s}
+            L${cx + s},${cy - s}
+            L${cx - s * 0.4},${cy}
+            L${cx + s},${cy + s}
+            L${cx - s},${cy + s}
+            L${cx + s * 0.4},${cy}
+            Z`.replace(/\s+/g, ' ');
+    }
+
 };
 
 const SHAPE_NAMES = Object.keys(SHAPES);

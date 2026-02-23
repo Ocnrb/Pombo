@@ -354,12 +354,9 @@ class UIController {
             });
         });
 
-        // Exposure tabs - switch between hidden/visible
-        document.querySelectorAll('.exposure-tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                const exposure = tab.dataset.exposure;
-                this.switchExposureTab(exposure);
-            });
+        // Visibility toggle - switch between hidden/visible
+        document.getElementById('visibility-toggle')?.addEventListener('click', () => {
+            this.toggleVisibility();
         });
 
         // Classification tabs (for Closed channels) - switch between personal/community
@@ -419,8 +416,10 @@ class UIController {
         });
 
         // Channel types info modal
-        document.getElementById('channel-info-help-btn')?.addEventListener('click', () => {
-            modalManager.show('channel-types-modal');
+        document.querySelectorAll('.channel-info-help-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                modalManager.show('channel-types-modal');
+            });
         });
         document.getElementById('close-channel-types-btn')?.addEventListener('click', () => {
             modalManager.hide('channel-types-modal');
@@ -2565,8 +2564,8 @@ class UIController {
         if (this.elements.channelCategoryInput) this.elements.channelCategoryInput.value = 'general';
         // Reset to public tab
         this.switchChannelTab('public');
-        // Reset to hidden exposure (default)
-        this.switchExposureTab('hidden');
+        // Reset to hidden visibility (default)
+        this.setVisibility(false);
         // Reset classification to personal (for Closed channels)
         this.switchClassificationTab('personal');
         // Reset read-only toggle
@@ -2648,7 +2647,7 @@ class UIController {
         
         // Native (Closed) channels: hide exposure section entirely (always hidden, no choice)
         if (tabType === 'native') {
-            this.switchExposureTab('hidden');
+            this.setVisibility(false);
             this.elements.exposureSection?.classList.add('hidden');
         } else {
             this.elements.exposureSection?.classList.remove('hidden');
@@ -2656,30 +2655,48 @@ class UIController {
     }
 
     /**
-     * Switch exposure tab (hidden/visible)
+     * Toggle visibility (hidden/visible)
      */
-    switchExposureTab(exposure) {
-        // Update exposure buttons with subtle orange highlight for active
-        document.querySelectorAll('.exposure-tab').forEach(tab => {
-            const isActive = tab.dataset.exposure === exposure;
-            // Active: subtle orange bg and text
-            // Inactive: muted white text with hover
-            tab.classList.toggle('bg-[#F6851B]/20', isActive);
-            tab.classList.toggle('text-[#F6851B]', isActive);
-            tab.classList.toggle('text-white/30', !isActive);
-            tab.classList.toggle('hover:text-white/50', !isActive);
-            tab.classList.toggle('hover:bg-white/5', !isActive);
-        });
+    toggleVisibility() {
+        const toggle = document.getElementById('visibility-toggle');
+        if (!toggle) return;
+        const isEnabled = toggle.dataset.enabled === 'true';
+        this.setVisibility(!isEnabled);
+    }
+
+    /**
+     * Set visibility state
+     * @param {boolean} visible - Whether channel should be visible in Explore
+     */
+    setVisibility(visible) {
+        const toggle = document.getElementById('visibility-toggle');
+        if (!toggle) return;
         
-        // Show/hide visible fields
-        if (exposure === 'visible') {
+        toggle.dataset.enabled = visible ? 'true' : 'false';
+        const knob = toggle.querySelector('span');
+        
+        if (visible) {
+            toggle.classList.remove('bg-white/10');
+            toggle.classList.add('bg-[#F6851B]');
+            if (knob) {
+                knob.classList.remove('left-0.5', 'bg-white/30');
+                knob.classList.add('left-4', 'bg-white');
+            }
+            // Show visible fields
             this.elements.visibleFields?.classList.remove('hidden');
         } else {
+            toggle.classList.remove('bg-[#F6851B]');
+            toggle.classList.add('bg-white/10');
+            if (knob) {
+                knob.classList.remove('left-4', 'bg-white');
+                knob.classList.add('left-0.5', 'bg-white/30');
+            }
+            // Hide visible fields
             this.elements.visibleFields?.classList.add('hidden');
         }
         
-        // Store current exposure
-        this.currentExposure = exposure;
+        // Store current exposure for channel creation
+        this.currentExposure = visible ? 'visible' : 'hidden';
     }
 
     /**
@@ -4041,29 +4058,6 @@ class UIController {
         // Initialize delete account functionality (delegates to SettingsUI)
         settingsUI.initDeleteAccountUI();
 
-        // About button and modal
-        const aboutBtn = document.getElementById('about-btn');
-        const aboutModal = document.getElementById('about-modal');
-        const closeAboutBtn = document.getElementById('close-about-btn');
-
-        if (aboutBtn && aboutModal) {
-            aboutBtn.addEventListener('click', () => {
-                modalManager.show('about-modal');
-            });
-        }
-
-        if (closeAboutBtn && aboutModal) {
-            closeAboutBtn.addEventListener('click', () => {
-                modalManager.hide('about-modal');
-            });
-            // Close on backdrop click
-            aboutModal.addEventListener('click', (e) => {
-                if (e.target === aboutModal) {
-                    modalManager.hide('about-modal');
-                }
-            });
-        }
-
         // NSFW toggle
         const nsfwToggle = document.getElementById('nsfw-enabled');
         if (nsfwToggle) {
@@ -4289,6 +4283,122 @@ class UIController {
                 });
             });
         }
+
+        // Initialize carousel for mobile
+        this.initSettingsCarousel();
+    }
+
+    /**
+     * Settings carousel tab order for infinite loop
+     */
+    settingsTabOrder = ['profile', 'notifications', 'api', 'security', 'about'];
+    currentSettingsTabIndex = 0;
+
+    /**
+     * Initialize settings carousel for mobile
+     */
+    initSettingsCarousel() {
+        const carousel = document.getElementById('settings-carousel');
+        if (!carousel) return;
+
+        const tabElements = carousel.querySelectorAll('.carousel-tab');
+
+        // Click on adjacent tabs to navigate
+        tabElements.forEach((tab, index) => {
+            tab.addEventListener('click', () => {
+                if (index === 0) {
+                    // Clicked on left (prev) tab
+                    this.navigateSettingsCarousel(-1);
+                } else if (index === 2) {
+                    // Clicked on right (next) tab
+                    this.navigateSettingsCarousel(1);
+                }
+                // Middle tab (index 1) is already active, no action needed
+            });
+        });
+
+        // Add swipe support on entire modal content area
+        const modalContent = document.querySelector('#settings-modal .flex-1.p-6');
+        let touchStartX = 0;
+        
+        modalContent?.addEventListener('touchstart', (e) => {
+            touchStartX = e.touches[0].clientX;
+        }, { passive: true });
+
+        modalContent?.addEventListener('touchend', (e) => {
+            const touchEndX = e.changedTouches[0].clientX;
+            const diff = touchStartX - touchEndX;
+            if (Math.abs(diff) > 50) {
+                this.navigateSettingsCarousel(diff > 0 ? 1 : -1);
+            }
+        }, { passive: true });
+
+        // Also on carousel area
+        carousel.addEventListener('touchstart', (e) => {
+            touchStartX = e.touches[0].clientX;
+        }, { passive: true });
+
+        carousel.addEventListener('touchend', (e) => {
+            const touchEndX = e.changedTouches[0].clientX;
+            const diff = touchStartX - touchEndX;
+            if (Math.abs(diff) > 50) {
+                this.navigateSettingsCarousel(diff > 0 ? 1 : -1);
+            }
+        }, { passive: true });
+    }
+
+    /**
+     * Navigate carousel by offset (-1 for prev, +1 for next)
+     */
+    navigateSettingsCarousel(offset) {
+        const total = this.settingsTabOrder.length;
+        this.currentSettingsTabIndex = (this.currentSettingsTabIndex + offset + total) % total;
+        const tabName = this.settingsTabOrder[this.currentSettingsTabIndex];
+        this.selectSettingsTab(tabName);
+    }
+
+    /**
+     * Update carousel display with current, prev, and next tabs
+     */
+    updateSettingsCarousel(tabName) {
+        const carousel = document.getElementById('settings-carousel');
+        if (!carousel) return;
+
+        const tabs = carousel.querySelectorAll('.carousel-tab');
+        if (tabs.length !== 3) return;
+
+        const total = this.settingsTabOrder.length;
+        const currentIndex = this.settingsTabOrder.indexOf(tabName);
+        if (currentIndex === -1) return;
+
+        this.currentSettingsTabIndex = currentIndex;
+
+        const prevIndex = (currentIndex - 1 + total) % total;
+        const nextIndex = (currentIndex + 1) % total;
+
+        const tabLabels = {
+            'profile': 'Account',
+            'notifications': 'Notifications',
+            'api': 'API',
+            'security': 'Security',
+            'about': 'About'
+        };
+
+        // Update tab displays: [prev] [current] [next]
+        tabs[0].textContent = tabLabels[this.settingsTabOrder[prevIndex]];
+        tabs[0].dataset.tab = this.settingsTabOrder[prevIndex];
+        tabs[0].classList.remove('active');
+        tabs[0].classList.add('adjacent');
+
+        tabs[1].textContent = tabLabels[this.settingsTabOrder[currentIndex]];
+        tabs[1].dataset.tab = this.settingsTabOrder[currentIndex];
+        tabs[1].classList.add('active');
+        tabs[1].classList.remove('adjacent');
+
+        tabs[2].textContent = tabLabels[this.settingsTabOrder[nextIndex]];
+        tabs[2].dataset.tab = this.settingsTabOrder[nextIndex];
+        tabs[2].classList.remove('active');
+        tabs[2].classList.add('adjacent');
     }
 
     /**
@@ -4302,6 +4412,11 @@ class UIController {
             tab.classList.toggle('text-white', isActive);
             tab.classList.toggle('text-white/60', !isActive);
         });
+
+        // Update carousel for mobile
+        if (this.isMobileView()) {
+            this.updateSettingsCarousel(tabName);
+        }
 
         // Update panels
         this.elements.settingsPanels?.forEach(panel => {

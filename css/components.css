@@ -1203,10 +1203,20 @@ body {
     }
     
     /* Modal sidebars become horizontal tabs on mobile */
-    #new-channel-modal .flex.min-h-\[400px\],
+    #new-channel-modal .flex.flex-1.min-h-0,
     #settings-modal .flex.min-h-\[420px\],
     #channel-settings-modal .flex.min-h-\[400px\] {
         flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    /* Modal content panel - scrollable */
+    #new-channel-modal .flex-1.p-5.overflow-y-auto {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
     }
     
     /* Modal sidebars horizontal on mobile */
@@ -1217,12 +1227,13 @@ body {
         border-right: none !important;
         border-bottom: 1px solid rgba(255, 255, 255, 0.05);
         flex-direction: row !important;
-        overflow-x: auto;
-        padding: 0.5rem !important;
+        overflow: hidden;
+        padding: 0 !important;
         flex-shrink: 0;
         min-height: auto;
+        background: transparent !important;
     }
-    
+
     /* Hide "Type" label on mobile modals */
     #new-channel-modal .w-40 > .px-3.mb-2 {
         display: none;
@@ -1230,16 +1241,94 @@ body {
     
     /* Modal nav items horizontal */
     #new-channel-modal .w-40 nav,
-    #settings-modal .w-44 nav,
     #channel-settings-modal .w-40 nav {
         display: flex !important;
         flex-direction: row !important;
         gap: 0.5rem;
         flex-wrap: nowrap;
+        justify-content: center;
+        width: 100%;
+        padding-left: 0.5rem;
+        padding-right: 0.5rem;
+    }
+
+    /* Settings modal carousel container */
+    #settings-modal .w-44 nav {
+        display: none !important;
+    }
+
+    /* Settings carousel - replaces nav on mobile */
+    #settings-carousel {
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        padding: 0;
+        margin: 0;
+        gap: 0;
+        border-bottom: 1px solid #1f1f1f;
+        position: relative;
+        box-sizing: border-box;
+    }
+
+    /* Subtle orange glow on edges to indicate scroll */
+    #settings-carousel::before,
+    #settings-carousel::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 20px;
+        pointer-events: none;
+        z-index: 1;
+    }
+
+    #settings-carousel::before {
+        left: 0;
+        background: linear-gradient(to right, rgba(246, 133, 27, 0.15), transparent);
+    }
+
+    #settings-carousel::after {
+        right: 0;
+        background: linear-gradient(to left, rgba(246, 133, 27, 0.15), transparent);
+    }
+
+    #settings-carousel .carousel-tabs {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+    }
+
+    #settings-carousel .carousel-tab {
+        padding: 0.75rem 0;
+        margin: 0;
+        font-size: 10px;
+        font-weight: 300;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.3);
+        transition: all 0.3s ease;
+        white-space: nowrap;
+        text-align: center;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -1px;
+        box-sizing: border-box;
+    }
+
+    #settings-carousel .carousel-tab.active {
+        color: #F6851B;
+        font-weight: 400;
+        cursor: default;
+        border-bottom-color: #F6851B;
+    }
+
+    #settings-carousel .carousel-tab.adjacent {
+        color: rgba(255, 255, 255, 0.4);
     }
     
     #new-channel-modal .w-40 nav button,
-    #settings-modal .w-44 nav button,
     #channel-settings-modal .w-40 nav button {
         white-space: nowrap;
         flex-shrink: 0;
