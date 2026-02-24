@@ -995,34 +995,6 @@ class ChannelManager {
         // Get or derive ephemeral stream ID
         const ephemeralStreamId = channel?.ephemeralStreamId || deriveEphemeralId(messageStreamId);
 
-        // Try to enable storage if user is owner and storage not already enabled
-        // Only the stream owner can add a stream to a storage node
-        // Storage is ONLY for messageStream (ephemeral is never stored)
-        if (channel && !channel.storageEnabled) {
-            const currentAddress = authManager.getAddress()?.toLowerCase();
-            const ownerAddress = channel.createdBy?.toLowerCase();
-            
-            if (currentAddress && ownerAddress && currentAddress === ownerAddress) {
-                Logger.debug('Owner subscribing - trying to enable storage for messageStream:', messageStreamId);
-                try {
-                    // Use the channel's storage configuration if available
-                    const storageResult = await streamrController.enableStorage(messageStreamId, {
-                        storageProvider: channel.storageProvider,
-                        storageDays: channel.storageDays
-                    });
-                    if (storageResult.success) {
-                        channel.storageEnabled = true;
-                        channel.storageProvider = storageResult.provider;
-                        channel.storageDays = storageResult.storageDays;
-                        await this.saveChannels();
-                        Logger.info('Storage enabled by owner for messageStream');
-                    }
-                } catch (e) {
-                    Logger.debug('Could not enable storage (may already be enabled):', e.message);
-                }
-            }
-        }
-
         // Use dual-stream subscription
         await streamrController.subscribeToDualStream(
             messageStreamId,
