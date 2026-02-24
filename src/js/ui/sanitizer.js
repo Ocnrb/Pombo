@@ -22,8 +22,6 @@ const MESSAGE_CONFIG = {
         'src', 'frameborder', 'allow', 'allowfullscreen', 'loading'
     ],
     ALLOW_DATA_ATTR: true,
-    // Mark src as a URI attribute that should be validated
-    ADD_URI_SAFE_ATTR: ['src'],
     // Force all links to open in new tab with security attrs
     ADD_ATTR: ['target', 'rel'],
     // Forbid dangerous protocols

@@ -2257,6 +2257,11 @@ video {
   color: rgb(246 133 27 / var(--tw-text-opacity, 1));
 }
 
+.text-\[\#FFFFFF\] {
+  --tw-text-opacity: 1;
+  color: rgb(255 255 255 / var(--tw-text-opacity, 1));
+}
+
 .text-amber-400 {
   --tw-text-opacity: 1;
   color: rgb(251 191 36 / var(--tw-text-opacity, 1));
@@ -2911,6 +2916,11 @@ select option {
 .peer:checked ~ .peer-checked\:bg-\[\#F6851B\] {
   --tw-bg-opacity: 1;
   background-color: rgb(246 133 27 / var(--tw-bg-opacity, 1));
+}
+
+.peer:checked ~ .peer-checked\:bg-\[\#ff0000\] {
+  --tw-bg-opacity: 1;
+  background-color: rgb(255 0 0 / var(--tw-bg-opacity, 1));
 }
 
 .peer:checked ~ .peer-checked\:bg-white {

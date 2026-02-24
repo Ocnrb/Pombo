@@ -56,6 +56,14 @@ class UIController {
         // Setup callbacks for UI modules
         this._setupModuleCallbacks();
     }
+
+    /**
+     * Get the currently active channel (preview or joined)
+     * @returns {Object|null} Channel object or null
+     */
+    getActiveChannel() {
+        return this.previewChannel || channelManager.getCurrentChannel();
+    }
     
     /**
      * Setup dependencies for UI modules
@@ -68,6 +76,9 @@ class UIController {
                 const channel = channelManager.getCurrentChannel();
                 if (channel) {
                     channelManager.sendReaction(channel.streamId, msgId, emoji, isRemoving);
+                } else if (this.previewChannel) {
+                    // Preview mode: send reaction directly via streamrController
+                    this._sendPreviewReaction(msgId, emoji, isRemoving);
                 }
             }
         });
@@ -97,10 +108,11 @@ class UIController {
             getImage: (imageId) => mediaController.getImage(imageId),
             cacheImage: (imageId, data) => mediaController.cacheImage(imageId, data),
             requestImage: (streamId, imageId, password) => mediaController.requestImage(streamId, imageId, password),
-            getCurrentChannel: () => this.previewChannel || channelManager.getCurrentChannel(),
+            getCurrentChannel: () => this.getActiveChannel(),
             getFileUrl: (fileId) => mediaController.getFileUrl(fileId),
             isSeeding: (fileId) => mediaController.isSeeding(fileId),
-            isVideoPlayable: (fileType) => mediaController.isVideoPlayable(fileType)
+            isVideoPlayable: (fileType) => mediaController.isVideoPlayable(fileType),
+            getYouTubeEmbedsEnabled: () => secureStorage.getYouTubeEmbedsEnabled()
         });
         
         // SettingsUI
@@ -1636,7 +1648,7 @@ class UIController {
      * @param {Array} messages - Array of message objects
      */
     renderMessages(messages) {
-        const channel = channelManager.getCurrentChannel();
+        const channel = this.getActiveChannel();
         const hasMoreHistory = channel?.hasMoreHistory !== false;
         
         if (messages.length === 0) {
@@ -1728,7 +1740,7 @@ class UIController {
      * Start replying to a message
      */
     startReply(msgId) {
-        const channel = channelManager.getCurrentChannel();
+        const channel = this.getActiveChannel();
         if (!channel) return;
         
         const msg = channel.messages.find(m => (m.id || m.timestamp) === msgId);
@@ -1825,8 +1837,7 @@ class UIController {
      * Handle file download button click
      */
     async handleFileDownload(fileId) {
-        // Use previewChannel if in preview mode, otherwise get from channelManager
-        const channel = this.previewChannel || channelManager.getCurrentChannel();
+        const channel = this.getActiveChannel();
         if (!channel) {
             this.showNotification('No active channel', 'error');
             return;
@@ -2555,6 +2566,39 @@ class UIController {
         await streamrController.publishMessage(streamId, message);
         
         Logger.debug('Preview message sent:', message.id);
+    }
+
+    /**
+     * Send a reaction in preview mode (directly to stream without channelManager)
+     * @param {string} msgId - Message ID to react to
+     * @param {string} emoji - Emoji reaction
+     * @param {boolean} isRemoving - True if removing reaction
+     * @private
+     */
+    async _sendPreviewReaction(msgId, emoji, isRemoving) {
+        if (!this.previewChannel) return;
+        
+        const streamId = this.previewChannel.streamId;
+        const action = isRemoving ? 'remove' : 'add';
+        
+        try {
+            const reaction = {
+                type: 'reaction',
+                action: action,
+                messageId: msgId,
+                emoji: emoji,
+                user: authManager.getAddress(),
+                timestamp: Date.now()
+            };
+
+            // Publish to message stream (reactions are stored with messages)
+            await streamrController.publishReaction(streamId, reaction, this.previewChannel.password);
+            
+            Logger.debug('Preview reaction sent:', action, emoji, 'to', msgId);
+        } catch (error) {
+            Logger.error('Failed to send preview reaction:', error);
+            this.showNotification('Failed to send reaction', 'error');
+        }
     }
 
     // =========================================
@@ -4196,6 +4240,14 @@ class UIController {
                 }
             });
         }
+
+        // YouTube embeds toggle
+        const youtubeEmbedsToggle = document.getElementById('youtube-embeds-enabled');
+        if (youtubeEmbedsToggle) {
+            youtubeEmbedsToggle.addEventListener('change', async (e) => {
+                await secureStorage.setYouTubeEmbedsEnabled(e.target.checked);
+            });
+        }
     }
 
     /**
@@ -4381,6 +4433,12 @@ class UIController {
                 nsfwToggle.checked = secureStorage.getNsfwEnabled();
             }
 
+            // Update YouTube embeds toggle state
+            const youtubeEmbedsToggle = document.getElementById('youtube-embeds-enabled');
+            if (youtubeEmbedsToggle) {
+                youtubeEmbedsToggle.checked = secureStorage.getYouTubeEmbedsEnabled();
+            }
+
             // Select first tab by default
             this.selectSettingsTab('profile');
 
@@ -4420,7 +4478,7 @@ class UIController {
     /**
      * Settings carousel tab order for infinite loop
      */
-    settingsTabOrder = ['profile', 'notifications', 'api', 'security', 'about'];
+    settingsTabOrder = ['profile', 'notifications', 'api', 'linkpreviews', 'security', 'about'];
     currentSettingsTabIndex = 0;
 
     /**
@@ -4516,6 +4574,7 @@ class UIController {
             'profile': 'Account',
             'notifications': 'Notifications',
             'api': 'API',
+            'linkpreviews': 'Previews',
             'security': 'Security',
             'about': 'About'
         };

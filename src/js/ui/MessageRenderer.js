@@ -342,7 +342,9 @@ class MessageRenderer {
             default:
                 const escapedText = escapeHtml(msg.text || '');
                 const withLinks = linkify(escapedText);
-                const withYouTube = embedYouTubeLinks(withLinks);
+                // Only embed YouTube if setting is enabled
+                const youtubeEnabled = this.deps.getYouTubeEmbedsEnabled?.() !== false;
+                const withYouTube = youtubeEnabled ? embedYouTubeLinks(withLinks) : withLinks;
                 const withLineBreaks = withYouTube.replace(/\n/g, '<br>');
                 // Defense-in-depth: sanitize final HTML before rendering
                 return sanitizeMessageHtml(this.wrapInlineEmojis(withLineBreaks));

@@ -337,6 +337,23 @@ class SecureStorage {
     }
 
     /**
+     * Get YouTube embeds enabled setting (default: true)
+     */
+    getYouTubeEmbedsEnabled() {
+        if (!this.isUnlocked) return true;
+        return this.cache.youtubeEmbedsEnabled !== false; // Default true
+    }
+
+    /**
+     * Set YouTube embeds enabled setting
+     */
+    async setYouTubeEmbedsEnabled(enabled) {
+        if (!this.isUnlocked) return;
+        this.cache.youtubeEmbedsEnabled = enabled;
+        await this.saveToStorage();
+    }
+
+    /**
      * Get The Graph API key
      */
     getGraphApiKey() {

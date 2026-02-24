@@ -208,7 +208,7 @@
                 <div id="chat-header-right" class="flex-1 flex items-center justify-end space-x-3">
                     <div class="flex space-x-2">
                     <!-- Join button (shown in preview mode) -->
-                    <button id="join-channel-btn" class="hidden px-3 py-1.5 bg-[#F6851B]/15 hover:bg-[#F6851B]/25 text-[#F6851B] border border-[#F6851B]/40 text-sm font-medium rounded-lg transition flex items-center gap-1.5" title="Add to My Channels">
+                    <button id="join-channel-btn" class="hidden px-3 py-1.5 bg-[#F6851B]/15 hover:bg-[#F6851B]/25 text-[#FFFFFF] border border-[#F6851B]/40 text-sm font-medium rounded-lg transition flex items-center gap-1.5" title="Add to My Channels">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.5v15m7.5-7.5h-15"/>
                         </svg>
@@ -589,7 +589,7 @@
                     <button id="cancel-channel-btn-footer" class="hidden md:block px-5 py-2.5 rounded-xl text-sm font-medium text-white/60 hover:text-white/90 hover:bg-white/5 transition">
                         Cancel
                     </button>
-                    <button id="create-channel-btn" class="px-5 py-2.5 bg-[#F6851B]/15 hover:bg-[#F6851B]/25 text-[#F6851B] border border-[#F6851B]/40 text-sm font-medium rounded-lg transition">
+                    <button id="create-channel-btn" class="px-5 py-2.5 bg-[#F6851B]/15 hover:bg-[#F6851B]/25 text-[#FFFFFF] border border-[#F6851B]/40 text-sm font-medium rounded-lg transition">
                         Create Channel
                     </button>
                 </div>
@@ -1196,6 +1196,10 @@
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244"/></svg>
                             <span>API</span>
                         </button>
+                        <button data-settings-tab="linkpreviews" class="settings-tab w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-all text-white/60 hover:text-white/90 hover:bg-white/5">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"/></svg>
+                            <span>Link Previews</span>
+                        </button>
                         <div class="my-2 mx-3 border-t border-white/5 hidden md:block"></div>
                         <button data-settings-tab="security" class="settings-tab w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-all text-white/60 hover:text-white/90 hover:bg-white/5">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
@@ -1311,6 +1315,24 @@
                                 </p>
                             </div>
                             <div id="graph-api-status" class="text-xs"></div>
+                        </div>
+                    </div>
+
+                    <!-- Link Previews Panel -->
+                    <div id="settings-panel-linkpreviews" class="settings-panel hidden">
+                        <div class="space-y-6">
+                            <div class="flex items-start justify-between p-4 bg-white/5 rounded-xl border border-white/5">
+                                <div class="flex-1 mr-4">
+                                    <h4 class="text-sm font-medium text-white/90 mb-1">YouTube Embeds</h4>
+                                    <p class="text-xs text-white/40 leading-relaxed">
+                                        Show video player when YouTube links are shared
+                                    </p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="youtube-embeds-enabled" class="sr-only peer" checked>
+                                    <div class="w-11 h-6 bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white/60 after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#ff0000]"></div>
+                                </label>
+                            </div>
                         </div>
                     </div>
 
