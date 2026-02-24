@@ -2,7 +2,7 @@
 <html lang="pt">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://polygon-bor-rpc.publicnode.com https://gasstation.polygon.technology https://eth.llamarpc.com https://*.thegraph.com https://*.ens.domains https://euc.li https://*.logstore.usher.so; base-uri 'self'; form-action 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-vvt4KWwuNr51XfE5m+hzeNEGhiOfZzG97ccfqGsPwvE='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; connect-src 'self' wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://polygon-bor-rpc.publicnode.com https://gasstation.polygon.technology https://eth.llamarpc.com https://*.thegraph.com https://*.ens.domains https://euc.li https://*.logstore.usher.so; base-uri 'self'; form-action 'self'">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pombo - P2P Decentralized Chat</title>
 
@@ -1591,20 +1591,19 @@
     <div id="toast-container" class="toast-container"></div>
 
     <!-- Modal: Media Lightbox -->
-    <div id="media-lightbox-modal" class="hidden fixed inset-0 bg-black/95 flex items-center justify-center z-[70]" onclick="window.uiController?.closeLightbox()">
+    <div id="media-lightbox-modal" class="hidden fixed inset-0 bg-black/95 flex items-center justify-center z-[70]">
         <!-- Close button -->
-        <button class="absolute top-4 right-4 text-white/70 hover:text-white p-2 rounded-full bg-white/10 hover:bg-white/20 transition z-10" 
-                onclick="event.stopPropagation(); window.uiController?.closeLightbox()">
+        <button id="lightbox-close-btn" class="absolute top-4 right-4 text-white/70 hover:text-white p-2 rounded-full bg-white/10 hover:bg-white/20 transition z-10">
             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
             </svg>
         </button>
         
         <!-- Image container -->
-        <img id="lightbox-image" class="hidden max-w-[90vw] max-h-[90vh] object-contain rounded-lg" onclick="event.stopPropagation()" alt="Full size"/>
+        <img id="lightbox-image" class="hidden max-w-[90vw] max-h-[90vh] object-contain rounded-lg" alt="Full size"/>
         
         <!-- Video container -->
-        <video id="lightbox-video" class="hidden max-w-[90vw] max-h-[90vh] rounded-lg" controls onclick="event.stopPropagation()"></video>
+        <video id="lightbox-video" class="hidden max-w-[90vw] max-h-[90vh] rounded-lg" controls></video>
     </div>
 
     <!-- Modal: File Confirm -->

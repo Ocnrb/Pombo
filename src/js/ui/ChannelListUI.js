@@ -5,6 +5,7 @@
 
 import { Logger } from '../logger.js';
 import { escapeHtml, escapeAttr } from './utils.js';
+import { sanitizeText } from './sanitizer.js';
 
 class ChannelListUI {
     constructor() {
@@ -173,7 +174,7 @@ class ChannelListUI {
                         </svg>
                     </div>
                     <div class="flex-1 min-w-0 pl-1">
-                        <h3 class="text-[13px] font-medium text-white truncate">${escapeHtml(channel.name)}</h3>
+                        <h3 class="text-[13px] font-medium text-white truncate">${escapeHtml(sanitizeText(channel.name))}</h3>
                     </div>
                     <div class="flex items-center gap-1.5 ml-2">
                         ${hasUnread 

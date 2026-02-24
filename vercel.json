@@ -10,7 +10,7 @@
         { "key": "X-XSS-Protection", "value": "1; mode=block" },
         { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
         { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()" },
-        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://polygon-bor-rpc.publicnode.com https://gasstation.polygon.technology https://eth.llamarpc.com https://*.thegraph.com https://*.ens.domains https://euc.li https://*.logstore.usher.so; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" }
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; connect-src 'self' wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://polygon-bor-rpc.publicnode.com https://gasstation.polygon.technology https://eth.llamarpc.com https://*.thegraph.com https://*.ens.domains https://euc.li https://*.logstore.usher.so; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" }
       ]
     }
   ]

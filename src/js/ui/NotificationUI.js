@@ -5,6 +5,7 @@
 
 import { Logger } from '../logger.js';
 import { escapeHtml } from './utils.js';
+import { sanitizeText } from './sanitizer.js';
 
 // Toast icon SVGs
 const TOAST_ICONS = {
@@ -58,10 +59,11 @@ class NotificationUI {
         const toast = document.createElement('div');
         toast.className = `toast ${type}`;
         toast.style.setProperty('--toast-duration', `${duration}ms`);
+        // Defense-in-depth: sanitize then escape user content
         toast.innerHTML = `
             ${TOAST_ICONS[type] || TOAST_ICONS.info}
             <div class="toast-content">
-                <span class="toast-message">${escapeHtml(message)}</span>
+                <span class="toast-message">${escapeHtml(sanitizeText(message))}</span>
             </div>
             <span class="toast-close" title="Dismiss">
                 <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>

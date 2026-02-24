@@ -17,6 +17,9 @@ module.exports = {
     globalObject: 'this',
   },
   resolve: {
+    // Use browser exports from packages (important for @streamr/sdk)
+    mainFields: ['browser', 'module', 'main'],
+    conditionNames: ['browser', 'import', 'default'],
     fallback: {
       "crypto": false,
       "stream": false,
@@ -28,6 +31,14 @@ module.exports = {
       "os": false,
       "url": false,
       "zlib": false,
+      // Disable timers-browserify polyfill (uses inline script that violates CSP)
+      "timers": false,
+      "setimmediate": false,
+    },
+    alias: {
+      // Force use of native browser timers instead of polyfill
+      'timers-browserify': false,
+      'setimmediate': false,
     }
   },
   performance: {

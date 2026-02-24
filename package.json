@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@streamr/sdk": "^103.2.0",
+    "dompurify": "^3.3.1",
     "ethers": "^6.9.0",
     "qrcode": "^1.5.4"
   },

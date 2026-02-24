@@ -18,6 +18,7 @@ import { historyManager } from './historyManager.js';
 // UI Modules
 import { GasEstimator } from './ui/GasEstimator.js';
 import { notificationUI } from './ui/NotificationUI.js';
+import { sanitizeText } from './ui/sanitizer.js';
 import { escapeHtml as _escapeHtml, escapeAttr as _escapeAttr, formatAddress as _formatAddress, isValidMediaUrl as _isValidMediaUrl } from './ui/utils.js';
 import { reactionManager } from './ui/ReactionManager.js';
 import { onlineUsersUI } from './ui/OnlineUsersUI.js';
@@ -86,6 +87,7 @@ class UIController {
         mediaHandler.setDependencies({
             showNotification: (msg, type) => this.showNotification(msg, type)
         });
+        mediaHandler.initLightboxModal();
         
         // MessageRenderer
         messageRenderer.setDependencies({
@@ -95,7 +97,7 @@ class UIController {
             getImage: (imageId) => mediaController.getImage(imageId),
             cacheImage: (imageId, data) => mediaController.cacheImage(imageId, data),
             requestImage: (streamId, imageId, password) => mediaController.requestImage(streamId, imageId, password),
-            getCurrentChannel: () => channelManager.getCurrentChannel(),
+            getCurrentChannel: () => this.previewChannel || channelManager.getCurrentChannel(),
             getFileUrl: (fileId) => mediaController.getFileUrl(fileId),
             isSeeding: (fileId) => mediaController.isSeeding(fileId),
             isVideoPlayable: (fileType) => mediaController.isVideoPlayable(fileType)
@@ -1607,14 +1609,12 @@ class UIController {
                 const heightDiff = newScrollHeight - previousScrollHeight;
                 messagesArea.scrollTop = previousScrollTop + heightDiff;
             }
-            
-            this.hideLoadingMoreIndicator();
         } catch (error) {
             Logger.error('Failed to load more messages:', error);
+        } finally {
             this.hideLoadingMoreIndicator();
+            this.isLoadingMore = false;
         }
-        
-        this.isLoadingMore = false;
     }
 
     /**
@@ -1825,7 +1825,12 @@ class UIController {
      * Handle file download button click
      */
     async handleFileDownload(fileId) {
-        const channel = channelManager.getCurrentChannel();
+        // Use previewChannel if in preview mode, otherwise get from channelManager
+        const channel = this.previewChannel || channelManager.getCurrentChannel();
+        if (!channel) {
+            this.showNotification('No active channel', 'error');
+            return;
+        }
         await mediaHandler.handleFileDownload(fileId, channel, mediaController);
     }
 
@@ -1987,11 +1992,10 @@ class UIController {
                 await mediaController.sendVideo(currentChannel.streamId, file, currentChannel.password);
                 this.showNotification('Video shared!', 'success');
             }
-            
-            this.hideLoading();
         } catch (error) {
-            this.hideLoading();
             this.showNotification('Failed to send: ' + error.message, 'error');
+        } finally {
+            this.hideLoading();
         }
     }
     
@@ -2073,9 +2077,9 @@ class UIController {
             if (container) {
                 const isSeeding = mediaController.isSeeding(fileId);
                 
-                // Escape filename for safe HTML insertion
-                const safeFileName = this.escapeHtml(metadata.fileName);
-                const safeFileType = this.escapeHtml(metadata.fileType);
+                // Defense-in-depth: sanitize network-provided metadata
+                const safeFileName = this.escapeHtml(sanitizeText(metadata.fileName));
+                const safeFileType = this.escapeHtml(sanitizeText(metadata.fileType));
                 
                 if (metadata.fileType.startsWith('video/')) {
                     // Check if video format is playable in browser
@@ -2455,8 +2459,6 @@ class UIController {
             const channel = await channelManager.createChannel(name, type, password, members, options);
             Logger.debug('Channel created in UI:', channel);
 
-            this.hideLoadingToast();
-
             // Force render channel list
             Logger.debug('Rendering channel list...');
             this.renderChannelList();
@@ -2470,8 +2472,9 @@ class UIController {
 
             this.showNotification('Channel created successfully!', 'success');
         } catch (error) {
-            this.hideLoadingToast();
             this.showNotification('Failed to create channel: ' + error.message, 'error');
+        } finally {
+            this.hideLoadingToast();
         }
     }
 
@@ -3047,15 +3050,13 @@ class UIController {
         }
         
         this.hideJoinClosedChannelModal();
-        this.showLoadingToast('Joining channel...', 'Setting up encryption');
         
         try {
+            this.showLoadingToast('Joining channel...', 'Setting up encryption');
             const channel = await channelManager.joinChannel(streamId, null, {
                 localName,
                 classification
             });
-            
-            this.hideLoadingToast();
             
             // Clear the quick join input if it has the same ID
             if (this.elements.quickJoinInput?.value.trim() === streamId) {
@@ -3072,8 +3073,9 @@ class UIController {
             
             this.showNotification('Joined closed channel!', 'success');
         } catch (error) {
-            this.hideLoadingToast();
             this.showNotification('Failed to join: ' + error.message, 'error');
+        } finally {
+            this.hideLoadingToast();
         }
     }
 
@@ -3149,8 +3151,9 @@ class UIController {
                 channelInfo = await graphAPI.getChannelInfo(streamId);
             } catch (error) {
                 Logger.warn('Failed to query channel info:', error);
+            } finally {
+                this.hideLoading();
             }
-            this.hideLoading();
         }
         
         // If we know it's a password-protected channel, show password modal
@@ -3168,7 +3171,6 @@ class UIController {
                     name: channelInfo.name,
                     type: 'password'
                 });
-                this.hideLoadingToast();
                 
                 // Clear the input
                 if (this.elements.quickJoinInput) {
@@ -3180,15 +3182,15 @@ class UIController {
                 this.renderChannelList();
                 this.showNotification('Joined channel successfully!', 'success');
             } catch (error) {
+                this.showNotification('Failed to join: ' + error.message, 'error');
+            } finally {
                 this.hideLoadingToast();
-                this.showNotification('Failed to join: ' + error.message, 'error');;
             }
             return;
         }
         
         // For native/Closed channels, show the special modal to get name + classification
         if (channelInfo?.type === 'native') {
-            this.hideLoading();
             this.showJoinClosedChannelModal(streamId);
             return;
         }
@@ -3200,7 +3202,6 @@ class UIController {
                 name: channelInfo.name,
                 type: channelInfo.type
             } : undefined);
-            this.hideLoadingToast();
             
             // Clear the input
             if (this.elements.quickJoinInput) {
@@ -3212,8 +3213,6 @@ class UIController {
             this.renderChannelList();
             this.showNotification('Joined channel successfully!', 'success');
         } catch (error) {
-            this.hideLoadingToast();
-            
             // If channel isn't in cache but might require password, show join modal
             // This happens when we don't have info about the channel
             if (!channelInfo) {
@@ -3239,6 +3238,8 @@ class UIController {
             } else {
                 this.showNotification('Failed to join: ' + error.message, 'error');
             }
+        } finally {
+            this.hideLoadingToast();
         }
     }
 
@@ -3257,13 +3258,13 @@ class UIController {
         try {
             this.showLoadingToast('Joining channel...', 'This may take a moment');
             await channelManager.joinChannel(streamId, password);
-            this.hideLoadingToast();
             this.hideJoinChannelModal();
             this.renderChannelList();
             this.showNotification('Joined channel successfully!', 'success');
         } catch (error) {
-            this.hideLoadingToast();
             this.showNotification('Failed to join: ' + error.message, 'error');
+        } finally {
+            this.hideLoadingToast();
         }
     }
 
@@ -3300,7 +3301,6 @@ class UIController {
                 });
             }
             
-            this.hideLoadingToast();
             this.renderChannelList();
             
             // Automatically enter the channel after joining
@@ -3308,8 +3308,9 @@ class UIController {
             
             this.showNotification('Joined channel successfully!', 'success');
         } catch (error) {
-            this.hideLoadingToast();
             this.showNotification('Failed to join: ' + error.message, 'error');
+        } finally {
+            this.hideLoadingToast();
         }
     }
 
@@ -3364,14 +3365,13 @@ class UIController {
                 name: this._getChannelDisplayName(streamId, channelInfo),
                 type: channelInfo?.type || 'public',
                 readOnly: channelInfo?.readOnly || false,
+                password: null, // Preview mode doesn't have password (public channels only)
                 messages: []
                 // Note: reactions are handled by reactionManager (global state)
             };
 
             // Subscribe to channel stream temporarily (without persisting)
             await subscriptionManager.setPreviewChannel(streamId);
-
-            this.hideLoadingToast();
 
             // Update UI for preview mode
             this._showPreviewUI();
@@ -3391,10 +3391,11 @@ class UIController {
 
             Logger.info('Entered preview mode for:', streamId);
         } catch (error) {
-            this.hideLoadingToast();
             this.previewChannel = null;
             Logger.error('Failed to enter preview mode:', error);
             this.showNotification('Failed to load channel: ' + error.message, 'error');
+        } finally {
+            this.hideLoadingToast();
         }
     }
 
@@ -3521,8 +3522,6 @@ class UIController {
             // Transfer subscription handlers from preview to channelManager
             await subscriptionManager.promotePreviewToActive(previewStreamId);
 
-            this.hideLoadingToast();
-
             // Update UI - hide Join, show Invite
             this.elements.joinChannelBtn?.classList.add('hidden');
             this.elements.inviteUsersBtn?.classList.remove('hidden');
@@ -3536,9 +3535,10 @@ class UIController {
             this.showNotification('Channel added to your list!', 'success');
             Logger.info('Preview channel added to list:', previewStreamId);
         } catch (error) {
-            this.hideLoadingToast();
             Logger.error('Failed to add preview to list:', error);
             this.showNotification('Failed to add channel: ' + error.message, 'error');
+        } finally {
+            this.hideLoadingToast();
         }
     }
 
@@ -3964,18 +3964,17 @@ class UIController {
 
             this.showLoading('Sending invite...');
             await notificationManager.sendChannelInvite(address, currentChannel);
-            this.hideLoading();
             this.hideInviteModal();
             this.showNotification('Invite sent successfully!', 'success');
         } catch (error) {
-            this.hideLoading();
-            
             // Check for STREAM_NOT_FOUND error - user doesn't have notifications enabled
             if (error.message?.includes('STREAM_NOT_FOUND') || error.message?.includes('Stream not found')) {
                 this.showNotification('User does not have notifications enabled', 'error', 5000);
             } else {
                 this.showNotification('Failed to send invite', 'error');
             }
+        } finally {
+            this.hideLoading();
         }
     }
 
@@ -4829,7 +4828,6 @@ class UIController {
             try {
                 this.showLoading('Creating notification stream (on-chain transaction)...');
                 await notificationManager.enable();
-                this.hideLoading();
                 this.showNotification('Notifications enabled!', 'success');
                 
                 if (this.elements.notificationsStatus) {
@@ -4837,9 +4835,10 @@ class UIController {
                     this.elements.notificationsStatus.className = 'text-xs text-green-500';
                 }
             } catch (error) {
-                this.hideLoading();
                 e.target.checked = false;
                 this.showNotification('Failed to enable notifications: ' + error.message, 'error');
+            } finally {
+                this.hideLoading();
             }
         } else {
             notificationManager.disable();

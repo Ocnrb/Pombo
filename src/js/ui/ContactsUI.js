@@ -6,6 +6,7 @@
 import { modalManager } from './ModalManager.js';
 import { escapeHtml, escapeAttr } from './utils.js';
 import { getAvatar } from './AvatarGenerator.js';
+import { sanitizeText } from './sanitizer.js';
 
 class ContactsUI {
     constructor() {
@@ -99,12 +100,13 @@ class ContactsUI {
 
         this.elements.contactsList.innerHTML = contacts.map(contact => {
             const avatarSvg = getAvatar(contact.address, 32, 0.22);
+            // Defense-in-depth: sanitize user-provided nickname
             return `
                 <div class="flex items-center justify-between p-3 bg-[#1a1a1a] border border-[#282828] rounded-lg">
                     <div class="flex items-center gap-3 flex-1 min-w-0">
                         <div class="flex-shrink-0" style="width:32px;height:32px;border-radius:6px;overflow:hidden;">${avatarSvg}</div>
                         <div class="flex-1 min-w-0">
-                            <span class="text-[13px] font-medium text-white truncate block">${escapeHtml(contact.nickname)}</span>
+                            <span class="text-[13px] font-medium text-white truncate block">${escapeHtml(sanitizeText(contact.nickname))}</span>
                             <div class="text-[10px] text-[#666] font-mono truncate mt-0.5">${contact.address}</div>
                         </div>
                     </div>
@@ -146,14 +148,15 @@ class ContactsUI {
             return;
         }
 
+        let isLoading = false;
         try {
             let address = addressOrEns;
             
             // Resolve ENS if needed
             if (addressOrEns.endsWith('.eth')) {
                 showLoading('Resolving ENS...');
+                isLoading = true;
                 address = await identityManager.resolveAddress(addressOrEns);
-                hideLoading();
                 
                 if (!address) {
                     showNotification('Could not resolve ENS name', 'error');
@@ -175,8 +178,9 @@ class ContactsUI {
             this.elements.addContactAddress.value = '';
             this.elements.addContactNickname.value = '';
         } catch (error) {
-            hideLoading();
             showNotification('Failed to add contact: ' + error.message, 'error');
+        } finally {
+            if (isLoading) hideLoading();
         }
     }
 

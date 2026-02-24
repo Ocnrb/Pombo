@@ -3,6 +3,9 @@
  * This file bundles the Streamr SDK and Ethers.js, exposing them globally
  */
 
+// CSP-safe polyfills (must be first!)
+import './polyfills.js';
+
 import { StreamrClient, StreamPermission, STREAMR_STORAGE_NODE_GERMANY } from '@streamr/sdk';
 import * as ethers from 'ethers';
 import QRCode from 'qrcode';

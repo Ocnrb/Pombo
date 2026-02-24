@@ -129,6 +129,38 @@ class MediaHandler {
     }
 
     /**
+     * Initialize lightbox modal event listeners
+     * Called once on app startup to avoid inline onclick (CSP 'unsafe-inline')
+     */
+    initLightboxModal() {
+        const modal = document.getElementById('media-lightbox-modal');
+        const closeBtn = document.getElementById('lightbox-close-btn');
+        const imageEl = document.getElementById('lightbox-image');
+        const videoEl = document.getElementById('lightbox-video');
+
+        // Close on overlay click
+        if (modal) {
+            modal.addEventListener('click', () => this.closeLightbox());
+        }
+
+        // Close button
+        if (closeBtn) {
+            closeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.closeLightbox();
+            });
+        }
+
+        // Prevent close when clicking on image/video
+        if (imageEl) {
+            imageEl.addEventListener('click', (e) => e.stopPropagation());
+        }
+        if (videoEl) {
+            videoEl.addEventListener('click', (e) => e.stopPropagation());
+        }
+    }
+
+    /**
      * Handle file download button click
      * @param {string} fileId - File ID
      * @param {Object} channel - Current channel

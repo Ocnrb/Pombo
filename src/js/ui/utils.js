@@ -114,3 +114,28 @@ export function linkify(escapedText) {
         return `<a href="${safeHref}" target="_blank" rel="noopener noreferrer" class="text-[#F6851B] hover:underline break-all">${displayUrl}</a>`;
     });
 }
+
+/**
+ * Convert YouTube links in HTML to embedded players
+ * MUST be called on already processed HTML (after linkify)
+ * @param {string} html - HTML with links
+ * @returns {string} - HTML with YouTube embeds added after links
+ */
+export function embedYouTubeLinks(html) {
+    if (!html) return '';
+    
+    // Match YouTube URLs in anchor tags - handles both & and &amp; in URLs
+    const youtubeUrlPattern = /<a[^>]*href="(https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})[^"]*)"[^>]*>[^<]*<\/a>/gi;
+    
+    return html.replace(youtubeUrlPattern, (match, fullUrl, videoId) => {
+        // Validate videoId format (11 alphanumeric chars, hyphens, underscores)
+        if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+            return match;
+        }
+        
+        // Return original link + embed below it
+        const embed = `<div class="youtube-embed"><iframe src="https://www.youtube-nocookie.com/embed/${videoId}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen loading="lazy"></iframe></div>`;
+        
+        return match + embed;
+    });
+}

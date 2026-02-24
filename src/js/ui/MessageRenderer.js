@@ -3,9 +3,10 @@
  * Handles rendering of messages, content types, and related UI
  */
 
-import { escapeHtml, escapeAttr, formatAddress, addressToColor, linkify } from './utils.js';
+import { escapeHtml, escapeAttr, formatAddress, addressToColor, linkify, embedYouTubeLinks } from './utils.js';
 import { GroupPosition, shouldShowSenderName } from './MessageGrouper.js';
 import { getAvatar } from './AvatarGenerator.js';
+import { sanitizeMessageHtml, sanitizeText } from './sanitizer.js';
 
 class MessageRenderer {
     constructor() {
@@ -129,13 +130,14 @@ class MessageRenderer {
         if (!replyTo) return '';
         
         const displayName = replyTo.senderName || formatAddress(replyTo.sender);
+        // Defense-in-depth: sanitize network content
         const previewText = replyTo.text 
-            ? escapeHtml(replyTo.text.substring(0, 50)) + (replyTo.text.length > 50 ? '...' : '') 
+            ? escapeHtml(sanitizeText(replyTo.text.substring(0, 50))) + (replyTo.text.length > 50 ? '...' : '') 
             : '[Message]';
         
         return `
             <div class="reply-preview" data-reply-to-id="${escapeAttr(replyTo.id)}">
-                <span class="reply-preview-name">${escapeHtml(displayName)}</span>
+                <span class="reply-preview-name">${escapeHtml(sanitizeText(displayName))}</span>
                 <span class="reply-preview-text">${previewText}</span>
             </div>
         `;
@@ -209,8 +211,9 @@ class MessageRenderer {
         const isSeeding = this.deps.isSeeding?.(metadata.fileId);
         
         const safeFileId = escapeAttr(metadata.fileId);
-        const safeFileName = escapeHtml(metadata.fileName);
-        const safeFileType = escapeHtml(metadata.fileType);
+        // Defense-in-depth: sanitize network-provided metadata
+        const safeFileName = escapeHtml(sanitizeText(metadata.fileName));
+        const safeFileType = escapeHtml(sanitizeText(metadata.fileType));
         
         if (videoUrl) {
             const isPlayable = this.deps.isVideoPlayable?.(metadata.fileType);
@@ -314,8 +317,8 @@ class MessageRenderer {
                     </div>
                     <div class="absolute top-1.5 right-1.5 bg-black/60 text-gray-400 text-[10px] px-1.5 py-0.5 rounded" data-seeder-count="${safeFileId}"></div>
                 </div>
-                <div class="mt-1 px-0.5 text-[11px] text-gray-500 truncate" title="${escapeHtml(metadata.fileName)}">
-                    ${escapeHtml(metadata.fileName)}
+                <div class="mt-1 px-0.5 text-[11px] text-gray-500 truncate" title="${escapeHtml(sanitizeText(metadata.fileName))}">
+                    ${escapeHtml(sanitizeText(metadata.fileName))}
                 </div>
             </div>
         `;
@@ -339,8 +342,10 @@ class MessageRenderer {
             default:
                 const escapedText = escapeHtml(msg.text || '');
                 const withLinks = linkify(escapedText);
-                const withLineBreaks = withLinks.replace(/\n/g, '<br>');
-                return this.wrapInlineEmojis(withLineBreaks);
+                const withYouTube = embedYouTubeLinks(withLinks);
+                const withLineBreaks = withYouTube.replace(/\n/g, '<br>');
+                // Defense-in-depth: sanitize final HTML before rendering
+                return sanitizeMessageHtml(this.wrapInlineEmojis(withLineBreaks));
         }
     }
 
@@ -369,10 +374,11 @@ class MessageRenderer {
         // Only show sender row for first/single messages in group
         const showSender = shouldShowSenderName(groupPosition);
         const senderColor = addressToColor(msg.sender);
+        // Defense-in-depth: sanitize network-provided displayName
         const senderRowHtml = showSender ? `
                     <div class="message-sender-row flex items-center gap-1 mb-1">
                         ${badge.html}
-                        <span class="text-xs font-medium" style="color: ${senderColor}">${escapeHtml(displayName)}</span>
+                        <span class="text-xs font-medium" style="color: ${senderColor}">${escapeHtml(sanitizeText(displayName))}</span>
                     </div>` : '';
         
         // Avatar visible only on last/single messages in group, but placeholder for alignment

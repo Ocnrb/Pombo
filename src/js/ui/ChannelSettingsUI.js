@@ -6,6 +6,7 @@
 import { Logger } from '../logger.js';
 import { modalManager } from './ModalManager.js';
 import { escapeHtml, escapeAttr } from './utils.js';
+import { sanitizeText } from './sanitizer.js';
 
 class ChannelSettingsUI {
     constructor() {
@@ -191,7 +192,6 @@ class ChannelSettingsUI {
 
             await channelManager.deleteChannel(streamId);
 
-            hideLoading();
             showNotification(`Channel "${channelName}" deleted successfully`, 'success');
 
             // Update UI - select first remaining channel or show empty state
@@ -204,8 +204,9 @@ class ChannelSettingsUI {
                 showConnectedNoChannelState();
             }
         } catch (error) {
-            hideLoading();
             showNotification('Failed to delete channel: ' + error.message, 'error');
+        } finally {
+            hideLoading();
         }
     }
 
@@ -316,7 +317,7 @@ class ChannelSettingsUI {
             const members = await this.deps.channelManager.getChannelMembers(currentChannel.streamId);
             this.renderMembersList(members, currentChannel);
         } catch (error) {
-            this.elements.membersList.innerHTML = `<div class="text-center text-red-400/80 py-4 text-sm">Failed to load: ${error.message}</div>`;
+            this.elements.membersList.innerHTML = `<div class="text-center text-red-400/80 py-4 text-sm">Failed to load: ${sanitizeText(error.message)}</div>`;
         }
     }
 
@@ -490,7 +491,6 @@ class ChannelSettingsUI {
                 try {
                     showLoading(newCanGrant ? 'Granting admin permission...' : 'Revoking admin permission...');
                     await channelManager.updateMemberPermissions(currentChannel.streamId, address, { canGrant: newCanGrant });
-                    hideLoading();
                     showNotification(
                         newCanGrant ? 'Member can now add others!' : 'Admin permission removed',
                         'success'
@@ -498,8 +498,9 @@ class ChannelSettingsUI {
                     // Refresh members list
                     await this.loadMembers();
                 } catch (error) {
-                    hideLoading();
                     showNotification('Failed to update permission: ' + error.message, 'error');
+                } finally {
+                    hideLoading();
                 }
                 break;
 
@@ -532,13 +533,13 @@ class ChannelSettingsUI {
         try {
             showLoading('Adding member (on-chain transaction)...');
             await channelManager.addMember(currentChannel.streamId, address);
-            hideLoading();
             this.elements.addMemberInput.value = '';
             showNotification('Member added successfully!', 'success');
             await this.loadMembers();
         } catch (error) {
-            hideLoading();
             showNotification('Failed to add member: ' + error.message, 'error');
+        } finally {
+            hideLoading();
         }
     }
 
@@ -592,7 +593,6 @@ class ChannelSettingsUI {
                 }
             }
             
-            hideLoading();
             this.elements.batchMembersInput.value = '';
             
             if (failed > 0) {
@@ -603,8 +603,9 @@ class ChannelSettingsUI {
             
             await this.loadMembers();
         } catch (error) {
-            hideLoading();
             showNotification('Failed to add members: ' + error.message, 'error');
+        } finally {
+            hideLoading();
         }
     }
 
@@ -679,12 +680,12 @@ class ChannelSettingsUI {
         try {
             showLoading('Removing member (on-chain transaction)...');
             await channelManager.removeMember(currentChannel.streamId, address);
-            hideLoading();
             showNotification('Member removed successfully!', 'success');
             await this.loadMembers();
         } catch (error) {
-            hideLoading();
             showNotification('Failed to remove member: ' + error.message, 'error');
+        } finally {
+            hideLoading();
         }
     }
 
@@ -805,7 +806,7 @@ class ChannelSettingsUI {
             this.elements.permissionsList.innerHTML = formatted + legend;
             
         } catch (error) {
-            this.elements.permissionsList.innerHTML = `<div class="text-red-400/80 text-sm">Error: ${error.message}</div>`;
+            this.elements.permissionsList.innerHTML = `<div class="text-red-400/80 text-sm">Error: ${sanitizeText(error.message)}</div>`;
         }
     }
 }

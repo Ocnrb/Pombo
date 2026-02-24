@@ -4,6 +4,7 @@
  */
 
 import { escapeHtml, escapeAttr } from './utils.js';
+import { sanitizeText } from './sanitizer.js';
 
 class ExploreUI {
     constructor() {
@@ -297,8 +298,9 @@ class ExploreUI {
             const languageBadge = ch.language
                 ? `<span class="px-1.5 py-0.5 bg-white/5 text-white/40 text-[9px] font-medium rounded">${escapeHtml(languageNames[ch.language] || ch.language.toUpperCase())}</span>`
                 : '';
+            // Defense-in-depth: sanitize user-provided content before escaping
             const description = ch.description 
-                ? `<p class="text-xs text-white/40 mt-1 line-clamp-2">${escapeHtml(ch.description)}</p>` 
+                ? `<p class="text-xs text-white/40 mt-1 line-clamp-2">${escapeHtml(sanitizeText(ch.description))}</p>` 
                 : '';
             
             return `
@@ -306,7 +308,7 @@ class ExploreUI {
                 <div class="flex items-start justify-between gap-3">
                     <div class="flex-1 min-w-0">
                         <div class="flex items-center gap-2 flex-wrap">
-                            <h4 class="text-sm font-medium text-white/90 truncate">${escapeHtml(ch.name)}</h4>
+                            <h4 class="text-sm font-medium text-white/90 truncate">${escapeHtml(sanitizeText(ch.name))}</h4>
                             ${readOnlyBadge}
                         </div>
                         ${description}

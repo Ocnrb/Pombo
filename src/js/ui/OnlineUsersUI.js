@@ -5,6 +5,7 @@
 
 import { escapeHtml, escapeAttr, formatAddress } from './utils.js';
 import { getAvatar } from './AvatarGenerator.js';
+import { sanitizeText } from './sanitizer.js';
 
 class OnlineUsersUI {
     constructor() {
@@ -45,8 +46,9 @@ class OnlineUsersUI {
                     const shortAddress = formatAddress(address);
                     
                     // Display: nickname or address as main name
+                    // Defense-in-depth: sanitize + escape user-provided nickname
                     const displayName = nickname 
-                        ? escapeHtml(nickname) 
+                        ? escapeHtml(sanitizeText(nickname)) 
                         : shortAddress;
                     
                     // Subtitle: address if has nickname, or "(you)" if it's me

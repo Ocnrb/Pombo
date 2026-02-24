@@ -19,3 +19,4 @@ export { channelSettingsUI } from './ChannelSettingsUI.js';
 export { contactsUI } from './ContactsUI.js';
 export { channelListUI } from './ChannelListUI.js';
 export { avatarGenerator, generateAvatar, getAvatar, getAddressColor } from './AvatarGenerator.js';
+export { sanitizeMessageHtml, sanitizeText, sanitizeUrl, isSanitizerAvailable } from './sanitizer.js';

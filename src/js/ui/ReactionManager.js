@@ -4,6 +4,7 @@
  */
 
 import { Logger } from '../logger.js';
+import { sanitizeText } from './sanitizer.js';
 
 // Default emojis for emoji picker
 const DEFAULT_EMOJIS = [
@@ -191,7 +192,8 @@ class ReactionManager {
                     badge.className = `reaction-badge ${userReacted ? 'user-reacted' : ''}`;
                     badge.dataset.emoji = emoji;
                     badge.dataset.msgId = msgId;
-                    badge.innerHTML = `<span class="reaction-emoji">${emoji}</span>${users.length}`;
+                    // Defense-in-depth: sanitize emoji from network
+                    badge.innerHTML = `<span class="reaction-emoji">${sanitizeText(emoji)}</span>${users.length}`;
                     badge.addEventListener('click', () => this.toggleReaction(msgId, emoji));
                     container.appendChild(badge);
                 }
