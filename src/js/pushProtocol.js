@@ -15,30 +15,8 @@ const getEthers = () => {
 // ================================================
 
 /**
- * Calculate notification tag for an address.
- * The tag is a 4-byte identifier derived from the address
- * that allows k-anonymity (multiple users can have the same tag).
- * 
- * @param {string} address - Ethereum address (0x...)
- * @returns {string} 10-character tag (0x + 8 hex chars)
- */
-export function calculateTag(address) {
-    if (!address || !address.startsWith('0x')) {
-        throw new Error('Invalid address');
-    }
-    
-    const eth = getEthers();
-    
-    // Hash the address
-    const hash = eth.keccak256(eth.toUtf8Bytes(address.toLowerCase()));
-    
-    // Get first 4 bytes (8 hex chars + 0x = 10 chars)
-    return hash.slice(0, 10);
-}
-
-/**
- * Calculate notification tag for a channel.
- * Used for public/password channels where users opt-in.
+ * Calculate notification tag for a public/password channel.
+ * Users opt-in to receive notifications for these channels.
  * 
  * @param {string} streamId - Channel stream ID (ex: 0x.../channelname-1)
  * @returns {string} 10-character tag (0x + 8 hex chars)
@@ -50,8 +28,31 @@ export function calculateChannelTag(streamId) {
     
     const eth = getEthers();
     
-    // Prefix to distinguish from user tags
+    // Prefix to distinguish from user/native tags
     const data = `channel:${streamId.toLowerCase()}`;
+    const hash = eth.keccak256(eth.toUtf8Bytes(data));
+    
+    // Get first 4 bytes
+    return hash.slice(0, 10);
+}
+
+/**
+ * Calculate notification tag for a native channel.
+ * Native channels use per-channel tags (not per-user tags) for granular control.
+ * Privacy is maintained because only channel members know the streamId.
+ * 
+ * @param {string} streamId - Channel stream ID
+ * @returns {string} 10-character tag (0x + 8 hex chars)
+ */
+export function calculateNativeChannelTag(streamId) {
+    if (!streamId) {
+        throw new Error('Invalid streamId');
+    }
+    
+    const eth = getEthers();
+    
+    // Prefix to distinguish from public channel tags
+    const data = `native:${streamId.toLowerCase()}`;
     const hash = eth.keccak256(eth.toUtf8Bytes(data));
     
     // Get first 4 bytes
@@ -134,26 +135,6 @@ export function createRegistrationPayload(tag, subscription) {
 }
 
 /**
- * Create payload to send notification (wake signal).
- * 
- * @param {string} recipientAddress - Recipient address
- * @param {number} difficulty - PoW difficulty
- * @returns {Promise<object>} Payload to send to stream
- */
-export async function createNotificationPayload(recipientAddress, difficulty = 4) {
-    const tag = calculateTag(recipientAddress);
-    const { pow, nonce } = await calculatePoW(tag, difficulty);
-    
-    return {
-        type: 'notification',
-        tag: tag,
-        pow: pow,
-        nonce: nonce,
-        timestamp: Date.now()
-    };
-}
-
-/**
  * Create payload to send channel notification (wake signal).
  * Used for public/password channels.
  * 
@@ -170,6 +151,29 @@ export async function createChannelNotificationPayload(streamId, difficulty = 4)
         tag: tag,
         pow: pow,
         nonce: nonce,
+        channelType: 'public',
+        timestamp: Date.now()
+    };
+}
+
+/**
+ * Create payload to send native channel notification (wake signal).
+ * Used for native/DM channels.
+ * 
+ * @param {string} streamId - Channel stream ID
+ * @param {number} difficulty - PoW difficulty
+ * @returns {Promise<object>} Payload to send to stream
+ */
+export async function createNativeChannelNotificationPayload(streamId, difficulty = 4) {
+    const tag = calculateNativeChannelTag(streamId);
+    const { pow, nonce } = await calculatePoW(tag, difficulty);
+    
+    return {
+        type: 'notification',
+        tag: tag,
+        pow: pow,
+        nonce: nonce,
+        channelType: 'private',
         timestamp: Date.now()
     };
 }
@@ -197,12 +201,12 @@ export const DEFAULT_CONFIG = {
 };
 
 export default {
-    calculateTag,
     calculateChannelTag,
+    calculateNativeChannelTag,
     calculatePoW,
     verifyPoW,
     createRegistrationPayload,
-    createNotificationPayload,
     createChannelNotificationPayload,
+    createNativeChannelNotificationPayload,
     DEFAULT_CONFIG
 };

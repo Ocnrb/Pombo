@@ -311,6 +311,21 @@ class ChannelManager {
             }
 
             Logger.info('Dual-stream channel created successfully:', channel.messageStreamId);
+            
+            // Auto-enable notifications for this channel if global notifications are enabled
+            if (relayManager.enabled) {
+                try {
+                    if (type === 'native') {
+                        await relayManager.subscribeToNativeChannel(channel.messageStreamId);
+                    } else {
+                        await relayManager.subscribeToChannel(channel.messageStreamId);
+                    }
+                    Logger.debug('Auto-enabled notifications for created channel');
+                } catch (err) {
+                    Logger.warn('Failed to auto-enable notifications:', err.message);
+                }
+            }
+            
             return channel;
         } catch (error) {
             Logger.error('Failed to create channel:', error);
@@ -478,6 +493,21 @@ class ChannelManager {
             }
 
             Logger.info('Joined dual-stream channel:', messageStreamId);
+            
+            // Auto-enable notifications for this channel if global notifications are enabled
+            if (relayManager.enabled) {
+                try {
+                    if (channelType === 'native') {
+                        await relayManager.subscribeToNativeChannel(messageStreamId);
+                    } else {
+                        await relayManager.subscribeToChannel(messageStreamId);
+                    }
+                    Logger.debug('Auto-enabled notifications for new channel');
+                } catch (err) {
+                    Logger.warn('Failed to auto-enable notifications:', err.message);
+                }
+            }
+            
             return channel;
         } catch (error) {
             Logger.error('Failed to join channel:', error);
@@ -556,6 +586,21 @@ class ChannelManager {
             });
 
             Logger.info('Channel persisted from preview:', messageStreamId);
+            
+            // Auto-enable notifications for this channel if global notifications are enabled
+            if (relayManager.enabled) {
+                try {
+                    if (channelType === 'native') {
+                        await relayManager.subscribeToNativeChannel(messageStreamId);
+                    } else {
+                        await relayManager.subscribeToChannel(messageStreamId);
+                    }
+                    Logger.debug('Auto-enabled notifications for channel from preview');
+                } catch (err) {
+                    Logger.warn('Failed to auto-enable notifications:', err.message);
+                }
+            }
+            
             return channel;
         } catch (error) {
             Logger.error('Failed to persist channel from preview:', error);
@@ -1724,20 +1769,11 @@ class ChannelManager {
             
             const channelType = channel.type || 'unknown';
             
-            // Native channels: Send to each member individually
+            // Native channels: Send to channel tag (per-channel notifications)
             if (channelType === 'native') {
-                const myAddress = authManager.getAddress()?.toLowerCase();
-                const members = channel.members || [];
-                const otherMembers = members.filter(m => m.toLowerCase() !== myAddress);
-                
-                if (otherMembers.length === 0) {
-                    Logger.debug('No other members to send wake signals to');
-                    return;
-                }
-                
-                Logger.debug('Sending wake signals to', otherMembers.length, 'native members');
-                const sent = await relayManager.sendWakeSignalBatch(otherMembers);
-                Logger.debug('Wake signals sent:', sent, '/', otherMembers.length);
+                Logger.debug('Sending native channel wake signal for:', messageStreamId.slice(0, 20) + '...');
+                await relayManager.sendNativeChannelWakeSignal(messageStreamId);
+                Logger.debug('Native channel wake signal sent');
                 
             } else {
                 // Public/Password channels: Send to channel tag

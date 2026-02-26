@@ -1185,7 +1185,7 @@
                         <h4 class="text-white/90 font-medium">Blind Relay Architecture</h4>
                     </div>
                     <p class="text-white/50 text-xs leading-relaxed">
-                        Push notifications use a "Blind Relay" — the server that wakes your device <span class="text-white/70">never learns your identity</span>. It only sees anonymous tags, not who you are or what you're reading.
+                        Push notifications use a "Blind Relay" — the server that wakes your device <span class="text-white/70">cannot determine recipients</span>. It only sees anonymous tags with no link to identities or channels.
                     </p>
                 </div>
                 <div>
@@ -1200,20 +1200,24 @@
                 <div>
                     <div class="flex items-center gap-2 mb-2">
                         <svg class="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/></svg>
-                        <h4 class="text-white/90 font-medium">What the Relay Cannot See</h4>
+                        <h4 class="text-white/90 font-medium">What the Relay Sees</h4>
                     </div>
                     <ul class="text-white/50 text-xs leading-relaxed space-y-1.5 ml-6">
                         <li class="flex items-center gap-2">
                             <svg class="w-3 h-3 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                            <span>Your wallet address or ENS name</span>
+                            <span><span class="text-white/70">Cannot see:</span> Who receives the notification (k-anonymity)</span>
                         </li>
                         <li class="flex items-center gap-2">
                             <svg class="w-3 h-3 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                            <span>Message content (end-to-end encrypted)</span>
+                            <span><span class="text-white/70">Cannot see:</span> Which channel the message is from</span>
                         </li>
                         <li class="flex items-center gap-2">
                             <svg class="w-3 h-3 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                            <span>Your IP address (hidden by Streamr P2P)</span>
+                            <span><span class="text-white/70">Cannot see:</span> Message content (separate stream, never touches relay)</span>
+                        </li>
+                        <li class="flex items-center gap-2">
+                            <svg class="w-3 h-3 text-yellow-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                            <span><span class="text-white/70">Can see:</span> Sender's Streamr node address (inherent to network)</span>
                         </li>
                     </ul>
                 </div>
@@ -1394,8 +1398,9 @@
                                 <div class="flex-1 mr-4">
                                     <div class="flex items-center gap-2 mb-1">
                                         <h4 class="text-sm font-medium text-white/90">Push Notifications</h4>
-                                        <button id="push-learn-more-btn" class="text-xs text-white/40 hover:text-white/70 transition flex items-center gap-1">
-                                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                        <button id="push-learn-more-btn" class="inline-flex items-center gap-1 text-xs text-white/40 hover:text-white/60 transition">
+                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z"/></svg>
+                                            <span>Learn more</span>
                                         </button>
                                     </div>
                                     <p class="text-xs text-white/40 leading-relaxed">

@@ -330,11 +330,18 @@ class ChannelSettingsUI {
         
         if (!toggle) return;
         
+        // Get channel type
+        const { channelManager } = this.deps;
+        const channel = channelManager.channels.get(streamId);
+        const isNative = channel?.type === 'native';
+        
         // Check if push notifications are enabled globally
         const pushEnabled = relayManager.enabled;
         
-        // Check if this channel has notifications enabled
-        const isSubscribed = relayManager.isChannelSubscribed(streamId);
+        // Check if this channel has notifications enabled (use appropriate method based on type)
+        const isSubscribed = isNative 
+            ? relayManager.isNativeChannelSubscribed(streamId)
+            : relayManager.isChannelSubscribed(streamId);
         
         // Set toggle state
         toggle.checked = isSubscribed;
@@ -409,11 +416,19 @@ class ChannelSettingsUI {
     async handleChannelNotificationsToggle(e, streamId) {
         const enable = e.target.checked;
         const status = document.getElementById('channel-notifications-status');
-        const { showNotification } = this.deps;
+        const { showNotification, channelManager } = this.deps;
+        
+        // Get channel type
+        const channel = channelManager.channels.get(streamId);
+        const isNative = channel?.type === 'native';
         
         if (enable) {
             try {
-                const success = await relayManager.subscribeToChannel(streamId);
+                // Use appropriate method based on channel type
+                const success = isNative
+                    ? await relayManager.subscribeToNativeChannel(streamId)
+                    : await relayManager.subscribeToChannel(streamId);
+                    
                 if (success) {
                     showNotification('Push notifications enabled!', 'success');
                     if (status) {
@@ -429,7 +444,12 @@ class ChannelSettingsUI {
                 showNotification('Error: ' + error.message, 'error');
             }
         } else {
-            relayManager.unsubscribeFromChannel(streamId);
+            // Use appropriate method based on channel type
+            if (isNative) {
+                relayManager.unsubscribeFromNativeChannel(streamId);
+            } else {
+                relayManager.unsubscribeFromChannel(streamId);
+            }
             showNotification('Push notifications disabled', 'info');
             if (status) {
                 status.textContent = 'Push notifications disabled';

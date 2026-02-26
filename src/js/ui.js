@@ -4971,7 +4971,7 @@ class UIController {
         if (!this.elements.pushNotificationsStatus) return;
         
         if (relayManager.enabled) {
-            const channelCount = relayManager.subscribedChannels.size;
+            const channelCount = relayManager.subscribedChannels.size + relayManager.subscribedNativeChannels.size;
             this.elements.pushNotificationsStatus.textContent = `Enabled - ${channelCount} channel(s) with notifications enabled`;
             this.elements.pushNotificationsStatus.className = 'text-xs text-green-500';
         } else {

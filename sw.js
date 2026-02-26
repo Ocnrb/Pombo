@@ -1,25 +1,25 @@
-// sw.js - Service Worker para Push Notifications
+// sw.js - Service Worker for Push Notifications
 // ================================================
-// Este ficheiro TEM de estar na raiz do site
-// para ter scope sobre todas as páginas.
+// This file MUST be at the root of the site
+// to have scope over all pages.
 // ================================================
 
 const SW_VERSION = '1.0.0';
 
 // ================================================
-// INSTALAÇÃO
+// INSTALLATION
 // ================================================
 
 self.addEventListener('install', (event) => {
-    console.log('[SW] Instalado v' + SW_VERSION);
-    // NÃO usar skipWaiting() - deixar o browser gerir a transição
-    // para evitar resets inesperados da app
+    console.log('[SW] Installed v' + SW_VERSION);
+    // skipWaiting allows immediate activation after installation
+    self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
-    console.log('[SW] Activado');
-    // NÃO usar clients.claim() - evita refresh forçado
-    // A próxima navegação/refresh vai usar o novo SW naturalmente
+    console.log('[SW] Activated');
+    // clients.claim() takes control of all open pages
+    event.waitUntil(self.clients.claim());
 });
 
 // ================================================
@@ -27,7 +27,7 @@ self.addEventListener('activate', (event) => {
 // ================================================
 
 self.addEventListener('push', (event) => {
-    console.log('[SW] Push recebido');
+    console.log('[SW] Push received');
     
     let data = {};
     
@@ -36,46 +36,55 @@ self.addEventListener('push', (event) => {
             data = event.data.json();
         }
     } catch (e) {
-        console.warn('[SW] Push data não é JSON:', e);
+        console.warn('[SW] Push data is not JSON:', e);
     }
     
-    // O relay envia { type: 'wake', timestamp: ... }
-    // Não revela quem enviou nem o conteúdo (privacidade máxima)
+    // Relay sends { type: 'wake', channelType: 'private'|'public', timestamp: ... }
+    // channelType indicates if it's a private or public channel (without revealing which one)
+    
+    // Message based on channel type
+    let body = 'You have new messages';
+    if (data.channelType === 'private') {
+        body = 'New message in private channel';
+    } else if (data.channelType === 'public') {
+        body = 'New message in public channel';
+    }
     
     const options = {
-        body: 'You have new messages',
+        body: body,
         icon: '/favicon/web-app-manifest-192x192.png',
         badge: '/favicon/favicon-96x96.png',
-        tag: 'pombo-notification', // Agrupa notificações
-        renotify: true, // Vibra mesmo que já exista uma com esta tag
-        requireInteraction: false, // Não requer interação do user
+        tag: 'pombo-' + (data.timestamp || Date.now()), // Unique tag per notification
+        renotify: true, // Vibrate even if one with this tag already exists
+        requireInteraction: false, // Does not require user interaction
         silent: false,
         vibrate: [200, 100, 200],
         data: {
             url: self.registration.scope,
-            timestamp: data.timestamp || Date.now()
+            timestamp: data.timestamp || Date.now(),
+            channelType: data.channelType
         },
         actions: [
             {
                 action: 'open',
-                title: 'Abrir'
+                title: 'Open'
             },
             {
                 action: 'dismiss',
-                title: 'Ignorar'
+                title: 'Dismiss'
             }
         ]
     };
     
     event.waitUntil(
-        // Primeiro, verificar se já temos uma janela aberta
+        // First, check if we already have an open window
         self.clients.matchAll({ type: 'window', includeUncontrolled: true })
             .then((clients) => {
-                // Se há uma janela focada, não mostrar notificação
+                // If there's a focused window, don't show notification
                 const focusedClient = clients.find(c => c.focused);
                 if (focusedClient) {
-                    console.log('[SW] App já está focada, ignorando notificação visual');
-                    // Mas ainda assim notificar a app
+                    console.log('[SW] App already focused, skipping visual notification');
+                    // But still notify the app
                     focusedClient.postMessage({
                         type: 'PUSH_RECEIVED',
                         timestamp: data.timestamp
@@ -83,18 +92,18 @@ self.addEventListener('push', (event) => {
                     return;
                 }
                 
-                // Mostrar notificação
+                // Show notification
                 return self.registration.showNotification('Pombo', options);
             })
     );
 });
 
 // ================================================
-// CLICK NA NOTIFICAÇÃO
+// NOTIFICATION CLICK
 // ================================================
 
 self.addEventListener('notificationclick', (event) => {
-    console.log('[SW] Notificação clicada:', event.action);
+    console.log('[SW] Notification clicked:', event.action);
     
     event.notification.close();
     
@@ -102,41 +111,41 @@ self.addEventListener('notificationclick', (event) => {
         return;
     }
     
-    // Abrir ou focar a app
+    // Open or focus the app
     event.waitUntil(
         self.clients.matchAll({ type: 'window', includeUncontrolled: true })
             .then((clients) => {
-                // Se já temos uma janela, focar
+                // If we already have a window, focus it
                 if (clients.length > 0) {
                     const client = clients[0];
                     client.focus();
-                    // Notificar que foi clicada
+                    // Notify that it was clicked
                     client.postMessage({
                         type: 'NOTIFICATION_CLICKED'
                     });
                     return;
                 }
                 
-                // Senão, abrir nova janela
+                // Otherwise, open new window
                 return self.clients.openWindow(event.notification.data?.url || '/');
             })
     );
 });
 
 // ================================================
-// FECHAR NOTIFICAÇÃO
+// NOTIFICATION CLOSE
 // ================================================
 
 self.addEventListener('notificationclose', (event) => {
-    console.log('[SW] Notificação fechada');
+    console.log('[SW] Notification closed');
 });
 
 // ================================================
-// MENSAGENS DO CLIENTE
+// CLIENT MESSAGES
 // ================================================
 
 self.addEventListener('message', (event) => {
-    console.log('[SW] Mensagem recebida:', event.data);
+    console.log('[SW] Message received:', event.data);
     
     if (event.data?.type === 'SKIP_WAITING') {
         self.skipWaiting();

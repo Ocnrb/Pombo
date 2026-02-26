@@ -7,11 +7,11 @@
 import { Logger } from './logger.js';
 import { streamrController } from './streamr.js';
 import { 
-    calculateTag,
     calculateChannelTag,
+    calculateNativeChannelTag,
     createRegistrationPayload,
-    createNotificationPayload,
     createChannelNotificationPayload,
+    createNativeChannelNotificationPayload,
     DEFAULT_CONFIG 
 } from './pushProtocol.js';
 
@@ -43,11 +43,12 @@ const CONFIG = {
 class RelayManager {
     constructor() {
         this.initialized = false;
+        this.walletAddress = null;
         this.swRegistration = null;
         this.pushSubscription = null;
-        this.myTag = null;
         this.enabled = false;
-        this.subscribedChannels = new Set(); // Channels with active notifications (opt-in)
+        this.subscribedChannels = new Set(); // Public/password channels with notifications
+        this.subscribedNativeChannels = new Set(); // Native channels with notifications
         this.reRegistrationTimer = null; // Timer for periodic re-registration
         
         // Listener for Service Worker messages
@@ -70,25 +71,21 @@ class RelayManager {
      * @returns {Promise<boolean>} - true if initialization successful
      */
     async init(walletAddress) {
-        // Calcular tag para este endereço
-        const newTag = calculateTag(walletAddress);
-        Logger.debug('Tag calculated for', walletAddress, '→', newTag);
-        
         // If already initialized with SAME address, skip
-        if (this.initialized && this.myTag === newTag) {
+        if (this.initialized && this.walletAddress === walletAddress?.toLowerCase()) {
             Logger.debug('Already initialized with same address');
             return true;
         }
         
-        // If initialized with DIFFERENT address, re-register
-        if (this.initialized && this.myTag !== newTag) {
-            Logger.info('Account changed, re-registering push with new tag:', newTag);
-            this.myTag = newTag;
+        // If initialized with DIFFERENT address, refresh channel subscriptions
+        if (this.initialized && this.walletAddress !== walletAddress?.toLowerCase()) {
+            Logger.info('Account changed, refreshing subscriptions');
+            this.walletAddress = walletAddress?.toLowerCase();
             
-            // Re-register with new tag
-            if (this.pushSubscription) {
-                await this.registerWithRelays();
-            }
+            // Clear channel subscriptions (new account = new channels)
+            this.subscribedChannels.clear();
+            this.subscribedNativeChannels.clear();
+            this.loadSubscribedChannels();
             return true;
         }
         
@@ -99,9 +96,7 @@ class RelayManager {
         }
         
         try {
-            // Calculate user tag
-            this.myTag = newTag;
-            Logger.info('Tag calculated:', this.myTag);
+            this.walletAddress = walletAddress?.toLowerCase();
             
             // Register Service Worker
             this.swRegistration = await this.registerServiceWorker();
@@ -111,12 +106,6 @@ class RelayManager {
             
             // Check if we already have permission and subscription
             const hasExisting = await this.checkExistingSubscription();
-            
-            // Auto-enable push if no existing subscription (opt-out model)
-            if (!hasExisting) {
-                Logger.info('Auto-subscribing to push notifications...');
-                await this.subscribe();
-            }
             
             // Load channels with active notifications
             this.loadSubscribedChannels();
@@ -226,9 +215,6 @@ class RelayManager {
             this.enabled = true;
             Logger.info('Subscribed successfully');
             
-            // Register with relays
-            await this.registerWithRelays();
-            
             return this.pushSubscription;
             
         } catch (error) {
@@ -280,36 +266,9 @@ class RelayManager {
             return;
         }
         
-        // Check if we need immediate re-registration based on last timestamp
-        const stored = localStorage.getItem(CONFIG.storageKey);
-        if (stored) {
-            try {
-                const data = JSON.parse(stored);
-                const elapsed = Date.now() - (data.timestamp || 0);
-                
-                // If more than interval has passed, re-register now
-                if (elapsed > CONFIG.reRegistrationInterval) {
-                    Logger.info('Token refresh needed (last registration was', Math.round(elapsed / 3600000), 'hours ago)');
-                    this.registerWithRelays();
-                }
-            } catch (e) {
-                // Invalid stored data, re-register
-                this.registerWithRelays();
-            }
-        }
-        
-        // Set up periodic re-registration
+        // Set up periodic re-registration for channel subscriptions
         this.reRegistrationTimer = setInterval(() => {
-            Logger.info('Periodic token refresh...');
-            this.registerWithRelays().then(success => {
-                if (success) {
-                    Logger.info('Token refreshed successfully');
-                } else {
-                    Logger.warn('Token refresh failed - will retry next interval');
-                }
-            });
-            
-            // Also re-register channel subscriptions
+            Logger.info('Periodic channel subscription refresh...');
             this.refreshChannelSubscriptions();
         }, CONFIG.reRegistrationInterval);
         
@@ -328,121 +287,37 @@ class RelayManager {
     }
     
     /**
-     * Refresh all channel subscriptions.
+     * Refresh all channel subscriptions (public and native).
      */
     async refreshChannelSubscriptions() {
-        if (this.subscribedChannels.size === 0) return;
+        const totalChannels = this.subscribedChannels.size + this.subscribedNativeChannels.size;
+        if (totalChannels === 0) return;
         
-        Logger.debug('Refreshing', this.subscribedChannels.size, 'channel subscriptions...');
+        Logger.debug('Refreshing', totalChannels, 'channel subscriptions...');
         
+        // Refresh public/password channels
         for (const streamId of this.subscribedChannels) {
             try {
                 const channelTag = calculateChannelTag(streamId);
                 const payload = createRegistrationPayload(channelTag, this.pushSubscription);
                 await streamrController.client.publish(CONFIG.pushStreamId, payload);
             } catch (error) {
-                Logger.warn('Failed to refresh channel subscription:', streamId.slice(0, 20) + '...');
+                Logger.warn('Failed to refresh public channel subscription:', streamId.slice(0, 20) + '...');
+            }
+        }
+        
+        // Refresh native channels
+        for (const streamId of this.subscribedNativeChannels) {
+            try {
+                const channelTag = calculateNativeChannelTag(streamId);
+                const payload = createRegistrationPayload(channelTag, this.pushSubscription);
+                await streamrController.client.publish(CONFIG.pushStreamId, payload);
+            } catch (error) {
+                Logger.warn('Failed to refresh native channel subscription:', streamId.slice(0, 20) + '...');
             }
         }
     }
-    
-    // ================================================
-    // RELAY REGISTRATION
-    // ================================================
-    
-    /**
-     * Register subscription with all known relays.
-     */
-    async registerWithRelays() {
-        if (!this.pushSubscription || !this.myTag) {
-            Logger.error('Cannot register - no subscription or tag');
-            return false;
-        }
-        
-        try {
-            // Create registration payload
-            const payload = createRegistrationPayload(
-                this.myTag, 
-                this.pushSubscription
-            );
-            
-            // Publish to push stream (relay will receive)
-            await streamrController.client.publish(CONFIG.pushStreamId, payload);
-            
-            // Save state
-            localStorage.setItem(CONFIG.storageKey, JSON.stringify({
-                tag: this.myTag,
-                timestamp: Date.now()
-            }));
-            
-            Logger.info('Registered with relays');
-            return true;
-            
-        } catch (error) {
-            Logger.error('Error registering with relays:', error);
-            return false;
-        }
-    }
-    
-    // ================================================
-    // SENDING NOTIFICATIONS
-    // ================================================
-    
-    /**
-     * Send a wake signal to notify a recipient.
-     * This function calculates PoW and publishes the notification.
-     * 
-     * @param {string} recipientAddress - Recipient address
-     * @returns {Promise<boolean>}
-     */
-    async sendWakeSignal(recipientAddress) {
-        if (!this.initialized) {
-            Logger.warn('RelayManager not initialized - ignoring wake signal');
-            return false;
-        }
-        
-        try {
-            Logger.debug('Calculating PoW for:', recipientAddress);
-            
-            // Create payload with PoW (may take ~200ms)
-            const payload = await createNotificationPayload(
-                recipientAddress, 
-                CONFIG.powDifficulty
-            );
-            
-            // Publish to stream
-            await streamrController.client.publish(CONFIG.pushStreamId, payload);
-            
-            Logger.debug('Wake signal sent to tag:', payload.tag);
-            return true;
-            
-        } catch (error) {
-            Logger.error('Error sending wake signal:', error);
-            return false;
-        }
-    }
-    
-    /**
-     * Send wake signals to multiple recipients.
-     * Useful for groups.
-     * 
-     * @param {string[]} addresses - List of addresses
-     * @returns {Promise<number>} Number of signals sent successfully
-     */
-    async sendWakeSignalBatch(addresses) {
-        let sent = 0;
-        
-        for (const address of addresses) {
-            if (await this.sendWakeSignal(address)) {
-                sent++;
-            }
-            
-            // Small delay between sends to avoid overloading
-            await new Promise(r => setTimeout(r, 50));
-        }
-        
-        return sent;
-    }
+
     
     // ================================================
     // CHANNEL SUBSCRIPTION (opt-in for public/password)
@@ -453,11 +328,20 @@ class RelayManager {
      */
     loadSubscribedChannels() {
         try {
+            // Load public/password channels
             const stored = localStorage.getItem(CONFIG.storageKey + '_channels');
             if (stored) {
                 const channels = JSON.parse(stored);
                 this.subscribedChannels = new Set(channels);
-                Logger.debug('Channels with notifications:', this.subscribedChannels.size);
+                Logger.debug('Public channels with notifications:', this.subscribedChannels.size);
+            }
+            
+            // Load native channels
+            const storedNative = localStorage.getItem(CONFIG.storageKey + '_native_channels');
+            if (storedNative) {
+                const nativeChannels = JSON.parse(storedNative);
+                this.subscribedNativeChannels = new Set(nativeChannels);
+                Logger.debug('Native channels with notifications:', this.subscribedNativeChannels.size);
             }
         } catch (e) {
             Logger.warn('Error loading subscribed channels:', e);
@@ -469,8 +353,13 @@ class RelayManager {
      */
     saveSubscribedChannels() {
         try {
+            // Save public/password channels
             const channels = Array.from(this.subscribedChannels);
             localStorage.setItem(CONFIG.storageKey + '_channels', JSON.stringify(channels));
+            
+            // Save native channels
+            const nativeChannels = Array.from(this.subscribedNativeChannels);
+            localStorage.setItem(CONFIG.storageKey + '_native_channels', JSON.stringify(nativeChannels));
         } catch (e) {
             Logger.warn('Error saving subscribed channels:', e);
         }
@@ -491,6 +380,7 @@ class RelayManager {
         
         try {
             const channelTag = calculateChannelTag(streamId);
+            Logger.debug('Registering public channel tag:', channelTag);
             
             // Create registration payload for the channel
             const payload = createRegistrationPayload(
@@ -552,8 +442,6 @@ class RelayManager {
         }
         
         try {
-            Logger.debug('Calculating PoW for channel:', streamId.slice(0, 20) + '...');
-            
             // Create payload with PoW
             const payload = await createChannelNotificationPayload(
                 streamId,
@@ -563,11 +451,109 @@ class RelayManager {
             // Publish to stream
             await streamrController.client.publish(CONFIG.pushStreamId, payload);
             
-            Logger.debug('Channel wake signal sent to tag:', payload.tag);
+            Logger.debug('Public channel wake signal sent, tag:', payload.tag);
             return true;
             
         } catch (error) {
             Logger.error('Error sending channel wake signal:', error);
+            return false;
+        }
+    }
+    
+    // ================================================
+    // NATIVE CHANNEL SUBSCRIPTION
+    // ================================================
+    
+    /**
+     * Enable notifications for a native channel.
+     * Native channels use per-channel tags for granular notification control.
+     * 
+     * @param {string} streamId - Channel stream ID
+     * @returns {Promise<boolean>}
+     */
+    async subscribeToNativeChannel(streamId) {
+        if (!this.initialized || !this.pushSubscription) {
+            Logger.error('Need to enable notifications first (subscribe())');
+            return false;
+        }
+        
+        try {
+            const channelTag = calculateNativeChannelTag(streamId);
+            Logger.debug('Registering native channel tag:', channelTag);
+            
+            // Create registration payload for the native channel
+            const payload = createRegistrationPayload(
+                channelTag,
+                this.pushSubscription
+            );
+            
+            // Publish to push stream
+            await streamrController.client.publish(CONFIG.pushStreamId, payload);
+            
+            // Save locally
+            this.subscribedNativeChannels.add(streamId);
+            this.saveSubscribedChannels();
+            
+            Logger.info('Notifications enabled for native channel:', streamId.slice(0, 20) + '...');
+            return true;
+            
+        } catch (error) {
+            Logger.error('Error subscribing to native channel:', error);
+            return false;
+        }
+    }
+    
+    /**
+     * Disable notifications for a native channel.
+     * 
+     * @param {string} streamId - Channel stream ID
+     * @returns {boolean}
+     */
+    unsubscribeFromNativeChannel(streamId) {
+        this.subscribedNativeChannels.delete(streamId);
+        this.saveSubscribedChannels();
+        Logger.info('Notifications disabled for native channel:', streamId.slice(0, 20) + '...');
+        return true;
+    }
+    
+    /**
+     * Check if notifications are active for a native channel.
+     * 
+     * @param {string} streamId - Channel stream ID
+     * @returns {boolean}
+     */
+    isNativeChannelSubscribed(streamId) {
+        return this.subscribedNativeChannels.has(streamId);
+    }
+    
+    /**
+     * Send wake signal for a native channel.
+     * Used when someone sends a message in a native/DM channel.
+     * 
+     * @param {string} streamId - Channel stream ID
+     * @returns {Promise<boolean>}
+     */
+    async sendNativeChannelWakeSignal(streamId) {
+        if (!this.initialized) {
+            Logger.debug('RelayManager not initialized - ignoring native channel wake signal');
+            return false;
+        }
+        
+        try {
+            // Create payload with PoW
+            const payload = await createNativeChannelNotificationPayload(
+                streamId,
+                CONFIG.powDifficulty
+            );
+            
+            // Publish to stream
+            await streamrController.client.publish(CONFIG.pushStreamId, payload);
+            
+            Logger.debug('Native channel wake signal sent, tag:', payload.tag);
+            return true;
+            
+        } catch (error) {
+            Logger.error('Error sending native channel wake signal:', error);
             return false;
         }
     }
@@ -631,8 +617,8 @@ class RelayManager {
             initialized: this.initialized,
             enabled: this.enabled,
             hasSubscription: !!this.pushSubscription,
-            myTag: this.myTag,
             subscribedChannels: this.subscribedChannels.size,
+            subscribedNativeChannels: this.subscribedNativeChannels.size,
             permission: typeof Notification !== 'undefined' 
                 ? Notification.permission 
                 : 'unsupported'
