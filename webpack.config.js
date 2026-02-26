@@ -6,6 +6,8 @@ module.exports = {
     vendor: './src/streamr-bundle.js',
     // App bundle: All application modules
     app: './src/js/app.js',
+    // Crypto Worker bundle: Offloads heavy crypto operations
+    'crypto.worker': './src/js/workers/cryptoWorker.js',
   },
   output: {
     filename: 'js/[name].bundle.js',
@@ -14,7 +16,7 @@ module.exports = {
       name: '[name]Bundle',
       type: 'umd',
     },
-    globalObject: 'this',
+    globalObject: 'self', // Important for worker compatibility
   },
   resolve: {
     // Use browser exports from packages (important for @streamr/sdk)
