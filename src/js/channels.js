@@ -105,6 +105,12 @@ class ChannelManager {
         this.pendingMessages = new Map(); // streamId -> [messages]
         this.MAX_RETRIES = 3;
         this.RETRY_DELAY = 2000; // 2 seconds
+        
+        // OPTIMIZATION: Batch message verification for history loading
+        // Messages arriving within BATCH_WINDOW_MS are batched and verified in parallel
+        this.pendingVerifications = new Map(); // streamId -> { messages: [], timer: null }
+        this.BATCH_WINDOW_MS = 100; // Window to collect messages for batch processing
+        this.BATCH_MAX_SIZE = 50; // Maximum batch size before flushing
     }
 
     /**
@@ -1298,6 +1304,7 @@ class ChannelManager {
 
     /**
      * Handle text message (real-time and historical)
+     * Uses batch processing for historical messages to improve performance
      * @param {string} streamId - Stream ID
      * @param {Object} data - Message data
      */
@@ -1378,19 +1385,23 @@ class ChannelManager {
             Logger.debug('Skipping own recent message (already added locally):', data.id);
             return;
         }
+        
+        // Add channelId if missing (for backwards compatibility)
+        if (!data.channelId) {
+            data.channelId = streamId;
+        }
 
-        // Verify message signature
+        // OPTIMIZATION: Use batch processing for historical messages
+        // Real-time messages are processed immediately for best UX
+        if (!isRecentMessage) {
+            this.queueMessageForBatchVerification(streamId, data, channel);
+            return;
+        }
+
+        // Real-time message: verify immediately
         try {
-            // Add channelId if missing (for backwards compatibility)
-            if (!data.channelId) {
-                data.channelId = streamId;
-            }
-            
-            // Pass streamId for session key verification
-            // Skip timestamp check for historical messages (older than 30 seconds)
-            // to allow legitimate old messages from history to be verified
             const verification = await identityManager.verifyMessage(data, streamId, {
-                skipTimestampCheck: !isRecentMessage
+                skipTimestampCheck: false
             });
             data.verified = verification;
             
@@ -1422,12 +1433,112 @@ class ChannelManager {
         
         // Sort to maintain chronological order (in case of out-of-order delivery)
         this.sortMessagesByTimestamp(channel);
-        
-        // NOTE: No saveChannels() - messages are not persisted, only in RAM
-        // They will be reloaded from LogStore on next session
 
         // Notify handlers
         this.notifyHandlers('message', { streamId, message: data });
+    }
+    
+    /**
+     * Queue a historical message for batch verification
+     * Messages are batched and verified in parallel for better performance
+     * @private
+     */
+    queueMessageForBatchVerification(streamId, data, channel) {
+        // Get or create batch queue for this stream
+        if (!this.pendingVerifications.has(streamId)) {
+            this.pendingVerifications.set(streamId, { messages: [], timer: null });
+        }
+        
+        const batch = this.pendingVerifications.get(streamId);
+        batch.messages.push({ data, channel });
+        
+        // Flush immediately if batch is full
+        if (batch.messages.length >= this.BATCH_MAX_SIZE) {
+            if (batch.timer) {
+                clearTimeout(batch.timer);
+                batch.timer = null;
+            }
+            this.flushBatchVerification(streamId);
+            return;
+        }
+        
+        // Set or reset timer for batch flush
+        if (batch.timer) {
+            clearTimeout(batch.timer);
+        }
+        batch.timer = setTimeout(() => {
+            this.flushBatchVerification(streamId);
+        }, this.BATCH_WINDOW_MS);
+    }
+    
+    /**
+     * Flush pending batch verifications for a stream
+     * @private
+     */
+    async flushBatchVerification(streamId) {
+        const batch = this.pendingVerifications.get(streamId);
+        if (!batch || batch.messages.length === 0) {
+            return;
+        }
+        
+        // Clear the batch
+        const messagesToProcess = batch.messages;
+        batch.messages = [];
+        batch.timer = null;
+        
+        Logger.debug(`Batch verifying ${messagesToProcess.length} historical messages for ${streamId.slice(-20)}`);
+        
+        // Verify all messages in parallel using Promise.all
+        const verificationPromises = messagesToProcess.map(async ({ data, channel }) => {
+            try {
+                const verification = await identityManager.verifyMessage(data, streamId, {
+                    skipTimestampCheck: true
+                });
+                data.verified = verification;
+            } catch (error) {
+                data.verified = { valid: false, error: error.message, trustLevel: -1 };
+            }
+            return { data, channel };
+        });
+        
+        const verifiedMessages = await Promise.all(verificationPromises);
+        
+        // Add all verified messages to channel
+        let addedCount = 0;
+        for (const { data, channel } of verifiedMessages) {
+            // Double-check channel still exists and message not already added
+            if (!channel || !this.channels.has(streamId)) {
+                continue;
+            }
+            if (channel.messages.some(m => m.id === data.id)) {
+                continue;
+            }
+            
+            channel.messages.push(data);
+            addedCount++;
+            
+            // Update oldest timestamp
+            if (!channel.oldestTimestamp || data.timestamp < channel.oldestTimestamp) {
+                channel.oldestTimestamp = data.timestamp;
+            }
+        }
+        
+        if (addedCount > 0) {
+            // Sort messages once after adding all
+            const channel = this.channels.get(streamId);
+            if (channel) {
+                this.sortMessagesByTimestamp(channel);
+            }
+            
+            // Notify handlers with batch completion event
+            this.notifyHandlers('history_batch_loaded', { 
+                streamId, 
+                loaded: addedCount,
+                total: messagesToProcess.length
+            });
+            
+            Logger.debug(`Batch verification complete: ${addedCount}/${messagesToProcess.length} messages added`);
+        }
     }
 
     /**
@@ -1674,34 +1785,43 @@ class ChannelManager {
             );
             
             if (result.messages.length > 0) {
-                // Process and verify each message
-                for (const msg of result.messages) {
-                    // Skip if already exists
-                    if (channel.messages.some(m => m.id === msg.id)) {
-                        continue;
-                    }
-                    
-                    // Verify signature (skip timestamp check for historical)
-                    try {
-                        if (!msg.channelId) msg.channelId = messageStreamId;
-                        const verification = await identityManager.verifyMessage(msg, messageStreamId, {
-                            skipTimestampCheck: true
-                        });
-                        msg.verified = verification;
-                    } catch (error) {
-                        msg.verified = { valid: false, error: error.message, trustLevel: -1 };
-                    }
-                    
-                    channel.messages.push(msg);
-                    
-                    // Update oldest timestamp
-                    if (!channel.oldestTimestamp || msg.timestamp < channel.oldestTimestamp) {
-                        channel.oldestTimestamp = msg.timestamp;
-                    }
-                }
+                // Filter out duplicates first
+                const newMessages = result.messages.filter(msg => 
+                    !channel.messages.some(m => m.id === msg.id)
+                );
                 
-                // Sort messages
-                this.sortMessagesByTimestamp(channel);
+                if (newMessages.length > 0) {
+                    // OPTIMIZATION: Verify all messages in parallel using worker pool
+                    // This is much faster than sequential verification
+                    const verificationPromises = newMessages.map(async (msg) => {
+                        try {
+                            if (!msg.channelId) msg.channelId = messageStreamId;
+                            const verification = await identityManager.verifyMessage(msg, messageStreamId, {
+                                skipTimestampCheck: true
+                            });
+                            msg.verified = verification;
+                        } catch (error) {
+                            msg.verified = { valid: false, error: error.message, trustLevel: -1 };
+                        }
+                        return msg;
+                    });
+                    
+                    // Wait for all verifications to complete in parallel
+                    const verifiedMessages = await Promise.all(verificationPromises);
+                    
+                    // Add all verified messages to channel
+                    for (const msg of verifiedMessages) {
+                        channel.messages.push(msg);
+                        
+                        // Update oldest timestamp
+                        if (!channel.oldestTimestamp || msg.timestamp < channel.oldestTimestamp) {
+                            channel.oldestTimestamp = msg.timestamp;
+                        }
+                    }
+                    
+                    // Sort messages
+                    this.sortMessagesByTimestamp(channel);
+                }
             }
             
             channel.hasMoreHistory = result.hasMore;

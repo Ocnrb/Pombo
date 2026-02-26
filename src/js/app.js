@@ -1960,6 +1960,15 @@ class App {
                         Logger.debug(`History loaded: ${data.loaded} messages, hasMore: ${data.hasMore}`);
                     }
                 }
+            } else if (event === 'history_batch_loaded') {
+                // Batch of historical messages verified and added - re-render if current channel
+                if (data.streamId === currentStreamId) {
+                    const channel = channelManager.getCurrentChannel();
+                    if (channel) {
+                        uiController.renderMessages(channel.messages);
+                        Logger.debug(`History batch loaded: ${data.loaded}/${data.total} messages`);
+                    }
+                }
             }
         });
         

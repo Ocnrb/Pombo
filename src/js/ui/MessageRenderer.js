@@ -184,8 +184,10 @@ class MessageRenderer {
             if (channel) {
                 this.deps.requestImage?.(channel.streamId, msg.imageId, channel.password);
             }
+            // Include channel ID in placeholder to verify channel context when image arrives
+            const channelId = channel?.streamId || '';
             return `
-                <div data-image-id="${escapeAttr(msg.imageId)}" class="bg-[#1a1a1a] rounded-lg p-4 max-w-xs">
+                <div data-image-id="${escapeAttr(msg.imageId)}" data-channel-id="${escapeAttr(channelId)}" class="bg-[#1a1a1a] rounded-lg p-4 max-w-xs">
                     <div class="flex items-center gap-2">
                         <div class="animate-spin w-4 h-4 border-2 border-gray-600 border-t-white rounded-full"></div>
                         <span class="text-gray-500 text-sm">Loading image...</span>

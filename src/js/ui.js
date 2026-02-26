@@ -2100,6 +2100,14 @@ class UIController {
         mediaController.onImageReceived((imageId, base64Data) => {
             const placeholder = document.querySelector(`[data-image-id="${imageId}"]`);
             if (placeholder) {
+                // CRITICAL: Verify channel context to prevent cross-channel image leakage
+                const placeholderChannelId = placeholder.getAttribute('data-channel-id');
+                const currentChannel = this.getActiveChannel();
+                if (placeholderChannelId && currentChannel && placeholderChannelId !== currentChannel.streamId) {
+                    Logger.debug('Image received for different channel, skipping DOM update:', imageId);
+                    return;
+                }
+                
                 // Register media for safe onclick handling
                 const mediaId = this.registerMedia(base64Data, 'image');
                 if (!mediaId) return; // Invalid URL rejected
