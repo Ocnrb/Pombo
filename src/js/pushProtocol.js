@@ -11,6 +11,27 @@ const getEthers = () => {
 };
 
 // ================================================
+// K-ANONYMITY CONFIGURATION
+// ================================================
+// TAG_BYTES controls the size of notification tags.
+// Smaller = more collisions = better K-anonymity with few users.
+// Larger = fewer false positives but requires more users for privacy.
+//
+// Mathematical relationship:
+//   K ≈ total_users / (256 ^ TAG_BYTES)
+//
+// Examples with 1,000 users:
+//   TAG_BYTES=1 (256 tags)    → K ≈ 4   (acceptable)
+//   TAG_BYTES=2 (65,536 tags) → K ≈ 0.02 (no privacy!)
+//   TAG_BYTES=4 (4.29B tags)  → K ≈ 0    (no privacy!)
+//
+// Start small, increase as user base grows.
+// Rule: Increase TAG_BYTES only when K > 100 consistently.
+// ================================================
+const TAG_BYTES = 1; // 256 possible tags - good K-anonymity even with <10k users
+const TAG_HEX_CHARS = 2 + (TAG_BYTES * 2); // "0x" + hex chars
+
+// ================================================
 // TAG CALCULATION
 // ================================================
 
@@ -19,7 +40,7 @@ const getEthers = () => {
  * Users opt-in to receive notifications for these channels.
  * 
  * @param {string} streamId - Channel stream ID (ex: 0x.../channelname-1)
- * @returns {string} 10-character tag (0x + 8 hex chars)
+ * @returns {string} 4-character tag (0x + 2 hex chars) for K-anonymity
  */
 export function calculateChannelTag(streamId) {
     if (!streamId) {
@@ -32,8 +53,9 @@ export function calculateChannelTag(streamId) {
     const data = `channel:${streamId.toLowerCase()}`;
     const hash = eth.keccak256(eth.toUtf8Bytes(data));
     
-    // Get first 4 bytes
-    return hash.slice(0, 10);
+    // Truncate to TAG_BYTES for K-anonymity
+    // With TAG_BYTES=1: 256 possible tags
+    return hash.slice(0, TAG_HEX_CHARS);
 }
 
 /**
@@ -42,7 +64,7 @@ export function calculateChannelTag(streamId) {
  * Privacy is maintained because only channel members know the streamId.
  * 
  * @param {string} streamId - Channel stream ID
- * @returns {string} 10-character tag (0x + 8 hex chars)
+ * @returns {string} 4-character tag (0x + 2 hex chars) for K-anonymity
  */
 export function calculateNativeChannelTag(streamId) {
     if (!streamId) {
@@ -55,8 +77,9 @@ export function calculateNativeChannelTag(streamId) {
     const data = `native:${streamId.toLowerCase()}`;
     const hash = eth.keccak256(eth.toUtf8Bytes(data));
     
-    // Get first 4 bytes
-    return hash.slice(0, 10);
+    // Truncate to TAG_BYTES for K-anonymity
+    // With TAG_BYTES=1: 256 possible tags  
+    return hash.slice(0, TAG_HEX_CHARS);
 }
 
 // ================================================
