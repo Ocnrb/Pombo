@@ -40,7 +40,7 @@ class ExploreUI {
         return `
             <div class="explore-view flex flex-col h-full bg-[#161616]">
                 <!-- Filters Section -->
-                <div class="px-5 pt-3 pb-3 space-y-3">
+                <div class="px-4 pt-3 pb-3 space-y-3">
                     <!-- Search + Language Filter -->
                     <div class="flex gap-3">
                         <div class="flex-1 relative">
@@ -99,10 +99,10 @@ class ExploreUI {
                 </div>
 
                 <!-- Subtle separator -->
-                <div class="mx-5 border-t border-[#333]"></div>
+                <div class="mx-4 border-t border-[#333]"></div>
 
                 <!-- Channel List -->
-                <div id="explore-channels-list" class="flex-1 overflow-y-auto px-5 py-3 space-y-2">
+                <div id="explore-channels-list" class="flex-1 overflow-y-auto px-4 py-3 space-y-2">
                     <div class="flex flex-col items-center justify-center py-12 text-white/40">
                         <div class="spinner mb-3" style="width: 28px; height: 28px;"></div>
                         <p class="text-sm">Loading channels...</p>
