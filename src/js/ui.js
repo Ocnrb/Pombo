@@ -1059,8 +1059,9 @@ class UIController {
             this.elements.currentChannelInfo.parentElement.classList.remove('hidden');
             this.elements.messageInputContainer.classList.remove('hidden');
             
-            // Restore padding (removed in Explore view)
+            // Restore padding (removed in Explore view) and clear content immediately
             this.elements.messagesArea?.classList.add('p-4');
+            this.elements.messagesArea.innerHTML = '';
             
             // Hide explore type tabs
             this.elements.exploreTypeTabs?.classList.add('hidden');
@@ -1423,8 +1424,9 @@ class UIController {
             this.elements.currentChannelInfo.parentElement.classList.remove('hidden');
             this.elements.messageInputContainer.classList.remove('hidden');
             
-            // Restore padding (removed in Explore view)
+            // Restore padding (removed in Explore view) and clear content immediately
             this.elements.messagesArea?.classList.add('p-4');
+            this.elements.messagesArea.innerHTML = '';
             
             this.elements.exploreTypeTabs?.classList.add('hidden');
             this.elements.chatHeaderRight?.classList.remove('hidden');
