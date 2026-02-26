@@ -90,12 +90,10 @@ body {
 
 .own-message {
     margin-left: auto;
-    margin-right: 4px; /* Spacing from right edge on mobile */
 }
 
 .other-message {
     margin-right: auto;
-    margin-left: 4px; /* Spacing from left edge */
 }
 
 .message-bubble {
@@ -190,7 +188,7 @@ body {
 /* Desktop: all messages aligned to left, same style as received */
 @media (min-width: 768px) {
     .own-message {
-        margin-left: 4px; /* Spacing from sidebar edge */
+        margin-left: 0;
         margin-right: auto;
         flex-direction: row;
     }
