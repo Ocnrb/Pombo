@@ -31,8 +31,8 @@ const STREAM_CONFIG = {
     STORAGE_PROVIDERS: {
         STREAMR: {
             id: 'streamr',
-            name: 'Streamr Germany',
-            description: 'Official Streamr storage with configurable retention',
+            name: 'Streamr Official',
+            description: 'Official Streamr storage cluster with configurable retention',
             supportsTTL: true,
             defaultDays: 180,
             // Node address set dynamically from SDK
@@ -157,8 +157,8 @@ class StreamrController {
             });
             
             // Set storage node address from SDK (prefer Streamr's official node)
-            if (window.STREAMR_STORAGE_NODE_GERMANY) {
-                STREAM_CONFIG.NODE_ADDRESS = window.STREAMR_STORAGE_NODE_GERMANY;
+            if (window.STREAMR_STORAGE_NODE_ADDRESS) {
+                STREAM_CONFIG.NODE_ADDRESS = window.STREAMR_STORAGE_NODE_ADDRESS;
                 Logger.debug('Using Streamr official storage node');
             } else {
                 STREAM_CONFIG.NODE_ADDRESS = STREAM_CONFIG.LOGSTORE_NODE;

@@ -6,7 +6,7 @@
 // CSP-safe polyfills (must be first!)
 import './polyfills.js';
 
-import { StreamrClient, StreamPermission, STREAMR_STORAGE_NODE_GERMANY } from '@streamr/sdk';
+import { StreamrClient, StreamPermission, STREAMR_STORAGE_NODE_ADDRESS } from '@streamr/sdk';
 import * as ethers from 'ethers';
 import QRCode from 'qrcode';
 
@@ -14,9 +14,9 @@ import QRCode from 'qrcode';
 if (typeof window !== 'undefined') {
     window.StreamrClient = StreamrClient;
     window.StreamPermission = StreamPermission;
-    window.STREAMR_STORAGE_NODE_GERMANY = STREAMR_STORAGE_NODE_GERMANY;
+    window.STREAMR_STORAGE_NODE_ADDRESS = STREAMR_STORAGE_NODE_ADDRESS;
     window.ethers = ethers;
     window.QRCode = QRCode;
 }
 
-export { StreamrClient, StreamPermission, STREAMR_STORAGE_NODE_GERMANY, ethers, QRCode };
+export { StreamrClient, StreamPermission, STREAMR_STORAGE_NODE_ADDRESS, ethers, QRCode };
