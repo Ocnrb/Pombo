@@ -67,6 +67,173 @@ describe('secureStorage', () => {
         });
     });
 
+    // ==================== ACCOUNT MODE (with wallet) ====================
+    describe('init (Account Mode)', () => {
+        let mockSigner;
+        let mockStorageKey;
+
+        beforeEach(() => {
+            // Reset state
+            secureStorage.isGuestMode = false;
+            secureStorage.isUnlocked = false;
+            secureStorage.storageKey = null;
+            secureStorage.cache = null;
+
+            // Mock CryptoKey for storage key
+            mockStorageKey = { type: 'secret', algorithm: { name: 'AES-GCM' } };
+
+            // Mock signer with signMessage
+            mockSigner = {
+                signMessage: vi.fn().mockResolvedValue('0xmocksignature1234567890')
+            };
+
+            // Mock crypto.subtle for key derivation
+            vi.spyOn(crypto.subtle, 'importKey').mockResolvedValue({});
+            vi.spyOn(crypto.subtle, 'deriveKey').mockResolvedValue(mockStorageKey);
+
+            // Mock localStorage
+            localStorage.clear();
+        });
+
+        afterEach(() => {
+            vi.restoreAllMocks();
+        });
+
+        it('should initialize account mode successfully', async () => {
+            const address = '0x1234567890abcdef1234567890abcdef12345678';
+            
+            const result = await secureStorage.init(mockSigner, address);
+            
+            expect(result).toBe(true);
+            expect(secureStorage.isUnlocked).toBe(true);
+        });
+
+        it('should normalize address to lowercase', async () => {
+            const address = '0xABCDEF1234567890ABCDEF1234567890ABCDEF12';
+            
+            await secureStorage.init(mockSigner, address);
+            
+            expect(secureStorage.address).toBe(address.toLowerCase());
+        });
+
+        it('should call signer.signMessage', async () => {
+            const address = '0x1234567890abcdef1234567890abcdef12345678';
+            
+            await secureStorage.init(mockSigner, address);
+            
+            expect(mockSigner.signMessage).toHaveBeenCalledTimes(1);
+        });
+
+        it('should call crypto.subtle.deriveKey for PBKDF2', async () => {
+            const address = '0x1234567890abcdef1234567890abcdef12345678';
+            
+            await secureStorage.init(mockSigner, address);
+            
+            expect(crypto.subtle.deriveKey).toHaveBeenCalled();
+        });
+
+        it('should store the derived storage key', async () => {
+            const address = '0x1234567890abcdef1234567890abcdef12345678';
+            
+            await secureStorage.init(mockSigner, address);
+            
+            expect(secureStorage.storageKey).toBe(mockStorageKey);
+        });
+
+        it('should initialize cache after loading', async () => {
+            const address = '0x1234567890abcdef1234567890abcdef12345678';
+            
+            await secureStorage.init(mockSigner, address);
+            
+            // Should have initialized cache (loadFromStorage creates empty on failure)
+            expect(secureStorage.cache).toBeDefined();
+        });
+
+        it('should throw error if signer fails', async () => {
+            const address = '0x1234567890abcdef1234567890abcdef12345678';
+            mockSigner.signMessage.mockRejectedValue(new Error('User rejected'));
+            
+            await expect(secureStorage.init(mockSigner, address))
+                .rejects.toThrow('User rejected');
+        });
+
+        it('should throw error if key derivation fails', async () => {
+            const address = '0x1234567890abcdef1234567890abcdef12345678';
+            vi.spyOn(crypto.subtle, 'deriveKey').mockRejectedValue(new Error('Crypto error'));
+            
+            await expect(secureStorage.init(mockSigner, address))
+                .rejects.toThrow('Crypto error');
+        });
+
+        it('should not be in guest mode (initialized as non-guest)', async () => {
+            const address = '0x1234567890abcdef1234567890abcdef12345678';
+            
+            await secureStorage.init(mockSigner, address);
+            
+            // init() doesn't change isGuestMode, so it stays false (default)
+            expect(secureStorage.isGuestMode).toBe(false);
+        });
+
+        it('should have a storage key (unlike guest mode)', async () => {
+            const address = '0x1234567890abcdef1234567890abcdef12345678';
+            
+            await secureStorage.init(mockSigner, address);
+            
+            expect(secureStorage.storageKey).not.toBeNull();
+        });
+    });
+
+    describe('deriveStorageKey', () => {
+        let mockSigner;
+
+        beforeEach(() => {
+            mockSigner = {
+                signMessage: vi.fn().mockResolvedValue('0xsignature123')
+            };
+            vi.spyOn(crypto.subtle, 'importKey').mockResolvedValue({});
+            vi.spyOn(crypto.subtle, 'deriveKey').mockResolvedValue({ type: 'secret' });
+        });
+
+        afterEach(() => {
+            vi.restoreAllMocks();
+        });
+
+        it('should call signMessage on signer', async () => {
+            const address = '0xabc123';
+            
+            await secureStorage.deriveStorageKey(mockSigner, address);
+            
+            expect(mockSigner.signMessage).toHaveBeenCalled();
+        });
+
+        it('should include address in sign message', async () => {
+            const address = '0xabc123';
+            
+            await secureStorage.deriveStorageKey(mockSigner, address);
+            
+            const signedMessage = mockSigner.signMessage.mock.calls[0][0];
+            expect(signedMessage).toContain(address.toLowerCase());
+        });
+
+        it('should call crypto.subtle.importKey', async () => {
+            await secureStorage.deriveStorageKey(mockSigner, '0xtest');
+            
+            expect(crypto.subtle.importKey).toHaveBeenCalled();
+        });
+
+        it('should call crypto.subtle.deriveKey', async () => {
+            await secureStorage.deriveStorageKey(mockSigner, '0xtest');
+            
+            expect(crypto.subtle.deriveKey).toHaveBeenCalled();
+        });
+
+        it('should return derived key', async () => {
+            const result = await secureStorage.deriveStorageKey(mockSigner, '0xtest');
+            
+            expect(result).toEqual({ type: 'secret' });
+        });
+    });
+
     describe('Data Accessors (Guest Mode)', () => {
         beforeEach(() => {
             // Initialize guest mode for testing data accessors
