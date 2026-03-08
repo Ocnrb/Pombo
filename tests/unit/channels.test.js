@@ -61,6 +61,7 @@ vi.mock('../../src/js/secureStorage.js', () => ({
         isStorageUnlocked: vi.fn().mockReturnValue(true),
         getChannels: vi.fn().mockReturnValue([]),
         saveChannels: vi.fn(),
+        setChannels: vi.fn(),
         getChannel: vi.fn(),
         setChannel: vi.fn()
     }
@@ -786,6 +787,163 @@ describe('ChannelManager', () => {
             const result = await channelManager.getPublicChannels();
             
             expect(result).toEqual([]);
+        });
+    });
+
+    describe('saveChannels()', () => {
+        it('should save channels to secure storage', async () => {
+            secureStorage.isStorageUnlocked.mockReturnValue(true);
+            channelManager.channels.set('stream1', {
+                messageStreamId: 'stream1',
+                ephemeralStreamId: 'stream1-ephemeral',
+                name: 'Test Channel',
+                type: 'public',
+                createdAt: Date.now(),
+                createdBy: '0xowner'
+            });
+            
+            await channelManager.saveChannels();
+            
+            expect(secureStorage.setChannels).toHaveBeenCalled();
+        });
+        
+        it('should not save when storage is locked', async () => {
+            secureStorage.isStorageUnlocked.mockReturnValue(false);
+            channelManager.channels.set('stream1', { name: 'Test' });
+            
+            await channelManager.saveChannels();
+            
+            expect(secureStorage.setChannels).not.toHaveBeenCalled();
+        });
+        
+        it('should strip messages from saved data', async () => {
+            secureStorage.isStorageUnlocked.mockReturnValue(true);
+            channelManager.channels.set('stream1', {
+                messageStreamId: 'stream1',
+                name: 'Test',
+                type: 'public',
+                messages: [{ id: 1, text: 'Hello' }] // Should be stripped
+            });
+            
+            await channelManager.saveChannels();
+            
+            const savedData = secureStorage.setChannels.mock.calls[0][0];
+            expect(savedData[0].messages).toBeUndefined();
+        });
+        
+        it('should strip reactions from saved data', async () => {
+            secureStorage.isStorageUnlocked.mockReturnValue(true);
+            channelManager.channels.set('stream1', {
+                messageStreamId: 'stream1',
+                name: 'Test',
+                type: 'public',
+                reactions: { 'msg1': { '👍': ['0x1'] } } // Should be stripped
+            });
+            
+            await channelManager.saveChannels();
+            
+            const savedData = secureStorage.setChannels.mock.calls[0][0];
+            expect(savedData[0].reactions).toBeUndefined();
+        });
+        
+        it('should preserve channel metadata', async () => {
+            secureStorage.isStorageUnlocked.mockReturnValue(true);
+            channelManager.channels.set('stream1', {
+                messageStreamId: 'stream1',
+                ephemeralStreamId: 'stream1-eph',
+                name: 'My Channel',
+                type: 'native',
+                createdAt: 12345,
+                createdBy: '0xowner',
+                password: 'secret',
+                members: ['0x1', '0x2'],
+                exposure: 'visible',
+                description: 'A test channel',
+                language: 'en',
+                category: 'tech',
+                readOnly: true
+            });
+            
+            await channelManager.saveChannels();
+            
+            const savedData = secureStorage.setChannels.mock.calls[0][0][0];
+            expect(savedData.name).toBe('My Channel');
+            expect(savedData.type).toBe('native');
+            expect(savedData.password).toBe('secret');
+            expect(savedData.members).toEqual(['0x1', '0x2']);
+            expect(savedData.exposure).toBe('visible');
+            expect(savedData.readOnly).toBe(true);
+        });
+    });
+
+    describe('getCachedDeletePermission()', () => {
+        beforeEach(() => {
+            authManager.getAddress.mockReturnValue('0xmyaddress');
+        });
+        
+        it('should return invalid when no cache exists', () => {
+            channelManager.channels.set('stream1', { streamId: 'stream1' });
+            
+            const result = channelManager.getCachedDeletePermission('stream1');
+            
+            expect(result.valid).toBe(false);
+        });
+        
+        it('should return valid with cached permission for current wallet', () => {
+            channelManager.channels.set('stream1', {
+                streamId: 'stream1',
+                _deletePermCache: {
+                    canDelete: true,
+                    address: '0xmyaddress'
+                }
+            });
+            
+            const result = channelManager.getCachedDeletePermission('stream1');
+            
+            expect(result.valid).toBe(true);
+            expect(result.canDelete).toBe(true);
+        });
+        
+        it('should return invalid when wallet changed', () => {
+            channelManager.channels.set('stream1', {
+                streamId: 'stream1',
+                _deletePermCache: {
+                    canDelete: true,
+                    address: '0xotheraddress' // Different from current
+                }
+            });
+            
+            const result = channelManager.getCachedDeletePermission('stream1');
+            
+            expect(result.valid).toBe(false);
+        });
+        
+        it('should handle case-insensitive address comparison', () => {
+            authManager.getAddress.mockReturnValue('0xMyAddress');
+            channelManager.channels.set('stream1', {
+                streamId: 'stream1',
+                _deletePermCache: {
+                    canDelete: false,
+                    address: '0xmyaddress'
+                }
+            });
+            
+            const result = channelManager.getCachedDeletePermission('stream1');
+            
+            expect(result.valid).toBe(true);
+            expect(result.canDelete).toBe(false);
+        });
+        
+        it('should return invalid for non-existent channel', () => {
+            const result = channelManager.getCachedDeletePermission('non-existent');
+            
+            expect(result.valid).toBe(false);
+        });
+    });
+
+    describe('pendingMessages tracking', () => {
+        it('should have pendingMessages map', () => {
+            expect(channelManager.pendingMessages).toBeInstanceOf(Map);
         });
     });
 });

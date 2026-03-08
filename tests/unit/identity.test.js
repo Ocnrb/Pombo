@@ -492,4 +492,80 @@ describe('IdentityManager', () => {
             expect(secureStorage.setTrustedContacts).not.toHaveBeenCalled();
         });
     });
+
+    describe('saveUsername()', () => {
+        it('should save username to storage', async () => {
+            identityManager.username = 'NewUser';
+            await identityManager.saveUsername();
+            expect(secureStorage.setUsername).toHaveBeenCalledWith('NewUser');
+        });
+        
+        it('should not save if storage is locked', async () => {
+            secureStorage.isStorageUnlocked.mockReturnValue(false);
+            identityManager.username = 'Locked';
+            await identityManager.saveUsername();
+            expect(secureStorage.setUsername).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('getDisplayName()', () => {
+        it('should return truncated address for unknown', async () => {
+            const name = await identityManager.getDisplayName('0x1234567890abcdef1234567890abcdef12345678');
+            expect(name).toContain('0x1234');
+            expect(name.length).toBeLessThan(15);
+        });
+        
+        it('should return contact nickname if trusted', async () => {
+            await identityManager.addTrustedContact('0xKNOWN', 'Alice');
+            const name = await identityManager.getDisplayName('0xKNOWN');
+            expect(name).toBe('Alice');
+        });
+    });
+
+    describe('getIdentityInfo()', () => {
+        it('should return default info for unknown address', async () => {
+            const info = await identityManager.getIdentityInfo('0xUNKNOWN123');
+            expect(info.address).toBe('0xUNKNOWN123');
+            expect(info.trustLevel).toBe(0);
+            expect(info.trustInfo).toBeDefined();
+        });
+        
+        it('should include ENS name if available', async () => {
+            identityManager.ensCache.set('0xens', { 
+                name: 'test.eth',
+                timestamp: Date.now()
+            });
+            
+            const info = await identityManager.getIdentityInfo('0xens');
+            expect(info.ensName).toBe('test.eth');
+        });
+        
+        it('should include trusted contact info', async () => {
+            await identityManager.addTrustedContact('0xTRUSTED', 'TrustedUser');
+            const info = await identityManager.getIdentityInfo('0xTRUSTED');
+            
+            expect(info.trustLevel).toBe(2);
+            expect(info.displayName).toBe('TrustedUser');
+        });
+        
+        it('should use verification result if provided', async () => {
+            const verification = { valid: true, signer: '0xSIGNER' };
+            const info = await identityManager.getIdentityInfo('0xADDR', verification);
+            expect(info).toBeDefined();
+        });
+    });
+
+    describe('init()', () => {
+        it('should load username and contacts on init', async () => {
+            secureStorage.getUsername.mockReturnValue('InitUser');
+            secureStorage.getTrustedContacts.mockReturnValue({
+                '0xinit': { nickname: 'Init' }
+            });
+            
+            await identityManager.init();
+            
+            expect(identityManager.username).toBe('InitUser');
+            expect(identityManager.trustedContacts.size).toBe(1);
+        });
+    });
 });

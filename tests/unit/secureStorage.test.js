@@ -233,4 +233,566 @@ describe('secureStorage', () => {
             expect(secureStorage.PBKDF2_ITERATIONS).toBeGreaterThanOrEqual(100000);
         });
     });
+
+    describe('Channel Last Access', () => {
+        beforeEach(() => {
+            secureStorage.initAsGuest('0x1234567890abcdef1234567890abcdef12345678');
+        });
+
+        describe('getChannelLastAccess()', () => {
+            it('should return null for never accessed channel', () => {
+                expect(secureStorage.getChannelLastAccess('unknown-channel')).toBeNull();
+            });
+
+            it('should return timestamp after setting access', async () => {
+                const timestamp = Date.now();
+                await secureStorage.setChannelLastAccess('channel-1', timestamp);
+                expect(secureStorage.getChannelLastAccess('channel-1')).toBe(timestamp);
+            });
+
+            it('should return null when storage is locked', () => {
+                secureStorage.isUnlocked = false;
+                expect(secureStorage.getChannelLastAccess('channel-1')).toBeNull();
+            });
+
+            it('should read emergency localStorage value', () => {
+                const emergencyTimestamp = Date.now();
+                localStorage.setItem('pombo_channel_access_channel-1', emergencyTimestamp.toString());
+                
+                const result = secureStorage.getChannelLastAccess('channel-1');
+                expect(result).toBe(emergencyTimestamp);
+                
+                // Should clean up emergency key
+                expect(localStorage.getItem('pombo_channel_access_channel-1')).toBeNull();
+            });
+
+            it('should use newer timestamp between cache and emergency', async () => {
+                const olderTimestamp = Date.now() - 10000;
+                const newerTimestamp = Date.now();
+                
+                await secureStorage.setChannelLastAccess('channel-1', olderTimestamp);
+                localStorage.setItem('pombo_channel_access_channel-1', newerTimestamp.toString());
+                
+                expect(secureStorage.getChannelLastAccess('channel-1')).toBe(newerTimestamp);
+            });
+        });
+
+        describe('setChannelLastAccess()', () => {
+            it('should set timestamp with default to now', async () => {
+                const before = Date.now();
+                await secureStorage.setChannelLastAccess('channel-1');
+                const after = Date.now();
+                
+                const result = secureStorage.getChannelLastAccess('channel-1');
+                expect(result).toBeGreaterThanOrEqual(before);
+                expect(result).toBeLessThanOrEqual(after);
+            });
+
+            it('should remove emergency localStorage on set', async () => {
+                localStorage.setItem('pombo_channel_access_channel-1', '123456');
+                await secureStorage.setChannelLastAccess('channel-1', Date.now());
+                expect(localStorage.getItem('pombo_channel_access_channel-1')).toBeNull();
+            });
+
+            it('should not set when locked', async () => {
+                secureStorage.isUnlocked = false;
+                await secureStorage.setChannelLastAccess('channel-1', 12345);
+                
+                secureStorage.isUnlocked = true;
+                secureStorage.cache = { channelLastAccess: {} };
+                expect(secureStorage.getChannelLastAccess('channel-1')).toBeNull();
+            });
+        });
+
+        describe('getAllChannelLastAccess()', () => {
+            it('should return empty object initially', () => {
+                expect(secureStorage.getAllChannelLastAccess()).toEqual({});
+            });
+
+            it('should return all channel access timestamps', async () => {
+                await secureStorage.setChannelLastAccess('channel-1', 1000);
+                await secureStorage.setChannelLastAccess('channel-2', 2000);
+                
+                const all = secureStorage.getAllChannelLastAccess();
+                expect(all['channel-1']).toBe(1000);
+                expect(all['channel-2']).toBe(2000);
+            });
+
+            it('should return empty object when locked', () => {
+                secureStorage.isUnlocked = false;
+                expect(secureStorage.getAllChannelLastAccess()).toEqual({});
+            });
+        });
+    });
+
+    describe('Channel Order', () => {
+        beforeEach(() => {
+            secureStorage.initAsGuest('0x1234567890abcdef1234567890abcdef12345678');
+        });
+
+        describe('getChannelOrder()', () => {
+            it('should return empty array initially', () => {
+                expect(secureStorage.getChannelOrder()).toEqual([]);
+            });
+
+            it('should return empty array when locked', () => {
+                secureStorage.isUnlocked = false;
+                expect(secureStorage.getChannelOrder()).toEqual([]);
+            });
+        });
+
+        describe('setChannelOrder()', () => {
+            it('should set and get channel order', async () => {
+                const order = ['channel-1', 'channel-2', 'channel-3'];
+                await secureStorage.setChannelOrder(order);
+                expect(secureStorage.getChannelOrder()).toEqual(order);
+            });
+
+            it('should not set when locked', async () => {
+                secureStorage.isUnlocked = false;
+                await secureStorage.setChannelOrder(['channel-1']);
+                
+                secureStorage.isUnlocked = true;
+                secureStorage.cache = {};
+                expect(secureStorage.getChannelOrder()).toEqual([]);
+            });
+        });
+
+        describe('addToChannelOrder()', () => {
+            it('should add channel to order', async () => {
+                await secureStorage.addToChannelOrder('channel-1');
+                expect(secureStorage.getChannelOrder()).toContain('channel-1');
+            });
+
+            it('should add to end of list', async () => {
+                await secureStorage.setChannelOrder(['channel-1', 'channel-2']);
+                await secureStorage.addToChannelOrder('channel-3');
+                
+                const order = secureStorage.getChannelOrder();
+                expect(order[order.length - 1]).toBe('channel-3');
+            });
+
+            it('should not add duplicates', async () => {
+                await secureStorage.addToChannelOrder('channel-1');
+                await secureStorage.addToChannelOrder('channel-1');
+                
+                const order = secureStorage.getChannelOrder();
+                expect(order.filter(id => id === 'channel-1').length).toBe(1);
+            });
+
+            it('should initialize array if not exists', async () => {
+                secureStorage.cache.channelOrder = undefined;
+                await secureStorage.addToChannelOrder('channel-1');
+                expect(secureStorage.getChannelOrder()).toEqual(['channel-1']);
+            });
+        });
+
+        describe('removeFromChannelOrder()', () => {
+            it('should remove channel from order', async () => {
+                await secureStorage.setChannelOrder(['channel-1', 'channel-2', 'channel-3']);
+                await secureStorage.removeFromChannelOrder('channel-2');
+                
+                expect(secureStorage.getChannelOrder()).toEqual(['channel-1', 'channel-3']);
+            });
+
+            it('should handle removing non-existent channel', async () => {
+                await secureStorage.setChannelOrder(['channel-1']);
+                await secureStorage.removeFromChannelOrder('unknown');
+                
+                expect(secureStorage.getChannelOrder()).toEqual(['channel-1']);
+            });
+
+            it('should handle empty order array', async () => {
+                await secureStorage.removeFromChannelOrder('channel-1');
+                // Should not throw
+                expect(secureStorage.getChannelOrder()).toEqual([]);
+            });
+        });
+    });
+
+    describe('Last Opened Channel', () => {
+        beforeEach(() => {
+            secureStorage.initAsGuest('0x1234567890abcdef1234567890abcdef12345678');
+        });
+
+        describe('getLastOpenedChannel()', () => {
+            it('should return null initially', () => {
+                expect(secureStorage.getLastOpenedChannel()).toBeNull();
+            });
+
+            it('should return null when locked', () => {
+                secureStorage.isUnlocked = false;
+                expect(secureStorage.getLastOpenedChannel()).toBeNull();
+            });
+        });
+
+        describe('setLastOpenedChannel()', () => {
+            it('should set and get last opened channel', async () => {
+                await secureStorage.setLastOpenedChannel('channel-123');
+                expect(secureStorage.getLastOpenedChannel()).toBe('channel-123');
+            });
+
+            it('should allow setting to null', async () => {
+                await secureStorage.setLastOpenedChannel('channel-123');
+                await secureStorage.setLastOpenedChannel(null);
+                expect(secureStorage.getLastOpenedChannel()).toBeNull();
+            });
+        });
+    });
+
+    describe('Lifecycle', () => {
+        describe('lock()', () => {
+            it('should clear all state on lock', () => {
+                secureStorage.initAsGuest('0x1234567890abcdef1234567890abcdef12345678');
+                
+                secureStorage.lock();
+                
+                expect(secureStorage.isUnlocked).toBe(false);
+                expect(secureStorage.cache).toBeNull();
+                expect(secureStorage.address).toBeNull();
+                expect(secureStorage.storageKey).toBeNull();
+                expect(secureStorage.isGuestMode).toBe(false);
+            });
+        });
+
+        describe('isStorageUnlocked()', () => {
+            it('should return true when unlocked', () => {
+                secureStorage.initAsGuest('0x1234567890abcdef1234567890abcdef12345678');
+                expect(secureStorage.isStorageUnlocked()).toBe(true);
+            });
+
+            it('should return false when locked', () => {
+                secureStorage.lock();
+                expect(secureStorage.isStorageUnlocked()).toBe(false);
+            });
+        });
+
+        describe('getCurrentAddress()', () => {
+            it('should return address after init', () => {
+                const address = '0x1234567890abcdef1234567890abcdef12345678';
+                secureStorage.initAsGuest(address);
+                expect(secureStorage.getCurrentAddress()).toBe(address.toLowerCase());
+            });
+
+            it('should return null when locked', () => {
+                secureStorage.lock();
+                expect(secureStorage.getCurrentAddress()).toBeNull();
+            });
+        });
+    });
+
+    describe('getStats()', () => {
+        beforeEach(() => {
+            secureStorage.initAsGuest('0x1234567890abcdef1234567890abcdef12345678');
+        });
+
+        it('should return null when locked', () => {
+            secureStorage.lock();
+            expect(secureStorage.getStats()).toBeNull();
+        });
+
+        it('should return stats object with correct structure', () => {
+            const stats = secureStorage.getStats();
+            
+            expect(stats).toHaveProperty('channels');
+            expect(stats).toHaveProperty('contacts');
+            expect(stats).toHaveProperty('ensEntries');
+            expect(stats).toHaveProperty('hasUsername');
+            expect(stats).toHaveProperty('hasApiKey');
+        });
+
+        it('should count channels correctly', async () => {
+            await secureStorage.setChannels([
+                { streamId: 'ch1' },
+                { streamId: 'ch2' }
+            ]);
+            
+            const stats = secureStorage.getStats();
+            expect(stats.channels).toBe(2);
+        });
+
+        it('should count contacts correctly', async () => {
+            await secureStorage.setTrustedContacts({
+                '0xabc': { name: 'Alice' },
+                '0xdef': { name: 'Bob' },
+                '0x123': { name: 'Charlie' }
+            });
+            
+            const stats = secureStorage.getStats();
+            expect(stats.contacts).toBe(3);
+        });
+
+        it('should count ENS entries correctly', async () => {
+            await secureStorage.setENSCache({
+                'vitalik.eth': { address: '0x1' },
+                'test.eth': { address: '0x2' }
+            });
+            
+            const stats = secureStorage.getStats();
+            expect(stats.ensEntries).toBe(2);
+        });
+
+        it('should detect username presence', async () => {
+            expect(secureStorage.getStats().hasUsername).toBe(false);
+            
+            await secureStorage.setUsername('TestUser');
+            expect(secureStorage.getStats().hasUsername).toBe(true);
+        });
+
+        it('should detect API key presence', async () => {
+            expect(secureStorage.getStats().hasApiKey).toBe(false);
+            
+            await secureStorage.setGraphApiKey('test-key');
+            expect(secureStorage.getStats().hasApiKey).toBe(true);
+        });
+    });
+
+    describe('Encrypt/Decrypt (with real crypto)', () => {
+        let testKey;
+        
+        beforeEach(async () => {
+            secureStorage.initAsGuest('0x1234567890abcdef1234567890abcdef12345678');
+            // Create a real AES-GCM key for testing
+            testKey = await crypto.subtle.generateKey(
+                { name: 'AES-GCM', length: 256 },
+                true,
+                ['encrypt', 'decrypt']
+            );
+        });
+
+        describe('encrypt()', () => {
+            it('should throw when storage not initialized', async () => {
+                secureStorage.storageKey = null;
+                await expect(secureStorage.encrypt({ test: 'data' }))
+                    .rejects.toThrow('Storage not initialized');
+            });
+
+            it('should return iv and ciphertext arrays', async () => {
+                secureStorage.storageKey = testKey;
+                const result = await secureStorage.encrypt({ hello: 'world' });
+                
+                expect(result).toHaveProperty('iv');
+                expect(result).toHaveProperty('ciphertext');
+                expect(Array.isArray(result.iv)).toBe(true);
+                expect(Array.isArray(result.ciphertext)).toBe(true);
+                expect(result.iv.length).toBe(12); // AES-GCM IV is 12 bytes
+            });
+
+            it('should produce different ciphertext for same data (random IV)', async () => {
+                secureStorage.storageKey = testKey;
+                const data = { test: 'data' };
+                
+                const result1 = await secureStorage.encrypt(data);
+                const result2 = await secureStorage.encrypt(data);
+                
+                // IVs should be different
+                expect(result1.iv).not.toEqual(result2.iv);
+                // Ciphertext should be different due to different IVs
+                expect(result1.ciphertext).not.toEqual(result2.ciphertext);
+            });
+        });
+
+        describe('decrypt()', () => {
+            it('should throw when storage not initialized', async () => {
+                secureStorage.storageKey = null;
+                await expect(secureStorage.decrypt({ iv: [], ciphertext: [] }))
+                    .rejects.toThrow('Storage not initialized');
+            });
+
+            it('should decrypt encrypted data correctly', async () => {
+                secureStorage.storageKey = testKey;
+                const originalData = { message: 'Hello World', count: 42 };
+                
+                const encrypted = await secureStorage.encrypt(originalData);
+                const decrypted = await secureStorage.decrypt(encrypted);
+                
+                expect(decrypted).toEqual(originalData);
+            });
+
+            it('should handle complex nested objects', async () => {
+                secureStorage.storageKey = testKey;
+                const complexData = {
+                    channels: [{ id: 1 }, { id: 2 }],
+                    contacts: { '0x1': { name: 'Alice' } },
+                    settings: { nested: { deep: true } }
+                };
+                
+                const encrypted = await secureStorage.encrypt(complexData);
+                const decrypted = await secureStorage.decrypt(encrypted);
+                
+                expect(decrypted).toEqual(complexData);
+            });
+
+            it('should handle arrays', async () => {
+                secureStorage.storageKey = testKey;
+                const arrayData = [1, 2, 3, 'four', { five: 5 }];
+                
+                const encrypted = await secureStorage.encrypt(arrayData);
+                const decrypted = await secureStorage.decrypt(encrypted);
+                
+                expect(decrypted).toEqual(arrayData);
+            });
+        });
+    });
+
+    describe('loadFromStorage()', () => {
+        beforeEach(async () => {
+            localStorage.clear();
+            secureStorage.initAsGuest('0x1234567890abcdef1234567890abcdef12345678');
+        });
+
+        it('should initialize empty cache when no stored data', async () => {
+            secureStorage.cache = null;
+            secureStorage.storageKey = await crypto.subtle.generateKey(
+                { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
+            );
+            
+            await secureStorage.loadFromStorage();
+            
+            expect(secureStorage.cache).toBeDefined();
+            expect(secureStorage.cache.channels).toEqual([]);
+            expect(secureStorage.cache.trustedContacts).toEqual({});
+        });
+
+        it('should handle corrupted JSON in localStorage', async () => {
+            secureStorage.storageKey = await crypto.subtle.generateKey(
+                { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
+            );
+            localStorage.setItem(secureStorage.getStorageKey(), 'not valid json');
+            
+            await secureStorage.loadFromStorage();
+            
+            // Should fallback to empty cache
+            expect(secureStorage.cache.channels).toEqual([]);
+        });
+
+        it('should handle corrupted encrypted data', async () => {
+            secureStorage.storageKey = await crypto.subtle.generateKey(
+                { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
+            );
+            // Valid JSON but invalid encrypted format
+            localStorage.setItem(secureStorage.getStorageKey(), JSON.stringify({
+                iv: [1, 2, 3],
+                ciphertext: [4, 5, 6]
+            }));
+            
+            await secureStorage.loadFromStorage();
+            
+            // Should fallback to empty cache
+            expect(secureStorage.cache.channels).toEqual([]);
+        });
+    });
+
+    describe('saveToStorage()', () => {
+        beforeEach(async () => {
+            localStorage.clear();
+        });
+
+        it('should not save when not unlocked', async () => {
+            secureStorage.isUnlocked = false;
+            await secureStorage.saveToStorage();
+            // Should not throw, just warn
+        });
+
+        it('should save encrypted data to localStorage (non-guest)', async () => {
+            secureStorage.isGuestMode = false;
+            secureStorage.isUnlocked = true;
+            secureStorage.address = '0xtest';
+            secureStorage.cache = { channels: [], trustedContacts: {} };
+            secureStorage.storageKey = await crypto.subtle.generateKey(
+                { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
+            );
+            
+            await secureStorage.saveToStorage();
+            
+            const stored = localStorage.getItem(secureStorage.getStorageKey());
+            expect(stored).toBeTruthy();
+            
+            const parsed = JSON.parse(stored);
+            expect(parsed).toHaveProperty('iv');
+            expect(parsed).toHaveProperty('ciphertext');
+        });
+    });
+
+    describe('Edge Cases', () => {
+        beforeEach(() => {
+            secureStorage.initAsGuest('0x1234567890abcdef1234567890abcdef12345678');
+        });
+
+        describe('setChannels() when locked', () => {
+            it('should not set channels when locked', async () => {
+                await secureStorage.setChannels([{ id: 1 }]);
+                secureStorage.isUnlocked = false;
+                
+                // Try to set new channels
+                await secureStorage.setChannels([{ id: 2 }]);
+                
+                // Re-unlock and check original is preserved
+                secureStorage.isUnlocked = true;
+                const channels = secureStorage.getChannels();
+                expect(channels).toEqual([{ id: 1 }]);
+            });
+        });
+
+        describe('setTrustedContacts() when locked', () => {
+            it('should not set contacts when locked', async () => {
+                await secureStorage.setTrustedContacts({ '0x1': { name: 'A' } });
+                secureStorage.isUnlocked = false;
+                
+                await secureStorage.setTrustedContacts({ '0x2': { name: 'B' } });
+                
+                secureStorage.isUnlocked = true;
+                expect(secureStorage.getTrustedContacts()).toEqual({ '0x1': { name: 'A' } });
+            });
+        });
+
+        describe('setENSCache() when locked', () => {
+            it('should not set ENS cache when locked', async () => {
+                await secureStorage.setENSCache({ 'a.eth': {} });
+                secureStorage.isUnlocked = false;
+                
+                await secureStorage.setENSCache({ 'b.eth': {} });
+                
+                secureStorage.isUnlocked = true;
+                expect(secureStorage.getENSCache()).toHaveProperty('a.eth');
+            });
+        });
+
+        describe('setGraphApiKey() when locked', () => {
+            it('should not set API key when locked', async () => {
+                await secureStorage.setGraphApiKey('key1');
+                secureStorage.isUnlocked = false;
+                
+                await secureStorage.setGraphApiKey('key2');
+                
+                secureStorage.isUnlocked = true;
+                expect(secureStorage.getGraphApiKey()).toBe('key1');
+            });
+        });
+
+        describe('setSessionData() when locked', () => {
+            it('should not set session data when locked', async () => {
+                await secureStorage.setSessionData({ token: 'abc' });
+                secureStorage.isUnlocked = false;
+                
+                await secureStorage.setSessionData({ token: 'xyz' });
+                
+                secureStorage.isUnlocked = true;
+                expect(secureStorage.getSessionData()).toEqual({ token: 'abc' });
+            });
+        });
+    });
+
+    describe('isGuestMode property', () => {
+        it('should be true after initAsGuest', () => {
+            secureStorage.initAsGuest('0x1234');
+            expect(secureStorage.isGuestMode).toBe(true);
+        });
+
+        it('should be false after lock', () => {
+            secureStorage.initAsGuest('0x1234');
+            secureStorage.lock();
+            expect(secureStorage.isGuestMode).toBe(false);
+        });
+    });
 });

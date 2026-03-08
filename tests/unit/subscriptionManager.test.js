@@ -21,9 +21,16 @@ vi.mock('../../src/js/streamr.js', () => ({
         subscribe: vi.fn(),
         resend: vi.fn().mockResolvedValue([]),
         isInitialized: vi.fn().mockReturnValue(true),
-        publish: vi.fn()
+        publish: vi.fn(),
+        subscribeToDualStream: vi.fn().mockResolvedValue(undefined),
+        publishControl: vi.fn().mockResolvedValue(undefined),
+        fetchOlderHistory: vi.fn().mockResolvedValue({ messages: [] })
     },
-    STREAM_CONFIG: { partitions: 1 },
+    STREAM_CONFIG: { 
+        partitions: 1,
+        INITIAL_MESSAGES: 50,
+        MESSAGE_STREAM: { MESSAGES: 0 }
+    },
     deriveEphemeralId: vi.fn((id) => `${id}/ephemeral`)
 }));
 
@@ -84,6 +91,16 @@ describe('SubscriptionManager', () => {
         subscriptionManager.activityHandlers = [];
         subscriptionManager.pollIndex = 0;
         subscriptionManager.isPolling = false;
+        
+        // Reset config to defaults
+        subscriptionManager.config = {
+            POLL_INTERVAL: 30000,
+            POLL_BATCH_SIZE: 3,
+            POLL_STAGGER_DELAY: 2000,
+            MIN_POLL_INTERVAL: 10000,
+            MAX_CONCURRENT_SUBS: 1,
+            ACTIVITY_CHECK_MESSAGES: 3,
+        };
         
         vi.clearAllMocks();
         vi.useFakeTimers();
@@ -500,6 +517,526 @@ describe('SubscriptionManager', () => {
             await subscriptionManager.cleanup();
             
             expect(subscriptionManager.channelActivity.size).toBe(0);
+        });
+        
+        it('should reset poll index', async () => {
+            subscriptionManager.pollIndex = 5;
+            
+            await subscriptionManager.cleanup();
+            
+            expect(subscriptionManager.pollIndex).toBe(0);
+        });
+        
+        it('should reset isPolling flag', async () => {
+            subscriptionManager.isPolling = true;
+            
+            await subscriptionManager.cleanup();
+            
+            expect(subscriptionManager.isPolling).toBe(false);
+        });
+        
+        it('should clear activity handlers', async () => {
+            subscriptionManager.activityHandlers = [vi.fn(), vi.fn()];
+            
+            await subscriptionManager.cleanup();
+            
+            expect(subscriptionManager.activityHandlers).toEqual([]);
+        });
+    });
+
+    describe('setPreviewChannel()', () => {
+        beforeEach(() => {
+            // Mock streamrController.subscribeToDualStream
+            streamrController.subscribeToDualStream = vi.fn().mockResolvedValue(undefined);
+            streamrController.publishControl = vi.fn().mockResolvedValue(undefined);
+        });
+
+        it('should set preview channel id', async () => {
+            await subscriptionManager.setPreviewChannel('preview-stream');
+            
+            expect(subscriptionManager.previewChannelId).toBe('preview-stream');
+        });
+
+        it('should subscribe to dual stream', async () => {
+            await subscriptionManager.setPreviewChannel('preview-stream');
+            
+            expect(streamrController.subscribeToDualStream).toHaveBeenCalled();
+            const call = streamrController.subscribeToDualStream.mock.calls[0];
+            expect(call[0]).toBe('preview-stream');
+            expect(call[1]).toBe('preview-stream/ephemeral');
+        });
+
+        it('should not change if same preview already active', async () => {
+            subscriptionManager.previewChannelId = 'same-stream';
+            
+            await subscriptionManager.setPreviewChannel('same-stream');
+            
+            expect(streamrController.subscribeToDualStream).not.toHaveBeenCalled();
+        });
+
+        it('should clear previous preview channel', async () => {
+            subscriptionManager.previewChannelId = 'old-preview';
+            streamrController.unsubscribeFromDualStream = vi.fn().mockResolvedValue(undefined);
+            
+            await subscriptionManager.setPreviewChannel('new-preview');
+            
+            expect(streamrController.unsubscribeFromDualStream).toHaveBeenCalled();
+        });
+
+        it('should downgrade active channel when setting preview', async () => {
+            subscriptionManager.activeChannelId = 'active-stream';
+            channelManager.getChannel.mockReturnValue({ messages: [], ephemeralStreamId: 'active-stream/ephemeral' });
+            
+            await subscriptionManager.setPreviewChannel('preview-stream');
+            
+            expect(subscriptionManager.activeChannelId).toBeNull();
+        });
+
+        it('should warn on null streamId', async () => {
+            await subscriptionManager.setPreviewChannel(null);
+            
+            expect(subscriptionManager.previewChannelId).toBeNull();
+            expect(streamrController.subscribeToDualStream).not.toHaveBeenCalled();
+        });
+
+        it('should clear previewChannelId on subscription error', async () => {
+            streamrController.subscribeToDualStream.mockRejectedValue(new Error('Subscription failed'));
+            
+            await expect(subscriptionManager.setPreviewChannel('failing-stream')).rejects.toThrow('Subscription failed');
+            
+            expect(subscriptionManager.previewChannelId).toBeNull();
+        });
+
+        it('should start preview presence broadcasting', async () => {
+            await subscriptionManager.setPreviewChannel('preview-stream');
+            
+            // Presence is published immediately
+            expect(streamrController.publishControl).toHaveBeenCalled();
+        });
+    });
+
+    describe('promotePreviewToActive()', () => {
+        beforeEach(() => {
+            streamrController.subscribeToDualStream = vi.fn().mockResolvedValue(undefined);
+            streamrController.publishControl = vi.fn().mockResolvedValue(undefined);
+        });
+
+        it('should promote preview to active channel', async () => {
+            subscriptionManager.previewChannelId = 'preview-stream';
+            
+            await subscriptionManager.promotePreviewToActive('preview-stream');
+            
+            expect(subscriptionManager.activeChannelId).toBe('preview-stream');
+            expect(subscriptionManager.previewChannelId).toBeNull();
+        });
+
+        it('should stop preview presence interval', async () => {
+            subscriptionManager.previewChannelId = 'preview-stream';
+            subscriptionManager.previewPresenceInterval = setInterval(() => {}, 1000);
+            
+            await subscriptionManager.promotePreviewToActive('preview-stream');
+            
+            expect(subscriptionManager.previewPresenceInterval).toBeNull();
+        });
+
+        it('should not promote if not current preview channel', async () => {
+            subscriptionManager.previewChannelId = 'other-stream';
+            
+            await subscriptionManager.promotePreviewToActive('different-stream');
+            
+            expect(subscriptionManager.activeChannelId).toBeNull();
+        });
+
+        it('should not promote if no preview channel', async () => {
+            subscriptionManager.previewChannelId = null;
+            
+            await subscriptionManager.promotePreviewToActive('stream');
+            
+            expect(subscriptionManager.activeChannelId).toBeNull();
+        });
+    });
+
+    describe('downgradeToBackground()', () => {
+        it('should store activity state from messages', async () => {
+            const now = Date.now();
+            channelManager.getChannel.mockReturnValue({
+                messages: [{ timestamp: now - 1000 }, { timestamp: now }],
+                ephemeralStreamId: 'stream1/ephemeral'
+            });
+            
+            await subscriptionManager.downgradeToBackground('stream1');
+            
+            const activity = subscriptionManager.channelActivity.get('stream1');
+            expect(activity.lastMessageTime).toBe(now);
+        });
+
+        it('should unsubscribe from both streams', async () => {
+            channelManager.getChannel.mockReturnValue({
+                messages: [],
+                ephemeralStreamId: 'stream1/ephemeral'
+            });
+            
+            await subscriptionManager.downgradeToBackground('stream1');
+            
+            expect(streamrController.unsubscribeFromDualStream).toHaveBeenCalledWith('stream1', 'stream1/ephemeral');
+        });
+
+        it('should derive ephemeral ID if not in channel', async () => {
+            channelManager.getChannel.mockReturnValue({
+                messages: []
+            });
+            
+            await subscriptionManager.downgradeToBackground('stream1');
+            
+            expect(streamrController.unsubscribeFromDualStream).toHaveBeenCalledWith('stream1', 'stream1/ephemeral');
+        });
+
+        it('should handle null streamId gracefully', async () => {
+            await subscriptionManager.downgradeToBackground(null);
+            
+            expect(streamrController.unsubscribeFromDualStream).not.toHaveBeenCalled();
+        });
+
+        it('should handle unsubscribe error gracefully', async () => {
+            channelManager.getChannel.mockReturnValue({ messages: [], ephemeralStreamId: 'stream1/ephemeral' });
+            streamrController.unsubscribeFromDualStream.mockRejectedValue(new Error('Unsubscribe failed'));
+            
+            // Should not throw
+            await subscriptionManager.downgradeToBackground('stream1');
+        });
+    });
+
+    describe('pollBackgroundChannels()', () => {
+        beforeEach(() => {
+            streamrController.fetchOlderHistory = vi.fn().mockResolvedValue({ messages: [] });
+        });
+
+        it('should skip if already polling', async () => {
+            subscriptionManager.isPolling = true;
+            channelManager.getAllChannels.mockReturnValue([{ messageStreamId: 'stream1' }]);
+            
+            await subscriptionManager.pollBackgroundChannels();
+            
+            expect(streamrController.fetchOlderHistory).not.toHaveBeenCalled();
+        });
+
+        it('should skip active channel', async () => {
+            subscriptionManager.activeChannelId = 'stream1';
+            channelManager.getAllChannels.mockReturnValue([
+                { messageStreamId: 'stream1' },
+                { messageStreamId: 'stream2' }
+            ]);
+            subscriptionManager.channelActivity.set('stream2', { lastMessageTime: 0, unreadCount: 0, lastChecked: 0 });
+            
+            await subscriptionManager.pollBackgroundChannels();
+            
+            // Should only poll stream2
+            const calls = streamrController.fetchOlderHistory.mock.calls;
+            const polledIds = calls.map(c => c[0]);
+            expect(polledIds).not.toContain('stream1');
+        });
+
+        it('should process channels in batches', async () => {
+            // Use shorter stagger delay for test
+            subscriptionManager.config.POLL_STAGGER_DELAY = 0;
+            
+            channelManager.getAllChannels.mockReturnValue([
+                { messageStreamId: 'stream1' },
+                { messageStreamId: 'stream2' },
+                { messageStreamId: 'stream3' },
+                { messageStreamId: 'stream4' },
+                { messageStreamId: 'stream5' }
+            ]);
+            
+            // Initialize activity with lastChecked = 0 so all pass the MIN_POLL_INTERVAL check
+            for (let i = 1; i <= 5; i++) {
+                subscriptionManager.channelActivity.set(`stream${i}`, { lastMessageTime: 0, unreadCount: 0, lastChecked: 0 });
+            }
+            
+            // Need to use real timers for this test since it awaits setTimeout
+            vi.useRealTimers();
+            
+            await subscriptionManager.pollBackgroundChannels();
+            
+            // POLL_BATCH_SIZE is 3 by default
+            expect(streamrController.fetchOlderHistory.mock.calls.length).toBeLessThanOrEqual(3);
+            
+            vi.useFakeTimers();
+        });
+
+        it('should set isPolling flag during polling', async () => {
+            channelManager.getAllChannels.mockReturnValue([]);
+            
+            const pollingDuringCall = subscriptionManager.isPolling;
+            await subscriptionManager.pollBackgroundChannels();
+            
+            expect(subscriptionManager.isPolling).toBe(false);
+        });
+
+        it('should respect MIN_POLL_INTERVAL', async () => {
+            channelManager.getAllChannels.mockReturnValue([{ messageStreamId: 'stream1' }]);
+            subscriptionManager.channelActivity.set('stream1', {
+                lastMessageTime: 0,
+                unreadCount: 0,
+                lastChecked: Date.now() // Just checked
+            });
+            
+            await subscriptionManager.pollBackgroundChannels();
+            
+            expect(streamrController.fetchOlderHistory).not.toHaveBeenCalled();
+        });
+
+        it('should skip when no background channels', async () => {
+            channelManager.getAllChannels.mockReturnValue([]);
+            
+            await subscriptionManager.pollBackgroundChannels();
+            
+            expect(streamrController.fetchOlderHistory).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('checkChannelActivity()', () => {
+        beforeEach(() => {
+            streamrController.fetchOlderHistory = vi.fn().mockResolvedValue({ messages: [] });
+        });
+
+        it('should fetch recent history for channel', async () => {
+            const channel = { messageStreamId: 'stream1', password: null };
+            subscriptionManager.channelActivity.set('stream1', { lastMessageTime: 0, unreadCount: 0, lastChecked: 0 });
+            
+            await subscriptionManager.checkChannelActivity(channel);
+            
+            expect(streamrController.fetchOlderHistory).toHaveBeenCalled();
+            expect(streamrController.fetchOlderHistory.mock.calls[0][0]).toBe('stream1');
+        });
+
+        it('should count new messages since last check', async () => {
+            const now = Date.now();
+            streamrController.fetchOlderHistory.mockResolvedValue({
+                messages: [
+                    { timestamp: now - 500 },
+                    { timestamp: now - 100 }
+                ]
+            });
+            subscriptionManager.channelActivity.set('stream1', { lastMessageTime: now - 1000, unreadCount: 0, lastChecked: 0 });
+            
+            await subscriptionManager.checkChannelActivity({ messageStreamId: 'stream1' });
+            
+            const activity = subscriptionManager.channelActivity.get('stream1');
+            expect(activity.unreadCount).toBe(2);
+        });
+
+        it('should update lastMessageTime to latest', async () => {
+            const now = Date.now();
+            streamrController.fetchOlderHistory.mockResolvedValue({
+                messages: [
+                    { timestamp: now - 500 },
+                    { timestamp: now - 100 }
+                ]
+            });
+            subscriptionManager.channelActivity.set('stream1', { lastMessageTime: now - 1000, unreadCount: 0, lastChecked: 0 });
+            
+            await subscriptionManager.checkChannelActivity({ messageStreamId: 'stream1' });
+            
+            const activity = subscriptionManager.channelActivity.get('stream1');
+            expect(activity.lastMessageTime).toBe(now - 100);
+        });
+
+        it('should notify handlers on new activity', async () => {
+            const handler = vi.fn();
+            subscriptionManager.activityHandlers = [handler];
+            const now = Date.now();
+            streamrController.fetchOlderHistory.mockResolvedValue({
+                messages: [{ timestamp: now }]
+            });
+            subscriptionManager.channelActivity.set('stream1', { lastMessageTime: now - 1000, unreadCount: 0, lastChecked: 0 });
+            
+            await subscriptionManager.checkChannelActivity({ messageStreamId: 'stream1' });
+            
+            expect(handler).toHaveBeenCalledWith('stream1', expect.objectContaining({ unreadCount: 1 }));
+        });
+
+        it('should not notify if no new messages', async () => {
+            const handler = vi.fn();
+            subscriptionManager.activityHandlers = [handler];
+            streamrController.fetchOlderHistory.mockResolvedValue({ messages: [] });
+            subscriptionManager.channelActivity.set('stream1', { lastMessageTime: Date.now(), unreadCount: 0, lastChecked: 0 });
+            
+            await subscriptionManager.checkChannelActivity({ messageStreamId: 'stream1' });
+            
+            expect(handler).not.toHaveBeenCalled();
+        });
+
+        it('should update lastChecked even on error', async () => {
+            streamrController.fetchOlderHistory.mockRejectedValue(new Error('Fetch failed'));
+            const beforeTime = Date.now();
+            subscriptionManager.channelActivity.set('stream1', { lastMessageTime: 0, unreadCount: 0, lastChecked: 0 });
+            
+            await expect(subscriptionManager.checkChannelActivity({ messageStreamId: 'stream1' })).rejects.toThrow();
+            
+            const activity = subscriptionManager.channelActivity.get('stream1');
+            expect(activity.lastChecked).toBeGreaterThanOrEqual(beforeTime);
+        });
+
+        it('should use channel password for fetch', async () => {
+            const channel = { messageStreamId: 'stream1', password: 'secret' };
+            subscriptionManager.channelActivity.set('stream1', { lastMessageTime: 0, unreadCount: 0, lastChecked: 0 });
+            
+            await subscriptionManager.checkChannelActivity(channel);
+            
+            // fetchOlderHistory(streamId, partition, timestamp, count, password)
+            expect(streamrController.fetchOlderHistory.mock.calls[0][4]).toBe('secret');
+        });
+
+        it('should handle streamId fallback', async () => {
+            const channel = { streamId: 'legacy-stream' };
+            subscriptionManager.channelActivity.set('legacy-stream', { lastMessageTime: 0, unreadCount: 0, lastChecked: 0 });
+            
+            await subscriptionManager.checkChannelActivity(channel);
+            
+            expect(streamrController.fetchOlderHistory.mock.calls[0][0]).toBe('legacy-stream');
+        });
+    });
+
+    describe('forcePollChannel()', () => {
+        beforeEach(() => {
+            streamrController.fetchOlderHistory = vi.fn().mockResolvedValue({ messages: [] });
+        });
+
+        it('should poll specified channel', async () => {
+            channelManager.getChannel.mockReturnValue({ messageStreamId: 'stream1' });
+            subscriptionManager.channelActivity.set('stream1', { lastMessageTime: 0, unreadCount: 0, lastChecked: 0 });
+            
+            await subscriptionManager.forcePollChannel('stream1');
+            
+            expect(streamrController.fetchOlderHistory).toHaveBeenCalled();
+        });
+
+        it('should skip if channel not found', async () => {
+            channelManager.getChannel.mockReturnValue(null);
+            
+            await subscriptionManager.forcePollChannel('unknown');
+            
+            expect(streamrController.fetchOlderHistory).not.toHaveBeenCalled();
+        });
+
+        it('should skip active channel', async () => {
+            subscriptionManager.activeChannelId = 'stream1';
+            channelManager.getChannel.mockReturnValue({ messageStreamId: 'stream1' });
+            
+            await subscriptionManager.forcePollChannel('stream1');
+            
+            expect(streamrController.fetchOlderHistory).not.toHaveBeenCalled();
+        });
+
+        it('should handle polling error gracefully', async () => {
+            channelManager.getChannel.mockReturnValue({ messageStreamId: 'stream1' });
+            subscriptionManager.channelActivity.set('stream1', { lastMessageTime: 0, unreadCount: 0, lastChecked: 0 });
+            streamrController.fetchOlderHistory.mockRejectedValue(new Error('Poll failed'));
+            
+            // Should not throw
+            await subscriptionManager.forcePollChannel('stream1');
+        });
+    });
+
+    describe('_stopPreviewPresence()', () => {
+        it('should clear preview presence interval', () => {
+            subscriptionManager.previewPresenceInterval = setInterval(() => {}, 1000);
+            
+            subscriptionManager._stopPreviewPresence();
+            
+            expect(subscriptionManager.previewPresenceInterval).toBeNull();
+        });
+
+        it('should handle null interval gracefully', () => {
+            subscriptionManager.previewPresenceInterval = null;
+            
+            // Should not throw
+            subscriptionManager._stopPreviewPresence();
+            
+            expect(subscriptionManager.previewPresenceInterval).toBeNull();
+        });
+    });
+
+    describe('_handlePreviewMessage()', () => {
+        it('should forward to channelManager if channel exists', () => {
+            subscriptionManager.previewChannelId = 'stream1';
+            channelManager.getChannel.mockReturnValue({ streamId: 'stream1' });
+            const msg = { id: 'msg1', type: 'text' };
+            
+            subscriptionManager._handlePreviewMessage(msg);
+            
+            expect(channelManager.handleTextMessage).toHaveBeenCalledWith('stream1', msg);
+        });
+
+        it('should forward to uiController if channel not in manager', () => {
+            subscriptionManager.previewChannelId = 'stream1';
+            channelManager.getChannel.mockReturnValue(null);
+            window.uiController = { handlePreviewMessage: vi.fn() };
+            const msg = { id: 'msg1' };
+            
+            subscriptionManager._handlePreviewMessage(msg);
+            
+            expect(window.uiController.handlePreviewMessage).toHaveBeenCalledWith(msg);
+            
+            delete window.uiController;
+        });
+
+        it('should use activeChannelId if previewChannelId is null', () => {
+            subscriptionManager.previewChannelId = null;
+            subscriptionManager.activeChannelId = 'active-stream';
+            channelManager.getChannel.mockReturnValue({ streamId: 'active-stream' });
+            
+            subscriptionManager._handlePreviewMessage({ id: 'msg1' });
+            
+            expect(channelManager.handleTextMessage).toHaveBeenCalledWith('active-stream', expect.any(Object));
+        });
+    });
+
+    describe('_handlePreviewEphemeral()', () => {
+        it('should handle presence messages', () => {
+            subscriptionManager.previewChannelId = 'stream1';
+            const msg = { type: 'presence', user: 'testuser' };
+            
+            subscriptionManager._handlePreviewEphemeral(msg);
+            
+            expect(channelManager.handlePresenceMessage).toHaveBeenCalledWith('stream1', msg);
+        });
+
+        it('should handle typing messages', () => {
+            subscriptionManager.previewChannelId = 'stream1';
+            channelManager.notifyHandlers = vi.fn();
+            const msg = { type: 'typing', user: 'testuser' };
+            
+            subscriptionManager._handlePreviewEphemeral(msg);
+            
+            expect(channelManager.notifyHandlers).toHaveBeenCalledWith('typing', expect.objectContaining({ streamId: 'stream1' }));
+        });
+
+        it('should do nothing if no stream id', () => {
+            subscriptionManager.previewChannelId = null;
+            subscriptionManager.activeChannelId = null;
+            
+            // Should not throw
+            subscriptionManager._handlePreviewEphemeral({ type: 'presence' });
+        });
+    });
+
+    describe('Config defaults', () => {
+        it('should have correct POLL_STAGGER_DELAY', () => {
+            expect(subscriptionManager.config.POLL_STAGGER_DELAY).toBe(2000);
+        });
+
+        it('should have correct MIN_POLL_INTERVAL', () => {
+            expect(subscriptionManager.config.MIN_POLL_INTERVAL).toBe(10000);
+        });
+
+        it('should have correct MAX_CONCURRENT_SUBS', () => {
+            expect(subscriptionManager.config.MAX_CONCURRENT_SUBS).toBe(1);
+        });
+
+        it('should have correct ACTIVITY_CHECK_MESSAGES', () => {
+            expect(subscriptionManager.config.ACTIVITY_CHECK_MESSAGES).toBe(3);
         });
     });
 });

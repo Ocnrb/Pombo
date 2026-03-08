@@ -200,4 +200,194 @@ describe('GasEstimator', () => {
             expect(costs.gasPrice).toBe(30 * 1e9);
         });
     });
+
+    describe('rpcCall', () => {
+        let originalFetch;
+        
+        beforeEach(() => {
+            originalFetch = globalThis.fetch;
+            GasEstimator.currentRpcIndex = 0;
+        });
+        
+        afterEach(() => {
+            globalThis.fetch = originalFetch;
+        });
+
+        it('should return result on successful RPC call', async () => {
+            globalThis.fetch = vi.fn().mockResolvedValue({
+                ok: true,
+                json: () => Promise.resolve({ jsonrpc: '2.0', result: '0x1234', id: 1 })
+            });
+            
+            const result = await GasEstimator.rpcCall('eth_gasPrice');
+            expect(result.result).toBe('0x1234');
+        });
+
+        it('should try next RPC on failure', async () => {
+            let callCount = 0;
+            globalThis.fetch = vi.fn().mockImplementation(() => {
+                callCount++;
+                if (callCount === 1) {
+                    return Promise.reject(new Error('First RPC failed'));
+                }
+                return Promise.resolve({
+                    ok: true,
+                    json: () => Promise.resolve({ jsonrpc: '2.0', result: '0xabc', id: 1 })
+                });
+            });
+            
+            const result = await GasEstimator.rpcCall('eth_gasPrice');
+            expect(result.result).toBe('0xabc');
+            expect(callCount).toBe(2);
+        });
+
+        it('should throw when all RPCs fail', async () => {
+            globalThis.fetch = vi.fn().mockRejectedValue(new Error('All failed'));
+            
+            await expect(GasEstimator.rpcCall('eth_gasPrice'))
+                .rejects.toThrow('All failed');
+        });
+
+        it('should handle RPC error response', async () => {
+            globalThis.fetch = vi.fn().mockResolvedValue({
+                ok: true,
+                json: () => Promise.resolve({ jsonrpc: '2.0', error: { message: 'RPC error' }, id: 1 })
+            });
+            
+            await expect(GasEstimator.rpcCall('eth_gasPrice'))
+                .rejects.toThrow();
+        });
+
+        it('should handle HTTP errors', async () => {
+            globalThis.fetch = vi.fn().mockResolvedValue({
+                ok: false,
+                status: 500
+            });
+            
+            await expect(GasEstimator.rpcCall('eth_gasPrice'))
+                .rejects.toThrow();
+        });
+
+        it('should update currentRpcIndex on success', async () => {
+            GasEstimator.currentRpcIndex = 0;
+            
+            // First RPC fails, second succeeds
+            let callCount = 0;
+            globalThis.fetch = vi.fn().mockImplementation(() => {
+                callCount++;
+                if (callCount === 1) {
+                    return Promise.reject(new Error('First failed'));
+                }
+                return Promise.resolve({
+                    ok: true,
+                    json: () => Promise.resolve({ jsonrpc: '2.0', result: '0x1', id: 1 })
+                });
+            });
+            
+            await GasEstimator.rpcCall('eth_gasPrice');
+            expect(GasEstimator.currentRpcIndex).toBe(1);
+        });
+    });
+
+    describe('getBalance', () => {
+        let originalFetch;
+        
+        beforeEach(() => {
+            originalFetch = globalThis.fetch;
+            GasEstimator.currentRpcIndex = 0;
+        });
+        
+        afterEach(() => {
+            globalThis.fetch = originalFetch;
+        });
+
+        it('should return balance in wei', async () => {
+            const balanceHex = '0xDE0B6B3A7640000'; // 1 ETH/POL in wei
+            globalThis.fetch = vi.fn().mockResolvedValue({
+                ok: true,
+                json: () => Promise.resolve({ jsonrpc: '2.0', result: balanceHex, id: 1 })
+            });
+            
+            const balance = await GasEstimator.getBalance('0x1234');
+            expect(balance).toBe(1e18);
+        });
+
+        it('should return null on error', async () => {
+            globalThis.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
+            
+            const balance = await GasEstimator.getBalance('0x1234');
+            expect(balance).toBeNull();
+        });
+
+        it('should call RPC with correct params', async () => {
+            globalThis.fetch = vi.fn().mockResolvedValue({
+                ok: true,
+                json: () => Promise.resolve({ jsonrpc: '2.0', result: '0x0', id: 1 })
+            });
+            
+            await GasEstimator.getBalance('0xTestAddress');
+            
+            expect(globalThis.fetch).toHaveBeenCalled();
+            const callArgs = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+            expect(callArgs.method).toBe('eth_getBalance');
+            expect(callArgs.params).toContain('0xTestAddress');
+            expect(callArgs.params).toContain('latest');
+        });
+    });
+
+    describe('getGasPrice (RPC success)', () => {
+        let originalFetch;
+        
+        beforeEach(() => {
+            originalFetch = globalThis.fetch;
+            GasEstimator.cachedGasPrice = null;
+            GasEstimator.cacheTime = 0;
+            GasEstimator.currentRpcIndex = 0;
+        });
+        
+        afterEach(() => {
+            globalThis.fetch = originalFetch;
+        });
+
+        it('should fetch and cache gas price', async () => {
+            const gasPriceHex = '0x6FC23AC00'; // 30 gwei
+            globalThis.fetch = vi.fn().mockResolvedValue({
+                ok: true,
+                json: () => Promise.resolve({ jsonrpc: '2.0', result: gasPriceHex, id: 1 })
+            });
+            
+            const price = await GasEstimator.getGasPrice();
+            
+            expect(price).toBe(30 * 1e9);
+            expect(GasEstimator.cachedGasPrice).toBe(30 * 1e9);
+        });
+
+        it('should use cached value within duration', async () => {
+            GasEstimator.cachedGasPrice = 25 * 1e9;
+            GasEstimator.cacheTime = Date.now() - 30000; // 30s ago, within 60s cache
+            
+            globalThis.fetch = vi.fn();
+            
+            const price = await GasEstimator.getGasPrice();
+            
+            expect(price).toBe(25 * 1e9);
+            expect(globalThis.fetch).not.toHaveBeenCalled();
+        });
+
+        it('should refetch after cache expires', async () => {
+            GasEstimator.cachedGasPrice = 25 * 1e9;
+            GasEstimator.cacheTime = Date.now() - 70000; // 70s ago, expired
+            
+            const newPriceHex = '0x9502F9000'; // 40 gwei
+            globalThis.fetch = vi.fn().mockResolvedValue({
+                ok: true,
+                json: () => Promise.resolve({ jsonrpc: '2.0', result: newPriceHex, id: 1 })
+            });
+            
+            const price = await GasEstimator.getGasPrice();
+            
+            expect(price).toBe(40 * 1e9);
+            expect(globalThis.fetch).toHaveBeenCalled();
+        });
+    });
 });

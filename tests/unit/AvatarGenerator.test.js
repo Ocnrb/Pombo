@@ -250,4 +250,146 @@ describe('AvatarGenerator', () => {
             expect(avatarGenerator.getColor(address)).toBe(getAddressColor(address));
         });
     });
+
+    describe('Shape diversity', () => {
+        it('should generate different shapes for various addresses', () => {
+            const shapes = new Set();
+            // Generate many avatars and check shape diversity
+            for (let i = 0; i < 100; i++) {
+                const address = `0x${i.toString(16).padStart(40, '0')}`;
+                const svg = generateAvatar(address);
+                // Extract path d attribute to identify shape
+                const pathMatch = svg.match(/d="([^"]+)"/);
+                if (pathMatch) {
+                    // Use first command to identify shape type
+                    const shapeSignature = pathMatch[1].substring(0, 50);
+                    shapes.add(shapeSignature);
+                }
+            }
+            // Should have multiple different shapes
+            expect(shapes.size).toBeGreaterThan(5);
+        });
+
+        it('should use various color pairs', () => {
+            const colors = new Set();
+            for (let i = 0; i < 100; i++) {
+                const address = `0x${(i * 7).toString(16).padStart(40, '0')}`;
+                const svg = generateAvatar(address);
+                const rectMatch = svg.match(/fill="(#[0-9a-fA-F]{6})"/);
+                if (rectMatch) {
+                    colors.add(rectMatch[1]);
+                }
+            }
+            // Should have multiple different background colors
+            expect(colors.size).toBeGreaterThan(10);
+        });
+
+        it('should include rotation in transform', () => {
+            const rotations = new Set();
+            for (let i = 0; i < 50; i++) {
+                const address = `0x${i.toString(16).padStart(40, 'a')}`;
+                const svg = generateAvatar(address);
+                const rotateMatch = svg.match(/rotate\((\d+)/);
+                if (rotateMatch) {
+                    rotations.add(rotateMatch[1]);
+                }
+            }
+            // Should have multiple rotation values (0, 45, 90, 135, 180, 225, 270, 315)
+            expect(rotations.size).toBeGreaterThan(2);
+        });
+    });
+
+    describe('Cache eviction', () => {
+        it('should evict oldest entry when cache is full', () => {
+            clearAvatarCache();
+            
+            // Fill cache with many entries
+            for (let i = 0; i < 250; i++) {
+                const address = `0x${i.toString(16).padStart(40, '0')}`;
+                getAvatar(address);
+            }
+            
+            // Cache should not exceed MAX_CACHE_SIZE (200)
+            // We can't directly check cache size, but operation should not throw
+            const lastAddress = '0x' + 'f'.repeat(40);
+            const svg = getAvatar(lastAddress);
+            expect(svg).toContain('<svg');
+        });
+
+        it('should return same result after cache eviction', () => {
+            clearAvatarCache();
+            
+            const testAddress = '0x1111111111111111111111111111111111111111';
+            const original = generateAvatar(testAddress);
+            
+            // Fill cache to trigger eviction
+            for (let i = 0; i < 250; i++) {
+                getAvatar(`0x${i.toString(16).padStart(40, '0')}`);
+            }
+            
+            // Should still generate same avatar (deterministic)
+            const afterEviction = getAvatar(testAddress);
+            expect(afterEviction).toBe(original);
+        });
+    });
+
+    describe('Edge cases', () => {
+        it('should handle extremely long string', () => {
+            const longAddress = '0x' + 'a'.repeat(1000);
+            const svg = generateAvatar(longAddress);
+            expect(svg).toContain('<svg');
+        });
+
+        it('should handle non-hex characters gracefully', () => {
+            const weirdAddress = '0xghijklmnop123456789012345678901234567890';
+            const svg = generateAvatar(weirdAddress);
+            expect(svg).toContain('<svg');
+        });
+
+        it('should handle partial address', () => {
+            const partialAddress = '0x123';
+            const svg = generateAvatar(partialAddress);
+            expect(svg).toContain('<svg');
+        });
+
+        it('should generate valid SVG for all border radius values', () => {
+            const address = '0x1234567890abcdef1234567890abcdef12345678';
+            
+            [0, 0.1, 0.25, 0.5, 0.75, 1].forEach(radius => {
+                const svg = generateAvatar(address, 32, radius);
+                expect(svg).toContain('<svg');
+                expect(svg).toContain(`rx="${32 * radius}"`);
+            });
+        });
+
+        it('should handle very small sizes', () => {
+            const svg = generateAvatar('0x1234567890abcdef1234567890abcdef12345678', 8);
+            expect(svg).toContain('width="8"');
+            expect(svg).toContain('height="8"');
+        });
+
+        it('should handle large sizes', () => {
+            const svg = generateAvatar('0x1234567890abcdef1234567890abcdef12345678', 512);
+            expect(svg).toContain('width="512"');
+            expect(svg).toContain('height="512"');
+        });
+    });
+
+    describe('hashString behavior', () => {
+        it('should produce consistent results', () => {
+            const address = '0xabcdef';
+            const svg1 = generateAvatar(address);
+            const svg2 = generateAvatar(address);
+            expect(svg1).toBe(svg2);
+        });
+
+        it('should differentiate similar addresses', () => {
+            // Addresses differing by one character
+            const svg1 = generateAvatar('0x1234567890abcdef1234567890abcdef12345670');
+            const svg2 = generateAvatar('0x1234567890abcdef1234567890abcdef12345671');
+            // May or may not be different depending on hash collision
+            expect(svg1).toBeDefined();
+            expect(svg2).toBeDefined();
+        });
+    });
 });

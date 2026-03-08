@@ -19,11 +19,12 @@ export default defineConfig({
         '**/*.bundle.js'
       ],
       thresholds: {
-        // Começar com thresholds baixos, aumentar gradualmente
-        statements: 2,
-        branches: 2,
-        functions: 2,
-        lines: 2
+        // Threshold mínimo para prevenir regressões
+        // Atual: ~23% global - definir 20% como piso
+        statements: 20,
+        branches: 20,
+        functions: 25,
+        lines: 20
       }
     },
     
