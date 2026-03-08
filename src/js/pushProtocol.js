@@ -87,29 +87,41 @@ export function calculateNativeChannelTag(streamId) {
 // ================================================
 
 /**
+ * Get the current time epoch for PoW entropy.
+ * This prevents replay attacks by making the valid nonce change every 10 seconds.
+ * @returns {number} Current epoch (Unix timestamp / 10000)
+ */
+export function getCurrentEpoch() {
+    return Math.floor(Date.now() / 10000);
+}
+
+/**
  * Calculate Proof-of-Work for anti-spam.
  * Uses keccak256 hashing to find a nonce that produces a hash with leading zeros.
+ * Includes current 10-second epoch for entropy to prevent replay attacks.
  * 
  * @param {string} tag - Recipient tag
  * @param {number} difficulty - Number of zeros required (default: 4)
- * @returns {Promise<{pow: string, nonce: number}>}
+ * @returns {Promise<{pow: string, nonce: number, epoch: number}>}
  */
 export async function calculatePoW(tag, difficulty = 4) {
     const maxTime = 30000; // 30 seconds max
     const eth = getEthers();
     const target = '0'.repeat(difficulty);
     const startTime = Date.now();
+    const epoch = getCurrentEpoch();
     
     let nonce = 0;
     let pow;
     
     while (Date.now() - startTime < maxTime) {
-        const data = `${tag}:${nonce}`;
+        // Include epoch for entropy - prevents replay attacks
+        const data = `${tag}:${epoch}:${nonce}`;
         pow = eth.keccak256(eth.toUtf8Bytes(data));
         
         if (pow.slice(2).startsWith(target)) {
-            console.log(`[PoW] Main thread found in ${Date.now() - startTime}ms, nonce: ${nonce}`);
-            return { pow, nonce };
+            console.log(`[PoW] Main thread found in ${Date.now() - startTime}ms, nonce: ${nonce}, epoch: ${epoch}`);
+            return { pow, nonce, epoch };
         }
         
         nonce++;
@@ -125,11 +137,17 @@ export async function calculatePoW(tag, difficulty = 4) {
 
 /**
  * Verify if a PoW is valid (for debug/testing)
+ * @param {string} pow - The hash to verify
+ * @param {string} tag - Recipient tag
+ * @param {number} nonce - Nonce used
+ * @param {number} epoch - 10-second epoch used
+ * @param {number} difficulty - Number of zeros required (default: 4)
+ * @returns {boolean}
  */
-export function verifyPoW(pow, tag, nonce, difficulty = 4) {
+export function verifyPoW(pow, tag, nonce, epoch, difficulty = 4) {
     const eth = getEthers();
     const target = '0'.repeat(difficulty);
-    const data = `${tag}:${nonce}`;
+    const data = `${tag}:${epoch}:${nonce}`;
     const expected = eth.keccak256(eth.toUtf8Bytes(data));
     
     return pow === expected && pow.slice(2).startsWith(target);
@@ -167,13 +185,14 @@ export function createRegistrationPayload(tag, subscription) {
  */
 export async function createChannelNotificationPayload(streamId, difficulty = 4) {
     const tag = calculateChannelTag(streamId);
-    const { pow, nonce } = await calculatePoW(tag, difficulty);
+    const { pow, nonce, epoch } = await calculatePoW(tag, difficulty);
     
     return {
         type: 'notification',
         tag: tag,
         pow: pow,
         nonce: nonce,
+        epoch: epoch,
         channelType: 'public',
         timestamp: Date.now()
     };
@@ -189,13 +208,14 @@ export async function createChannelNotificationPayload(streamId, difficulty = 4)
  */
 export async function createNativeChannelNotificationPayload(streamId, difficulty = 4) {
     const tag = calculateNativeChannelTag(streamId);
-    const { pow, nonce } = await calculatePoW(tag, difficulty);
+    const { pow, nonce, epoch } = await calculatePoW(tag, difficulty);
     
     return {
         type: 'notification',
         tag: tag,
         pow: pow,
         nonce: nonce,
+        epoch: epoch,
         channelType: 'private',
         timestamp: Date.now()
     };
@@ -226,6 +246,7 @@ export const DEFAULT_CONFIG = {
 export default {
     calculateChannelTag,
     calculateNativeChannelTag,
+    getCurrentEpoch,
     calculatePoW,
     verifyPoW,
     createRegistrationPayload,
