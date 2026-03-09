@@ -187,10 +187,10 @@ class MessageRenderer {
             // Include channel ID in placeholder to verify channel context when image arrives
             const channelId = channel?.streamId || '';
             return `
-                <div data-image-id="${escapeAttr(msg.imageId)}" data-channel-id="${escapeAttr(channelId)}" class="bg-[#1a1a1a] rounded-lg p-4 max-w-xs">
+                <div data-image-id="${escapeAttr(msg.imageId)}" data-channel-id="${escapeAttr(channelId)}" class="bg-white/[0.05] rounded-xl p-4 max-w-xs">
                     <div class="flex items-center gap-2">
-                        <div class="animate-spin w-4 h-4 border-2 border-gray-600 border-t-white rounded-full"></div>
-                        <span class="text-gray-500 text-sm">Loading image...</span>
+                        <div class="animate-spin w-4 h-4 border-2 border-white/20 border-t-white rounded-full"></div>
+                        <span class="text-white/40 text-sm">Loading image...</span>
                     </div>
                 </div>
             `;
@@ -248,9 +248,9 @@ class MessageRenderer {
                             </div>
                             ` : ''}
                         </div>
-                        <div class="flex items-center gap-2 mt-1 px-0.5 text-[11px] text-gray-500">
+                        <div class="flex items-center gap-2 mt-1 px-0.5 text-[11px] text-white/40">
                             <span class="truncate flex-1">${safeFileName}</span>
-                            <span class="text-gray-600">${this.formatFileSize(metadata.fileSize)}</span>
+                            <span class="text-white/25">${this.formatFileSize(metadata.fileSize)}</span>
                             <a href="${videoUrl}" download="${safeFileName}" class="text-blue-400 hover:text-blue-300">Save</a>
                         </div>
                     </div>
@@ -258,7 +258,7 @@ class MessageRenderer {
             } else {
                 return `
                     <div data-file-id="${safeFileId}" class="video-container">
-                        <div class="flex items-center gap-2 bg-[#1a1a1a] rounded-lg p-2">
+                        <div class="flex items-center gap-2 bg-white/[0.05] rounded-xl p-2">
                             <svg class="w-8 h-8 text-purple-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/>
                             </svg>
@@ -284,7 +284,7 @@ class MessageRenderer {
         // Video not available yet - show preview panel
         return `
             <div data-file-id="${safeFileId}" class="video-container">
-                <div class="relative rounded-lg overflow-hidden bg-[#1a1a1a] cursor-pointer group"
+                <div class="relative rounded-xl overflow-hidden bg-white/[0.05] cursor-pointer group"
                      style="aspect-ratio: 16/9; width: 220px;">
                     <div class="absolute inset-0 flex items-center justify-center">
                         <svg class="w-10 h-10 text-purple-500/20" fill="currentColor" viewBox="0 0 24 24">
@@ -306,10 +306,10 @@ class MessageRenderer {
                     </button>
                     <div data-progress-overlay="${safeFileId}" class="hidden absolute inset-0 bg-black/70 flex flex-col items-center justify-center">
                         <div class="text-white text-sm font-medium" data-progress-percent="${safeFileId}">0%</div>
-                        <div class="w-2/3 bg-gray-700 rounded-full h-1.5 mt-1.5">
+                        <div class="w-2/3 bg-white/10 rounded-full h-1.5 mt-1.5">
                             <div data-progress-fill="${safeFileId}" class="bg-blue-500 h-1.5 rounded-full transition-all duration-300" style="width: 0%"></div>
                         </div>
-                        <div class="text-[10px] text-gray-400 mt-1" data-progress-text="${safeFileId}">Starting...</div>
+                        <div class="text-[10px] text-white/30 mt-1" data-progress-text="${safeFileId}">Starting...</div>
                     </div>
                     <div class="absolute top-1.5 left-1.5 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1">
                         <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20">
@@ -317,9 +317,9 @@ class MessageRenderer {
                         </svg>
                         ${this.formatFileSize(metadata.fileSize)}
                     </div>
-                    <div class="absolute top-1.5 right-1.5 bg-black/60 text-gray-400 text-[10px] px-1.5 py-0.5 rounded" data-seeder-count="${safeFileId}"></div>
+                    <div class="absolute top-1.5 right-1.5 bg-black/60 text-white/30 text-[10px] px-1.5 py-0.5 rounded" data-seeder-count="${safeFileId}"></div>
                 </div>
-                <div class="mt-1 px-0.5 text-[11px] text-gray-500 truncate" title="${escapeHtml(sanitizeText(metadata.fileName))}">
+                <div class="mt-1 px-0.5 text-[11px] text-white/40 truncate" title="${escapeHtml(sanitizeText(metadata.fileName))}">
                     ${escapeHtml(sanitizeText(metadata.fileName))}
                 </div>
             </div>
@@ -400,7 +400,7 @@ class MessageRenderer {
                     <div class="message-content">${contentHtml}</div>
                     <div class="message-footer">
                         ${reactionsHtml}
-                        <span class="message-time text-xs text-gray-500">${time}</span>
+                        <span class="message-time text-xs text-white/40">${time}</span>
                     </div>
                     ${msg.verified && !msg.verified.valid && msg.signature ? '<div class="text-xs text-red-400 mt-1">⚠️ Invalid signature</div>' : ''}
                     <span class="reply-trigger reply-btn" data-msg-id="${escapeAttr(msgId)}" title="Reply"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17l-5-5 5-5"/><path d="M4 12h11a4 4 0 0 1 4 4v4"/></svg></span>

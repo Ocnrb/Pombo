@@ -57,7 +57,7 @@ class JoinChannelUI {
         
         if (hasInput) {
             // Show "Join" mode with orange styling
-            btn.classList.remove('text-[#888]', 'hover:text-white');
+            btn.classList.remove('text-white/50', 'hover:text-white');
             btn.classList.add('text-[#F6851B]', 'hover:text-[#ff9933]', 'border-[#F6851B]/30');
             text.textContent = 'Join';
             // Change icon to chat bubble (message balloon)
@@ -65,7 +65,7 @@ class JoinChannelUI {
         } else {
             // Show "Explore" mode with default styling
             btn.classList.remove('text-[#F6851B]', 'hover:text-[#ff9933]', 'border-[#F6851B]/30');
-            btn.classList.add('text-[#888]', 'hover:text-white');
+            btn.classList.add('text-white/50', 'hover:text-white');
             text.textContent = 'Explore';
             // Restore globe icon
             icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"/>';
@@ -308,14 +308,14 @@ class JoinChannelUI {
             const safeTitle = this._escapeHtml(title);
             const safeMessage = this._escapeHtml(message);
             modal.innerHTML = `
-                <div class="bg-[#111111] rounded-xl p-5 w-[340px] max-w-full mx-4 border border-[#222]">
+                <div class="bg-[#111113] rounded-2xl p-5 w-[340px] max-w-full mx-4 border border-white/[0.06]">
                     <h3 class="text-[15px] font-medium mb-2 text-white">${safeTitle}</h3>
-                    <p class="text-[12px] text-[#888] mb-4">${safeMessage}</p>
+                    <p class="text-[12px] text-white/50 mb-4">${safeMessage}</p>
                     <input type="password" id="browse-password-input" placeholder="Password" 
-                        class="w-full bg-[#1a1a1a] border border-[#282828] text-white px-3 py-2.5 rounded-lg text-[13px] focus:outline-none focus:border-[#444] transition mb-4"
+                        class="w-full bg-white/[0.05] border border-white/[0.08] text-white px-3 py-2.5 rounded-xl text-[13px] focus:outline-none focus:border-white/[0.15] transition mb-4"
                         autocomplete="off">
                     <div class="flex gap-2">
-                        <button id="cancel-pw-btn" class="flex-1 bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] text-[#888] text-[13px] font-medium py-2.5 rounded-lg transition">
+                        <button id="cancel-pw-btn" class="flex-1 bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] text-white/50 text-[13px] font-medium py-2.5 rounded-xl transition">
                             Cancel
                         </button>
                         <button id="confirm-pw-btn" class="flex-1 bg-white hover:bg-[#f0f0f0] text-black text-[13px] font-medium py-2.5 rounded-lg transition">
@@ -365,10 +365,10 @@ class JoinChannelUI {
             const modal = document.createElement('div');
             modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50';
             modal.innerHTML = `
-                <div class="bg-[#111111] rounded-xl p-5 border border-[#222]">
+                <div class="bg-[#111113] rounded-2xl p-5 border border-white/[0.06]">
                     <h3 class="text-[15px] font-medium mb-4 text-white">Invite QR Code</h3>
                     <div id="qr-container" class="bg-white p-3 rounded-lg flex items-center justify-center"></div>
-                    <button class="mt-4 w-full bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] text-[#888] text-[13px] font-medium px-4 py-2.5 rounded-lg transition">Close</button>
+                    <button class="mt-4 w-full bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] text-white/50 text-[13px] font-medium px-4 py-2.5 rounded-xl transition">Close</button>
                 </div>
             `;
             

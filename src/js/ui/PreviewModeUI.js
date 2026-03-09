@@ -183,7 +183,7 @@ class PreviewModeUI {
 
         // Clear messages area first and show loading spinner
         elements.messagesArea.innerHTML = `
-            <div class="flex flex-col items-center justify-center h-full text-gray-500">
+            <div class="flex flex-col items-center justify-center h-full text-white/40">
                 <div class="spinner mb-3" style="width: 24px; height: 24px;"></div>
                 <span class="text-sm">Loading messages...</span>
             </div>
@@ -198,7 +198,7 @@ class PreviewModeUI {
             if (this.previewChannel && this.previewChannel.isLoading && this.previewChannel.messages.length === 0) {
                 this.previewChannel.isLoading = false;
                 elements.messagesArea.innerHTML = `
-                    <div class="flex items-center justify-center h-full text-gray-500">
+                    <div class="flex items-center justify-center h-full text-white/40">
                         No messages yet. Start the conversation!
                     </div>
                 `;

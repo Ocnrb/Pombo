@@ -130,8 +130,10 @@ class UIController {
             notificationManager,
             relayManager,
             notificationUI,
+            contactsUI,
             showNotification: (msg, type) => this.showNotification(msg, type),
             updateWalletInfo: (address, isGuest) => headerUI.updateWalletInfo(address, isGuest),
+            updateDisplayName: (username) => headerUI.updateDisplayName(username),
             updateNetworkStatus: (status, connected) => headerUI.updateNetworkStatus(status, connected),
             renderChannelList: () => this.renderChannelList(),
             resetToDisconnectedState: () => this.resetToDisconnectedState(),
@@ -168,6 +170,7 @@ class UIController {
         contactsUI.setDependencies({
             identityManager,
             Logger,
+            settingsUI,
             showNotification: (msg, type) => this.showNotification(msg, type),
             showLoading: (msg) => this.showLoading(msg),
             hideLoading: () => this.hideLoading()
@@ -549,7 +552,7 @@ class UIController {
             const countEl = document.querySelector(`[data-channel-count="${streamId}"]`);
             if (countEl && activity.unreadCount > 0) {
                 countEl.textContent = activity.unreadCount >= 30 ? '+30' : activity.unreadCount;
-                countEl.classList.remove('hidden', 'text-[#666]', 'bg-[#252525]');
+                countEl.classList.remove('hidden', 'text-white/30', 'bg-white/[0.06]');
                 countEl.classList.add('text-white', 'bg-[#F6851B]/20');
             }
         });
@@ -1132,7 +1135,7 @@ class UIController {
         
         // Reset online users list
         if (this.elements.onlineUsersList) {
-            this.elements.onlineUsersList.innerHTML = '<div class="text-gray-400 text-sm text-center">No one online</div>';
+            this.elements.onlineUsersList.innerHTML = '<div class="text-white/30 text-sm text-center">No one online</div>';
         }
         if (this.elements.onlineUsersCount) {
             this.elements.onlineUsersCount.textContent = '0';
@@ -1167,7 +1170,7 @@ class UIController {
         
         // Remove selection highlight from channel list
         document.querySelectorAll('.channel-item').forEach(item => {
-            item.classList.remove('bg-[#252525]');
+            item.classList.remove('bg-white/[0.06]');
         });
         
         // Push to browser history
@@ -1566,7 +1569,7 @@ class UIController {
                                     </div>
                                     ` : ''}
                                 </div>
-                                <div class="flex items-center justify-between mt-1 text-xs text-gray-500">
+                                <div class="flex items-center justify-between mt-1 text-xs text-white/40">
                                     <span class="truncate flex-1">${safeFileName}</span>
                                     <div class="flex items-center gap-2 ml-2">
                                         <span>${messageRenderer.formatFileSize(metadata.fileSize)}</span>
@@ -1589,12 +1592,12 @@ class UIController {
                                     const parent = videoEl.closest('[data-file-id]');
                                     if (parent) {
                                         parent.innerHTML = `
-                                            <div class="bg-[#252525] rounded-lg p-3">
+                                            <div class="bg-white/[0.06] rounded-lg p-3">
                                                 <div class="flex items-center gap-2 mb-2">
                                                     <svg class="w-5 h-5 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
                                                     </svg>
-                                                    <span class="text-sm text-gray-300">Format not supported</span>
+                                                    <span class="text-sm text-white/70">Format not supported</span>
                                                 </div>
                                                 <a href="${url}" download="${safeFileName}" class="block w-full bg-blue-600 hover:bg-blue-700 text-white text-center px-3 py-2 rounded-lg text-sm transition">
                                                     Download ${safeFileName}
@@ -1611,7 +1614,7 @@ class UIController {
                         // Format not playable - show download button
                         container.outerHTML = `
                             <div data-file-id="${_escapeAttr(fileId)}" class="max-w-xs">
-                                <div class="bg-[#252525] rounded-lg p-3">
+                                <div class="bg-white/[0.06] rounded-lg p-3">
                                     <div class="flex items-center gap-2 mb-2">
                                         <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/>
@@ -1622,7 +1625,7 @@ class UIController {
                                         ⚠️ Format not supported in browser (${safeFileType.split('/')[1]?.toUpperCase() || 'video'})
                                     </div>
                                     <div class="flex items-center justify-between">
-                                        <span class="text-xs text-gray-400">${messageRenderer.formatFileSize(metadata.fileSize)}</span>
+                                        <span class="text-xs text-white/30">${messageRenderer.formatFileSize(metadata.fileSize)}</span>
                                         <a href="${url}" download="${safeFileName}" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-sm transition">
                                             Download
                                         </a>
@@ -1738,6 +1741,8 @@ class UIController {
             this.elements.sidebar?.classList.remove('chat-active');
             this.elements.chatArea?.classList.remove('active');
             document.body.classList.remove('chat-open');
+            // Clean up any dangling modal body classes
+            document.body.classList.remove('settings-open', 'contacts-open', 'new-channel-open');
         }
     }
 

@@ -71,6 +71,24 @@ class ContactsUI {
             this.init();
         }
         this.renderList();
+        // Add contacts-open class for mobile
+        if (window.innerWidth < 768) {
+            // Close settings modal if open (using proper hide to run cleanup)
+            const settingsModal = document.getElementById('settings-modal');
+            if (settingsModal && !settingsModal.classList.contains('hidden')) {
+                if (this.deps?.settingsUI?.hide) {
+                    this.deps.settingsUI.hide();
+                } else {
+                    document.body.classList.remove('settings-open');
+                    settingsModal.classList.add('hidden');
+                }
+            }
+            document.body.classList.add('contacts-open');
+            // Update pill nav active tab
+            document.querySelectorAll('.pill-nav-item[data-pill-tab]').forEach(item => {
+                item.classList.toggle('active', item.dataset.pillTab === 'contacts');
+            });
+        }
         modalManager.show('contacts-modal');
     }
 
@@ -79,6 +97,12 @@ class ContactsUI {
      */
     hide() {
         modalManager.hide('contacts-modal');
+        // Remove contacts-open class for mobile
+        document.body.classList.remove('contacts-open');
+        // Reset pill nav to chats tab
+        document.querySelectorAll('.pill-nav-item[data-pill-tab]').forEach(item => {
+            item.classList.toggle('active', item.dataset.pillTab === 'chats');
+        });
         // Clear inputs
         if (this.elements.addContactAddress) this.elements.addContactAddress.value = '';
         if (this.elements.addContactNickname) this.elements.addContactNickname.value = '';
@@ -93,7 +117,7 @@ class ContactsUI {
         
         if (contacts.length === 0) {
             this.elements.contactsList.innerHTML = `
-                <div class="text-center text-[#555] py-8 text-[13px]">No trusted contacts yet</div>
+                <div class="text-center text-white/25 py-8 text-[13px]">No trusted contacts yet</div>
             `;
             return;
         }
@@ -102,16 +126,16 @@ class ContactsUI {
             const avatarSvg = getAvatar(contact.address, 32, 0.22);
             // Defense-in-depth: sanitize user-provided nickname
             return `
-                <div class="flex items-center justify-between p-3 bg-[#1a1a1a] border border-[#282828] rounded-lg">
+                <div class="flex items-center justify-between p-3 bg-white/[0.05] border border-white/[0.08] rounded-xl">
                     <div class="flex items-center gap-3 flex-1 min-w-0">
                         <div class="flex-shrink-0" style="width:32px;height:32px;border-radius:6px;overflow:hidden;">${avatarSvg}</div>
                         <div class="flex-1 min-w-0">
                             <span class="text-[13px] font-medium text-white truncate block">${escapeHtml(sanitizeText(contact.nickname))}</span>
-                            <div class="text-[10px] text-[#666] font-mono truncate mt-0.5">${contact.address}</div>
+                            <div class="text-[10px] text-white/30 font-mono truncate mt-0.5">${contact.address}</div>
                         </div>
                     </div>
                     <button 
-                        class="remove-contact-btn ml-2 text-[#555] hover:text-red-400 p-1.5 transition"
+                        class="remove-contact-btn ml-2 text-white/25 hover:text-red-400 p-1.5 transition"
                         data-address="${escapeAttr(contact.address)}"
                         title="Remove contact"
                     >

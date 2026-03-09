@@ -17,6 +17,8 @@ import { Logger } from './logger.js';
 import { getAvatar } from './ui/AvatarGenerator.js';
 import { escapeHtml, escapeAttr } from './ui/utils.js';
 import { headerUI } from './ui/HeaderUI.js';
+import { settingsUI } from './ui/SettingsUI.js';
+import { contactsUI } from './ui/ContactsUI.js';
 import { chatAreaUI } from './ui/ChatAreaUI.js';
 import { reactionManager } from './ui/ReactionManager.js';
 import { mediaHandler } from './ui/MediaHandler.js';
@@ -61,6 +63,17 @@ class App {
 
             // Set up wallet connection handlers
             this.setupWalletHandlers();
+
+            // Initialize mobile pill nav
+            headerUI.initPillNav({
+                onConnect: () => this.connectWallet(),
+                onDisconnect: () => this.disconnectWallet(),
+                onSwitchWallet: (addr) => this.switchWallet(addr),
+                onChatsTab: () => {
+                    settingsUI.hide();
+                    contactsUI.hide();
+                }
+            });
 
             // Check for invite link in URL
             this.checkInviteLink();
@@ -267,12 +280,12 @@ class App {
             const modal = document.createElement('div');
             modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 animate-fadeIn';
             modal.innerHTML = `
-                <div class="bg-[#111111] rounded-xl w-[360px] overflow-hidden shadow-2xl border border-[#222] animate-slideUp">
+                <div class="bg-[#111113] rounded-2xl w-[360px] overflow-hidden shadow-2xl border border-white/[0.06] animate-slideUp">
                     <!-- Header -->
                     <div class="px-5 pt-5 pb-3">
                         <div class="flex items-center justify-between">
                             <h3 class="text-[15px] font-medium text-white">Unlock Account</h3>
-                            <button id="close-modal" class="text-[#666] hover:text-white transition p-1 -mr-1">
+                            <button id="close-modal" class="text-white/30 hover:text-white transition p-1 -mr-1">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
                                 </svg>
@@ -283,12 +296,12 @@ class App {
                     ${singleWallet ? `
                     <!-- Single Wallet Display -->
                     <div class="px-5 pb-4">
-                        <div class="bg-[#1a1a1a] rounded-lg p-3 border border-[#282828]">
+                        <div class="bg-white/[0.05] rounded-xl p-3 border border-white/[0.08]">
                             <div class="flex items-center gap-3">
                                 <div class="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0">${getAvatar(wallet.address, 40, 0.2)}</div>
                                 <div class="flex-1 min-w-0">
                                     <div class="text-[13px] font-medium text-white truncate">${escapeAttr(getDisplayName(wallet, 0))}</div>
-                                    <div class="text-[11px] text-[#888] font-mono">${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}</div>
+                                    <div class="text-[11px] text-white/50 font-mono">${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}</div>
                                 </div>
                             </div>
                         </div>
@@ -298,14 +311,14 @@ class App {
                     <div class="px-5 pb-4">
                         <div class="space-y-2 max-h-40 overflow-y-auto scrollbar-thin">
                             ${wallets.map((w, i) => `
-                                <button class="wallet-item w-full bg-[#1a1a1a] hover:bg-[#202020] rounded-lg p-3 border border-[#282828] hover:border-[#444] transition-all text-left ${i === 0 ? 'selected border-[#444]' : ''}" data-address="${escapeAttr(w.address)}" data-name="${escapeAttr(w.name)}">
+                                <button class="wallet-item w-full bg-white/[0.05] hover:bg-white/[0.08] rounded-xl p-3 border border-white/[0.08] hover:border-white/[0.12] transition-all text-left ${i === 0 ? 'selected border-white/[0.12]' : ''}" data-address="${escapeAttr(w.address)}" data-name="${escapeAttr(w.name)}">
                                     <div class="flex items-center gap-3">
                                         <div class="w-9 h-9 rounded-lg overflow-hidden flex-shrink-0">${getAvatar(w.address, 36, 0.2)}</div>
                                         <div class="flex-1 min-w-0">
                                             <div class="text-[13px] font-medium text-white truncate">${escapeAttr(getDisplayName(w, i))}</div>
-                                            <div class="text-[11px] text-[#888] font-mono">${w.address.slice(0, 6)}...${w.address.slice(-4)}</div>
+                                            <div class="text-[11px] text-white/50 font-mono">${w.address.slice(0, 6)}...${w.address.slice(-4)}</div>
                                         </div>
-                                        <div class="w-4 h-4 rounded-full border border-[#444] group-[.selected]:bg-white flex items-center justify-center">
+                                        <div class="w-4 h-4 rounded-full border border-white/[0.12] group-[.selected]:bg-white flex items-center justify-center">
                                             <div class="w-2 h-2 rounded-full bg-white opacity-0 selected-dot"></div>
                                         </div>
                                     </div>
@@ -320,9 +333,9 @@ class App {
                         <div class="relative">
                             <input type="password" id="wallet-password" 
                                 placeholder="Password"
-                                class="w-full bg-[#1a1a1a] border border-[#282828] rounded-lg px-3 py-2.5 text-[13px] text-white placeholder-[#555] focus:outline-none focus:border-[#444] transition"
+                                class="w-full bg-white/[0.05] border border-white/[0.08] rounded-xl px-3 py-2.5 text-[13px] text-white placeholder-white/25 focus:outline-none focus:border-white/[0.15] transition"
                                 autocomplete="off">
-                            <button id="toggle-password" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#555] hover:text-white transition">
+                            <button id="toggle-password" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/25 hover:text-white transition">
                                 <svg id="eye-icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/>
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
@@ -340,11 +353,11 @@ class App {
                     </div>
                     
                     <!-- Footer -->
-                    <div class="border-t border-[#222] px-5 py-3 bg-[#0d0d0d]">
+                    <div class="border-t border-white/[0.06] px-5 py-3 bg-[#09090b]">
                         <div class="flex items-center justify-center gap-3 text-[12px]">
-                            <button id="create-new-btn" class="text-[#666] hover:text-white transition">New account</button>
-                            <span class="text-[#333]">·</span>
-                            <button id="import-btn" class="text-[#666] hover:text-white transition">Import</button>
+                            <button id="create-new-btn" class="text-white/30 hover:text-white transition">New account</button>
+                            <span class="text-white/15">·</span>
+                            <button id="import-btn" class="text-white/30 hover:text-white transition">Import</button>
                         </div>
                     </div>
                 </div>
@@ -371,8 +384,8 @@ class App {
             // Wallet selection
             walletItems.forEach(item => {
                 item.addEventListener('click', () => {
-                    walletItems.forEach(w => w.classList.remove('selected', 'border-[#444]'));
-                    item.classList.add('selected', 'border-[#444]');
+                    walletItems.forEach(w => w.classList.remove('selected', 'border-white/[0.12]'));
+                    item.classList.add('selected', 'border-white/[0.12]');
                     selectedAddress = item.dataset.address;
                     selectedName = item.dataset.name;
                     passwordInput.focus();
@@ -736,7 +749,7 @@ class App {
             const modal = document.createElement('div');
             modal.className = 'fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4';
             modal.innerHTML = `
-                <div class="bg-[#141414] rounded-2xl w-[420px] max-w-[95vw] shadow-2xl border border-white/5 overflow-hidden">
+                <div class="bg-[#111113] rounded-2xl w-[420px] max-w-[95vw] shadow-2xl border border-white/[0.06] overflow-hidden">
                     <!-- Step 1: Account Created -->
                     <div id="step-1">
                         <!-- Header -->
@@ -1057,7 +1070,7 @@ class App {
             const modal = document.createElement('div');
             modal.className = 'fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4';
             modal.innerHTML = `
-                <div class="bg-[#141414] rounded-2xl w-[420px] max-w-[95vw] shadow-2xl border border-white/5 overflow-hidden">
+                <div class="bg-[#111113] rounded-2xl w-[420px] max-w-[95vw] shadow-2xl border border-white/[0.06] overflow-hidden">
                     <!-- Step 1: Import Private Key -->
                     <div id="step-1">
                         <!-- Header -->
@@ -1475,12 +1488,12 @@ class App {
             const modal = document.createElement('div');
             modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 animate-fadeIn';
             modal.innerHTML = `
-                <div class="bg-[#111111] rounded-xl w-[360px] overflow-hidden shadow-2xl border border-[#222] animate-slideUp">
+                <div class="bg-[#111113] rounded-2xl w-[360px] overflow-hidden shadow-2xl border border-white/[0.06] animate-slideUp">
                     <!-- Header -->
                     <div class="px-5 pt-5 pb-3">
                         <div class="flex items-center justify-between">
                             <h3 class="text-[15px] font-medium text-white">Select Account</h3>
-                            <button id="close-modal" class="text-[#666] hover:text-white transition p-1 -mr-1">
+                            <button id="close-modal" class="text-white/30 hover:text-white transition p-1 -mr-1">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
                                 </svg>
@@ -1492,12 +1505,12 @@ class App {
                     <div class="px-5 pb-5">
                         <div class="space-y-2 max-h-60 overflow-y-auto scrollbar-thin">
                             ${wallets.map((w, i) => `
-                                <button class="account-option w-full bg-[#1a1a1a] hover:bg-[#202020] rounded-lg p-3 border border-[#282828] hover:border-[#444] transition-all text-left" data-address="${escapeAttr(w.address)}">
+                                <button class="account-option w-full bg-white/[0.05] hover:bg-white/[0.08] rounded-xl p-3 border border-white/[0.08] hover:border-white/[0.12] transition-all text-left" data-address="${escapeAttr(w.address)}">
                                     <div class="flex items-center gap-3">
                                         <div class="w-9 h-9 rounded-lg overflow-hidden flex-shrink-0">${getAvatar(w.address, 36, 0.2)}</div>
                                         <div class="flex-1 min-w-0">
                                             <div class="text-[13px] font-medium text-white truncate">${escapeAttr(getDisplayName(w, i))}</div>
-                                            <div class="text-[11px] text-[#888] font-mono">${w.address.slice(0, 6)}...${w.address.slice(-4)}</div>
+                                            <div class="text-[11px] text-white/50 font-mono">${w.address.slice(0, 6)}...${w.address.slice(-4)}</div>
                                         </div>
                                     </div>
                                 </button>
@@ -1637,6 +1650,11 @@ class App {
             try {
                 await identityManager.init();
                 Logger.info('Identity manager initialized');
+                // Show username instead of address if one is set
+                const username = identityManager.getUsername();
+                if (username) {
+                    headerUI.updateDisplayName(username);
+                }
             } catch (idError) {
                 Logger.warn('Identity manager init failed (non-critical):', idError);
             }

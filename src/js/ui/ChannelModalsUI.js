@@ -47,6 +47,7 @@ class ChannelModalsUI {
      * Show new channel modal
      */
     show() {
+        document.body.classList.add('new-channel-open');
         this.deps.modalManager?.show('new-channel-modal');
         if (this.elements.channelNameInput) this.elements.channelNameInput.value = '';
         if (this.elements.channelPasswordInput) this.elements.channelPasswordInput.value = '';
@@ -82,6 +83,7 @@ class ChannelModalsUI {
      * Hide new channel modal
      */
     hide() {
+        document.body.classList.remove('new-channel-open');
         this.deps.modalManager?.hideNewChannelModal();
     }
 

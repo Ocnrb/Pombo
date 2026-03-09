@@ -38,7 +38,7 @@ class ExploreUI {
             : '';
 
         return `
-            <div class="explore-view flex flex-col h-full bg-[#161616]">
+            <div class="explore-view flex flex-col h-full bg-[#0f0f12]">
                 <!-- Filters Section -->
                 <div class="px-4 pt-3 pb-3 space-y-3">
                     <!-- Search + Language Filter -->
@@ -90,7 +90,7 @@ class ExploreUI {
                             <button type="button" data-category="comedy" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">Comedy</button>
                             ${nsfwChips}
                         </div>
-                        <button id="explore-toggle-categories-btn" type="button" class="hidden absolute right-0 top-0 h-[26px] px-2 items-center bg-gradient-to-l from-[#161616] via-[#161616] to-transparent pl-6 text-white/40 hover:text-white/60 transition">
+                        <button id="explore-toggle-categories-btn" type="button" class="hidden absolute right-0 top-0 h-[26px] px-2 items-center bg-gradient-to-l from-[#0f0f12] via-[#0f0f12] to-transparent pl-6 text-white/40 hover:text-white/60 transition">
                             <svg id="explore-toggle-categories-icon" class="w-4 h-4 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 9l-7 7-7-7"/>
                             </svg>
@@ -99,7 +99,7 @@ class ExploreUI {
                 </div>
 
                 <!-- Subtle separator -->
-                <div class="mx-4 border-t border-[#333]"></div>
+                <div class="mx-4 border-t border-white/[0.06]"></div>
 
                 <!-- Channel List -->
                 <div id="explore-channels-list" class="flex-1 overflow-y-auto px-4 py-3 space-y-2">
@@ -304,7 +304,7 @@ class ExploreUI {
                 : '';
             
             return `
-            <div class="p-3 bg-white/5 border border-white/5 rounded-xl hover:bg-white/[0.07] hover:border-white/10 transition cursor-pointer explore-channel-item group" data-stream-id="${escapeAttr(ch.streamId)}" data-type="${escapeAttr(ch.type || 'public')}">
+            <div class="p-3.5 bg-white/[0.03] border border-white/[0.05] rounded-2xl hover:bg-white/[0.06] hover:border-white/[0.1] transition-all duration-200 cursor-pointer explore-channel-item group" data-stream-id="${escapeAttr(ch.streamId)}" data-type="${escapeAttr(ch.type || 'public')}">
                 <div class="flex items-start justify-between gap-3">
                     <div class="flex-1 min-w-0">
                         <div class="flex items-center gap-2 flex-wrap">
@@ -313,11 +313,11 @@ class ExploreUI {
                         </div>
                         ${description}
                     </div>
-                    <svg class="w-4 h-4 text-white/20 group-hover:text-white/40 flex-shrink-0 mt-0.5 transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg class="w-4 h-4 text-white/15 group-hover:text-white/30 flex-shrink-0 mt-0.5 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
                     </svg>
                 </div>
-                <div class="flex items-center gap-1.5 mt-2">
+                <div class="flex items-center gap-1.5 mt-2.5">
                     ${categoryBadge}
                     ${languageBadge}
                 </div>
@@ -358,10 +358,10 @@ class ExploreUI {
             const isActive = tab.dataset.browseFilter === this.browseTypeFilter;
             if (isActive) {
                 tab.classList.add('text-[#F6851B]', 'border-[#F6851B]');
-                tab.classList.remove('text-white/40', 'hover:text-white/60', 'border-transparent');
+                tab.classList.remove('text-white/30', 'hover:text-white/50', 'border-transparent');
             } else {
                 tab.classList.remove('text-[#F6851B]', 'border-[#F6851B]');
-                tab.classList.add('text-white/40', 'hover:text-white/60', 'border-transparent');
+                tab.classList.add('text-white/30', 'hover:text-white/50', 'border-transparent');
             }
         });
     }

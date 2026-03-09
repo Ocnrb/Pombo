@@ -129,7 +129,7 @@ class ChatAreaUI {
         
         if (messages.length === 0) {
             this.messagesArea.innerHTML = `
-                <div class="flex items-center justify-center h-full text-gray-500">
+                <div class="flex items-center justify-center h-full text-white/40">
                     No messages yet. Start the conversation!
                 </div>
             `;
@@ -143,7 +143,7 @@ class ChatAreaUI {
         if (!hasMoreHistory) {
             historyStartIndicator = `
                 <div class="flex justify-center py-4">
-                    <div class="text-[#444] text-xs">
+                    <div class="text-white/[0.12] text-xs">
                         — beginning of conversation —
                     </div>
                 </div>
@@ -355,12 +355,12 @@ class ChatAreaUI {
         
         if (hasUnread) {
             countEl.textContent = unreadCount >= 30 ? '+30' : unreadCount;
-            countEl.classList.remove('hidden', 'text-[#666]', 'bg-[#252525]');
+            countEl.classList.remove('hidden', 'text-white/30', 'bg-white/[0.06]');
             countEl.classList.add('text-white', 'bg-[#F6851B]/20');
         } else {
             countEl.classList.add('hidden');
             countEl.classList.remove('text-white', 'bg-[#F6851B]/20');
-            countEl.classList.add('text-[#666]', 'bg-[#252525]');
+            countEl.classList.add('text-white/30', 'bg-white/[0.06]');
         }
     }
 
@@ -385,8 +385,8 @@ class ChatAreaUI {
         if (!msg.signature) {
             return {
                 html: '',
-                textColor: 'text-gray-400',
-                bgColor: 'bg-gray-700',
+                textColor: 'text-white/30',
+                bgColor: 'bg-white/10',
                 border: ''
             };
         }
@@ -436,7 +436,7 @@ class ChatAreaUI {
     showEmptyState(message = 'Select a channel to start chatting') {
         if (this.messagesArea) {
             this.messagesArea.innerHTML = `
-                <div class="flex items-center justify-center h-full text-gray-500">
+                <div class="flex items-center justify-center h-full text-white/40">
                     ${escapeHtml(message)}
                 </div>
             `;

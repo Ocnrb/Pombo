@@ -80,10 +80,10 @@ class InviteUI {
         document.querySelectorAll('.invite-tab').forEach(tab => {
             if (tab.dataset.inviteTab === tabType) {
                 tab.classList.add('bg-white', 'text-black', 'font-medium');
-                tab.classList.remove('text-[#888]', 'hover:text-white', 'hover:bg-[#252525]');
+                tab.classList.remove('text-white/50', 'hover:text-white', 'hover:bg-white/[0.06]');
             } else {
                 tab.classList.remove('bg-white', 'text-black', 'font-medium');
-                tab.classList.add('text-[#888]', 'hover:text-white', 'hover:bg-[#252525]');
+                tab.classList.add('text-white/50', 'hover:text-white', 'hover:bg-white/[0.06]');
             }
         });
 

@@ -53,20 +53,20 @@ class SettingsUI {
         const modal = document.createElement('div');
         modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50';
         modal.innerHTML = `
-            <div class="bg-[#111111] rounded-xl w-[300px] overflow-hidden shadow-2xl border border-[#222]">
+            <div class="bg-[#111113] rounded-2xl w-[300px] overflow-hidden shadow-2xl border border-white/[0.06]">
                 <div class="px-5 pt-5 pb-2">
                     <h3 class="text-[14px] font-medium text-white">${title}</h3>
-                    <p class="text-[11px] text-[#666] mt-0.5">${subtitle}</p>
+                    <p class="text-[11px] text-white/30 mt-0.5">${subtitle}</p>
                 </div>
                 <div class="px-5 pb-5 pt-3">
                     <div class="flex items-center justify-between mb-1.5">
-                        <span class="text-[10px] text-[#666]">Progress</span>
+                        <span class="text-[10px] text-white/30">Progress</span>
                         <span class="text-[10px] font-medium text-white" id="progress-label">0%</span>
                     </div>
-                    <div class="h-1.5 bg-[#1a1a1a] rounded-full overflow-hidden">
+                    <div class="h-1.5 bg-white/[0.05] rounded-full overflow-hidden">
                         <div id="progress-bar" class="h-full bg-white transition-all duration-300 ease-out" style="width: 0%"></div>
                     </div>
-                    <p class="text-[10px] text-[#555] text-center mt-3">This may take a few seconds...</p>
+                    <p class="text-[10px] text-white/25 text-center mt-3">This may take a few seconds...</p>
                 </div>
             </div>
         `;
@@ -708,6 +708,7 @@ class SettingsUI {
                 const newName = e.target.value;
                 await this.identityManager.setUsername(newName);
                 this.authManager.updateWalletName(newName || null);
+                this.deps.updateDisplayName?.(newName || null);
                 this.showNotification('Username updated!', 'success');
             });
         }
@@ -841,7 +842,21 @@ class SettingsUI {
 
             // Add settings-open class for mobile slide-in effect
             if (this.isMobileView && this.isMobileView()) {
+                // Close contacts modal if open (using proper hide to run cleanup)
+                const contactsModal = document.getElementById('contacts-modal');
+                if (contactsModal && !contactsModal.classList.contains('hidden')) {
+                    if (this.deps.contactsUI?.hide) {
+                        this.deps.contactsUI.hide();
+                    } else {
+                        document.body.classList.remove('contacts-open');
+                        contactsModal.classList.add('hidden');
+                    }
+                }
                 document.body.classList.add('settings-open');
+                // Update pill nav active tab
+                document.querySelectorAll('.pill-nav-item[data-pill-tab]').forEach(item => {
+                    item.classList.toggle('active', item.dataset.pillTab === 'settings');
+                });
             }
 
             this.modalManager?.show('settings-modal');
@@ -854,6 +869,10 @@ class SettingsUI {
     hide() {
         // Remove settings-open class for mobile
         document.body.classList.remove('settings-open');
+        // Reset pill nav to chats tab
+        document.querySelectorAll('.pill-nav-item[data-pill-tab]').forEach(item => {
+            item.classList.toggle('active', item.dataset.pillTab === 'chats');
+        });
         this.modalManager?.hide('settings-modal');
     }
 
@@ -897,7 +916,7 @@ class SettingsUI {
         let touchStartY = 0;
         let isSwiping = false;
         
-        const modalContainer = modal.querySelector('.bg-\\[\\#141414\\]');
+        const modalContainer = modal.querySelector('.bg-\\[\\#111113\\]');
         if (!modalContainer) return;
 
         modalContainer.addEventListener('touchstart', (e) => {
@@ -1122,7 +1141,7 @@ class SettingsUI {
         if (isDefault) {
             this.elements.graphApiStatus.innerHTML = '<span class="text-yellow-500 inline-flex items-center gap-1"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>Using default key (rate limited)</span>';
         } else {
-            this.elements.graphApiStatus.innerHTML = '<span class="text-gray-400">Testing connection...</span>';
+            this.elements.graphApiStatus.innerHTML = '<span class="text-white/30">Testing connection...</span>';
             const connected = await this.graphAPI.testConnection();
             if (connected) {
                 this.elements.graphApiStatus.innerHTML = '<span class="text-green-500 inline-flex items-center gap-1"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Custom key active</span>';
@@ -1265,11 +1284,11 @@ class SettingsUI {
             const modal = document.createElement('div');
             modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50';
             modal.innerHTML = `
-                <div class="bg-[#111111] rounded-xl w-[320px] overflow-hidden shadow-2xl border border-[#222]">
+                <div class="bg-[#111113] rounded-2xl w-[320px] overflow-hidden shadow-2xl border border-white/[0.06]">
                     <div class="px-5 pt-5 pb-4">
                         <div class="flex items-center justify-between">
                             <h3 class="text-[15px] font-medium text-white">Fund Account</h3>
-                            <button id="close-fund-modal" class="text-[#666] hover:text-white transition p-1 -mr-1">
+                            <button id="close-fund-modal" class="text-white/30 hover:text-white transition p-1 -mr-1">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
                                 </svg>
@@ -1381,7 +1400,7 @@ class SettingsUI {
             
             if (this.elements.notificationsStatus) {
                 this.elements.notificationsStatus.textContent = 'Disabled';
-                this.elements.notificationsStatus.className = 'text-xs text-gray-500';
+                this.elements.notificationsStatus.className = 'text-xs text-white/40';
             }
         }
     }
@@ -1440,24 +1459,24 @@ class SettingsUI {
             const safeTitle = _escapeHtml(title);
             const safeDescription = _escapeHtml(description);
             modal.innerHTML = `
-                <div class="bg-[#111111] rounded-xl w-[360px] overflow-hidden shadow-2xl border border-[#222]">
+                <div class="bg-[#111113] rounded-2xl w-[360px] overflow-hidden shadow-2xl border border-white/[0.06]">
                     <div class="px-5 pt-5 pb-3">
                         <div class="flex items-center justify-between">
                             <h3 class="text-[15px] font-medium text-white">${safeTitle}</h3>
-                            <button id="close-modal" class="text-[#666] hover:text-white transition p-1 -mr-1">
+                            <button id="close-modal" class="text-white/30 hover:text-white transition p-1 -mr-1">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
                                 </svg>
                             </button>
                         </div>
-                        <p class="text-[11px] text-[#666] mt-1 whitespace-pre-line">${safeDescription}</p>
+                        <p class="text-[11px] text-white/30 mt-1 whitespace-pre-line">${safeDescription}</p>
                     </div>
                     <div class="px-5 pb-4 space-y-3">
                         <div class="relative">
                             <input type="password" id="password-input" placeholder="Password"
-                                class="w-full bg-[#1a1a1a] border border-[#282828] rounded-lg px-3 py-2.5 text-[13px] text-white placeholder-[#555] focus:outline-none focus:border-[#444] transition"
+                                class="w-full bg-white/[0.05] border border-white/[0.08] rounded-xl px-3 py-2.5 text-[13px] text-white placeholder-white/25 focus:outline-none focus:border-white/[0.15] transition"
                                 autocomplete="off">
-                            <button id="toggle-visibility" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#555] hover:text-white transition">
+                            <button id="toggle-visibility" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/25 hover:text-white transition">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/>
@@ -1467,14 +1486,14 @@ class SettingsUI {
                         ${requireConfirm ? `
                         <div class="relative">
                             <input type="password" id="password-confirm" placeholder="Confirm password"
-                                class="w-full bg-[#1a1a1a] border border-[#282828] rounded-lg px-3 py-2.5 text-[13px] text-white placeholder-[#555] focus:outline-none focus:border-[#444] transition"
+                                class="w-full bg-white/[0.05] border border-white/[0.08] rounded-xl px-3 py-2.5 text-[13px] text-white placeholder-white/25 focus:outline-none focus:border-white/[0.15] transition"
                                 autocomplete="off">
                         </div>
                         ` : ''}
                         <p id="password-error" class="text-[11px] text-red-500 hidden"></p>
                     </div>
                     <div class="px-5 pb-5 flex gap-2">
-                        <button id="pw-cancel" class="flex-1 bg-[#1a1a1a] hover:bg-[#202020] text-white text-[13px] font-medium py-2.5 rounded-lg transition border border-[#282828]">
+                        <button id="pw-cancel" class="flex-1 bg-white/[0.05] hover:bg-white/[0.08] text-white text-[13px] font-medium py-2.5 rounded-xl transition border border-white/[0.08]">
                             Cancel
                         </button>
                         <button id="pw-confirm" class="flex-1 bg-white hover:bg-[#f0f0f0] text-black text-[13px] font-medium py-2.5 rounded-lg transition">

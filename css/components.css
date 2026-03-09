@@ -18,7 +18,7 @@
     border-radius: 50%;
     background: #F6851B;
     cursor: pointer;
-    border: 2px solid #0d0d0d;
+    border: 2px solid #09090b;
     box-shadow: 0 2px 6px rgba(246, 133, 27, 0.4);
     transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
@@ -34,7 +34,7 @@
     border-radius: 50%;
     background: #F6851B;
     cursor: pointer;
-    border: 2px solid #0d0d0d;
+    border: 2px solid #09090b;
     box-shadow: 0 2px 6px rgba(246, 133, 27, 0.4);
     transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
@@ -50,14 +50,14 @@
 
 /* ----- Base Layout ----- */
 html {
-    background-color: #0d0d0d;
+    background-color: #09090b;
     color-scheme: dark;
 }
 
 body {
     font-family: 'Inter', sans-serif;
-    background-color: #0d0d0d;
-    color: #e0e0e0;
+    background-color: #09090b;
+    color: rgba(255, 255, 255, 0.87);
     margin: 0;
     padding: 0;
 }
@@ -72,7 +72,7 @@ body {
 
 .messages-area {
     height: calc(100% - 120px);
-    background-color: #121212;
+    background-color: #0f0f12;
 }
 
 /* ----- Message Styles ----- */
@@ -135,6 +135,7 @@ body {
 .msg-group-middle .message-bubble::before {
     display: none;
 }
+
 
 /* ----- Message Grouping - Stack Effect ----- */
 
@@ -328,9 +329,9 @@ body {
     max-width: 400px;
     aspect-ratio: 16 / 9;
     margin-top: 8px;
-    border-radius: 8px;
+    border-radius: 12px;
     overflow: hidden;
-    background: #0a0a0a;
+    background: #09090b;
 }
 
 .youtube-embed iframe {
@@ -415,7 +416,7 @@ body {
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb {
-    background: #333;
+    background: rgba(255, 255, 255, 0.12);
     border-radius: 3px;
 }
 
@@ -444,8 +445,8 @@ body {
 }
 
 .reaction-badge {
-    background-color: #374151;
-    color: #e0e0e0;
+    background-color: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.8);
     padding: 3px 8px;
     border-radius: 12px;
     font-size: 0.75rem;
@@ -464,11 +465,11 @@ body {
 }
 
 .reaction-badge:hover {
-    background-color: #4b5563;
+    background-color: rgba(255, 255, 255, 0.12);
 }
 
 .reaction-badge.user-reacted {
-    background-color: #3e527b;
+    background-color: rgba(246, 133, 27, 0.15);
 }
 
 /* ----- Message Actions ----- */
@@ -477,7 +478,7 @@ body {
     opacity: 0;
     transition: opacity 0.15s;
     cursor: pointer;
-    color: #555;
+    color: rgba(255, 255, 255, 0.2);
     user-select: none;
     position: absolute;
     display: flex;
@@ -525,28 +526,28 @@ body {
 
 .react-trigger:hover,
 .reply-trigger:hover {
-    color: #888;
+    color: rgba(255, 255, 255, 0.5);
 }
 
 /* ----- Reply Preview ----- */
 .reply-preview {
-    background: #252525;
-    border-left: 2px solid #555;
+    background: rgba(255, 255, 255, 0.05);
+    border-left: 2px solid rgba(255, 255, 255, 0.15);
     padding: 4px 8px;
     margin-bottom: 6px;
-    border-radius: 4px;
+    border-radius: 6px;
     font-size: 0.8rem;
-    color: #888;
+    color: rgba(255, 255, 255, 0.5);
     cursor: pointer;
     max-width: 280px;
 }
 
 .reply-preview:hover {
-    background: #303030;
+    background: rgba(255, 255, 255, 0.08);
 }
 
 .reply-preview-name {
-    color: #aaa;
+    color: rgba(255, 255, 255, 0.6);
     font-weight: 500;
     font-size: 0.75rem;
 }
@@ -561,9 +562,9 @@ body {
 
 /* ----- Reply Bar ----- */
 .reply-bar {
-    background: #1a1a1a;
+    background: rgba(255, 255, 255, 0.03);
     padding: 8px 12px;
-    border-top: 1px solid #333;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
     display: none;
     align-items: center;
     justify-content: space-between;
@@ -584,18 +585,18 @@ body {
 
 .reply-bar-label {
     font-size: 0.7rem;
-    color: #666;
+    color: rgba(255, 255, 255, 0.3);
 }
 
 .reply-bar-name {
     font-size: 0.75rem;
-    color: #888;
+    color: rgba(255, 255, 255, 0.5);
     font-weight: 500;
 }
 
 .reply-bar-text {
     font-size: 0.8rem;
-    color: #aaa;
+    color: rgba(255, 255, 255, 0.6);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -603,15 +604,15 @@ body {
 
 .reply-bar-close {
     cursor: pointer;
-    color: #555;
+    color: rgba(255, 255, 255, 0.25);
     padding: 4px;
-    border-radius: 4px;
+    border-radius: 6px;
     transition: all 0.15s;
 }
 
 .reply-bar-close:hover {
-    color: #aaa;
-    background: #333;
+    color: rgba(255, 255, 255, 0.6);
+    background: rgba(255, 255, 255, 0.08);
 }
 
 /* ----- Message Highlight ----- */
@@ -636,8 +637,8 @@ body {
 }
 
 .date-pill {
-    background-color: #252525;
-    color: #888;
+    background-color: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.4);
     font-size: 0.75rem;
     padding: 4px 12px;
     border-radius: 12px;
@@ -646,8 +647,8 @@ body {
 /* ----- Reaction Picker ----- */
 .reaction-picker {
     position: fixed;
-    background-color: #1e1e1e;
-    border: 1px solid #333;
+    background-color: #16161b;
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 0.5rem;
     padding: 0.5rem;
     z-index: 100;
@@ -666,7 +667,7 @@ body {
 }
 
 .reaction-picker span:hover {
-    background-color: #374151;
+    background-color: rgba(255, 255, 255, 0.1);
 }
 
 /* ----- Emoji Picker ----- */
@@ -674,9 +675,9 @@ body {
     position: absolute;
     bottom: 50px;
     left: 10px;
-    background-color: #1e1e1e;
-    border: 1px solid #333;
-    border-radius: 0.5rem;
+    background-color: #16161b;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.75rem;
     padding: 0.5rem;
     z-index: 10;
     display: none;
@@ -693,7 +694,7 @@ body {
 }
 
 .emoji-picker span:hover {
-    background-color: #374151;
+    background-color: rgba(255, 255, 255, 0.1);
     border-radius: 4px;
 }
 
@@ -710,7 +711,7 @@ body {
 .typing-dot {
     width: 8px;
     height: 8px;
-    background-color: #888;
+    background-color: rgba(255, 255, 255, 0.4);
     border-radius: 50%;
     display: inline-block;
     margin: 0 2px;
@@ -727,7 +728,7 @@ body {
 
 /* ----- Input Buttons ----- */
 .input-button {
-    background-color: #374151;
+    background-color: rgba(255, 255, 255, 0.06);
     color: white;
     width: 2.25rem;
     height: 2.25rem;
@@ -740,7 +741,7 @@ body {
 }
 
 .input-button:hover {
-    background-color: #4b5563;
+    background-color: rgba(255, 255, 255, 0.12);
 }
 
 /* ----- Send Button ----- */
@@ -789,13 +790,13 @@ body {
     position: relative;
     padding: 0.875rem 1rem;
     border-radius: 0.75rem;
-    color: #e5e5e5;
+    color: rgba(255, 255, 255, 0.9);
     font-size: 0.8125rem;
     display: flex;
     align-items: flex-start;
     gap: 0.75rem;
     animation: toastSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-    background-color: #1a1a1a;
+    background-color: #16161b;
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
     overflow: hidden;
@@ -976,7 +977,7 @@ body {
 .spinner {
     width: 48px;
     height: 48px;
-    border: 4px solid #333;
+    border: 4px solid rgba(255, 255, 255, 0.08);
     border-top-color: #F6851B;
     border-radius: 50%;
     animation: spin 1s linear infinite;
@@ -989,7 +990,7 @@ body {
 }
 
 .loading-text {
-    color: #e0e0e0;
+    color: rgba(255, 255, 255, 0.87);
     font-size: 0.9rem;
 }
 
@@ -999,12 +1000,12 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-    background: #1f1f1f;
+    background: rgba(255, 255, 255, 0.02);
     border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb {
-    background-color: #4b5563;
+    background-color: rgba(255, 255, 255, 0.1);
     border-radius: 3px;
 }
 
@@ -1022,7 +1023,7 @@ body {
 }
 
 #online-users-list::-webkit-scrollbar-thumb {
-    background-color: #4b5563;
+    background-color: rgba(255, 255, 255, 0.1);
     border-radius: 2px;
 }
 
@@ -1047,11 +1048,11 @@ body {
     bottom: calc(100% + 6px);
     left: 50%;
     transform: translateX(-50%);
-    background-color: #252525;
-    color: #aaa;
+    background-color: #16161b;
+    color: rgba(255, 255, 255, 0.6);
     font-size: 0.7rem;
     padding: 4px 8px;
-    border-radius: 4px;
+    border-radius: 6px;
     white-space: nowrap;
     opacity: 0;
     visibility: hidden;
@@ -1067,7 +1068,7 @@ body {
     left: 50%;
     transform: translateX(-50%);
     border: 4px solid transparent;
-    border-top-color: #252525;
+    border-top-color: #16161b;
     opacity: 0;
     visibility: hidden;
     transition: opacity 0.15s, visibility 0.15s;
@@ -1101,10 +1102,7 @@ body {
         width: 280px;
     }
     
-    /* Hide Pombo text */
-    .header-brand-text {
-        display: none;
-    }
+
     
     /* Smaller logo */
     .header-logo {
@@ -1113,11 +1111,22 @@ body {
     }
 }
 
+/* ----- Always hide mobile-only pill elements on desktop ----- */
+#mobile-pill-nav,
+#sidebar-connect-float {
+    display: none !important;
+}
+
 /* ===========================================
    MOBILE (< 768px)
    Sidebar = initial view, Chat = push navigation
    =========================================== */
 @media (max-width: 767px) {
+    /* Re-enable mobile pill elements (override desktop hiding) */
+    #mobile-pill-nav:not(.hidden),
+    #sidebar-connect-float:not(.hidden) {
+        display: block !important;
+    }
     /* Use dynamic viewport height for mobile browsers */
     body {
         height: 100dvh;
@@ -1134,6 +1143,8 @@ body {
         padding-left: 0.5rem;
         padding-right: 0.75rem;
         height: 3.5rem;
+        background-color: #09090b !important;
+        backdrop-filter: none;
     }
     
     /* Explore tabs take available space and align right on mobile */
@@ -1144,8 +1155,8 @@ body {
     
     /* Smaller logo on mobile */
     .header-logo {
-        width: 2rem;
-        height: 2rem;
+        width: 2.25rem;
+        height: 2.25rem;
     }
     
     /* Hide wallet address text */
@@ -1154,6 +1165,12 @@ body {
         overflow: hidden;
         text-overflow: ellipsis;
         font-size: 0.75rem;
+    }
+
+    /* Hide header wallet controls on mobile (moved to pill nav) */
+    #connect-wallet,
+    #wallet-controls {
+        display: none !important;
     }
     
     /* ----- SIDEBAR: Full screen initial view ----- */
@@ -1179,7 +1196,7 @@ body {
         inset: 0;
         z-index: 20;
         transform: translateX(100%);
-        background-color: #121212;
+        background-color: #09090b;
     }
     
     /* Show chat when active */
@@ -1187,9 +1204,62 @@ body {
         transform: translateX(0);
         z-index: 35;
     }
+
+    /* ----- UNIFIED DARK BACKGROUND ON MOBILE ----- */
+    /* Match all backgrounds to sidebar tone (#09090b) for consistency */
+    .messages-area {
+        background-color: #09090b !important;
+    }
+
+    #chat-header {
+        background-color: #09090b !important;
+    }
+
+    #message-input-container {
+        background-color: #09090b !important;
+    }
+
+    /* Chat main area */
+    #chat-area main {
+        background-color: #09090b !important;
+    }
+
+    /* Explore view */
+    .explore-view {
+        background-color: #09090b !important;
+    }
+
+    /* Modal containers on mobile */
+    #new-channel-modal > div,
+    #settings-modal > div,
+    #channel-settings-modal > div,
+    #contacts-modal > div,
+    #channel-types-modal > div,
+    #storage-info-modal > div {
+        background-color: #09090b !important;
+    }
+
+    /* Modal header bars (contacts header hidden on mobile, channel-settings visible) */
+    #new-channel-modal > div > .flex.border-b,
+    #channel-settings-modal > div > .flex.border-b {
+        background-color: #09090b !important;
+    }
+
+    /* Modal tab strips / sidebars — bg set in horizontal tabs rule below */
+
+    /* Modal footers and sidebars with #0a0a0a background */
+    .bg-\[\#0a0a0a\] {
+        background-color: #09090b !important;
+    }
+
+    /* Inline bg-[#111113] modal panels */
+    .bg-\[\#111113\] {
+        background-color: #09090b !important;
+    }
     
     /* ----- HIDE MAIN HEADER WHEN CHAT IS ACTIVE ----- */
-    body.chat-open header {
+    /* Use explicit combinatorial rule so settings-open always wins */
+    body.chat-open:not(.settings-open):not(.contacts-open) header {
         display: none !important;
     }
     
@@ -1232,16 +1302,177 @@ body {
         padding: 0.5rem;
     }
     
-    /* Show sidebar footer buttons on mobile */
-    #contacts-btn,
-    #settings-btn {
-        display: flex !important;
+    /* OLD sidebar footer replaced by pill nav */
+
+    /* Hide desktop sidebar footer on mobile */
+    #sidebar-footer-desktop {
+        display: none !important;
+    }
+
+    /* Hide pill and connect float when chat is open or new channel modal is visible */
+    body.chat-open #mobile-pill-nav,
+    body.chat-open #sidebar-connect-float,
+    body.new-channel-open #mobile-pill-nav,
+    body.new-channel-open #sidebar-connect-float {
+        display: none !important;
+    }
+
+    /* ----- FLOATING CONNECT BUTTON (Guest mode) ----- */
+    #sidebar-connect-float {
+        position: fixed;
+        bottom: 4.5rem;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 101;
+    }
+
+    /* ----- PILL NAVIGATION BAR ----- */
+    #mobile-pill-nav {
+        position: fixed;
+        bottom: 2rem;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 100;
+        padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    .pill-nav-inner {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        background: rgba(255, 255, 255, 0.06);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 2rem;
+        padding: 0.35rem 0.5rem;
+    }
+
+    .pill-nav-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.125rem;
+        padding: 0.4rem 0.75rem;
+        border-radius: 1.5rem;
+        font-size: 0.625rem;
+        font-weight: 500;
+        color: rgba(255, 255, 255, 0.35);
+        transition: all 0.2s ease;
+        cursor: pointer;
+        background: none;
+        border: none;
+        position: relative;
+    }
+
+    .pill-nav-item:active {
+        transform: scale(0.95);
+    }
+
+    .pill-nav-item.active {
+        color: #F6851B;
+        background: rgba(246, 133, 27, 0.12);
+    }
+
+    .pill-nav-item.active svg {
+        stroke-width: 2;
+    }
+
+    /* ----- PROFILE AVATAR IN PILL ----- */
+    .pill-profile-wrapper {
+        padding: 0.25rem;
+    }
+
+    .pill-profile-avatar {
+        width: 2rem;
+        height: 2rem;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1.5px solid rgba(255, 255, 255, 0.12);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        overflow: hidden;
+    }
+
+    .pill-profile-avatar:active {
+        transform: scale(0.93);
+    }
+
+    .pill-profile-avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        border-radius: 50%;
+    }
+
+    /* ----- PROFILE DROPDOWN ----- */
+    .pill-profile-dropdown {
+        position: absolute;
+        bottom: calc(100% + 0.5rem);
+        right: 0;
+        min-width: 200px;
+        background: #16161b;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 1rem;
+        padding: 0.5rem;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        z-index: 50;
+    }
+
+    .pill-dropdown-address {
+        padding: 0.5rem 0.75rem;
+        font-size: 0.75rem;
+        color: rgba(255, 255, 255, 0.4);
+        font-family: monospace;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        margin-bottom: 0.25rem;
+    }
+
+    .pill-dropdown-accounts {
+        max-height: 120px;
+        overflow-y: auto;
+    }
+
+    .pill-dropdown-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        width: 100%;
+        padding: 0.5rem 0.75rem;
+        border-radius: 0.5rem;
+        font-size: 0.8125rem;
+        color: rgba(255, 255, 255, 0.6);
+        background: none;
+        border: none;
+        cursor: pointer;
+        transition: background 0.15s ease;
+        text-align: left;
+    }
+
+    .pill-dropdown-item:hover,
+    .pill-dropdown-item:active {
+        background: rgba(255, 255, 255, 0.06);
+    }
+
+    .pill-dropdown-disconnect {
+        color: #ef4444;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        margin-top: 0.25rem;
+        padding-top: 0.5rem;
     }
     
     /* Channel list items taller on mobile */
     #channel-list .channel-item {
         padding-top: 1rem;
         padding-bottom: 1rem;
+    }
+
+    /* Bottom padding so list doesn't hide behind pill */
+    #channel-list {
+        padding-bottom: 5rem;
     }
     
     /* Chat header adjustments */
@@ -1264,15 +1495,15 @@ body {
         height: 36px;
     }
     
-    /* Message input area - fixed at bottom with keyboard support */
+    /* Message input area - flush at bottom */
     #message-input-container {
-        padding: 0.875rem;
-        padding-bottom: calc(0.875rem + env(safe-area-inset-bottom));
+        padding: 0.75rem;
+        padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
     }
     
     /* Safe area padding utility */
     .pb-safe {
-        padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+        padding-bottom: env(safe-area-inset-bottom);
     }
     
     /* Messages container scrollable */
@@ -1329,15 +1560,49 @@ body {
         transform: translateX(0);
     }
 
-    /* Hide main header when settings/channel-details is open on mobile */
-    body.settings-open header,
+    /* Hide main header only for channel details */
     body.channel-details-open header {
         display: none !important;
     }
 
-    body.settings-open .app-container,
     body.channel-details-open .app-container {
         height: 100dvh;
+    }
+
+    /* Settings/Contacts modal: minimal bottom padding (pill is fixed, overlaps content) */
+    body.settings-open #settings-modal,
+    body.contacts-open #contacts-modal {
+        padding-bottom: 0 !important;
+    }
+
+    /* Hide settings modal header on mobile (pill replaces close button) */
+    #settings-modal > div > .flex.border-b {
+        display: none !important;
+    }
+
+    /* Hide contacts modal header and close button on mobile */
+    #contacts-modal > div > .flex.items-center.gap-2.mb-4 {
+        display: none !important;
+    }
+    #close-contacts-btn {
+        display: none !important;
+    }
+
+    /* Contacts modal full-screen on mobile */
+    #contacts-modal {
+        padding: 0 !important;
+        background: transparent !important;
+        backdrop-filter: none !important;
+    }
+    #contacts-modal > div {
+        width: 100% !important;
+        max-width: 100% !important;
+        height: 100% !important;
+        max-height: 100% !important;
+        border-radius: 0 !important;
+        margin: 0 !important;
+        padding: 1rem 1.25rem 7rem 1.25rem !important;
+        border: none !important;
     }
     
     #new-channel-modal > div,
@@ -1349,14 +1614,13 @@ body {
         max-height: 100% !important;
         border-radius: 0 !important;
         margin: 0 !important;
+        border: none !important;
     }
 
     /* Modal headers - same dark color as main header */
     #new-channel-modal > div > .flex.border-b,
-    #settings-modal > div > .flex.border-b,
     #channel-settings-modal > div > .flex.border-b {
-        background-color: #0d0d0d !important;
-        border-color: #333 !important;
+        border-color: rgba(255, 255, 255, 0.06) !important;
     }
 
     /* Settings modal content area - full height flex */
@@ -1396,13 +1660,13 @@ body {
     #channel-settings-modal .w-44 {
         width: 100% !important;
         border-right: none !important;
-        border-bottom: 1px solid #333;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
         flex-direction: row !important;
         overflow: hidden;
         padding: 0 !important;
         flex-shrink: 0;
         min-height: auto;
-        background: #0d0d0d !important;
+        background: #09090b !important;
     }
 
     /* Hide "Type" label on mobile modals */
@@ -1438,7 +1702,7 @@ body {
         padding: 0;
         margin: 0;
         gap: 0;
-        border-bottom: 1px solid #1f1f1f;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
         position: relative;
         box-sizing: border-box;
     }
@@ -1557,86 +1821,6 @@ body {
     /* Channel list items compact */
     #channel-list .channel-item {
         padding: 0.625rem 0.75rem;
-    }
-    
-    /* ----- Modals Full-Screen on Small Mobile ----- */
-    .modal-overlay {
-        padding: 0 !important;
-    }
-    
-    .modal-content {
-        width: 100% !important;
-        max-width: 100% !important;
-        height: 100% !important;
-        max-height: 100% !important;
-        border-radius: 0 !important;
-        margin: 0 !important;
-    }
-    
-    /* Modal body becomes column layout */
-    .modal-body {
-        flex-direction: column;
-    }
-    
-    /* Modal sidebar becomes horizontal tabs strip */
-    .modal-sidebar {
-        width: 100% !important;
-        border-right: none !important;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-        flex-direction: row;
-        overflow-x: auto;
-        padding: 0.5rem;
-        flex-shrink: 0;
-    }
-    
-    .modal-sidebar nav {
-        display: flex;
-        flex-direction: row;
-        gap: 0.5rem;
-        flex-wrap: nowrap;
-    }
-    
-    .modal-sidebar nav button {
-        white-space: nowrap;
-        flex-shrink: 0;
-    }
-    
-    /* Hide "Type" label on small mobile */
-    .modal-sidebar > div:first-child {
-        display: none;
-    }
-}
-
-/* ===========================================
-   MODAL RESPONSIVE STYLES (Tablet: 480-767px)
-   =========================================== */
-@media (min-width: 480px) and (max-width: 767px) {
-    /* Modals take more screen space */
-    .modal-content {
-        max-width: 100%;
-        max-height: 95vh;
-        margin: 0.5rem;
-        border-radius: 1rem;
-    }
-    
-    /* Smaller modal headers */
-    .modal-content h3 {
-        font-size: 1rem;
-    }
-    
-    /* Reduce modal sidebar width */
-    .modal-sidebar {
-        width: 7rem;
-    }
-    
-    /* Hide text labels in modal sidebars, show only icons */
-    .modal-sidebar nav button span {
-        display: none;
-    }
-    
-    .modal-sidebar nav button {
-        justify-content: center;
-        padding: 0.75rem;
     }
 }
 

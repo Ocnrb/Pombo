@@ -420,7 +420,7 @@ class ChannelSettingsUI {
         let touchStartY = 0;
         let isSwiping = false;
         
-        const modalContainer = modal.querySelector('.bg-\\[\\#141414\\]');
+        const modalContainer = modal.querySelector('.bg-\\[\\#111113\\]');
         if (!modalContainer) return;
 
         // Remove existing listeners by using a bound function reference
@@ -785,7 +785,7 @@ class ChannelSettingsUI {
         modal.id = 'leave-channel-modal';
         modal.className = 'fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60]';
         modal.innerHTML = `
-            <div class="bg-[#141414] rounded-2xl w-[380px] max-w-[95vw] mx-4 shadow-2xl border border-white/5 overflow-hidden">
+            <div class="bg-[#111113] rounded-2xl w-[380px] max-w-[95vw] mx-4 shadow-2xl border border-white/[0.06] overflow-hidden">
                 <div class="p-6">
                     <div class="flex items-center gap-3 mb-4">
                         <div class="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-lg">🚪</div>
@@ -984,7 +984,7 @@ class ChannelSettingsUI {
         
         const dropdown = document.createElement('div');
         dropdown.id = 'member-dropdown-menu';
-        dropdown.className = 'fixed bg-[#141414] border border-white/10 rounded-xl shadow-2xl py-1 z-[9999] min-w-[200px] overflow-hidden';
+        dropdown.className = 'fixed bg-[#111113] border border-white/10 rounded-xl shadow-2xl py-1 z-[9999] min-w-[200px] overflow-hidden';
         dropdown.innerHTML = `
             <div class="px-3 py-2 border-b border-white/5">
                 <div class="text-xs text-white/40">Member</div>
@@ -1183,7 +1183,7 @@ class ChannelSettingsUI {
         modal.id = 'remove-member-modal';
         modal.className = 'fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70]';
         modal.innerHTML = `
-            <div class="bg-[#141414] rounded-2xl w-[380px] max-w-[95vw] mx-4 shadow-2xl border border-white/5 overflow-hidden">
+            <div class="bg-[#111113] rounded-2xl w-[380px] max-w-[95vw] mx-4 shadow-2xl border border-white/[0.06] overflow-hidden">
                 <div class="p-6">
                     <div class="flex items-center gap-3 mb-4">
                         <div class="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center text-lg">👤</div>

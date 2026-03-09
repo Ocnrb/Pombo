@@ -5,10 +5,15 @@
  */
 
 import { escapeHtml } from './utils.js';
+import { generateAvatar } from './AvatarGenerator.js';
 
 class HeaderUI {
     constructor() {
         this.deps = {};
+        this._profileDropdownOpen = false;
+        this._boundCloseDropdown = null;
+        this._currentAddress = null;
+        this._currentDisplayName = null;
         
         // DOM elements
         this.elements = {
@@ -22,6 +27,9 @@ class HeaderUI {
             currentChannelInfo: null,
             chatHeaderRight: null
         };
+
+        // Mobile pill elements (cached on first access)
+        this._pillElements = null;
     }
 
     /**
@@ -58,6 +66,9 @@ class HeaderUI {
     updateWalletInfo(address, isGuest = false) {
         const { walletInfo, connectWalletBtn, walletControls, contactsBtn, settingsBtn } = this.elements;
         
+        // Mobile pill elements
+        const pill = this._getPillElements();
+        
         if (address) {
             if (isGuest) {
                 // Guest mode: show "Guest" with different styling
@@ -74,18 +85,38 @@ class HeaderUI {
                 walletControls?.classList.add('hidden');
                 // Hide contacts button for guest
                 contactsBtn?.classList.add('hidden');
+                
+                // Mobile: show floating connect, hide pill nav
+                pill.connectFloat?.classList.remove('hidden');
+                pill.pillNav?.classList.add('hidden');
             } else {
+                this._currentAddress = address;
                 const short = `${address.slice(0, 6)}...${address.slice(-4)}`;
-                walletInfo.textContent = short;
+                const displayText = this._currentDisplayName || short;
+                walletInfo.textContent = displayText;
                 // Hide connect button, show wallet controls
                 connectWalletBtn.classList.add('hidden');
                 walletControls?.classList.remove('hidden');
                 // Show contacts button
                 contactsBtn?.classList.remove('hidden');
+                
+                // Mobile: hide floating connect, show pill nav
+                pill.connectFloat?.classList.add('hidden');
+                pill.pillNav?.classList.remove('hidden');
+                // Update profile avatar in pill
+                if (pill.profileBtn) {
+                    pill.profileBtn.innerHTML = generateAvatar(address, 32, 0.2);
+                }
+                // Update profile address in dropdown (always show address)
+                if (pill.profileAddress) {
+                    pill.profileAddress.textContent = short;
+                }
             }
             // Show settings button
             settingsBtn?.classList.remove('hidden');
         } else {
+            this._currentAddress = null;
+            this._currentDisplayName = null;
             walletInfo.textContent = 'Not Connected';
             // Show connect button with original text, hide wallet controls
             connectWalletBtn.innerHTML = `
@@ -100,7 +131,29 @@ class HeaderUI {
             contactsBtn?.classList.add('hidden');
             // Hide settings button
             settingsBtn?.classList.add('hidden');
+            
+            // Mobile: hide both pill and float
+            pill.connectFloat?.classList.add('hidden');
+            pill.pillNav?.classList.add('hidden');
         }
+    }
+
+    /**
+     * Update display name shown in header and pill nav
+     * @param {string|null} username - Username to show, or null to revert to address
+     */
+    updateDisplayName(username) {
+        this._currentDisplayName = username || null;
+        const displayText = this._currentDisplayName || (this._currentAddress ? `${this._currentAddress.slice(0, 6)}...${this._currentAddress.slice(-4)}` : null);
+        if (!displayText) return;
+
+        const { walletInfo } = this.elements;
+        if (walletInfo) {
+            walletInfo.textContent = displayText;
+        }
+        const pill = this._getPillElements();
+        // Pill dropdown always shows address, not username
+        // Only update desktop header text
     }
 
     /**
@@ -125,14 +178,14 @@ class HeaderUI {
         if (!dot) return;
         
         if (connected) {
-            dot.classList.remove('bg-[#444]', 'bg-amber-400');
+            dot.classList.remove('bg-white/20', 'bg-amber-400');
             dot.classList.add('bg-emerald-400');
         } else if (status.toLowerCase().includes('connecting')) {
-            dot.classList.remove('bg-[#444]', 'bg-emerald-400');
+            dot.classList.remove('bg-white/20', 'bg-emerald-400');
             dot.classList.add('bg-amber-400');
         } else {
             dot.classList.remove('bg-emerald-400', 'bg-amber-400');
-            dot.classList.add('bg-[#444]');
+            dot.classList.add('bg-white/20');
         }
     }
 
@@ -215,6 +268,149 @@ class HeaderUI {
         this.updateChannelTitle(channel.name);
         this.updateChannelInfo(channel.type, channel.readOnly);
         this.showHeaderRight(true);
+    }
+
+    /**
+     * Get mobile pill nav elements (cached)
+     */
+    _getPillElements() {
+        if (!this._pillElements) {
+            this._pillElements = {
+                connectFloat: document.getElementById('sidebar-connect-float'),
+                sidebarConnectBtn: document.getElementById('sidebar-connect-btn'),
+                pillNav: document.getElementById('mobile-pill-nav'),
+                pillChatsBtn: document.getElementById('pill-chats-btn'),
+                profileBtn: document.getElementById('pill-profile-btn'),
+                profileDropdown: document.getElementById('pill-profile-dropdown'),
+                profileAddress: document.getElementById('pill-profile-address'),
+                profileAccounts: document.getElementById('pill-profile-accounts'),
+                disconnectBtn: document.getElementById('pill-disconnect-btn')
+            };
+        }
+        return this._pillElements;
+    }
+
+    /**
+     * Initialize mobile pill nav event handlers
+     * Called from app.js after DOM is ready
+     */
+    initPillNav({ onConnect, onDisconnect, onSwitchWallet, onChatsTab }) {
+        const pill = this._getPillElements();
+
+        // Floating connect button triggers same action as header connect
+        pill.sidebarConnectBtn?.addEventListener('click', () => {
+            onConnect?.();
+        });
+
+        // Profile avatar toggles dropdown
+        pill.profileBtn?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleProfileDropdown();
+        });
+
+        // Disconnect from dropdown
+        pill.disconnectBtn?.addEventListener('click', () => {
+            this._closeProfileDropdown();
+            onDisconnect?.();
+        });
+
+        // Close dropdown on outside click
+        this._boundCloseDropdown = () => this._closeProfileDropdown();
+        document.addEventListener('click', this._boundCloseDropdown);
+
+        // Pill tabs: chats tab closes any open modal and returns to channel list
+        pill.pillChatsBtn?.addEventListener('click', () => {
+            this._setActivePillTab('chats');
+            onChatsTab?.();
+        });
+
+        // Desktop sidebar footer buttons
+        const contactsBtnDesktop = document.getElementById('contacts-btn-desktop');
+        const settingsBtnDesktop = document.getElementById('settings-btn-desktop');
+        if (contactsBtnDesktop) {
+            contactsBtnDesktop.addEventListener('click', () => {
+                document.getElementById('contacts-btn')?.click();
+            });
+        }
+        if (settingsBtnDesktop) {
+            settingsBtnDesktop.addEventListener('click', () => {
+                document.getElementById('settings-btn')?.click();
+            });
+        }
+    }
+
+    /**
+     * Toggle profile dropdown
+     */
+    _toggleProfileDropdown() {
+        const pill = this._getPillElements();
+        if (!pill.profileDropdown) return;
+
+        if (this._profileDropdownOpen) {
+            this._closeProfileDropdown();
+        } else {
+            pill.profileDropdown.classList.remove('hidden');
+            this._profileDropdownOpen = true;
+        }
+    }
+
+    /**
+     * Close profile dropdown
+     */
+    _closeProfileDropdown() {
+        const pill = this._getPillElements();
+        if (!pill.profileDropdown) return;
+        pill.profileDropdown.classList.add('hidden');
+        this._profileDropdownOpen = false;
+    }
+
+    /**
+     * Set active pill tab visually
+     */
+    _setActivePillTab(tab) {
+        const items = document.querySelectorAll('.pill-nav-item[data-pill-tab]');
+        items.forEach(item => {
+            if (item.dataset.pillTab === tab) {
+                item.classList.add('active');
+            } else {
+                item.classList.remove('active');
+            }
+        });
+    }
+
+    /**
+     * Update available accounts in profile dropdown
+     * @param {Array} wallets - Array of { address } objects
+     * @param {string} currentAddress - Currently active address
+     * @param {Function} onSwitch - Callback when switching wallets
+     */
+    updatePillAccounts(wallets, currentAddress, onSwitch) {
+        const pill = this._getPillElements();
+        if (!pill.profileAccounts) return;
+
+        const others = wallets.filter(w => w.address !== currentAddress);
+        if (others.length === 0) {
+            pill.profileAccounts.innerHTML = '';
+            return;
+        }
+
+        pill.profileAccounts.innerHTML = others.map(w => {
+            const short = `${w.address.slice(0, 6)}...${w.address.slice(-4)}`;
+            return `<button class="pill-dropdown-item" data-switch-address="${escapeHtml(w.address)}">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"/>
+                </svg>
+                ${escapeHtml(short)}
+            </button>`;
+        }).join('');
+
+        // Bind click handlers for switch buttons
+        pill.profileAccounts.querySelectorAll('[data-switch-address]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this._closeProfileDropdown();
+                onSwitch?.(btn.dataset.switchAddress);
+            });
+        });
     }
 }
 

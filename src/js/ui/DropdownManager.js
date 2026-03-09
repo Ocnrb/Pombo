@@ -41,7 +41,7 @@ class DropdownManager {
         // Create dropdown
         const dropdown = document.createElement('div');
         dropdown.id = 'channel-dropdown-menu';
-        dropdown.className = 'fixed bg-[#141414] border border-white/10 rounded-xl shadow-2xl py-1 z-[9999] min-w-[180px] overflow-hidden';
+        dropdown.className = 'fixed bg-[#111113] border border-white/10 rounded-xl shadow-2xl py-1 z-[9999] min-w-[180px] overflow-hidden';
         dropdown.innerHTML = `
             <button class="channel-action w-full text-left px-4 py-2.5 hover:bg-white/5 text-sm text-white/70 hover:text-white transition flex items-center gap-2" data-action="copy-stream-id">
                 <span class="w-4 h-4 flex items-center justify-center font-semibold text-base">#</span>

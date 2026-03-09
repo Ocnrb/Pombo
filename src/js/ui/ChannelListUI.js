@@ -123,7 +123,7 @@ class ChannelListUI {
             : `No ${this.currentFilter} channels`;
         
         this.elements.channelList.innerHTML = `
-            <div class="p-4 text-center text-[#555] text-[13px]">
+            <div class="p-4 text-center text-white/25 text-[13px]">
                 ${filterMsg}
             </div>
         `;
@@ -142,8 +142,8 @@ class ChannelListUI {
         const hasUnread = unreadCount > 0;
         
         const countClass = hasUnread 
-            ? 'text-white bg-[#F6851B]/20' 
-            : 'text-[#666] bg-[#252525]';
+            ? 'text-white bg-[#F6851B]/20 font-medium' 
+            : 'text-white/30 bg-white/[0.04]';
         
         // Show "+30" if we hit the initial load limit
         const displayCount = hasUnread ? (unreadCount >= 30 ? '+30' : unreadCount) : '';
@@ -151,18 +151,18 @@ class ChannelListUI {
         // Check if this is the currently active channel
         const isActive = channel.streamId === currentStreamId;
         const activeClass = isActive 
-            ? 'border-l-2 border-l-[#F6851B] bg-[#1a1a1a]' 
+            ? 'border-l-2 border-l-[#F6851B] bg-white/[0.06]' 
             : 'border-l-2 border-l-transparent';
 
         return `
             <div
-                class="channel-item px-3 py-3 mx-2 rounded-lg cursor-pointer bg-[#151515] border border-[#222] hover:bg-[#1e1e1e] hover:border-[#333] transition group ${activeClass}"
+                class="channel-item px-3 py-3 mx-2 rounded-xl cursor-pointer bg-white/[0.02] border border-white/[0.04] hover:bg-white/[0.06] hover:border-white/[0.08] transition-all duration-200 group ${activeClass}"
                 data-stream-id="${escapeAttr(channel.streamId)}"
                 draggable="true"
             >
                 <div class="flex items-center justify-between">
                     <!-- Drag handle (6 dots) - visible on hover -->
-                    <div class="drag-handle flex-shrink-0 mr-2 cursor-grab opacity-0 group-hover:opacity-100 transition-opacity text-[#555] hover:text-[#888]" title="Drag to reorder">
+                    <div class="drag-handle flex-shrink-0 mr-2 cursor-grab opacity-0 group-hover:opacity-100 transition-opacity text-white/20 hover:text-white/40" title="Drag to reorder">
                         <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                             <circle cx="8" cy="6" r="1.5"/>
                             <circle cx="16" cy="6" r="1.5"/>
@@ -173,14 +173,14 @@ class ChannelListUI {
                         </svg>
                     </div>
                     <div class="flex-1 min-w-0 pl-1">
-                        <h3 class="text-[13px] font-medium text-white truncate">${escapeHtml(sanitizeText(channel.name))}</h3>
+                        <h3 class="text-[13px] font-medium text-white/90 truncate">${escapeHtml(sanitizeText(channel.name))}</h3>
                     </div>
                     <div class="flex items-center gap-1.5 ml-2">
                         ${hasUnread 
-                            ? `<span class="channel-msg-count text-[10px] ${countClass} px-1.5 py-0.5 rounded" data-channel-count="${escapeAttr(channel.streamId)}">${displayCount}</span>` 
-                            : `<span class="channel-msg-count text-[10px] text-[#666] bg-[#252525] px-1.5 py-0.5 rounded hidden" data-channel-count="${escapeAttr(channel.streamId)}">0</span>`
+                            ? `<span class="channel-msg-count text-[10px] ${countClass} px-1.5 py-0.5 rounded-md" data-channel-count="${escapeAttr(channel.streamId)}">${displayCount}</span>` 
+                            : `<span class="channel-msg-count text-[10px] text-white/30 bg-white/[0.04] px-1.5 py-0.5 rounded-md hidden" data-channel-count="${escapeAttr(channel.streamId)}">0</span>`
                         }
-                        <svg class="w-3.5 h-3.5 text-[#444]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg class="w-3.5 h-3.5 text-white/15 group-hover:text-white/30 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.25 4.5l7.5 7.5-7.5 7.5"></path>
                         </svg>
                     </div>
@@ -338,13 +338,13 @@ class ChannelListUI {
 
         if (count > 0) {
             badge.textContent = count >= 30 ? '+30' : count;
-            badge.classList.remove('hidden', 'text-[#666]', 'bg-[#252525]');
-            badge.classList.add('text-white', 'bg-[#F6851B]/20');
+            badge.classList.remove('hidden', 'text-white/30', 'bg-white/[0.04]');
+            badge.classList.add('text-white', 'bg-[#F6851B]/20', 'font-medium');
         } else {
             badge.textContent = '0';
             badge.classList.add('hidden');
-            badge.classList.remove('text-white', 'bg-[#F6851B]/20');
-            badge.classList.add('text-[#666]', 'bg-[#252525]');
+            badge.classList.remove('text-white', 'bg-[#F6851B]/20', 'font-medium');
+            badge.classList.add('text-white/30', 'bg-white/[0.04]');
         }
     }
 
@@ -356,7 +356,7 @@ class ChannelListUI {
         document.querySelectorAll('.channel-item').forEach(item => {
             const isActive = item.dataset.streamId === streamId;
             item.classList.toggle('border-l-[#F6851B]', isActive);
-            item.classList.toggle('bg-[#1a1a1a]', isActive);
+            item.classList.toggle('bg-white/[0.06]', isActive);
             item.classList.toggle('border-l-transparent', !isActive);
         });
     }
