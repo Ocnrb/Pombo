@@ -21,6 +21,16 @@ import { chatAreaUI } from './ui/ChatAreaUI.js';
 import { reactionManager } from './ui/ReactionManager.js';
 import { mediaHandler } from './ui/MediaHandler.js';
 import { sanitizeText } from './ui/sanitizer.js';
+import { 
+    createModalFromTemplate, 
+    bindData, 
+    closeModal, 
+    setupModalCloseHandlers,
+    setupPasswordToggle,
+    $,
+    validatePasswordRules,
+    updatePasswordIndicator
+} from './ui/modalUtils.js';
 
 class App {
     constructor() {
@@ -340,19 +350,6 @@ class App {
                 </div>
             `;
 
-            // Add animations
-            const style = document.createElement('style');
-            style.textContent = `
-                @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-                @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-                .animate-fadeIn { animation: fadeIn 0.15s ease-out; }
-                .animate-slideUp { animation: slideUp 0.2s ease-out; }
-                .scrollbar-thin::-webkit-scrollbar { width: 3px; }
-                .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
-                .scrollbar-thin::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
-                .wallet-item.selected .selected-dot { opacity: 1; }
-            `;
-            document.head.appendChild(style);
             document.body.appendChild(modal);
 
             const passwordInput = modal.querySelector('#wallet-password');
@@ -394,7 +391,6 @@ class App {
             const cleanup = () => {
                 passwordInput.value = '';
                 document.body.removeChild(modal);
-                document.head.removeChild(style);
             };
             
             // Unlock action
@@ -414,7 +410,6 @@ class App {
                     resolve();
                 } catch (error) {
                     // Re-show modal with error
-                    document.head.appendChild(style);
                     document.body.appendChild(modal);
                     passwordError.classList.remove('hidden');
                     passwordInput.classList.add('border-red-500');
@@ -474,95 +469,20 @@ class App {
      */
     async showCreateWalletModal() {
         return new Promise((resolve, reject) => {
-            const modal = document.createElement('div');
-            modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 animate-fadeIn';
-            modal.innerHTML = `
-                <div class="bg-[#111111] rounded-xl w-[340px] overflow-hidden shadow-2xl border border-[#222] animate-slideUp">
-                    <!-- Header -->
-                    <div class="px-5 pt-5 pb-3">
-                        <div class="flex items-center justify-between">
-                            <h3 class="text-[15px] font-medium text-white">Connect Account</h3>
-                            <button id="close-modal" class="text-[#666] hover:text-white transition p-1 -mr-1">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-                    
-                    <!-- Options -->
-                    <div class="px-5 pb-3 space-y-2">
-                        <button id="create-btn" class="w-full bg-white hover:bg-[#f0f0f0] rounded-lg p-3.5 text-left transition-all">
-                            <div class="flex items-center gap-3">
-                                <div class="w-9 h-9 rounded-lg bg-[#111] flex items-center justify-center">
-                                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4.5v15m7.5-7.5h-15"/>
-                                    </svg>
-                                </div>
-                                <div>
-                                    <div class="text-[13px] font-medium text-black">Create New Account</div>
-                                    <div class="text-[11px] text-[#666]">Generate a new private key</div>
-                                </div>
-                            </div>
-                        </button>
-                        
-                        <button id="import-btn" class="w-full bg-[#1a1a1a] hover:bg-[#202020] border border-[#282828] hover:border-[#333] rounded-lg p-3.5 text-left transition-all">
-                            <div class="flex items-center gap-3">
-                                <div class="w-9 h-9 rounded-lg bg-[#252525] flex items-center justify-center">
-                                    <svg class="w-4 h-4 text-[#888]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
-                                    </svg>
-                                </div>
-                                <div>
-                                    <div class="text-[13px] font-medium text-white">Import Private Key</div>
-                                    <div class="text-[11px] text-[#666]">Use existing account</div>
-                                </div>
-                            </div>
-                        </button>
-                    </div>
-                    
-                    <!-- Restore link (discreet) -->
-                    <div class="px-5 pb-4 flex justify-end">
-                        <button id="restore-btn" class="flex items-center gap-1.5 text-[#555] hover:text-[#888] transition text-[11px]">
-                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/>
-                            </svg>
-                            restore
-                        </button>
-                        <input type="file" id="restore-file-input" accept=".json" class="hidden">
-                    </div>
-                </div>
-            `;
+            const modal = createModalFromTemplate('modal-create-wallet');
+            if (!modal) {
+                reject(new Error('Template not found'));
+                return;
+            }
 
-            // Add animations
-            const style = document.createElement('style');
-            style.textContent = `
-                @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-                @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-                .animate-fadeIn { animation: fadeIn 0.15s ease-out; }
-                .animate-slideUp { animation: slideUp 0.2s ease-out; }
-            `;
-            document.head.appendChild(style);
-            document.body.appendChild(modal);
+            const cleanup = () => closeModal(modal);
 
-            const cleanup = () => {
-                document.body.removeChild(modal);
-                document.head.removeChild(style);
-            };
-
-            modal.querySelector('#close-modal').addEventListener('click', () => {
+            setupModalCloseHandlers(modal, () => {
                 cleanup();
                 reject(new Error('cancelled'));
             });
-            
-            modal.addEventListener('click', (e) => {
-                if (e.target === modal) {
-                    cleanup();
-                    reject(new Error('cancelled'));
-                }
-            });
 
-            modal.querySelector('#create-btn').addEventListener('click', async () => {
+            $(modal, '[data-action="create"]').addEventListener('click', async () => {
                 cleanup();
                 try {
                     await this.connectLocal();
@@ -572,7 +492,7 @@ class App {
                 }
             });
 
-            modal.querySelector('#import-btn').addEventListener('click', async () => {
+            $(modal, '[data-action="import"]').addEventListener('click', async () => {
                 cleanup();
                 try {
                     await this.importPrivateKey();
@@ -583,8 +503,8 @@ class App {
             });
 
             // Restore from backup
-            const restoreBtn = modal.querySelector('#restore-btn');
-            const restoreFileInput = modal.querySelector('#restore-file-input');
+            const restoreBtn = $(modal, '[data-action="restore"]');
+            const restoreFileInput = $(modal, '[data-restore-input]');
             
             restoreBtn.addEventListener('click', () => {
                 restoreFileInput.click();
@@ -725,77 +645,40 @@ class App {
      */
     async showSecureInput(title, label, inputType = 'password') {
         return new Promise((resolve) => {
-            const modal = document.createElement('div');
-            modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50';
-            modal.innerHTML = `
-                <div class="bg-[#111111] rounded-xl w-[340px] overflow-hidden shadow-2xl border border-[#222]">
-                    <div class="px-5 pt-5 pb-3">
-                        <div class="flex items-center justify-between">
-                            <h3 class="text-[15px] font-medium text-white">${title}</h3>
-                            <button id="close-modal" class="text-[#666] hover:text-white transition p-1 -mr-1">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
-                                </svg>
-                            </button>
-                        </div>
-                        <p class="text-[11px] text-[#666] mt-1">${label}</p>
-                    </div>
-                    <div class="px-5 pb-4">
-                        <div class="relative">
-                            <input type="${inputType}" id="secure-input" 
-                                class="w-full bg-[#1a1a1a] border border-[#282828] rounded-lg px-3 py-2.5 text-[13px] text-white placeholder-[#555] focus:outline-none focus:border-[#444] transition"
-                                autocomplete="off" spellcheck="false">
-                            ${inputType === 'password' ? `
-                            <button id="toggle-visibility" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#555] hover:text-white transition">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/>
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                                </svg>
-                            </button>
-                            ` : ''}
-                        </div>
-                    </div>
-                    <div class="px-5 pb-5 flex gap-2">
-                        <button id="secure-cancel" class="flex-1 bg-[#1a1a1a] hover:bg-[#202020] text-white text-[13px] font-medium py-2.5 rounded-lg transition border border-[#282828]">
-                            Cancel
-                        </button>
-                        <button id="secure-confirm" class="flex-1 bg-white hover:bg-[#f0f0f0] text-black text-[13px] font-medium py-2.5 rounded-lg transition">
-                            Continue
-                        </button>
-                    </div>
-                </div>
-            `;
+            const modal = createModalFromTemplate('modal-secure-input', { title, label });
+            
+            const input = $(modal, '[data-secure-input]');
+            const confirmBtn = $(modal, '[data-confirm]');
+            const cancelBtn = $(modal, '[data-cancel]');
+            const toggleBtn = $(modal, '[data-toggle-visibility]');
 
-            document.body.appendChild(modal);
-
-            const input = modal.querySelector('#secure-input');
-            const confirmBtn = modal.querySelector('#secure-confirm');
-            const cancelBtn = modal.querySelector('#secure-cancel');
-            const closeBtn = modal.querySelector('#close-modal');
-            const toggleBtn = modal.querySelector('#toggle-visibility');
+            // Set input type
+            input.type = inputType;
+            
+            // Hide toggle button if not password type
+            if (inputType !== 'password' && toggleBtn) {
+                toggleBtn.style.display = 'none';
+            }
 
             input.focus();
 
-            if (toggleBtn) {
-                toggleBtn.addEventListener('click', () => {
-                    input.type = input.type === 'password' ? 'text' : 'password';
-                });
+            // Setup password toggle
+            if (toggleBtn && inputType === 'password') {
+                setupPasswordToggle(toggleBtn, input);
             }
 
             const cleanup = (value) => {
                 input.value = '';
-                document.body.removeChild(modal);
+                if (modal.parentNode) modal.parentNode.removeChild(modal);
                 resolve(value);
             };
 
             confirmBtn.addEventListener('click', () => cleanup(input.value || null));
             cancelBtn.addEventListener('click', () => cleanup(null));
-            closeBtn.addEventListener('click', () => cleanup(null));
+            setupModalCloseHandlers(modal, () => cleanup(null));
+            
             input.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') cleanup(input.value || null);
-            });
-            modal.addEventListener('click', (e) => {
-                if (e.target === modal) cleanup(null);
             });
         });
     }
@@ -1045,45 +928,18 @@ class App {
             const confirmBtn = modal.querySelector('#confirm-btn');
             const passwordError = modal.querySelector('#password-error');
 
-            // SVG icons
-            const checkIcon = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>`;
-            const emptyIcon = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke-width="1.5"/></svg>`;
-
-            // Validation state
-            let isValid = { length: false, upper: false, lower: false, number: false };
-
-            const updateCheckmark = (element, valid) => {
-                element.innerHTML = valid ? checkIcon : emptyIcon;
-                element.innerHTML += element.textContent;
-                const text = element.textContent;
-                element.innerHTML = (valid ? checkIcon : emptyIcon) + ` <span>${text}</span>`;
-                element.className = `flex items-center gap-2 ${valid ? 'text-emerald-400' : 'text-white/30'}`;
-            };
-
             const validatePassword = () => {
-                const pwd = passwordInput.value;
-                isValid.length = pwd.length >= 12;
-                isValid.upper = /[A-Z]/.test(pwd);
-                isValid.lower = /[a-z]/.test(pwd);
-                isValid.number = /[0-9]/.test(pwd);
+                const rules = validatePasswordRules(passwordInput.value);
 
                 // Update UI
-                checkLength.className = `flex items-center gap-2 ${isValid.length ? 'text-emerald-400' : 'text-white/30'}`;
-                checkLength.innerHTML = (isValid.length ? checkIcon : emptyIcon) + ' At least 12 characters';
-                
-                checkUpper.className = `flex items-center gap-2 ${isValid.upper ? 'text-emerald-400' : 'text-white/30'}`;
-                checkUpper.innerHTML = (isValid.upper ? checkIcon : emptyIcon) + ' Uppercase letter';
-                
-                checkLower.className = `flex items-center gap-2 ${isValid.lower ? 'text-emerald-400' : 'text-white/30'}`;
-                checkLower.innerHTML = (isValid.lower ? checkIcon : emptyIcon) + ' Lowercase letter';
-                
-                checkNumber.className = `flex items-center gap-2 ${isValid.number ? 'text-emerald-400' : 'text-white/30'}`;
-                checkNumber.innerHTML = (isValid.number ? checkIcon : emptyIcon) + ' Number';
+                updatePasswordIndicator(checkLength, rules.length, 'At least 12 characters');
+                updatePasswordIndicator(checkUpper, rules.upper, 'Uppercase letter');
+                updatePasswordIndicator(checkLower, rules.lower, 'Lowercase letter');
+                updatePasswordIndicator(checkNumber, rules.number, 'Number');
 
                 // Enable/disable continue button
-                const allValid = isValid.length && isValid.upper && isValid.lower && isValid.number;
-                continueBtn.disabled = !allValid;
-                continueBtn.className = allValid 
+                continueBtn.disabled = !rules.isValid;
+                continueBtn.className = rules.isValid 
                     ? 'flex-1 bg-white hover:bg-white/90 text-black text-sm font-medium py-3 rounded-xl transition'
                     : 'flex-1 bg-white/10 text-white/30 text-sm font-medium py-3 rounded-xl transition cursor-not-allowed';
             };
@@ -1369,12 +1225,8 @@ class App {
             const confirmBtn = modal.querySelector('#confirm-btn');
             const passwordError = modal.querySelector('#password-error');
 
-            // SVG icons
-            const checkIcon = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>`;
-            const emptyIcon = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke-width="1.5"/></svg>`;
-
             // Validation state
-            let isValid = { length: false, upper: false, lower: false, number: false };
+            let passwordValid = false;
             let isPkValid = false;
 
             // Normalize private key - add 0x if missing
@@ -1396,30 +1248,20 @@ class App {
             };
 
             const validatePassword = () => {
-                const pwd = passwordInput.value;
-                isValid.length = pwd.length >= 12;
-                isValid.upper = /[A-Z]/.test(pwd);
-                isValid.lower = /[a-z]/.test(pwd);
-                isValid.number = /[0-9]/.test(pwd);
+                const rules = validatePasswordRules(passwordInput.value);
+                passwordValid = rules.isValid;
 
                 // Update UI
-                checkLength.className = `flex items-center gap-2 ${isValid.length ? 'text-emerald-400' : 'text-white/30'}`;
-                checkLength.innerHTML = (isValid.length ? checkIcon : emptyIcon) + ' At least 12 characters';
-                
-                checkUpper.className = `flex items-center gap-2 ${isValid.upper ? 'text-emerald-400' : 'text-white/30'}`;
-                checkUpper.innerHTML = (isValid.upper ? checkIcon : emptyIcon) + ' Uppercase letter';
-                
-                checkLower.className = `flex items-center gap-2 ${isValid.lower ? 'text-emerald-400' : 'text-white/30'}`;
-                checkLower.innerHTML = (isValid.lower ? checkIcon : emptyIcon) + ' Lowercase letter';
-                
-                checkNumber.className = `flex items-center gap-2 ${isValid.number ? 'text-emerald-400' : 'text-white/30'}`;
-                checkNumber.innerHTML = (isValid.number ? checkIcon : emptyIcon) + ' Number';
+                updatePasswordIndicator(checkLength, rules.length, 'At least 12 characters');
+                updatePasswordIndicator(checkUpper, rules.upper, 'Uppercase letter');
+                updatePasswordIndicator(checkLower, rules.lower, 'Lowercase letter');
+                updatePasswordIndicator(checkNumber, rules.number, 'Number');
 
                 updateSaveButton();
             };
 
             const updateSaveButton = () => {
-                const allValid = isPkValid && isValid.length && isValid.upper && isValid.lower && isValid.number;
+                const allValid = isPkValid && passwordValid;
                 saveBtn.disabled = !allValid;
                 saveBtn.className = allValid 
                     ? 'flex-1 bg-white hover:bg-white/90 text-black text-sm font-medium py-3 rounded-xl transition'
@@ -1594,27 +1436,7 @@ class App {
      * Show progress modal for encryption/decryption
      */
     showProgressModal(title, subtitle) {
-        const modal = document.createElement('div');
-        modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50';
-        modal.innerHTML = `
-            <div class="bg-[#111111] rounded-xl w-[300px] overflow-hidden shadow-2xl border border-[#222]">
-                <div class="px-5 pt-5 pb-2">
-                    <h3 class="text-[14px] font-medium text-white">${title}</h3>
-                    <p class="text-[11px] text-[#666] mt-0.5">${subtitle}</p>
-                </div>
-                <div class="px-5 pb-5 pt-3">
-                    <div class="flex items-center justify-between mb-1.5">
-                        <span class="text-[10px] text-[#666]">Progress</span>
-                        <span class="text-[10px] font-medium text-white" id="progress-label">0%</span>
-                    </div>
-                    <div class="h-1.5 bg-[#1a1a1a] rounded-full overflow-hidden">
-                        <div id="progress-bar" class="h-full bg-white transition-all duration-300 ease-out" style="width: 0%"></div>
-                    </div>
-                    <p class="text-[10px] text-[#555] text-center mt-3">This may take a few seconds...</p>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(modal);
+        const modal = createModalFromTemplate('modal-progress', { title, subtitle });
         return modal;
     }
 
@@ -1623,8 +1445,8 @@ class App {
      */
     updateProgressModal(modal, progress) {
         const percent = Math.round(progress * 100);
-        const progressBar = modal.querySelector('#progress-bar');
-        const progressLabel = modal.querySelector('#progress-label');
+        const progressBar = $(modal, '[data-progress-bar]');
+        const progressLabel = $(modal, '[data-progress-label]');
         
         if (progressBar) progressBar.style.width = `${percent}%`;
         if (progressLabel) progressLabel.textContent = `${percent}%`;
@@ -1635,7 +1457,7 @@ class App {
      */
     hideProgressModal(modal) {
         if (modal && modal.parentNode) {
-            document.body.removeChild(modal);
+            modal.parentNode.removeChild(modal);
         }
     }
 
@@ -2032,78 +1854,26 @@ class App {
      * Show invite dialog and process
      */
     showInviteDialog(inviteData) {
-        // Create custom modal instead of native confirm()
-        const modal = document.createElement('div');
-        modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 animate-fadeIn';
-        modal.innerHTML = `
-            <div class="bg-[#111111] rounded-xl w-[360px] overflow-hidden shadow-2xl border border-[#222] animate-slideUp">
-                <!-- Header -->
-                <div class="px-5 pt-5 pb-3">
-                    <div class="flex items-center justify-between">
-                        <h3 class="text-[15px] font-medium text-white">Channel Invite</h3>
-                        <button id="close-invite-modal" class="text-[#666] hover:text-white transition p-1 -mr-1">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
-                            </svg>
-                        </button>
-                    </div>
-                    <p class="text-[13px] text-[#888] mt-1">You've been invited to join a channel</p>
-                </div>
-                
-                <!-- Channel Info -->
-                <div class="px-5 pb-4">
-                    <div class="bg-[#1a1a1a] rounded-lg p-4 border border-[#282828] space-y-3">
-                        <div class="flex items-center gap-3">
-                            <div class="w-10 h-10 rounded-lg bg-[#252525] flex items-center justify-center">
-                                <svg class="w-5 h-5 text-[#888]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14"/>
-                                </svg>
-                            </div>
-                            <div class="flex-1 min-w-0">
-                                <div class="text-[14px] font-medium text-white truncate">${escapeHtml(sanitizeText(inviteData.name))}</div>
-                                <div class="text-[12px] text-[#666]">${this.getChannelTypeLabel(inviteData.type)}</div>
-                            </div>
-                        </div>
-                        <div class="pt-2 border-t border-[#282828]">
-                            <div class="text-[11px] text-[#555] font-mono break-all">${escapeHtml(sanitizeText(inviteData.streamId))}</div>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Actions -->
-                <div class="px-5 pb-5 flex gap-3">
-                    <button id="decline-invite" class="flex-1 bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] text-[#888] text-[13px] font-medium px-4 py-2.5 rounded-lg transition">
-                        Decline
-                    </button>
-                    <button id="accept-invite" class="flex-1 bg-white hover:bg-[#f0f0f0] text-black text-[13px] font-medium px-4 py-2.5 rounded-lg transition">
-                        Join Channel
-                    </button>
-                </div>
-            </div>
-        `;
-        
-        document.body.appendChild(modal);
-        
-        const closeModal = () => {
-            modal.classList.add('animate-fadeOut');
-            setTimeout(() => document.body.removeChild(modal), 150);
-        };
-        
-        // Close button
-        modal.querySelector('#close-invite-modal').addEventListener('click', closeModal);
-        
-        // Decline button
-        modal.querySelector('#decline-invite').addEventListener('click', closeModal);
-        
-        // Accept button
-        modal.querySelector('#accept-invite').addEventListener('click', () => {
-            closeModal();
-            this.joinChannelFromInvite(inviteData);
+        const modal = createModalFromTemplate('modal-invite');
+        if (!modal) return;
+
+        // Bind channel data (safely escaped via textContent)
+        bindData(modal, {
+            channelName: sanitizeText(inviteData.name),
+            channelType: this.getChannelTypeLabel(inviteData.type),
+            streamId: sanitizeText(inviteData.streamId)
         });
-        
-        // Click outside to close
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) closeModal();
+
+        const cleanup = () => closeModal(modal);
+
+        // Close and decline handlers
+        setupModalCloseHandlers(modal, cleanup);
+        $(modal, '[data-action="decline"]').addEventListener('click', cleanup);
+
+        // Accept handler
+        $(modal, '[data-action="accept"]').addEventListener('click', () => {
+            cleanup();
+            this.joinChannelFromInvite(inviteData);
         });
     }
 

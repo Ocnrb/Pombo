@@ -4,14 +4,11 @@
  */
 
 import { Logger } from '../logger.js';
+import { CONFIG } from '../config.js';
 
 export const GasEstimator = {
-    // Multiple RPC endpoints for fallback (ordered by reliability)
-    RPC_URLS: [
-        'https://rpc.ankr.com/polygon',
-        'https://polygon.drpc.org',
-        'https://polygon-bor-rpc.publicnode.com'
-    ],
+    // RPC endpoints from centralized config
+    RPC_URLS: CONFIG.network.rpcEndpoints,
     currentRpcIndex: 0,
     
     // Approximate gas units for Streamr operations (based on real tx data)

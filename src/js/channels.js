@@ -15,67 +15,7 @@ import { identityManager } from './identity.js';
 import { secureStorage } from './secureStorage.js';
 import { graphAPI } from './graph.js';
 import { relayManager } from './relayManager.js';
-
-/**
- * Check if an error is a blockchain/gas related error
- * @param {Error} error - The error to check
- * @returns {{ isGasError: boolean, message: string }}
- */
-function parseChainError(error) {
-    const errorMsg = error.message || '';
-    const errorCode = error.code || '';
-    const reason = error.reason?.code || error.reason || '';
-    const errorMsgLower = errorMsg.toLowerCase();
-    
-    // Insufficient funds for gas (check various formats)
-    if (errorCode === 'INSUFFICIENT_FUNDS' ||
-        errorMsg.includes('INSUFFICIENT_FUNDS') ||
-        errorMsg.includes('code=INSUFFICIENT_FUNDS') ||
-        errorMsgLower.includes('insufficient funds') ||
-        errorMsgLower.includes('not enough balance')) {
-        return {
-            isGasError: true,
-            message: 'Insufficient POL for gas fees. Please add POL to your wallet on Polygon network.'
-        };
-    }
-    
-    // Contract call exception (often means out of gas or reverted)
-    if (errorCode === 'CALL_EXCEPTION' || 
-        reason === 'CALL_EXCEPTION' ||
-        errorMsg.includes('CALL_EXCEPTION')) {
-        return {
-            isGasError: true,
-            message: 'Transaction failed. This usually means insufficient POL for gas fees or the transaction was rejected.'
-        };
-    }
-    
-    // Network/RPC errors
-    if (errorCode === 'NETWORK_ERROR' || 
-        errorCode === 'SERVER_ERROR' ||
-        errorMsgLower.includes('network') ||
-        errorMsgLower.includes('timeout')) {
-        return {
-            isGasError: false,
-            message: 'Network error. Please check your connection and try again.'
-        };
-    }
-    
-    // User rejected transaction
-    if (errorCode === 'ACTION_REJECTED' || 
-        errorCode === 4001 ||
-        errorMsgLower.includes('user rejected')) {
-        return {
-            isGasError: false,
-            message: 'Transaction was cancelled.'
-        };
-    }
-    
-    // Not a recognized chain error
-    return {
-        isGasError: false,
-        message: errorMsg || 'An unknown error occurred'
-    };
-}
+import { parseChainError } from './utils/chainErrors.js';
 
 class ChannelManager {
     constructor() {

@@ -385,6 +385,45 @@ body {
     }
 }
 
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Modal animation utilities */
+.animate-fadeIn {
+    animation: fadeIn 0.15s ease-out;
+}
+
+.animate-slideUp {
+    animation: slideUp 0.2s ease-out;
+}
+
+/* Thin scrollbar for modal lists */
+.scrollbar-thin::-webkit-scrollbar {
+    width: 3px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+    background: #333;
+    border-radius: 3px;
+}
+
+/* Wallet selection indicator */
+.wallet-item.selected .selected-dot {
+    opacity: 1;
+}
+
 /* ----- Reactions ----- */
 .reactions-container {
     display: flex;

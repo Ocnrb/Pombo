@@ -7,6 +7,7 @@
 // ethers is exposed globally by vendor.bundle.js
 const getEthers = () => {
     if (typeof window !== 'undefined' && window.ethers) return window.ethers;
+    /* c8 ignore next */
     throw new Error('ethers not available - vendor bundle must be loaded first');
 };
 

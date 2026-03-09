@@ -1,5 +1,6 @@
 import { escapeHtml as _escapeHtml } from './utils.js';
 import { GasEstimator } from './GasEstimator.js';
+import { CONFIG, getNetworkParams } from '../config.js';
 
 /**
  * Settings UI Manager
@@ -1203,13 +1204,7 @@ class SettingsUI {
                     if (switchError.code === 4902) {
                         await window.ethereum.request({
                             method: 'wallet_addEthereumChain',
-                            params: [{
-                                chainId: '0x89',
-                                chainName: 'Polygon Mainnet',
-                                nativeCurrency: { name: 'POL', symbol: 'POL', decimals: 18 },
-                                rpcUrls: ['https://polygon-bor-rpc.publicnode.com', 'https://rpc.ankr.com/polygon'],
-                                blockExplorerUrls: ['https://polygonscan.com']
-                            }],
+                            params: [getNetworkParams()],
                         });
                     } else {
                         throw switchError;

@@ -1830,6 +1830,178 @@
         </div>
     </div>
 
+    <!-- ============================================ -->
+    <!-- MODAL TEMPLATES (Hidden, cloned via JS)     -->
+    <!-- ============================================ -->
+
+    <!-- Template: Progress Modal -->
+    <template id="modal-progress">
+        <div class="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+            <div class="bg-[#111111] rounded-xl w-[300px] overflow-hidden shadow-2xl border border-[#222]" data-modal-content>
+                <div class="px-5 pt-5 pb-2">
+                    <h3 class="text-[14px] font-medium text-white" data-bind="title">Processing...</h3>
+                    <p class="text-[11px] text-[#666] mt-0.5" data-bind="subtitle">Please wait</p>
+                </div>
+                <div class="px-5 pb-5 pt-3">
+                    <div class="flex items-center justify-between mb-1.5">
+                        <span class="text-[10px] text-[#666]">Progress</span>
+                        <span class="text-[10px] font-medium text-white" data-progress-label>0%</span>
+                    </div>
+                    <div class="h-1.5 bg-[#1a1a1a] rounded-full overflow-hidden">
+                        <div data-progress-bar class="h-full bg-white transition-all duration-300 ease-out" style="width: 0%"></div>
+                    </div>
+                    <p class="text-[10px] text-[#555] text-center mt-3">This may take a few seconds...</p>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- Template: Secure Input Modal -->
+    <template id="modal-secure-input">
+        <div class="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+            <div class="bg-[#111111] rounded-xl w-[340px] overflow-hidden shadow-2xl border border-[#222]" data-modal-content>
+                <div class="px-5 pt-5 pb-3">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-[15px] font-medium text-white" data-bind="title">Input</h3>
+                        <button data-close-modal class="text-[#666] hover:text-white transition p-1 -mr-1">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <p class="text-[11px] text-[#666] mt-1" data-bind="label">Enter value</p>
+                </div>
+                <div class="px-5 pb-4">
+                    <div class="relative">
+                        <input type="password" data-secure-input 
+                            class="w-full bg-[#1a1a1a] border border-[#282828] rounded-lg px-3 py-2.5 text-[13px] text-white placeholder-[#555] focus:outline-none focus:border-[#444] transition"
+                            autocomplete="off" spellcheck="false">
+                        <button data-toggle-visibility class="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#555] hover:text-white transition">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="px-5 pb-5 flex gap-2">
+                    <button data-cancel class="flex-1 bg-[#1a1a1a] hover:bg-[#202020] text-white text-[13px] font-medium py-2.5 rounded-lg transition border border-[#282828]">
+                        Cancel
+                    </button>
+                    <button data-confirm class="flex-1 bg-white hover:bg-[#f0f0f0] text-black text-[13px] font-medium py-2.5 rounded-lg transition">
+                        Continue
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- Template: Create Wallet Modal -->
+    <template id="modal-create-wallet">
+        <div class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 animate-fadeIn">
+            <div class="bg-[#111111] rounded-xl w-[340px] overflow-hidden shadow-2xl border border-[#222] animate-slideUp" data-modal-content>
+                <div class="px-5 pt-5 pb-3">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-[15px] font-medium text-white">Connect Account</h3>
+                        <button data-close-modal class="text-[#666] hover:text-white transition p-1 -mr-1">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="px-5 pb-3 space-y-2">
+                    <!-- Create New Account -->
+                    <button data-action="create" class="w-full bg-white hover:bg-[#f0f0f0] rounded-lg p-3.5 text-left transition-all">
+                        <div class="flex items-center gap-3">
+                            <div class="w-9 h-9 rounded-lg bg-[#111] flex items-center justify-center">
+                                <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4.5v15m7.5-7.5h-15"/>
+                                </svg>
+                            </div>
+                            <div>
+                                <p class="text-[13px] font-medium text-black">Create New Account</p>
+                                <p class="text-[11px] text-[#666]">Generate a new private key</p>
+                            </div>
+                        </div>
+                    </button>
+                    <!-- Import Private Key -->
+                    <button data-action="import" class="w-full bg-[#1a1a1a] hover:bg-[#202020] border border-[#282828] hover:border-[#333] rounded-lg p-3.5 text-left transition-all">
+                        <div class="flex items-center gap-3">
+                            <div class="w-9 h-9 rounded-lg bg-[#252525] flex items-center justify-center">
+                                <svg class="w-4 h-4 text-[#888]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+                                </svg>
+                            </div>
+                            <div>
+                                <p class="text-[13px] font-medium text-white">Import Private Key</p>
+                                <p class="text-[11px] text-[#666]">Use existing account</p>
+                            </div>
+                        </div>
+                    </button>
+                </div>
+                <!-- Restore link (discreet) -->
+                <div class="px-5 pb-4 flex justify-end">
+                    <button data-action="restore" class="flex items-center gap-1.5 text-[#555] hover:text-[#888] transition text-[11px]">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/>
+                        </svg>
+                        restore
+                    </button>
+                    <input type="file" data-restore-input accept=".json" class="hidden">
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- Template: Invite Dialog -->
+    <template id="modal-invite">
+        <div class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 animate-fadeIn">
+            <div class="bg-[#111111] rounded-xl w-[360px] overflow-hidden shadow-2xl border border-[#222] animate-slideUp" data-modal-content>
+                <!-- Header -->
+                <div class="px-5 pt-5 pb-3">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-[15px] font-medium text-white">Channel Invite</h3>
+                        <button data-close-modal class="text-[#666] hover:text-white transition p-1 -mr-1">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <p class="text-[13px] text-[#888] mt-1">You've been invited to join a channel</p>
+                </div>
+                <!-- Channel Info -->
+                <div class="px-5 pb-4">
+                    <div class="bg-[#1a1a1a] rounded-lg p-4 border border-[#282828] space-y-3">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 rounded-lg bg-[#252525] flex items-center justify-center">
+                                <svg class="w-5 h-5 text-[#888]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14"/>
+                                </svg>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="text-[14px] font-medium text-white truncate" data-bind="channelName"></div>
+                                <div class="text-[12px] text-[#666]" data-bind="channelType">Public Channel</div>
+                            </div>
+                        </div>
+                        <div class="pt-2 border-t border-[#282828]">
+                            <div class="text-[11px] text-[#555] font-mono break-all" data-bind="streamId"></div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Actions -->
+                <div class="px-5 pb-5 flex gap-3">
+                    <button data-action="decline" class="flex-1 bg-[#1a1a1a] hover:bg-[#252525] border border-[#282828] text-[#888] text-[13px] font-medium px-4 py-2.5 rounded-lg transition">
+                        Decline
+                    </button>
+                    <button data-action="accept" class="flex-1 bg-white hover:bg-[#f0f0f0] text-black text-[13px] font-medium px-4 py-2.5 rounded-lg transition">
+                        Join Channel
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+
     <!-- Loading Overlay -->
     <div id="loading-overlay" class="loading-overlay">
         <div class="spinner"></div>

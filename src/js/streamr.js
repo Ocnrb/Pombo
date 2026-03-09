@@ -18,6 +18,8 @@
 
 import { Logger } from './logger.js';
 import { cryptoManager } from './crypto.js';
+import { CONFIG, getRpcEndpoints } from './config.js';
+import { executeWithRetry, executeWithRetryAndVerify } from './utils/retry.js';
 
 // === STREAM CONFIG (DUAL-STREAM ARCHITECTURE) ===
 const STREAM_CONFIG = {
@@ -139,18 +141,14 @@ class StreamrController {
                 auth: {
                     privateKey: signer.privateKey
                 },
-                // Custom RPC endpoints for Polygon (avoid polygon-rpc.com 401 errors)
+                // RPC endpoints from centralized config
                 contracts: {
                     ethereumNetwork: {
-                        chainId: 137,
+                        chainId: CONFIG.network.chainId,
                         // Disable highGasPriceStrategy to avoid gasstation.polygon.technology errors
                         highGasPriceStrategy: false
                     },
-                    rpcs: [
-                        { url: 'https://rpc.ankr.com/polygon' },
-                        { url: 'https://polygon.drpc.org' },
-                        { url: 'https://polygon-bor-rpc.publicnode.com' }
-                    ],
+                    rpcs: getRpcEndpoints(),
                     // Use first RPC that responds (faster, less reliable for consensus)
                     rpcQuorum: 1
                 }
@@ -302,11 +300,11 @@ class StreamrController {
             // === SERIAL CREATION: Streams must be created one after another ===
             // Note: Parallel creation causes REPLACEMENT_UNDERPRICED error due to nonce conflicts
             
-            // Helper function to create stream with retry
+            // Helper function to create stream with retry and verification
             const createStreamWithRetry = async (streamId, streamMetadata, streamDescription, partitionCount, maxRetries = 7) => {
-                for (let attempt = 1; attempt <= maxRetries; attempt++) {
-                    try {
-                        Logger.info(`Creating stream (attempt ${attempt}/${maxRetries})...`);
+                return executeWithRetryAndVerify(
+                    `createStream(${streamDescription})`,
+                    async () => {
                         const stream = await this.client.createStream({
                             id: streamId,
                             description: streamMetadata,
@@ -314,30 +312,18 @@ class StreamrController {
                         });
                         Logger.info(`✓ Stream created: ${stream.id}`);
                         return stream;
-                    } catch (error) {
-                        Logger.warn(`Stream creation attempt ${attempt} failed:`, error.message);
-                        
+                    },
+                    async () => {
                         // Check if stream was actually created despite error
-                        try {
-                            const existingStream = await this.client.getStream(streamId);
-                            if (existingStream) {
-                                Logger.info(`✓ Stream exists (created despite error): ${existingStream.id}`);
-                                return existingStream;
-                            }
-                        } catch (e) {
-                            // Stream doesn't exist, continue retry
+                        const existingStream = await this.client.getStream(streamId);
+                        if (existingStream) {
+                            Logger.info(`✓ Stream exists (created despite error): ${existingStream.id}`);
+                            return existingStream;
                         }
-                        
-                        if (attempt < maxRetries) {
-                            // Wait before retry with exponential backoff
-                            const delay = attempt * 3000;
-                            Logger.info(`Retrying in ${delay/1000}s...`);
-                            await new Promise(r => setTimeout(r, delay));
-                        } else {
-                            throw error;
-                        }
-                    }
-                }
+                        return null;
+                    },
+                    { maxRetries }
+                );
             };
             
             // Step 1: Create MESSAGE STREAM first (sequential to avoid nonce conflicts)
@@ -556,32 +542,13 @@ class StreamrController {
             return;
         }
 
-        // Retry loop for RPC reliability
-        for (let attempt = 1; attempt <= retries; attempt++) {
-            try {
-                Logger.debug(`Setting permissions (attempt ${attempt}/${retries})...`);
-                
-                await this.client.setPermissions({
-                    streamId: streamId,
-                    assignments: assignments
-                });
-
-                Logger.debug('Permissions set successfully (batch)');
-                return; // Success
-                
-            } catch (error) {
-                Logger.warn(`Permission attempt ${attempt} failed:`, error.message);
-                
-                if (attempt < retries) {
-                    const delay = attempt * 3000;
-                    Logger.debug(`Retrying in ${delay/1000}s...`);
-                    await new Promise(r => setTimeout(r, delay));
-                } else {
-                    Logger.error('All permission attempts failed for:', streamId);
-                    throw error;
-                }
-            }
-        }
+        await executeWithRetry('setStreamPermissions', async () => {
+            await this.client.setPermissions({
+                streamId: streamId,
+                assignments: assignments
+            });
+            Logger.debug('Permissions set successfully (batch)');
+        }, { maxRetries: retries });
     }
 
     /**
@@ -593,36 +560,16 @@ class StreamrController {
         // If string passed, get the stream object
         const streamId = typeof stream === 'string' ? stream : stream.id;
 
-        for (let attempt = 1; attempt <= retries; attempt++) {
-            try {
-                Logger.debug(`Granting public permissions (attempt ${attempt}/${retries})...`);
-                
-                // Use setPermissions for consistent single-transaction behavior
-                await this.client.setPermissions({
-                    streamId: streamId,
-                    assignments: [{
-                        public: true,
-                        permissions: ['subscribe', 'publish']
-                    }]
-                });
-                
-                Logger.debug('Public permissions granted successfully');
-                return; // Success - exit
-                
-            } catch (error) {
-                Logger.warn(`Permission attempt ${attempt} failed:`, error.message);
-                
-                if (attempt < retries) {
-                    // Wait before retry (exponential backoff)
-                    const delay = attempt * 3000;
-                    Logger.debug(`Retrying in ${delay/1000}s...`);
-                    await new Promise(r => setTimeout(r, delay));
-                } else {
-                    Logger.error('All permission attempts failed for:', streamId);
-                    throw error;
-                }
-            }
-        }
+        await executeWithRetry('grantPublicPermissions', async () => {
+            await this.client.setPermissions({
+                streamId: streamId,
+                assignments: [{
+                    public: true,
+                    permissions: ['subscribe', 'publish']
+                }]
+            });
+            Logger.debug('Public permissions granted successfully');
+        }, { maxRetries: retries });
     }
 
     /**
@@ -632,34 +579,16 @@ class StreamrController {
     async grantPublicReadOnlyPermissions(stream, retries = 7) {
         const streamId = typeof stream === 'string' ? stream : stream.id;
 
-        for (let attempt = 1; attempt <= retries; attempt++) {
-            try {
-                Logger.debug(`Granting public read-only permissions (attempt ${attempt}/${retries})...`);
-                
-                await this.client.setPermissions({
-                    streamId: streamId,
-                    assignments: [{
-                        public: true,
-                        permissions: ['subscribe']  // Only subscribe, no publish
-                    }]
-                });
-                
-                Logger.debug('Public read-only permissions granted successfully');
-                return;
-                
-            } catch (error) {
-                Logger.warn(`Read-only permission attempt ${attempt} failed:`, error.message);
-                
-                if (attempt < retries) {
-                    const delay = attempt * 3000;
-                    Logger.debug(`Retrying in ${delay/1000}s...`);
-                    await new Promise(r => setTimeout(r, delay));
-                } else {
-                    Logger.error('All read-only permission attempts failed for:', streamId);
-                    throw error;
-                }
-            }
-        }
+        await executeWithRetry('grantPublicReadOnlyPermissions', async () => {
+            await this.client.setPermissions({
+                streamId: streamId,
+                assignments: [{
+                    public: true,
+                    permissions: ['subscribe']
+                }]
+            });
+            Logger.debug('Public read-only permissions granted successfully');
+        }, { maxRetries: retries });
     }
 
     /**
@@ -690,32 +619,13 @@ class StreamrController {
             });
         }
 
-        // Retry loop for RPC reliability
-        for (let attempt = 1; attempt <= retries; attempt++) {
-            try {
-                Logger.debug(`Granting permissions to addresses (attempt ${attempt}/${retries}):`, addresses);
-
-                await this.client.setPermissions({
-                    streamId: streamId,
-                    assignments: assignments
-                });
-
-                Logger.info('All permissions granted to addresses:', addresses);
-                return; // Success
-                
-            } catch (error) {
-                Logger.warn(`Grant permissions attempt ${attempt} failed:`, error.message);
-                
-                if (attempt < retries) {
-                    const delay = attempt * 3000;
-                    Logger.debug(`Retrying in ${delay/1000}s...`);
-                    await new Promise(r => setTimeout(r, delay));
-                } else {
-                    Logger.error('All grant permission attempts failed for:', streamId);
-                    throw error;
-                }
-            }
-        }
+        await executeWithRetry('grantPermissionsToAddresses', async () => {
+            await this.client.setPermissions({
+                streamId: streamId,
+                assignments: assignments
+            });
+            Logger.info('All permissions granted to addresses:', addresses);
+        }, { maxRetries: retries });
     }
 
     /**
@@ -746,32 +656,13 @@ class StreamrController {
             });
         }
 
-        // Retry loop for RPC reliability
-        for (let attempt = 1; attempt <= retries; attempt++) {
-            try {
-                Logger.debug(`Revoking permissions from addresses (attempt ${attempt}/${retries}):`, addresses);
-
-                await this.client.setPermissions({
-                    streamId: streamId,
-                    assignments: assignments
-                });
-
-                Logger.debug('Permissions revoked from addresses:', addresses);
-                return; // Success
-                
-            } catch (error) {
-                Logger.warn(`Revoke permissions attempt ${attempt} failed:`, error.message);
-                
-                if (attempt < retries) {
-                    const delay = attempt * 3000;
-                    Logger.debug(`Retrying in ${delay/1000}s...`);
-                    await new Promise(r => setTimeout(r, delay));
-                } else {
-                    Logger.error('All revoke permission attempts failed for:', streamId);
-                    throw error;
-                }
-            }
-        }
+        await executeWithRetry('revokePermissionsFromAddresses', async () => {
+            await this.client.setPermissions({
+                streamId: streamId,
+                assignments: assignments
+            });
+            Logger.debug('Permissions revoked from addresses:', addresses);
+        }, { maxRetries: retries });
     }
 
     /**
@@ -799,35 +690,16 @@ class StreamrController {
             ? ['subscribe', 'publish', 'grant']
             : ['subscribe', 'publish'];
 
-        // Retry loop for RPC reliability
-        for (let attempt = 1; attempt <= retries; attempt++) {
-            try {
-                Logger.debug(`Updating permissions (attempt ${attempt}/${retries})...`);
-                
-                await this.client.setPermissions({
-                    streamId: streamId,
-                    assignments: [{
-                        userId: normalizedAddress,
-                        permissions: newPermissions
-                    }]
-                });
-                
-                Logger.debug(`Permissions updated for ${normalizedAddress}`);
-                return; // Success
-                
-            } catch (error) {
-                Logger.warn(`Update permissions attempt ${attempt} failed:`, error.message);
-                
-                if (attempt < retries) {
-                    const delay = attempt * 3000;
-                    Logger.debug(`Retrying in ${delay/1000}s...`);
-                    await new Promise(r => setTimeout(r, delay));
-                } else {
-                    Logger.error('All update permission attempts failed for:', streamId);
-                    throw error;
-                }
-            }
-        }
+        await executeWithRetry('updatePermissions', async () => {
+            await this.client.setPermissions({
+                streamId: streamId,
+                assignments: [{
+                    userId: normalizedAddress,
+                    permissions: newPermissions
+                }]
+            });
+            Logger.debug(`Permissions updated for ${normalizedAddress}`);
+        }, { maxRetries: retries });
     }
 
     /**
@@ -1136,24 +1008,15 @@ class StreamrController {
 
         // Helper function to delete a single stream with retries
         const deleteWithRetry = async (sid, description) => {
-            for (let attempt = 1; attempt <= retries; attempt++) {
-                try {
-                    Logger.debug(`Deleting ${description} (attempt ${attempt}/${retries})...`);
+            try {
+                await executeWithRetry(`delete(${description})`, async () => {
                     await this.client.deleteStream(sid);
                     Logger.info(`✓ ${description} deleted:`, sid);
-                    return { success: true };
-                } catch (error) {
-                    Logger.warn(`Delete ${description} attempt ${attempt} failed:`, error.message);
-                    
-                    if (attempt < retries) {
-                        const delay = attempt * 3000;
-                        Logger.debug(`Retrying in ${delay/1000}s...`);
-                        await new Promise(r => setTimeout(r, delay));
-                    } else {
-                        Logger.error(`All delete attempts failed for ${description}:`, sid);
-                        return { success: false, error };
-                    }
-                }
+                }, { maxRetries: retries });
+                return { success: true };
+            } catch (error) {
+                Logger.error(`All delete attempts failed for ${description}:`, sid);
+                return { success: false, error };
             }
         };
 
@@ -1471,9 +1334,8 @@ class StreamrController {
             storageDays 
         });
         
-        for (let attempt = 1; attempt <= retries; attempt++) {
-            try {
-                Logger.debug(`Adding to storage node (attempt ${attempt}/${retries})...`);
+        try {
+            await executeWithRetry('enableStorage', async () => {
                 const stream = await this.client.getStream(messageStreamId);
                 
                 // Add to storage node
@@ -1494,27 +1356,18 @@ class StreamrController {
                     provider: providerId,
                     days: storageDays
                 });
-                
-                return { 
-                    success: true, 
-                    provider: providerId, 
-                    storageDays: storageDays,
-                    nodeAddress: nodeAddress
-                };
-            } catch (error) {
-                Logger.warn(`Storage attempt ${attempt} failed:`, error.message);
-                
-                if (attempt < retries) {
-                    const delay = attempt * 3000;
-                    Logger.debug(`Retrying in ${delay/1000}s...`);
-                    await new Promise(r => setTimeout(r, delay));
-                } else {
-                    Logger.error('All storage attempts failed for:', messageStreamId);
-                    return { success: false, provider: providerId, storageDays: null };
-                }
-            }
+            }, { maxRetries: retries });
+            
+            return { 
+                success: true, 
+                provider: providerId, 
+                storageDays: storageDays,
+                nodeAddress: nodeAddress
+            };
+        } catch (error) {
+            Logger.error('All storage attempts failed for:', messageStreamId);
+            return { success: false, provider: providerId, storageDays: null };
         }
-        return { success: false, provider: providerId, storageDays: null };
     }
 
     /**
