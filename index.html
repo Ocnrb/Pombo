@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-vvt4KWwuNr51XfE5m+hzeNEGhiOfZzG97ccfqGsPwvE='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; connect-src 'self' wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://polygon-bor-rpc.publicnode.com https://gasstation.polygon.technology https://eth.llamarpc.com https://*.thegraph.com https://*.ens.domains https://euc.li https://*.logstore.usher.so https://fcm.googleapis.com https://*.push.services.mozilla.com https://updates.push.services.mozilla.com; base-uri 'self'; form-action 'self'">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Pombo - P2P Decentralized Chat</title>
 
     <!-- Favicons -->
@@ -61,25 +61,40 @@
         
         <!-- Right side: Wallet controls -->
         <div class="flex items-center gap-3">
-            <div id="wallet-info" class="text-sm text-white/40 cursor-pointer hover:text-white/80 transition font-mono" title="Click to copy address">Not Connected</div>
+            <!-- Guest label (shown alongside Connect button when in guest mode) -->
+            <div id="wallet-info" class="text-sm text-white/40 cursor-pointer hover:text-white/80 transition font-mono hidden" title="Click to copy address">Not Connected</div>
+            <!-- Connect button (shown when not connected or guest) -->
             <button id="connect-wallet" class="bg-[#F6851B] hover:bg-[#e5780f] text-white px-4 py-1.5 rounded-xl text-sm font-medium transition-all duration-200 flex items-center gap-1.5 shadow-lg shadow-[#F6851B]/20 hover:shadow-[#F6851B]/30">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/>
                 </svg>
-                Connect
+                Create Account
             </button>
-            <div id="wallet-controls" class="hidden flex items-center gap-1.5">
-                <button id="switch-wallet" class="hidden bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] p-1.5 rounded-xl transition-all duration-200" title="Switch Account">
-                    <svg class="w-3.5 h-3.5 text-white/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"/>
+            <!-- Desktop: Unified account dropdown (hidden on mobile) -->
+            <div id="desktop-account-wrapper" class="hidden md:relative">
+                <button id="desktop-account-btn" class="bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] text-white/70 hover:text-white px-3 py-1.5 rounded-xl text-sm font-medium transition-all duration-200 flex items-center gap-2">
+                    <div id="desktop-account-avatar" class="w-5 h-5 rounded-full overflow-hidden flex-shrink-0"></div>
+                    <span id="desktop-account-name" class="max-w-[140px] truncate font-mono text-[13px]">Not Connected</span>
+                    <svg class="w-3 h-3 text-white/30 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
                     </svg>
                 </button>
-                <button id="disconnect-wallet" class="bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] text-white/50 hover:text-white px-3 py-1.5 rounded-xl text-sm font-medium transition-all duration-200 flex items-center gap-1.5">
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9"/>
-                    </svg>
-                    <span>Disconnect</span>
-                </button>
+                <!-- Dropdown menu -->
+                <div id="desktop-account-dropdown" class="hidden absolute top-full right-0 mt-1.5 min-w-[200px] bg-[#16161b] border border-white/[0.1] rounded-xl p-1.5 shadow-2xl z-50" style="transform-origin: top right;">
+                    <div id="desktop-dropdown-address" class="px-3 py-2 text-[11px] text-white/40 font-mono border-b border-white/[0.06] mb-1"></div>
+                    <button id="switch-wallet" class="hidden w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] text-white/60 hover:bg-white/[0.06] transition text-left">
+                        <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"/>
+                        </svg>
+                        Switch Account
+                    </button>
+                    <button id="disconnect-wallet" class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] text-red-400 hover:bg-white/[0.06] transition text-left">
+                        <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9"/>
+                        </svg>
+                        Disconnect
+                    </button>
+                </div>
             </div>
         </div>
     </header>
@@ -249,7 +264,6 @@
                             <button id="online-header" class="hidden items-center gap-1 hover:text-white/70 transition">
                                 <span id="online-users-count">0</span>
                                 <span>Online</span>
-                                <span class="text-xs leading-none rotate-90">›</span>
                             </button>
                             <div id="online-users-list" class="absolute top-full left-0 mt-1 w-56 bg-[#1e1e1e] border border-white/10 rounded-xl p-3 z-20 hidden max-h-48 overflow-y-auto">
                                 <div class="text-white/30 text-sm text-center">No one online</div>
@@ -1076,13 +1090,14 @@
                     <!-- Info Panel -->
                     <div id="channel-panel-info" class="channel-settings-panel hidden space-y-5">
                         <div class="space-y-5">
-                            <div>
-                                <label class="block text-sm font-medium text-white/40 uppercase tracking-wider mb-2">Permissions Type</label>
-                                <div id="channel-settings-type" class="text-base text-white font-medium"></div>
+                            <!-- Channel Name -->
+                            <div id="channel-name-section" class="hidden">
+                                <label class="block text-sm font-medium text-white/40 uppercase tracking-wider mb-2">Name</label>
+                                <div id="channel-settings-name" class="text-sm text-white/80"></div>
                             </div>
                             <div>
                                 <div class="flex items-center gap-2 mb-2">
-                                    <label class="text-sm font-medium text-white/40 uppercase tracking-wider">Channel ID</label>
+                                    <label class="text-sm font-medium text-white/40 uppercase tracking-wider">ID</label>
                                     <button id="copy-stream-id-btn" class="p-1 hover:bg-white/5 rounded transition" title="Copy">
                                         <svg class="w-4 h-4 text-white/40 hover:text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
                                     </button>
@@ -1091,10 +1106,16 @@
                             </div>
                         </div>
                         
-                        <!-- Non-native message / Channel Description -->
+                        <!-- Channel Description -->
                         <div id="non-native-message" class="hidden mt-6">
                             <label class="block text-sm font-medium text-white/40 uppercase tracking-wider mb-2">Description</label>
                             <div id="channel-description-display" class="text-base text-white/60 bg-white/5 px-3 py-3 rounded-lg"></div>
+                        </div>
+
+                        <!-- Access type -->
+                        <div>
+                            <label class="block text-sm font-medium text-white/40 uppercase tracking-wider mb-2">Access</label>
+                            <div id="channel-settings-type" class="text-sm text-white/60"></div>
                         </div>
                     </div>
 
@@ -1110,7 +1131,7 @@
                                     </button>
                                 </div>
                                 <div id="members-list" class="space-y-2 max-h-[200px] overflow-y-auto pr-1">
-                                    <div class="text-center text-white/30 py-4 text-base">Loading...</div>
+                                    <div class="text-center text-white/30 py-4 text-sm">Loading...</div>
                                 </div>
                             </div>
 
@@ -1125,9 +1146,9 @@
                                             type="text"
                                             id="add-member-input"
                                             placeholder="0x... address"
-                                            class="flex-1 bg-white/5 border border-white/10 text-white px-4 py-2.5 rounded-xl text-base focus:outline-none focus:border-white/30 transition placeholder:text-white/20"
+                                            class="flex-1 bg-white/5 border border-white/10 text-white px-4 py-2.5 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20"
                                         />
-                                        <button id="add-member-btn" class="bg-white/10 hover:bg-white/20 text-white border border-white/20 px-4 py-2.5 rounded-xl text-base transition">
+                                        <button id="add-member-btn" class="bg-white/10 hover:bg-white/20 text-white border border-white/20 px-4 py-2.5 rounded-xl text-sm transition">
                                             Add
                                         </button>
                                     </div>
@@ -1145,7 +1166,7 @@
                                                 rows="4"
                                                 class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm font-mono focus:outline-none focus:border-white/30 transition placeholder:text-white/20 resize-none"
                                             ></textarea>
-                                            <button id="batch-add-members-btn" class="w-full bg-white/10 hover:bg-white/20 text-white border border-white/20 px-4 py-2.5 rounded-xl text-base transition">
+                                            <button id="batch-add-members-btn" class="w-full bg-white/10 hover:bg-white/20 text-white border border-white/20 px-4 py-2.5 rounded-xl text-sm transition">
                                                 Add All Addresses
                                             </button>
                                         </div>
@@ -1180,7 +1201,7 @@
                         <div class="space-y-5">
                             <div id="channel-notifications-container" class="flex items-start justify-between p-4 bg-white/5 rounded-xl border border-white/5 transition-opacity duration-200">
                                 <div class="flex-1 mr-4">
-                                    <h4 class="text-base font-medium text-white/90 mb-1">Push Notifications</h4>
+                                    <h4 class="text-sm font-medium text-white/90 mb-1">Push Notifications</h4>
                                     <p class="text-sm text-white/40 leading-relaxed">
                                         Get notified when new messages are posted in this channel
                                     </p>
@@ -1210,7 +1231,7 @@
                         <div class="space-y-5">
                             <div>
                                 <label class="block text-sm font-medium text-white/40 uppercase tracking-wider mb-2">Storage Provider</label>
-                                <div id="channel-storage-provider" class="text-base text-white font-medium">-</div>
+                                <div id="channel-storage-provider" class="text-sm text-white/60">-</div>
                             </div>
                             <div>
                                 <div class="flex items-center gap-2 mb-2">
@@ -1223,7 +1244,7 @@
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-white/40 uppercase tracking-wider mb-2">Retention Period</label>
-                                <div id="channel-storage-retention" class="text-base text-white font-medium">-</div>
+                                <div id="channel-storage-retention" class="text-sm text-white/60">-</div>
                             </div>
                             <div id="channel-storage-no-storage" class="hidden p-4 bg-amber-500/5 rounded-xl border border-amber-500/10">
                                 <p class="text-sm text-amber-400/80 flex items-center gap-2">
@@ -1238,14 +1259,14 @@
                     <div id="channel-panel-danger" class="channel-settings-panel hidden">
                         <div id="delete-channel-section" class="space-y-4">
                             <div class="p-4 bg-red-500/5 rounded-xl border border-red-500/10">
-                                <h4 class="text-base font-medium text-white/90 mb-1 flex items-center gap-2">
+                                <h4 class="text-sm font-medium text-white/90 mb-1 flex items-center gap-2">
                                     <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
                                     Delete Channel
                                 </h4>
                                 <p class="text-sm text-white/40 mb-4">
                                     Permanently delete this channel from the Streamr network. This cannot be undone.
                                 </p>
-                                <button id="delete-channel-btn" class="w-full bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 px-4 py-2.5 rounded-xl text-base transition">
+                                <button id="delete-channel-btn" class="w-full bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 px-4 py-2.5 rounded-xl text-sm transition">
                                     Delete Channel Forever
                                 </button>
                             </div>

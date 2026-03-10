@@ -158,7 +158,7 @@ class UIController {
             showNotification: (msg, type) => this.showNotification(msg, type),
             showLoading: (msg) => this.showLoading(msg),
             hideLoading: () => this.hideLoading(),
-            getChannelTypeLabel: (type, readOnly) => headerUI.getChannelTypeLabel(type, readOnly),
+            getChannelTypeLabel: (type, readOnly, showLabel) => headerUI.getChannelTypeLabel(type, readOnly, showLabel),
             renderChannelList: () => this.renderChannelList(),
             selectChannel: (streamId) => this.selectChannel(streamId),
             showConnectedNoChannelState: () => this.showConnectedNoChannelState(),
@@ -207,9 +207,15 @@ class UIController {
             walletInfo: document.getElementById('wallet-info'),
             connectWalletBtn: document.getElementById('connect-wallet'),
             disconnectWalletBtn: document.getElementById('disconnect-wallet'),
-            walletControls: document.getElementById('wallet-controls'),
             switchWalletBtn: document.getElementById('switch-wallet'),
             contactsBtn: document.getElementById('contacts-btn'),
+            // Desktop account dropdown
+            desktopAccountWrapper: document.getElementById('desktop-account-wrapper'),
+            desktopAccountBtn: document.getElementById('desktop-account-btn'),
+            desktopAccountAvatar: document.getElementById('desktop-account-avatar'),
+            desktopAccountName: document.getElementById('desktop-account-name'),
+            desktopAccountDropdown: document.getElementById('desktop-account-dropdown'),
+            desktopDropdownAddress: document.getElementById('desktop-dropdown-address'),
 
             // Sidebar
             channelList: document.getElementById('channel-list'),
@@ -271,6 +277,8 @@ class UIController {
             channelSettingsModal: document.getElementById('channel-settings-modal'),
             channelSettingsType: document.getElementById('channel-settings-type'),
             channelSettingsId: document.getElementById('channel-settings-id'),
+            channelSettingsName: document.getElementById('channel-settings-name'),
+            channelNameSection: document.getElementById('channel-name-section'),
             copyStreamIdBtn: document.getElementById('copy-stream-id-btn'),
             membersSection: document.getElementById('members-section'),
             nonNativeMessage: document.getElementById('non-native-message'),
@@ -416,13 +424,18 @@ class UIController {
         headerUI.init({
             walletInfo: this.elements.walletInfo,
             connectWalletBtn: this.elements.connectWalletBtn,
-            walletControls: this.elements.walletControls,
             switchWalletBtn: this.elements.switchWalletBtn,
             contactsBtn: this.elements.contactsBtn,
             settingsBtn: document.getElementById('settings-btn'),
             currentChannelName: this.elements.currentChannelName,
             currentChannelInfo: this.elements.currentChannelInfo,
-            chatHeaderRight: this.elements.chatHeaderRight
+            chatHeaderRight: this.elements.chatHeaderRight,
+            desktopAccountWrapper: this.elements.desktopAccountWrapper,
+            desktopAccountBtn: this.elements.desktopAccountBtn,
+            desktopAccountAvatar: this.elements.desktopAccountAvatar,
+            desktopAccountName: this.elements.desktopAccountName,
+            desktopAccountDropdown: this.elements.desktopAccountDropdown,
+            desktopDropdownAddress: this.elements.desktopDropdownAddress
         });
 
         // Initialize PreviewModeUI with dependencies
@@ -959,21 +972,21 @@ class UIController {
         // Delete channel button
         if (this.elements.deleteChannelBtn) {
             this.elements.deleteChannelBtn.addEventListener('click', () => {
-                this.showDeleteChannelModal();
+                channelSettingsUI.showDeleteModal();
             });
         }
 
         // Cancel delete button
         if (this.elements.cancelDeleteBtn) {
             this.elements.cancelDeleteBtn.addEventListener('click', () => {
-                this.hideDeleteChannelModal();
+                channelSettingsUI.hideDeleteModal();
             });
         }
 
         // Confirm delete button
         if (this.elements.confirmDeleteBtn) {
             this.elements.confirmDeleteBtn.addEventListener('click', () => {
-                this.handleDeleteChannel();
+                channelSettingsUI.handleDelete();
             });
         }
 
@@ -981,7 +994,7 @@ class UIController {
         if (this.elements.deleteChannelModal) {
             this.elements.deleteChannelModal.addEventListener('click', (e) => {
                 if (e.target === this.elements.deleteChannelModal) {
-                    this.hideDeleteChannelModal();
+                    channelSettingsUI.hideDeleteModal();
                 }
             });
         }

@@ -106,16 +106,16 @@ class App {
         const switchBtn = document.getElementById('switch-wallet');
 
         connectBtn.addEventListener('click', async () => {
-            // Connect or upgrade from Guest to real account
-            // (button is hidden when connected with real account)
             await this.connectWallet();
         });
 
         disconnectBtn?.addEventListener('click', async () => {
+            headerUI._closeDesktopDropdown();
             await this.disconnectWallet();
         });
 
         switchBtn?.addEventListener('click', async () => {
+            headerUI._closeDesktopDropdown();
             await this.switchWallet();
         });
     }
@@ -195,7 +195,8 @@ class App {
             if (wasGuest) {
                 uiController.showNotification('Guest session ended - all data has been cleared', 'info');
             } else {
-                uiController.showNotification('Account disconnected', 'info');
+                // Non-guest disconnect: reconnect as Guest so user is never stuck
+                await this.fallbackToGuest('Account disconnected - continuing as Guest');
             }
             
             Logger.info('Account disconnected - full cleanup complete');
@@ -234,6 +235,15 @@ class App {
     }
 
     /**
+     * Fallback to Guest mode when no account is connected
+     * Used when user cancels auth modals or disconnects
+     */
+    async fallbackToGuest(message = 'Continuing as Guest') {
+        await this.connectAsGuest();
+        uiController.showNotification(message, 'info');
+    }
+
+    /**
      * Connect wallet (generate, import, or load saved)
      */
     async connectWallet() {
@@ -259,6 +269,11 @@ class App {
                 console.error('Failed to connect wallet:', error);
                 uiController.showNotification('Failed to connect: ' + error.message, 'error');
             }
+        }
+
+        // If still not connected after modal flow, fallback to Guest
+        if (!authManager.getAddress()) {
+            await this.fallbackToGuest();
         }
     }
 
@@ -714,8 +729,7 @@ class App {
             
             // User cancelled - connect as guest instead
             if (setupResult === 'cancelled') {
-                await this.connectAsGuest();
-                uiController.showNotification('Continuing as Guest - your data won\'t be saved', 'info');
+                await this.fallbackToGuest('Continuing as Guest - your data won\'t be saved');
                 return;
             }
             

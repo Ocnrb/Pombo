@@ -58,8 +58,17 @@ class ChannelSettingsUI {
         const effectiveReadOnly = canPublish === false || currentChannel.readOnly;
 
         // Update channel info
-        this.elements.channelSettingsType.innerHTML = this.deps.getChannelTypeLabel(currentChannel.type, effectiveReadOnly);
+        this.elements.channelSettingsType.innerHTML = this.deps.getChannelTypeLabel(currentChannel.type, effectiveReadOnly, true);
         this.elements.channelSettingsId.textContent = currentChannel.streamId;
+
+        // Populate channel name (network name or local fallback)
+        const channelName = currentChannel.channelInfo?.name || currentChannel.name || '';
+        if (this.elements.channelSettingsName) {
+            this.elements.channelSettingsName.textContent = channelName;
+        }
+        if (this.elements.channelNameSection) {
+            this.elements.channelNameSection.classList.toggle('hidden', !channelName.trim());
+        }
 
         // Determine channel type
         const isNative = currentChannel.type === 'native';

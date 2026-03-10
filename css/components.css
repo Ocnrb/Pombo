@@ -59,15 +59,15 @@ body {
     background-color: #09090b;
     color: rgba(255, 255, 255, 0.87);
     margin: 0;
-    padding: 0;
+    padding: env(safe-area-inset-top, 0px) 0 0 0;
 }
 
 .app-container {
-    height: calc(100vh - 3.5rem);
+    height: calc(100vh - 3.5rem - env(safe-area-inset-top, 0px));
 }
 
 .chat-container {
-    height: calc(100vh - 3.5rem);
+    height: calc(100vh - 3.5rem - env(safe-area-inset-top, 0px));
 }
 
 .messages-area {
@@ -404,6 +404,37 @@ body {
 
 .animate-slideUp {
     animation: slideUp 0.2s ease-out;
+}
+
+/* Dropdown open/close animation */
+@keyframes dropdownOpen {
+    from {
+        opacity: 0;
+        transform: scale(0.95) translateY(-4px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+@keyframes dropdownOpenUp {
+    from {
+        opacity: 0;
+        transform: scale(0.95) translateY(4px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+.dropdown-animate-open {
+    animation: dropdownOpen 0.18s ease-out;
+}
+
+.dropdown-animate-open-up {
+    animation: dropdownOpenUp 0.18s ease-out;
 }
 
 /* Thin scrollbar for modal lists */
@@ -1027,11 +1058,6 @@ body {
     border-radius: 2px;
 }
 
-.rotate-90 {
-    transform: rotate(90deg);
-    display: inline-block;
-}
-
 .rotate-180 {
     transform: rotate(180deg);
 }
@@ -1133,7 +1159,7 @@ body {
     }
     
     .app-container {
-        height: calc(100dvh - 3.5rem);
+        height: calc(100dvh - 3.5rem - env(safe-area-inset-top, 0px));
         position: relative;
         overflow: hidden;
     }
@@ -1169,7 +1195,8 @@ body {
 
     /* Hide header wallet controls on mobile (moved to pill nav) */
     #connect-wallet,
-    #wallet-controls {
+    #desktop-account-wrapper,
+    #wallet-info {
         display: none !important;
     }
     
@@ -1264,7 +1291,7 @@ body {
     }
     
     body.chat-open .app-container {
-        height: 100dvh;
+        height: calc(100dvh - env(safe-area-inset-top, 0px));
     }
     
     /* ----- CLOSE BUTTON POSITIONING ----- */
@@ -1420,6 +1447,7 @@ body {
         padding: 0.5rem;
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
         z-index: 50;
+        transform-origin: bottom right;
     }
 
     .pill-dropdown-address {
@@ -1566,7 +1594,7 @@ body {
     }
 
     body.channel-details-open .app-container {
-        height: 100dvh;
+        height: calc(100dvh - env(safe-area-inset-top, 0px));
     }
 
     /* Settings/Contacts modal: minimal bottom padding (pill is fixed, overlaps content) */
@@ -1793,7 +1821,7 @@ body {
     }
     
     .app-container {
-        height: calc(100dvh - 3rem);
+        height: calc(100dvh - 3rem - env(safe-area-inset-top, 0px));
     }
     
     /* Hide connect button text */

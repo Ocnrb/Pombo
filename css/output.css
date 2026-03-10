@@ -1227,6 +1227,10 @@ video {
   max-width: 56rem;
 }
 
+.max-w-\[140px\] {
+  max-width: 140px;
+}
+
 .max-w-\[90vw\] {
   max-width: 90vw;
 }
@@ -1273,11 +1277,6 @@ video {
 
 .rotate-45 {
   --tw-rotate: 45deg;
-  transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
-}
-
-.rotate-90 {
-  --tw-rotate: 90deg;
   transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
 }
 
@@ -1648,6 +1647,10 @@ video {
 
 .border-white\/\[0\.12\] {
   border-color: rgb(255 255 255 / 0.12);
+}
+
+.border-white\/\[0\.1\] {
+  border-color: rgb(255 255 255 / 0.1);
 }
 
 .border-l-\[\#F6851B\] {
@@ -3040,6 +3043,10 @@ select option {
 }
 
 @media (min-width: 768px) {
+  .md\:relative {
+    position: relative;
+  }
+
   .md\:block {
     display: block;
   }

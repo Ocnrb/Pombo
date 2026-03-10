@@ -11,7 +11,9 @@ class HeaderUI {
     constructor() {
         this.deps = {};
         this._profileDropdownOpen = false;
+        this._desktopDropdownOpen = false;
         this._boundCloseDropdown = null;
+        this._boundCloseDesktopDropdown = null;
         this._currentAddress = null;
         this._currentDisplayName = null;
         
@@ -19,13 +21,19 @@ class HeaderUI {
         this.elements = {
             walletInfo: null,
             connectWalletBtn: null,
-            walletControls: null,
             switchWalletBtn: null,
             contactsBtn: null,
             settingsBtn: null,
             currentChannelName: null,
             currentChannelInfo: null,
-            chatHeaderRight: null
+            chatHeaderRight: null,
+            // Desktop dropdown
+            desktopAccountWrapper: null,
+            desktopAccountBtn: null,
+            desktopAccountAvatar: null,
+            desktopAccountName: null,
+            desktopAccountDropdown: null,
+            desktopDropdownAddress: null
         };
 
         // Mobile pill elements (cached on first access)
@@ -48,14 +56,32 @@ class HeaderUI {
         this.elements = {
             walletInfo: elements.walletInfo,
             connectWalletBtn: elements.connectWalletBtn,
-            walletControls: elements.walletControls,
             switchWalletBtn: elements.switchWalletBtn,
             contactsBtn: elements.contactsBtn,
             settingsBtn: elements.settingsBtn,
             currentChannelName: elements.currentChannelName,
             currentChannelInfo: elements.currentChannelInfo,
-            chatHeaderRight: elements.chatHeaderRight
+            chatHeaderRight: elements.chatHeaderRight,
+            // Desktop dropdown
+            desktopAccountWrapper: elements.desktopAccountWrapper,
+            desktopAccountBtn: elements.desktopAccountBtn,
+            desktopAccountAvatar: elements.desktopAccountAvatar,
+            desktopAccountName: elements.desktopAccountName,
+            desktopAccountDropdown: elements.desktopAccountDropdown,
+            desktopDropdownAddress: elements.desktopDropdownAddress
         };
+
+        // Desktop dropdown toggle
+        this.elements.desktopAccountBtn?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleDesktopDropdown();
+        });
+        this._boundCloseDesktopDropdown = (e) => {
+            if (this._desktopDropdownOpen && !this.elements.desktopAccountWrapper?.contains(e.target)) {
+                this._closeDesktopDropdown();
+            }
+        };
+        document.addEventListener('click', this._boundCloseDesktopDropdown);
     }
 
     /**
@@ -64,16 +90,17 @@ class HeaderUI {
      * @param {boolean} isGuest - Whether connected as Guest
      */
     updateWalletInfo(address, isGuest = false) {
-        const { walletInfo, connectWalletBtn, walletControls, contactsBtn, settingsBtn } = this.elements;
+        const { walletInfo, connectWalletBtn, contactsBtn, settingsBtn,
+                desktopAccountWrapper, desktopAccountAvatar, desktopAccountName, desktopDropdownAddress } = this.elements;
         
         // Mobile pill elements
         const pill = this._getPillElements();
         
         if (address) {
             if (isGuest) {
-                // Guest mode: show "Guest" with different styling
+                // Guest mode: show "Guest" label + Connect button
                 walletInfo.innerHTML = `<span class="text-amber-400">Guest</span>`;
-                // For Guest: show Connect button to allow creating account
+                walletInfo.classList.remove('hidden');
                 connectWalletBtn.classList.remove('hidden');
                 connectWalletBtn.innerHTML = `
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -81,8 +108,9 @@ class HeaderUI {
                     </svg>
                     Create Account
                 `;
-                // Hide wallet controls for guest
-                walletControls?.classList.add('hidden');
+                // Hide desktop dropdown for guest
+                desktopAccountWrapper?.classList.add('hidden');
+                desktopAccountWrapper?.classList.remove('md:relative');
                 // Hide contacts button for guest
                 contactsBtn?.classList.add('hidden');
                 
@@ -93,10 +121,25 @@ class HeaderUI {
                 this._currentAddress = address;
                 const short = `${address.slice(0, 6)}...${address.slice(-4)}`;
                 const displayText = this._currentDisplayName || short;
-                walletInfo.textContent = displayText;
-                // Hide connect button, show wallet controls
+                
+                // Hide connect button and guest label, show desktop dropdown
+                walletInfo.classList.add('hidden');
                 connectWalletBtn.classList.add('hidden');
-                walletControls?.classList.remove('hidden');
+                desktopAccountWrapper?.classList.remove('hidden');
+                desktopAccountWrapper?.classList.add('md:relative');
+                
+                // Update desktop dropdown button
+                if (desktopAccountAvatar) {
+                    desktopAccountAvatar.innerHTML = generateAvatar(address, 20, 0.2);
+                }
+                if (desktopAccountName) {
+                    desktopAccountName.textContent = displayText;
+                    desktopAccountName.classList.toggle('font-mono', !this._currentDisplayName);
+                }
+                if (desktopDropdownAddress) {
+                    desktopDropdownAddress.textContent = short;
+                }
+                
                 // Show contacts button
                 contactsBtn?.classList.remove('hidden');
                 
@@ -118,7 +161,8 @@ class HeaderUI {
             this._currentAddress = null;
             this._currentDisplayName = null;
             walletInfo.textContent = 'Not Connected';
-            // Show connect button with original text, hide wallet controls
+            walletInfo.classList.add('hidden');
+            // Show connect button with original text
             connectWalletBtn.innerHTML = `
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/>
@@ -126,7 +170,9 @@ class HeaderUI {
                 Connect
             `;
             connectWalletBtn.classList.remove('hidden');
-            walletControls?.classList.add('hidden');
+            // Hide desktop dropdown
+            desktopAccountWrapper?.classList.add('hidden');
+            desktopAccountWrapper?.classList.remove('md:relative');
             // Hide contacts button
             contactsBtn?.classList.add('hidden');
             // Hide settings button
@@ -147,13 +193,12 @@ class HeaderUI {
         const displayText = this._currentDisplayName || (this._currentAddress ? `${this._currentAddress.slice(0, 6)}...${this._currentAddress.slice(-4)}` : null);
         if (!displayText) return;
 
-        const { walletInfo } = this.elements;
-        if (walletInfo) {
-            walletInfo.textContent = displayText;
+        // Update desktop dropdown button name
+        const { desktopAccountName } = this.elements;
+        if (desktopAccountName) {
+            desktopAccountName.textContent = displayText;
+            desktopAccountName.classList.toggle('font-mono', !this._currentDisplayName);
         }
-        const pill = this._getPillElements();
-        // Pill dropdown always shows address, not username
-        // Only update desktop header text
     }
 
     /**
@@ -239,13 +284,26 @@ class HeaderUI {
      * @param {boolean} readOnly - Whether channel is read-only
      * @returns {string} - HTML with icon and label
      */
-    getChannelTypeLabel(type, readOnly = false) {
-        // Pencil-slash icon for read-only indicator
-        const roIcon = readOnly ? '<svg class="w-3 h-3 ml-1 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3l18 18"/></svg>' : '';
+    getChannelTypeLabel(type, readOnly = false, showLabel = false) {
+        // Pencil-slash icon for read-only indicator (header only)
+        const roIcon = readOnly && !showLabel ? '<svg class="w-3 h-3 ml-1 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3l18 18"/></svg>' : '';
+
+        if (showLabel) {
+            // Vertical layout for Channel Details modal: [icon][label] per line
+            const roLine = readOnly ? '<span class="inline-flex items-center gap-1.5"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3l18 18"/></svg>Read Only</span>' : '';
+            const typeLines = {
+                'public': `<span class="inline-flex items-center gap-1.5"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>Open</span>`,
+                'password': `<span class="inline-flex items-center gap-1.5"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>Password Protected</span>`,
+                'native': `<span class="inline-flex items-center gap-1.5"><svg class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.5l-8 13.5 8 4.5 8-4.5-8-13.5zm0 18l-8-4.5 8 9 8-9-8 4.5z"/></svg>Verified Membership</span>`
+            };
+            const typeLine = typeLines[type] || escapeHtml(String(type || 'Unknown'));
+            return `<div class="flex flex-col gap-1.5">${typeLine}${roLine}</div>`;
+        }
+
         const labels = {
-            'public': `<span class="inline-flex items-center gap-1"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>Open${roIcon}</span>`,
-            'password': `<span class="inline-flex items-center gap-1"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>Protected${roIcon}</span>`,
-            'native': `<span class="inline-flex items-center gap-1"><svg class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.5l-8 13.5 8 4.5 8-4.5-8-13.5zm0 18l-8-4.5 8 9 8-9-8 4.5z"/></svg>Closed${roIcon}</span>`
+            'public': `<span class="inline-flex items-center gap-1"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>${roIcon}</span>`,
+            'password': `<span class="inline-flex items-center gap-1"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>${roIcon}</span>`,
+            'native': `<span class="inline-flex items-center gap-1"><svg class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.5l-8 13.5 8 4.5 8-4.5-8-13.5zm0 18l-8-4.5 8 9 8-9-8 4.5z"/></svg>${roIcon}</span>`
         };
         // Security: escape unknown types to prevent XSS
         return labels[type] || escapeHtml(String(type || 'Unknown'));
@@ -350,6 +408,7 @@ class HeaderUI {
             this._closeProfileDropdown();
         } else {
             pill.profileDropdown.classList.remove('hidden');
+            pill.profileDropdown.classList.add('dropdown-animate-open-up');
             this._profileDropdownOpen = true;
         }
     }
@@ -361,7 +420,35 @@ class HeaderUI {
         const pill = this._getPillElements();
         if (!pill.profileDropdown) return;
         pill.profileDropdown.classList.add('hidden');
+        pill.profileDropdown.classList.remove('dropdown-animate-open-up');
         this._profileDropdownOpen = false;
+    }
+
+    /**
+     * Toggle desktop account dropdown
+     */
+    _toggleDesktopDropdown() {
+        const { desktopAccountDropdown } = this.elements;
+        if (!desktopAccountDropdown) return;
+
+        if (this._desktopDropdownOpen) {
+            this._closeDesktopDropdown();
+        } else {
+            desktopAccountDropdown.classList.remove('hidden');
+            desktopAccountDropdown.classList.add('dropdown-animate-open');
+            this._desktopDropdownOpen = true;
+        }
+    }
+
+    /**
+     * Close desktop account dropdown
+     */
+    _closeDesktopDropdown() {
+        const { desktopAccountDropdown } = this.elements;
+        if (!desktopAccountDropdown) return;
+        desktopAccountDropdown.classList.add('hidden');
+        desktopAccountDropdown.classList.remove('dropdown-animate-open');
+        this._desktopDropdownOpen = false;
     }
 
     /**
