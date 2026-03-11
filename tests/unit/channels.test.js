@@ -30,7 +30,8 @@ vi.mock('../../src/js/streamr.js', () => ({
         hasPublishPermission: vi.fn().mockResolvedValue(true),
         hasDeletePermission: vi.fn().mockResolvedValue(false),
         grantPublicPermissions: vi.fn(),
-        resend: vi.fn()
+        resend: vi.fn(),
+        unsubscribeFromDualStream: vi.fn().mockResolvedValue(undefined)
     },
     STREAM_CONFIG: {
         partitions: 1
@@ -77,6 +78,17 @@ vi.mock('../../src/js/graph.js', () => ({
 vi.mock('../../src/js/relayManager.js', () => ({
     relayManager: {
         sendPushNotification: vi.fn()
+    }
+}));
+
+vi.mock('../../src/js/dm.js', () => ({
+    dmManager: {
+        subscribeDMEphemeral: vi.fn().mockResolvedValue(undefined),
+        unsubscribeDMEphemeral: vi.fn().mockResolvedValue(undefined),
+        loadDMTimeline: vi.fn(),
+        getPeerPublicKey: vi.fn().mockResolvedValue(null),
+        isDMChannel: vi.fn().mockReturnValue(false),
+        conversations: new Map()
     }
 }));
 
@@ -650,11 +662,10 @@ describe('ChannelManager', () => {
         });
 
         describe('handlePresenceMessage()', () => {
-            it('should add user to online users', () => {
+            it('should add user to online users using senderId', () => {
                 const presenceData = {
-                    userId: 'user1',
+                    senderId: 'user1',
                     nickname: 'TestUser',
-                    address: '0xtest',
                     lastActive: Date.now()
                 };
                 
@@ -662,22 +673,55 @@ describe('ChannelManager', () => {
                 
                 const users = channelManager.onlineUsers.get('stream1');
                 expect(users.has('user1')).toBe(true);
+                expect(users.get('user1').address).toBe('user1');
             });
             
+            it('should prefer senderId over self-reported userId', () => {
+                channelManager.handlePresenceMessage('stream1', {
+                    senderId: '0xreal',
+                    userId: '0xspoofed',
+                    nickname: 'Test',
+                    lastActive: Date.now()
+                });
+                
+                const users = channelManager.onlineUsers.get('stream1');
+                expect(users.has('0xreal')).toBe(true);
+                expect(users.has('0xspoofed')).toBe(false);
+            });
+
+            it('should fall back to userId when senderId missing (legacy)', () => {
+                channelManager.handlePresenceMessage('stream1', {
+                    userId: 'user1',
+                    nickname: 'Test',
+                    lastActive: Date.now()
+                });
+                
+                const users = channelManager.onlineUsers.get('stream1');
+                expect(users.has('user1')).toBe(true);
+            });
+
+            it('should ignore presence with no senderId or userId', () => {
+                channelManager.handlePresenceMessage('stream1', {
+                    nickname: 'Ghost',
+                    lastActive: Date.now()
+                });
+                
+                const users = channelManager.onlineUsers.get('stream1');
+                expect(users.size).toBe(0);
+            });
+
             it('should update existing user presence', () => {
                 // First presence
                 channelManager.handlePresenceMessage('stream1', {
-                    userId: 'user1',
+                    senderId: 'user1',
                     nickname: 'OldName',
-                    address: '0xtest',
                     lastActive: 1000
                 });
                 
                 // Updated presence
                 channelManager.handlePresenceMessage('stream1', {
-                    userId: 'user1',
+                    senderId: 'user1',
                     nickname: 'NewName',
-                    address: '0xtest',
                     lastActive: 2000
                 });
                 
@@ -693,6 +737,85 @@ describe('ChannelManager', () => {
                 channelManager.onOnlineUsersChange(handler);
                 
                 expect(channelManager.onlineUsersHandlers).toContain(handler);
+            });
+        });
+
+        describe('handleControlMessage()', () => {
+            it('should use senderId for typing events', async () => {
+                const handler = vi.fn();
+                channelManager.onMessage(handler);
+
+                await channelManager.handleControlMessage('stream1', {
+                    type: 'typing',
+                    senderId: '0xreal_sender',
+                    user: '0xspoofed'
+                });
+
+                expect(handler).toHaveBeenCalledWith('typing', {
+                    streamId: 'stream1',
+                    user: '0xreal_sender'
+                });
+            });
+
+            it('should fall back to data.user for typing when senderId missing', async () => {
+                const handler = vi.fn();
+                channelManager.onMessage(handler);
+
+                await channelManager.handleControlMessage('stream1', {
+                    type: 'typing',
+                    user: '0xlegacy_user'
+                });
+
+                expect(handler).toHaveBeenCalledWith('typing', {
+                    streamId: 'stream1',
+                    user: '0xlegacy_user'
+                });
+            });
+
+            it('should use senderId for reaction events', async () => {
+                const channel = { reactions: {} };
+                channelManager.channels.set('stream1', channel);
+                const handler = vi.fn();
+                channelManager.onMessage(handler);
+
+                await channelManager.handleControlMessage('stream1', {
+                    type: 'reaction',
+                    senderId: '0xreal_reactor',
+                    user: '0xspoofed',
+                    messageId: 'msg1',
+                    emoji: '👍',
+                    action: 'add'
+                });
+
+                expect(channel.reactions['msg1']['👍']).toContain('0xreal_reactor');
+                expect(handler).toHaveBeenCalledWith('reaction', expect.objectContaining({
+                    user: '0xreal_reactor'
+                }));
+            });
+
+            it('should forward presence to handlePresenceMessage', async () => {
+                await channelManager.handleControlMessage('stream1', {
+                    type: 'presence',
+                    senderId: '0xpresence_user',
+                    nickname: 'Alice',
+                    lastActive: Date.now()
+                });
+
+                const users = channelManager.onlineUsers.get('stream1');
+                expect(users.has('0xpresence_user')).toBe(true);
+            });
+
+            it('should not process when disconnected', async () => {
+                authManager.isConnected.mockReturnValueOnce(false);
+                const handler = vi.fn();
+                channelManager.onMessage(handler);
+
+                await channelManager.handleControlMessage('stream1', {
+                    type: 'typing',
+                    senderId: '0xuser'
+                });
+
+                expect(handler).not.toHaveBeenCalled();
             });
         });
 
@@ -944,6 +1067,41 @@ describe('ChannelManager', () => {
     describe('pendingMessages tracking', () => {
         it('should have pendingMessages map', () => {
             expect(channelManager.pendingMessages).toBeInstanceOf(Map);
+        });
+    });
+
+    // ==================== leaveChannel() DM cleanup ====================
+    describe('leaveChannel() DM cleanup', () => {
+        it('should clean up DM-specific data when leaving DM channel', async () => {
+            const { dmManager } = await import('../../src/js/dm.js');
+            const { dmCrypto } = await import('../../src/js/dmCrypto.js');
+            const { secureStorage } = await import('../../src/js/secureStorage.js');
+            
+            // Setup mock functions
+            secureStorage.clearSentMessages = vi.fn().mockResolvedValue(undefined);
+            secureStorage.clearSentReactions = vi.fn().mockResolvedValue(undefined);
+            secureStorage.removeFromChannelOrder = vi.fn().mockResolvedValue(undefined);
+            
+            const peerAddress = '0xpeer123456789012345678901234567890123456';
+            const streamId = `${peerAddress}/Pombo-DM-1`;
+            const ephemeralId = `${peerAddress}/Pombo-DM-2`;
+            
+            channelManager.channels.set(streamId, {
+                type: 'dm',
+                peerAddress,
+                messageStreamId: streamId,
+                ephemeralStreamId: ephemeralId
+            });
+            dmManager.conversations.set(peerAddress, streamId);
+            dmCrypto.peerPublicKeys.set(peerAddress, '0x02fakepubkey');
+            
+            await channelManager.leaveChannel(streamId);
+            
+            expect(secureStorage.clearSentMessages).toHaveBeenCalledWith(streamId);
+            expect(secureStorage.clearSentReactions).toHaveBeenCalledWith(streamId);
+            expect(dmCrypto.peerPublicKeys.has(peerAddress)).toBe(false);
+            expect(dmManager.conversations.has(peerAddress)).toBe(false);
+            expect(channelManager.channels.has(streamId)).toBe(false);
         });
     });
 });

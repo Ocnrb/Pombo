@@ -39,6 +39,19 @@ vi.mock('../../src/js/crypto.js', () => ({
     deriveEphemeralId: vi.fn((id) => `ephemeral-${id}`)
 }));
 
+vi.mock('../../src/js/dm.js', () => ({
+    dmManager: {
+        getPeerPublicKey: vi.fn()
+    }
+}));
+
+vi.mock('../../src/js/dmCrypto.js', () => ({
+    dmCrypto: {
+        getSharedKey: vi.fn(),
+        encrypt: vi.fn()
+    }
+}));
+
 // Import after mocks
 import { mediaController, MEDIA_CONFIG } from '../../src/js/media.js';
 

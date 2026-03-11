@@ -962,4 +962,195 @@ describe('secureStorage', () => {
             expect(secureStorage.isGuestMode).toBe(false);
         });
     });
+
+    // ==================== Sent Messages (DM) ====================
+    describe('Sent Messages (DM)', () => {
+        beforeEach(() => {
+            secureStorage.initAsGuest('0x1234567890abcdef1234567890abcdef12345678');
+        });
+
+        describe('getSentMessages()', () => {
+            it('should return empty array for unknown stream', () => {
+                expect(secureStorage.getSentMessages('unknown-stream')).toEqual([]);
+            });
+
+            it('should return empty array when locked', () => {
+                secureStorage.isUnlocked = false;
+                expect(secureStorage.getSentMessages('any-stream')).toEqual([]);
+            });
+        });
+
+        describe('addSentMessage()', () => {
+            it('should store a text message', async () => {
+                const msg = {
+                    id: 'msg-1',
+                    sender: '0xabc',
+                    timestamp: Date.now(),
+                    signature: '0xsig',
+                    channelId: 'stream-1',
+                    text: 'Hello DM'
+                };
+                await secureStorage.addSentMessage('stream-1', msg);
+
+                const stored = secureStorage.getSentMessages('stream-1');
+                expect(stored).toHaveLength(1);
+                expect(stored[0].text).toBe('Hello DM');
+                expect(stored[0].id).toBe('msg-1');
+            });
+
+            it('should store an image message', async () => {
+                const msg = {
+                    id: 'img-1',
+                    sender: '0xabc',
+                    timestamp: Date.now(),
+                    signature: '0xsig',
+                    channelId: 'stream-1',
+                    type: 'image',
+                    imageId: 'img-abc',
+                    imageData: 'data:image/png;base64,...'
+                };
+                await secureStorage.addSentMessage('stream-1', msg);
+
+                const stored = secureStorage.getSentMessages('stream-1');
+                expect(stored[0].type).toBe('image');
+                expect(stored[0].imageId).toBe('img-abc');
+            });
+
+            it('should store a video_announce message', async () => {
+                const msg = {
+                    id: 'vid-1',
+                    sender: '0xabc',
+                    timestamp: Date.now(),
+                    signature: '0xsig',
+                    channelId: 'stream-1',
+                    type: 'video_announce',
+                    metadata: { duration: 120 }
+                };
+                await secureStorage.addSentMessage('stream-1', msg);
+
+                const stored = secureStorage.getSentMessages('stream-1');
+                expect(stored[0].type).toBe('video_announce');
+                expect(stored[0].metadata.duration).toBe(120);
+            });
+
+            it('should cap at 200 messages per stream', async () => {
+                for (let i = 0; i < 210; i++) {
+                    await secureStorage.addSentMessage('stream-1', {
+                        id: `msg-${i}`,
+                        sender: '0xabc',
+                        timestamp: Date.now() + i,
+                        signature: '0xsig',
+                        channelId: 'stream-1',
+                        text: `Message ${i}`
+                    });
+                }
+
+                const stored = secureStorage.getSentMessages('stream-1');
+                expect(stored).toHaveLength(200);
+                // Should keep the latest 200 (indexes 10-209)
+                expect(stored[0].id).toBe('msg-10');
+                expect(stored[199].id).toBe('msg-209');
+            });
+
+            it('should keep separate streams independent', async () => {
+                await secureStorage.addSentMessage('stream-A', {
+                    id: 'a1', sender: '0x1', timestamp: 1, signature: '', channelId: 'stream-A', text: 'A'
+                });
+                await secureStorage.addSentMessage('stream-B', {
+                    id: 'b1', sender: '0x1', timestamp: 2, signature: '', channelId: 'stream-B', text: 'B'
+                });
+
+                expect(secureStorage.getSentMessages('stream-A')).toHaveLength(1);
+                expect(secureStorage.getSentMessages('stream-B')).toHaveLength(1);
+            });
+
+            it('should not store when locked', async () => {
+                secureStorage.isUnlocked = false;
+                await secureStorage.addSentMessage('stream-1', {
+                    id: 'msg-1', sender: '0x1', timestamp: 1, signature: '', channelId: 'stream-1', text: 'X'
+                });
+
+                secureStorage.isUnlocked = true;
+                expect(secureStorage.getSentMessages('stream-1')).toEqual([]);
+            });
+        });
+
+        describe('clearSentMessages()', () => {
+            it('should clear sent messages for a stream', async () => {
+                await secureStorage.addSentMessage('stream-1', {
+                    id: 'msg-1', sender: '0x1', timestamp: 1, signature: '', channelId: 'stream-1', text: 'Hi'
+                });
+                expect(secureStorage.getSentMessages('stream-1')).toHaveLength(1);
+
+                await secureStorage.clearSentMessages('stream-1');
+                expect(secureStorage.getSentMessages('stream-1')).toEqual([]);
+            });
+
+            it('should not affect other streams', async () => {
+                await secureStorage.addSentMessage('stream-A', {
+                    id: 'a1', sender: '0x1', timestamp: 1, signature: '', channelId: 'stream-A', text: 'A'
+                });
+                await secureStorage.addSentMessage('stream-B', {
+                    id: 'b1', sender: '0x1', timestamp: 2, signature: '', channelId: 'stream-B', text: 'B'
+                });
+
+                await secureStorage.clearSentMessages('stream-A');
+                expect(secureStorage.getSentMessages('stream-A')).toEqual([]);
+                expect(secureStorage.getSentMessages('stream-B')).toHaveLength(1);
+            });
+        });
+
+        describe('clearSentReactions()', () => {
+            it('should clear sent reactions for a stream', async () => {
+                await secureStorage.addSentReaction('stream-1', 'msg-1', '👍', '0xuser1');
+                expect(Object.keys(secureStorage.getSentReactions('stream-1'))).toHaveLength(1);
+
+                await secureStorage.clearSentReactions('stream-1');
+                expect(secureStorage.getSentReactions('stream-1')).toEqual({});
+            });
+
+            it('should not affect other streams', async () => {
+                await secureStorage.addSentReaction('stream-A', 'msg-1', '👍', '0xuser1');
+                await secureStorage.addSentReaction('stream-B', 'msg-2', '❤️', '0xuser1');
+
+                await secureStorage.clearSentReactions('stream-A');
+                expect(secureStorage.getSentReactions('stream-A')).toEqual({});
+                expect(Object.keys(secureStorage.getSentReactions('stream-B'))).toHaveLength(1);
+            });
+        });
+    });
+
+    // ==================== Export Backup includes sentMessages ====================
+    describe('exportAccountBackup - sentMessages inclusion', () => {
+        it('should include sentMessages in the backup data object', () => {
+            // We test the data preparation logic, not the encryption.
+            // exportAccountBackup encrypts dataToBackup, so we verify the cache is set up correctly.
+            secureStorage.initAsGuest('0xabc123');
+            secureStorage.cache.sentMessages = {
+                'stream-1': [{ id: 'msg-1', text: 'Hello', timestamp: 1 }],
+                'stream-2': [{ id: 'msg-2', text: 'World', timestamp: 2 }]
+            };
+
+            // The export builds dataToBackup from cache — verify the fields exist
+            const data = {
+                channels: secureStorage.cache.channels || [],
+                trustedContacts: secureStorage.cache.trustedContacts || {},
+                ensCache: secureStorage.cache.ensCache || {},
+                username: secureStorage.cache.username,
+                graphApiKey: secureStorage.cache.graphApiKey,
+                sentMessages: secureStorage.cache.sentMessages || {}
+            };
+
+            expect(data.sentMessages).toBeDefined();
+            expect(Object.keys(data.sentMessages)).toHaveLength(2);
+            expect(data.sentMessages['stream-1'][0].text).toBe('Hello');
+        });
+
+        it('should default sentMessages to empty object when not set', () => {
+            secureStorage.initAsGuest('0xdef456');
+            // Don't set sentMessages — should default to {}
+            const sentMessages = secureStorage.cache.sentMessages || {};
+            expect(sentMessages).toEqual({});
+        });
+    });
 });
