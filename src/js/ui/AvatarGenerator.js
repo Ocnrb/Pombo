@@ -1,385 +1,45 @@
 /**
  * Avatar Generator
  * Generates deterministic SVG avatars based on Ethereum addresses
- * Inspired by Avvvatars - uses geometric shapes with muted color palette
+ * Procedural polygon generation 
  */
 
-// Muted, darker color palette - pairs of [background, shape]
-const COLOR_PAIRS = [
-    // --- AZUIS PROFUNDOS & SLATE BLUES ---
-    ['#12182B', '#3B6BE3'],  // Royal Blue
-    ['#151C33', '#4A81D9'],  // Strong Cerulean
-    ['#1D1F2E', '#5C7CFA'],  // Clear Cobalt
-    ['#181536', '#5D5FE3'],  // Rich Indigo
-    ['#141A2F', '#4C6EDB'],  // Muted Sapphire
-    ['#101726', '#4462C9'],  // Deep Atlantic
-    ['#171C2B', '#6A7FDB'],  // Soft Periwinkle
-
-    // --- INDIGO & VIOLETS (Richer, less grayish) ---
-    ['#19142A', '#6C5DD3'],  // Soft Indigo
-    ['#1C1633', '#7A6CE0'],  // Muted Electric Violet
-    ['#1A1230', '#5F55B5'],  // Deep Night Indigo
-    ['#201238', '#7B4FE0'],  // Deep Violet
-    ['#23113A', '#8A4BD6'],  // Royal Iris
-
-    // --- PURPLES & MAGENTAS (Controlled but vivid saturation) ---
-    ['#1D122B', '#8E46E6'],  // Vibrant Amethyst
-    ['#211529', '#8952D9'],  // Royal Purple
-    ['#241024', '#B33DB3'],  // Deep Magenta
-    ['#291425', '#C44994'],  // Rich Orchid
-    ['#2A1028', '#A93FA0'],  // Velvet Plum
-
-    // --- REDS & WINES (No orange) ---
-    ['#2B1212', '#D93838'],  // Strong Crimson
-    ['#2E151A', '#D94160'],  // Vibrant Ruby
-    ['#2E1622', '#C93C75'],  // Deep Berry
-    ['#261518', '#C44B5A'],  // Rich Rose
-    ['#2A1416', '#B5424D'],  // Muted Garnet
-    ['#241012', '#A63A44'],  // Deep Wine
-
-    // --- DEEP DARK GREENS (Elegant and cool) ---
-    ['#0F1F1A', '#1F8A70'],  // Deep Teal
-    ['#0E1B17', '#1C7C68'],  // Muted Emerald
-    ['#0C1A16', '#207561'],  // Forest Teal
-    ['#0F201C', '#2C8C6A'],  // Dark Sea Green
-    ['#101C18', '#3A7F66'],  // Dusty Pine
-
-    // --- COOL NEUTRALS (No grayish purples) ---
-    ['#1A1C23', '#7382A6'],  // Steel Blue
-    ['#181B22', '#6F7C99'],  // Cool Slate
-    ['#161A20', '#5F6B85']   // Deep Blue Grey
+// Dark background colors (colorful, no greys or very dark ones)
+const BACKGROUND_COLORS = [
+    // Blues (with color, not too dark)
+    '#1A2847', '#1E3055', '#1B2A4A', '#182845', '#1F3358',
+    // Cyans/Teals
+    '#152D35', '#183540', '#1A3842', '#173038', '#1C3A45',
+    // Indigos
+    '#231845', '#28204F', '#261C4A', '#2A2255', '#2D2560',
+    // Violets/Purples
+    '#2E1850', '#321C58', '#2F1A52', '#351F5E', '#382262',
+    // Magentas
+    '#3A1845', '#3E1C4A', '#3C1A48', '#421F50', '#452252',
+    // Deep Pinks
+    '#3D1830', '#421C35', '#401A32', '#461F38', '#4A223C',
+    // Wines/Reds
+    '#3A1820', '#3E1C24', '#3C1A22', '#421F28', '#45222C'
 ];
 
-// Shape generators - complex polygons
-const SHAPES = {
-
-    // ---------- ARROWS / CHEVRONS ----------
-    arrowRight: (cx, cy, size) => {
-        const s = size * 0.35;
-        return `M${cx - s},${cy - s * 0.6}
-                L${cx + s * 0.4},${cy}
-                L${cx - s},${cy + s * 0.6}
-                L${cx - s * 0.5},${cy}
-                Z`;
-    },
-
-    chevronRight: (cx, cy, size) => {
-        const s = size * 0.3;
-        const w = size * 0.15;
-        return `M${cx - s},${cy - s}
-                L${cx + s * 0.3},${cy}
-                L${cx - s},${cy + s}
-                L${cx - s + w},${cy + s}
-                L${cx + s * 0.3 + w},${cy}
-                L${cx - s + w},${cy - s}
-                Z`;
-    },
-
-    chevronLeft: (cx, cy, size) => {
-        const s = size * 0.3;
-        const w = size * 0.15;
-        return `M${cx + s},${cy - s}
-                L${cx - s * 0.3},${cy}
-                L${cx + s},${cy + s}
-                L${cx + s - w},${cy + s}
-                L${cx - s * 0.3 - w},${cy}
-                L${cx + s - w},${cy - s}
-                Z`;
-    },
-
-
-    // ---------- TRIANGLES ----------
-    triangleUp: (cx, cy, size) => {
-        const s = size * 0.4;
-        return `M${cx},${cy - s}
-                L${cx + s * 0.9},${cy + s * 0.7}
-                L${cx - s * 0.9},${cy + s * 0.7}
-                Z`;
-    },
-
-    triangleDown: (cx, cy, size) => {
-        const s = size * 0.4;
-        return `M${cx},${cy + s}
-                L${cx + s * 0.9},${cy - s * 0.7}
-                L${cx - s * 0.9},${cy - s * 0.7}
-                Z`;
-    },
-
-    triangleLeft: (cx, cy, size) => {
-        const s = size * 0.4;
-        return `M${cx - s},${cy} L${cx + s * 0.7},${cy - s * 0.9} L${cx + s * 0.7},${cy + s * 0.9} Z`;
-    },
-
-    triangleRight: (cx, cy, size) => {
-        const s = size * 0.4;
-        return `M${cx + s},${cy} L${cx - s * 0.7},${cy - s * 0.9} L${cx - s * 0.7},${cy + s * 0.9} Z`;
-    },
-
-
-    // ---------- BASIC POLYGONS ----------
-    diamond: (cx, cy, size) => {
-        const s = size * 0.38;
-        return `M${cx},${cy - s}
-                L${cx + s},${cy}
-                L${cx},${cy + s}
-                L${cx - s},${cy}
-                Z`;
-    },
-
-    square: (cx, cy, size) => {
-        const s = size * 0.35;
-        return `M${cx - s},${cy - s}
-                L${cx + s},${cy - s}
-                L${cx + s},${cy + s}
-                L${cx - s},${cy + s}
-                Z`;
-    },
-
-    pentagon: (cx, cy, size) => {
-        const s = size * 0.35;
-        const p = [];
-        for (let i = 0; i < 5; i++) {
-            const a = (Math.PI * 2 / 5) * i - Math.PI / 2;
-            p.push(`${cx + s * Math.cos(a)},${cy + s * Math.sin(a)}`);
-        }
-        return `M${p.join(' L')} Z`;
-    },
-
-    hexagon: (cx, cy, size) => {
-        const s = size * 0.35;
-        const p = [];
-        for (let i = 0; i < 6; i++) {
-            const a = (Math.PI / 3) * i - Math.PI / 6;
-            p.push(`${cx + s * Math.cos(a)},${cy + s * Math.sin(a)}`);
-        }
-        return `M${p.join(' L')} Z`;
-    },
-
-    heptagon: (cx, cy, size) => {
-        const s = size * 0.35;
-        const points = [];
-        for (let i = 0; i < 7; i++) {
-            const angle = (Math.PI * 2 / 7) * i - Math.PI / 2;
-            points.push(`${cx + s * Math.cos(angle)},${cy + s * Math.sin(angle)}`);
-        }
-        return `M${points.join(' L')} Z`;
-    },
-
-    octagon: (cx, cy, size) => {
-        const s = size * 0.33;
-        const p = [];
-        for (let i = 0; i < 8; i++) {
-            const a = (Math.PI / 4) * i;
-            p.push(`${cx + s * Math.cos(a)},${cy + s * Math.sin(a)}`);
-        }
-        return `M${p.join(' L')} Z`;
-    },
-
-
-
-    // ---------- STARS ----------
-    star4: (cx, cy, size) => {
-        const outer = size * 0.38;
-        const inner = size * 0.16;
-        const p = [];
-        for (let i = 0; i < 8; i++) {
-            const a = (Math.PI / 4) * i - Math.PI / 2;
-            const r = i % 2 === 0 ? outer : inner;
-            p.push(`${cx + r * Math.cos(a)},${cy + r * Math.sin(a)}`);
-        }
-        return `M${p.join(' L')} Z`;
-    },
-
-    star5: (cx, cy, size) => {
-        const outer = size * 0.38;
-        const inner = size * 0.16;
-        const points = [];
-        for (let i = 0; i < 10; i++) {
-            const angle = (Math.PI / 5) * i - Math.PI / 2;
-            const r = i % 2 === 0 ? outer : inner;
-            points.push(`${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`);
-        }
-        return `M${points.join(' L')} Z`;
-    },
-
-    star6: (cx, cy, size) => {
-        const outer = size * 0.38;
-        const inner = size * 0.18;
-        const points = [];
-        for (let i = 0; i < 12; i++) {
-            const angle = (Math.PI / 6) * i - Math.PI / 2;
-            const r = i % 2 === 0 ? outer : inner;
-            points.push(`${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`);
-        }
-        return `M${points.join(' L')} Z`;
-    },
-
-
-    // ---------- STRUCTURAL / UI ----------
-    parallelogram: (cx, cy, size) => {
-        const s = size * 0.35;
-        const skew = size * 0.12;
-        return `M${cx - s + skew},${cy - s * 0.6}
-                L${cx + s + skew},${cy - s * 0.6}
-                L${cx + s - skew},${cy + s * 0.6}
-                L${cx - s - skew},${cy + s * 0.6}
-                Z`;
-    },
-
-    trapezoid: (cx, cy, size) => {
-        const s = size * 0.38;
-        return `M${cx - s * 0.6},${cy - s * 0.5}
-                L${cx + s * 0.6},${cy - s * 0.5}
-                L${cx + s},${cy + s * 0.5}
-                L${cx - s},${cy + s * 0.5}
-                Z`;
-    },
-
-    cross: (cx, cy, size) => {
-        const s = size * 0.35;
-        const w = size * 0.12;
-        return `M${cx - w},${cy - s}
-                L${cx + w},${cy - s}
-                L${cx + w},${cy - w}
-                L${cx + s},${cy - w}
-                L${cx + s},${cy + w}
-                L${cx + w},${cy + w}
-                L${cx + w},${cy + s}
-                L${cx - w},${cy + s}
-                L${cx - w},${cy + w}
-                L${cx - s},${cy + w}
-                L${cx - s},${cy - w}
-                Z`;
-    },
-
-    house: (cx, cy, size) => {
-        const s = size * 0.32;
-        return `M${cx},${cy - s}
-                L${cx + s},${cy - s * 0.2}
-                L${cx + s},${cy + s}
-                L${cx - s},${cy + s}
-                L${cx - s},${cy - s * 0.2}
-                Z`;
-    },
-
-    shield: (cx, cy, size) => {
-        const s = size * 0.35;
-        return `M${cx},${cy - s}
-                L${cx + s},${cy - s * 0.5}
-                L${cx + s * 0.8},${cy + s * 0.3}
-                L${cx},${cy + s}
-                L${cx - s * 0.8},${cy + s * 0.3}
-                L${cx - s},${cy - s * 0.5}
-                Z`;
-    },
-
-    kite: (cx, cy, size) => {
-        const s = size * 0.38;
-        return `M${cx},${cy - s}
-                L${cx + s * 0.5},${cy - s * 0.1}
-                L${cx},${cy + s}
-                L${cx - s * 0.5},${cy - s * 0.1}
-                Z`;
-    },
-
-    step: (cx, cy, size) => {
-        const s = size * 0.35;
-        return `M${cx - s},${cy - s}
-                L${cx},${cy - s}
-                L${cx},${cy}
-                L${cx + s},${cy}
-                L${cx + s},${cy + s}
-                L${cx - s},${cy + s}
-                Z`;
-    },
-
-    doubleBlock: (cx, cy, size) => {
-        const w = size * 0.25;
-        const h = size * 0.28;
-        const gap = size * 0.08;
-        return `M${cx - w - gap},${cy - h}
-                L${cx - gap},${cy - h}
-                L${cx - gap},${cy + h}
-                L${cx - w - gap},${cy + h}
-                Z
-                M${cx + gap},${cy - h}
-                L${cx + w + gap},${cy - h}
-                L${cx + w + gap},${cy + h}
-                L${cx + gap},${cy + h}
-                Z`;
-    },
-
-    splitPill: (cx, cy, size) => {
-        const w = size * 0.4;
-        const h = size * 0.22;
-        const r = h;
-        const d = size * 0.02;
-        return `M${cx - w + r},${cy - h}
-                L${cx + w - r},${cy - h}
-                Q${cx + w},${cy - h} ${cx + w},${cy}
-                Q${cx + w},${cy + h} ${cx + w - r},${cy + h}
-                L${cx - w + r},${cy + h}
-                Q${cx - w},${cy + h} ${cx - w},${cy}
-                Q${cx - w},${cy - h} ${cx - w + r},${cy - h}
-                Z
-                M${cx - d},${cy - h}
-                L${cx + d},${cy - h}
-                L${cx + d},${cy + h}
-                L${cx - d},${cy + h}
-                Z`;
-    },
-
-    roundedRect: (cx, cy, size) => {
-        const s = size * 0.35;
-        const r = size * 0.12;
-        return `
-            M${cx - s + r},${cy - s}
-            L${cx + s - r},${cy - s}
-            Q${cx + s},${cy - s} ${cx + s},${cy - s + r}
-            L${cx + s},${cy + s - r}
-            Q${cx + s},${cy + s} ${cx + s - r},${cy + s}
-            L${cx - s + r},${cy + s}
-            Q${cx - s},${cy + s} ${cx - s},${cy + s - r}
-            L${cx - s},${cy - s + r}
-            Q${cx - s},${cy - s} ${cx - s + r},${cy - s}
-            Z`.replace(/\s+/g, ' ');
-    },
-
-    pill: (cx, cy, size) => {
-        const w = size * 0.4;
-        const h = size * 0.22;
-        const r = h;
-        return `
-            M${cx - w + r},${cy - h}
-            L${cx + w - r},${cy - h}
-            Q${cx + w},${cy - h} ${cx + w},${cy}
-            Q${cx + w},${cy + h} ${cx + w - r},${cy + h}
-            L${cx - w + r},${cy + h}
-            Q${cx - w},${cy + h} ${cx - w},${cy}
-            Q${cx - w},${cy - h} ${cx - w + r},${cy - h}
-            Z`.replace(/\s+/g, ' ');
-    },
-
-    bookmark: (cx, cy, size) => {
-        const s = size * 0.35;
-        return `M${cx - s},${cy - s} L${cx + s},${cy - s} L${cx + s},${cy + s} L${cx},${cy + s * 0.4} L${cx - s},${cy + s} Z`;
-    },
-
-    hourglass: (cx, cy, size) => {
-        const s = size * 0.35;
-        return `
-            M${cx - s},${cy - s}
-            L${cx + s},${cy - s}
-            L${cx - s * 0.4},${cy}
-            L${cx + s},${cy + s}
-            L${cx - s},${cy + s}
-            L${cx + s * 0.4},${cy}
-            Z`.replace(/\s+/g, ' ');
-    }
-
-};
-
-const SHAPE_NAMES = Object.keys(SHAPES);
+// Vibrant shape colors (no orange/amber, no greens)
+const SHAPE_COLORS = [
+    // Blues
+    '#3B6BE3', '#4A81D9', '#5C7CFA', '#5D5FE3', '#4C6EDB', '#4462C9', '#6A7FDB',
+    '#3A5CAA', '#5B8DD9', '#4F7AC4',
+    // Cyans (blue-leaning)
+    '#38A5B8', '#2E99A8', '#4AB4C4', '#3D8FA0', '#5CC4D4', '#2A8899', '#47A8B8',
+    // Indigos & Violets
+    '#6C5DD3', '#7A6CE0', '#5F55B5', '#7B4FE0', '#8A4BD6', '#5A4DB8', '#9066E8',
+    // Purples & Magentas
+    '#8E46E6', '#8952D9', '#B33DB3', '#C44994', '#A93FA0', '#9B3DC4', '#D44EC0', '#A855D9',
+    // Pinks & Roses
+    '#E85A8F', '#D4557A', '#E86B9A', '#CC4F88', '#B84D70', '#F07AA8',
+    // Reds & Wines
+    '#D93838', '#D94160', '#C93C75', '#C44B5A', '#B5424D', '#A63A44', '#E04545', '#9A3535',
+    // Cool Neutrals
+    '#7382A6', '#6F7C99', '#5F6B85', '#8894B0', '#5A6270', '#9AA4BA', '#7A8495'
+];
 
 /**
  * Hash a string to a number
@@ -398,7 +58,174 @@ function hashString(str) {
 }
 
 /**
+ * Simple seeded PRNG (mulberry32)
+ * Creates deterministic pseudo-random numbers from a seed
+ */
+function createRng(seed) {
+    return function() {
+        let t = seed += 0x6D2B79F5;
+        t = Math.imul(t ^ t >>> 15, t | 1);
+        t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+}
+
+/**
+ * Generate a procedural polygon path
+ * @param {function} rng - Seeded random number generator
+ * @param {number} cx - Center X
+ * @param {number} cy - Center Y
+ * @param {number} radius - Base radius
+ * @param {number} numVertices - Number of vertices (3-8)
+ * @param {number} irregularity - Angular variation (0-0.3)
+ * @param {number} spikiness - Radius variation (0-0.5)
+ * @returns {string} - SVG path string
+ */
+function generatePolygonPath(rng, cx, cy, radius, numVertices, irregularity, spikiness) {
+    const points = [];
+    const angleStep = (Math.PI * 2) / numVertices;
+    
+    for (let i = 0; i < numVertices; i++) {
+        // Base angle with irregularity
+        const baseAngle = angleStep * i - Math.PI / 2; // Start from top
+        const angleOffset = (rng() - 0.5) * 2 * irregularity * angleStep;
+        const angle = baseAngle + angleOffset;
+        
+        // Radius with spikiness variation
+        const radiusOffset = 1 + (rng() - 0.5) * 2 * spikiness;
+        const r = radius * radiusOffset;
+        
+        // Calculate point
+        const x = cx + r * Math.cos(angle);
+        const y = cy + r * Math.sin(angle);
+        points.push({ x, y });
+    }
+    
+    // Build path
+    const pathParts = points.map((p, i) => 
+        (i === 0 ? 'M' : 'L') + p.x.toFixed(2) + ',' + p.y.toFixed(2)
+    );
+    pathParts.push('Z');
+    
+    return pathParts.join(' ');
+}
+
+/**
+ * Generate a procedural polygon with optional inner hole
+ * @param {function} rng - Seeded random number generator
+ * @param {number} cx - Center X
+ * @param {number} cy - Center Y
+ * @param {number} size - Canvas size
+ * @returns {object} - { path, hasHoles }
+ */
+function generateProceduralShape(rng, cx, cy, size) {
+    // Margin from edge (5% on each side = 90% usable area)
+    const margin = size * 0.05;
+    const usableRadius = (size / 2) - margin;
+    const baseRadius = usableRadius * 0.9; // Base radius with small safety margin
+    
+    // === POLYGON A (central, large) ===
+    const numVerticesA = 3 + Math.floor(rng() * 4); // 3-6 vertices
+    const irregularityA = 0.1 + rng() * 0.25; // 10-35% irregularity
+    const spikinessA = 0.1 + rng() * 0.25; // 10-35% spikiness
+    const scaleA = 0.75 + rng() * 0.20; // 75-95%
+    const radiusA = baseRadius * scaleA;
+    
+    // Minimal offset from center to keep centered
+    const offsetAx = (rng() - 0.5) * size * 0.02;
+    const offsetAy = (rng() - 0.5) * size * 0.02;
+    const cxA = cx + offsetAx;
+    const cyA = cy + offsetAy;
+    
+    const pathA = generatePolygonPath(rng, cxA, cyA, radiusA, numVerticesA, irregularityA, spikinessA);
+    
+    // === POLYGON B (overlapping, different size) ===
+    const numVerticesB = 3 + Math.floor(rng() * 4); // 3-6 vertices
+    const irregularityB = 0.1 + rng() * 0.25;
+    const spikinessB = 0.1 + rng() * 0.25;
+    const scaleB = 0.50 + rng() * 0.35; // 50-85% (bigger range)
+    const radiusB = baseRadius * scaleB;
+    
+    // Position B with visible offset - shapes should be distinguishable
+    const overlapFactor = 0.38 + rng() * 0.32; // 38-70% distance
+    const maxDistance = usableRadius - radiusB; // Ensure B stays within bounds
+    const distanceAB = Math.min((radiusA + radiusB) * overlapFactor, maxDistance * 0.7);
+    const angleAB = rng() * Math.PI * 2; // Random direction
+    
+    const cxB = cxA + Math.cos(angleAB) * distanceAB;
+    const cyB = cyA + Math.sin(angleAB) * distanceAB;
+    
+    const pathB = generatePolygonPath(rng, cxB, cyB, radiusB, numVerticesB, irregularityB, spikinessB);
+    
+    // === HOLES (1-2, as separate shapes with background color) ===
+    const numHoles = rng() < 0.5 ? 1 : 2; // 50% one hole, 50% two holes
+    
+    // Calculate composition center (weighted average of both polygon centers)
+    const compositeCx = (cxA + cxB) / 2;
+    const compositeCy = (cyA + cyB) / 2;
+    const compositeRadius = Math.max(radiusA, radiusB) * 0.6;
+    
+    // Hole properties - same for all holes
+    const holeVertices = 3 + Math.floor(rng() * 3); // 3-5 vertices
+    const holeIrregularity = 0.1 + rng() * 0.2;
+    const holeSpikiness = 0.1 + rng() * 0.2;
+    const holeSizeBase = numHoles === 1 ? 0.90 : 0.60;
+    const holeScale = holeSizeBase + rng() * 0.10;
+    const holeRadius = compositeRadius * holeScale;
+    
+    let holesPath = '';
+    
+    // Pre-calculate hole positions to avoid overlap
+    const holePositions = [];
+    if (numHoles === 1) {
+        // Single hole: can be anywhere in composition
+        holePositions.push({
+            x: compositeCx + (rng() - 0.5) * compositeRadius * 0.8,
+            y: compositeCy + (rng() - 0.5) * compositeRadius * 0.8
+        });
+    } else {
+        // Two holes: place on opposite sides to avoid overlap
+        const baseAngle = rng() * Math.PI * 2;
+        const minSeparation = holeRadius * 2.2; // Minimum distance between hole centers
+        const holeDistance = Math.max(minSeparation, compositeRadius * 0.5);
+        
+        // First hole
+        holePositions.push({
+            x: compositeCx + Math.cos(baseAngle) * holeDistance * 0.5,
+            y: compositeCy + Math.sin(baseAngle) * holeDistance * 0.5
+        });
+        // Second hole - opposite side
+        holePositions.push({
+            x: compositeCx + Math.cos(baseAngle + Math.PI) * holeDistance * 0.5,
+            y: compositeCy + Math.sin(baseAngle + Math.PI) * holeDistance * 0.5
+        });
+    }
+    
+    for (let h = 0; h < numHoles; h++) {
+        const holePath = generatePolygonPath(
+            rng,
+            holePositions[h].x,
+            holePositions[h].y,
+            holeRadius,
+            holeVertices,
+            holeIrregularity,
+            holeSpikiness
+        );
+        
+        holesPath += ' ' + holePath;
+    }
+    
+    // Return polygons and holes separately
+    return { 
+        path: pathA + ' ' + pathB,
+        holesPath: holesPath.trim(),
+        hasHoles: numHoles > 0
+    };
+}
+
+/**
  * Generate a deterministic avatar SVG based on an Ethereum address
+ * Uses procedural polygon generation - infinite unique shapes
  * @param {string} address - Ethereum address (0x...)
  * @param {number} size - Avatar size in pixels
  * @param {number} borderRadius - Border radius (0-1, percentage of size)
@@ -410,38 +237,33 @@ export function generateAvatar(address, size = 32, borderRadius = 0.2) {
     }
     
     const normalizedAddress = address.toLowerCase();
-    const hash1 = hashString(normalizedAddress);
-    const hash2 = hashString(normalizedAddress.split('').reverse().join(''));
+    const seed = hashString(normalizedAddress);
+    const rng = createRng(seed);
     
-    // Select colors based on hash
-    const colorIndex = hash1 % COLOR_PAIRS.length;
-    const [bgColor, shapeColor] = COLOR_PAIRS[colorIndex];
+    // Select colors (only 2: background + shape)
+    const bgColor = BACKGROUND_COLORS[Math.floor(rng() * BACKGROUND_COLORS.length)];
+    const shapeColor = SHAPE_COLORS[Math.floor(rng() * SHAPE_COLORS.length)];
     
-    // Select shape based on different part of hash
-    const shapeIndex = hash2 % SHAPE_NAMES.length;
-    const shapeName = SHAPE_NAMES[shapeIndex];
-    const shapeGenerator = SHAPES[shapeName];
+    // Center position (fixed, no offset to keep composition centered)
+    const cx = size / 2;
+    const cy = size / 2;
     
-    // Calculate shape position with slight variation
-    const offsetX = ((hash1 % 10) - 5) * (size * 0.01);
-    const offsetY = ((hash2 % 10) - 5) * (size * 0.01);
-    const cx = size / 2 + offsetX;
-    const cy = size / 2 + offsetY;
+    // Generate the procedural shape (2 polygons + optional holes)
+    const { path, holesPath, hasHoles } = generateProceduralShape(rng, cx, cy, size);
     
-    // Calculate rotation based on hash
-    const rotation = (hash1 % 8) * 45;
-    
-    // Generate shape path
-    const shapePath = shapeGenerator(cx, cy, size);
+    // Rotation
+    const rotation = Math.floor(rng() * 360);
     
     // Calculate border radius in pixels
     const rx = size * borderRadius;
     
-    // Build SVG
+    // Build SVG - holes drawn with background color to "subtract"
+    const holesElement = hasHoles ? `<path d="${holesPath}" fill="${bgColor}"/>` : '';
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
         <rect width="${size}" height="${size}" rx="${rx}" fill="${bgColor}"/>
         <g transform="rotate(${rotation} ${cx} ${cy})">
-            <path d="${shapePath}" fill="${shapeColor}"/>
+            <path d="${path}" fill="${shapeColor}"/>
+            ${holesElement}
         </g>
     </svg>`;
     
@@ -507,12 +329,15 @@ export function clearAvatarCache() {
  */
 export function getAddressColor(address) {
     if (!address || typeof address !== 'string') {
-        return COLOR_PAIRS[0][1]; // Default shape color
+        return SHAPE_COLORS[0]; // Default shape color
     }
     const normalizedAddress = address.toLowerCase();
-    const hash = hashString(normalizedAddress);
-    const colorIndex = hash % COLOR_PAIRS.length;
-    return COLOR_PAIRS[colorIndex][1]; // Return shape color
+    const seed = hashString(normalizedAddress);
+    const rng = createRng(seed);
+    // Skip background selection, get shape color
+    rng(); // background
+    const colorIndex = Math.floor(rng() * SHAPE_COLORS.length);
+    return SHAPE_COLORS[colorIndex];
 }
 
 // Export singleton-style access

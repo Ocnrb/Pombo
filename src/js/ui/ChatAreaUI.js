@@ -355,12 +355,12 @@ class ChatAreaUI {
         
         if (hasUnread) {
             countEl.textContent = unreadCount >= 30 ? '+30' : unreadCount;
-            countEl.classList.remove('hidden', 'text-white/30', 'bg-white/[0.06]');
+            countEl.classList.remove('hidden', 'text-white/30', 'bg-white/[0.04]');
             countEl.classList.add('text-white', 'bg-[#F6851B]/20');
         } else {
             countEl.classList.add('hidden');
             countEl.classList.remove('text-white', 'bg-[#F6851B]/20');
-            countEl.classList.add('text-white/30', 'bg-white/[0.06]');
+            countEl.classList.add('text-white/30', 'bg-white/[0.04]');
         }
     }
 

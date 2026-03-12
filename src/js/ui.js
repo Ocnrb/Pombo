@@ -583,7 +583,7 @@ class UIController {
             const countEl = document.querySelector(`[data-channel-count="${streamId}"]`);
             if (countEl && activity.unreadCount > 0) {
                 countEl.textContent = activity.unreadCount >= 30 ? '+30' : activity.unreadCount;
-                countEl.classList.remove('hidden', 'text-white/30', 'bg-white/[0.06]');
+                countEl.classList.remove('hidden', 'text-white/30', 'bg-white/[0.04]');
                 countEl.classList.add('text-white', 'bg-[#F6851B]/20');
             }
         });

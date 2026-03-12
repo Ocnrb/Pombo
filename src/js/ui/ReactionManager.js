@@ -180,7 +180,7 @@ class ReactionManager {
         if (!container) return;
         
         const reactions = this.messageReactions?.get(msgId);
-        const currentAddress = this.getCurrentAddress?.()?.toLowerCase();
+        const currentAddress = this.deps.getCurrentAddress?.()?.toLowerCase();
         
         container.innerHTML = '';
         
