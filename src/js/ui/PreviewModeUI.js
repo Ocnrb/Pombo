@@ -446,6 +446,12 @@ class PreviewModeUI {
             message.verified = { valid: false, error: error.message, trustLevel: -1 };
         }
 
+        // Check if preview channel still exists (may have been cleared during async verification)
+        if (!this.previewChannel) {
+            Logger.debug('Preview: Channel cleared during verification, skipping message');
+            return;
+        }
+
         // Mark as no longer loading (we got at least one message)
         this.previewChannel.isLoading = false;
 

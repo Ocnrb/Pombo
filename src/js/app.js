@@ -181,8 +181,8 @@ class App {
             );
             if (!password) return;
 
-            // Disconnect current wallet first
-            await this.disconnectWallet();
+            // Disconnect current wallet first (skip fallback to guest since we're switching)
+            await this.disconnectWallet({ skipFallback: true });
 
             // Load selected wallet
             await this.loadWalletWithProgress(password, selectedAddress);
@@ -195,8 +195,12 @@ class App {
     /**
      * Disconnect wallet - COMPLETE CLEANUP
      * This function is "sovereign" - it must fully reset the app state
+     * @param {Object} options - Options
+     * @param {boolean} options.skipFallback - If true, don't fallback to guest (used during account switch)
      */
-    async disconnectWallet() {
+    async disconnectWallet(options = {}) {
+        const { skipFallback = false } = options;
+        
         // Check if guest before disconnecting (for notification)
         const wasGuest = authManager.isGuestMode();
         
@@ -233,7 +237,7 @@ class App {
             
             if (wasGuest) {
                 uiController.showNotification('Guest session ended - all data has been cleared', 'info');
-            } else {
+            } else if (!skipFallback) {
                 // Non-guest disconnect: reconnect as Guest so user is never stuck
                 await this.fallbackToGuest('Account disconnected - continuing as Guest');
             }
