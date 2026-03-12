@@ -4,32 +4,35 @@
  * Procedural polygon generation 
  */
 
-// Dark background colors (colorful, no greys or very dark ones)
+// Dark background colors (expanded palette)
 const BACKGROUND_COLORS = [
-    // Blues (with color, not too dark)
+    // Azuis Profundos & Slate Blues
+    '#12182B', '#151C33', '#1D1F2E', '#181536', '#141A2F', '#101726', '#171C2B',
     '#1A2847', '#1E3055', '#1B2A4A', '#182845', '#1F3358',
-    // Cyans/Teals
-    '#152D35', '#183540', '#1A3842', '#173038', '#1C3A45',
-    // Indigos
+    // Indigo & Violets
+    '#19142A', '#1C1633', '#1A1230', '#201238', '#23113A',
     '#231845', '#28204F', '#261C4A', '#2A2255', '#2D2560',
-    // Violets/Purples
+    // Purples & Magentas
+    '#1D122B', '#211529', '#241024', '#291425', '#2A1028',
     '#2E1850', '#321C58', '#2F1A52', '#351F5E', '#382262',
-    // Magentas
     '#3A1845', '#3E1C4A', '#3C1A48', '#421F50', '#452252',
-    // Deep Pinks
+    // Reds & Wines
+    '#2B1212', '#2E151A', '#2E1622', '#261518', '#2A1416', '#241012',
     '#3D1830', '#421C35', '#401A32', '#461F38', '#4A223C',
-    // Wines/Reds
-    '#3A1820', '#3E1C24', '#3C1A22', '#421F28', '#45222C'
+    '#3A1820', '#3E1C24', '#3C1A22', '#421F28', '#45222C',
+    // Deep Dark Greens/Teals
+    '#0F1F1A', '#0E1B17', '#0C1A16', '#0F201C', '#101C18',
+    '#152D35', '#183540', '#1A3842', '#173038', '#1C3A45',
+    // Cool Neutrals
+    '#1A1C23', '#181B22', '#161A20'
 ];
 
-// Vibrant shape colors (no orange/amber, no greens)
+// Vibrant shape colors (expanded palette, no orange/amber)
 const SHAPE_COLORS = [
-    // Blues
+    // Azuis Profundos & Slate Blues
     '#3B6BE3', '#4A81D9', '#5C7CFA', '#5D5FE3', '#4C6EDB', '#4462C9', '#6A7FDB',
     '#3A5CAA', '#5B8DD9', '#4F7AC4',
-    // Cyans (blue-leaning)
-    '#38A5B8', '#2E99A8', '#4AB4C4', '#3D8FA0', '#5CC4D4', '#2A8899', '#47A8B8',
-    // Indigos & Violets
+    // Indigo & Violets
     '#6C5DD3', '#7A6CE0', '#5F55B5', '#7B4FE0', '#8A4BD6', '#5A4DB8', '#9066E8',
     // Purples & Magentas
     '#8E46E6', '#8952D9', '#B33DB3', '#C44994', '#A93FA0', '#9B3DC4', '#D44EC0', '#A855D9',
@@ -37,6 +40,9 @@ const SHAPE_COLORS = [
     '#E85A8F', '#D4557A', '#E86B9A', '#CC4F88', '#B84D70', '#F07AA8',
     // Reds & Wines
     '#D93838', '#D94160', '#C93C75', '#C44B5A', '#B5424D', '#A63A44', '#E04545', '#9A3535',
+    // Deep Greens/Teals
+    '#1F8A70', '#1C7C68', '#207561', '#2C8C6A', '#3A7F66',
+    '#38A5B8', '#2E99A8', '#4AB4C4', '#3D8FA0', '#5CC4D4', '#2A8899', '#47A8B8',
     // Cool Neutrals
     '#7382A6', '#6F7C99', '#5F6B85', '#8894B0', '#5A6270', '#9AA4BA', '#7A8495'
 ];
