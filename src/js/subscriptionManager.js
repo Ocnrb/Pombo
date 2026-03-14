@@ -254,8 +254,18 @@ class SubscriptionManager {
         // Stop any existing preview presence interval
         this._stopPreviewPresence();
         
+        // Track consecutive failures to avoid spamming logs
+        let consecutiveFailures = 0;
+        const MAX_CONSECUTIVE_FAILURES = 3;
+        
         const publishPresence = async () => {
             if (this.previewChannelId !== messageStreamId) return;
+            
+            // If we've failed too many times, stop trying
+            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                Logger.debug('Preview presence disabled after repeated failures');
+                return;
+            }
             
             const myAddress = authManager.getAddress();
             const myNickname = identityManager?.getUsername?.() || null;
@@ -270,8 +280,15 @@ class SubscriptionManager {
             
             try {
                 await streamrController.publishControl(ephemeralStreamId, presenceData);
+                consecutiveFailures = 0; // Reset on success
             } catch (e) {
-                Logger.warn('Failed to publish preview presence:', e.message);
+                consecutiveFailures++;
+                if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                    Logger.warn('Stopping preview presence: too many failures');
+                    this._stopPreviewPresence();
+                } else {
+                    Logger.debug(`Preview presence error (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}):`, e.message);
+                }
             }
         };
         

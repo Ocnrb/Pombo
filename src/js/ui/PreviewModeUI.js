@@ -203,7 +203,7 @@ class PreviewModeUI {
                     </div>
                 `;
             }
-        }, 7000); // 7 seconds timeout
+        }, 15000); // 15 seconds timeout
 
         // Update header
         elements.currentChannelName.textContent = this.previewChannel.name;
@@ -254,7 +254,17 @@ class PreviewModeUI {
         const elements = this.ui.elements;
         
         try {
-            const canPublish = await streamrController.hasPublishPermission(this.previewChannel.streamId, true);
+            const result = await streamrController.hasPublishPermission(this.previewChannel.streamId, true);
+            
+            // Handle RPC error - don't mark as read-only when we can't verify
+            if (result.rpcError) {
+                Logger.warn('RPC error checking permissions, keeping optimistic state');
+                // For public channels, assume user can publish (optimistic)
+                // Server will reject if actually not allowed
+                return;
+            }
+            
+            const canPublish = result.hasPermission;
             
             // Update effective read-only: either channel is marked read-only OR user cannot publish
             const effectiveReadOnly = !canPublish || this.previewChannel.readOnly;

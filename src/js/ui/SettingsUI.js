@@ -769,6 +769,9 @@ class SettingsUI {
             });
         }
 
+        // Initialize RPC settings
+        this.initRpcSettings();
+
         // Initialize export private key functionality
         this.initExportPrivateKeyUI();
 
@@ -844,6 +847,9 @@ class SettingsUI {
                 this.elements.settingsGraphApiKey.value = currentKey;
             }
             await this.updateGraphApiStatusDisplay();
+
+            // Update RPC settings display
+            this.updateRpcStatusDisplay();
 
             // Update NSFW toggle state
             const nsfwToggle = document.getElementById('nsfw-enabled');
@@ -1661,6 +1667,194 @@ class SettingsUI {
                 if (e.target === modal) cleanup(null);
             });
         });
+    }
+
+    // ========================================
+    // RPC Settings Methods
+    // ========================================
+
+    /**
+     * Initialize RPC settings UI
+     */
+    initRpcSettings() {
+        const presetSelect = document.getElementById('rpc-preset-select');
+        const customContainer = document.getElementById('custom-rpc-container');
+        const customInput = document.getElementById('custom-rpc-url');
+        const testBtn = document.getElementById('test-rpc-btn');
+        
+        if (!presetSelect) return;
+        
+        // Set default to dRPC if no preference saved
+        presetSelect.value = 'drpc';
+        
+        // Load saved preference
+        const saved = localStorage.getItem('pombo_rpc_preference');
+        if (saved) {
+            try {
+                const pref = JSON.parse(saved);
+                presetSelect.value = pref.preset || 'drpc';
+                if (pref.preset === 'custom' && pref.customUrl) {
+                    customInput.value = pref.customUrl;
+                    customContainer?.classList.remove('hidden');
+                }
+            } catch (e) {
+                // Use defaults
+            }
+        }
+        
+        // Show/hide custom input based on selection
+        presetSelect.addEventListener('change', (e) => {
+            const isCustom = e.target.value === 'custom';
+            customContainer?.classList.toggle('hidden', !isCustom);
+            if (!isCustom) {
+                this.saveRpcPreference();
+            }
+        });
+        
+        // Save custom URL on change
+        customInput?.addEventListener('change', () => {
+            if (customInput.value.trim()) {
+                this.saveRpcPreference();
+            }
+        });
+        
+        // Test connection button
+        testBtn?.addEventListener('click', () => this.testRpcConnection());
+    }
+
+    /**
+     * Save RPC preference to localStorage and reconnect client
+     */
+    async saveRpcPreference() {
+        const presetSelect = document.getElementById('rpc-preset-select');
+        const customInput = document.getElementById('custom-rpc-url');
+        
+        if (!presetSelect) return;
+        
+        const preset = presetSelect.value;
+        const pref = { preset };
+        
+        if (preset === 'custom' && customInput?.value.trim()) {
+            pref.customUrl = customInput.value.trim();
+        }
+        
+        localStorage.setItem('pombo_rpc_preference', JSON.stringify(pref));
+        this.Logger?.info('RPC preference saved:', pref);
+        
+        // Reconnect Streamr client with new RPC endpoints
+        if (this.streamrController?.client) {
+            this.showNotification('Reconnecting with new RPC...', 'info');
+            const success = await this.streamrController.reconnect();
+            if (success) {
+                this.showNotification('RPC updated successfully', 'success');
+            } else {
+                this.showNotification('RPC saved. Reload page to apply.', 'warning');
+            }
+        } else {
+            this.showNotification('RPC preference saved', 'info');
+        }
+    }
+
+    /**
+     * Test RPC connection
+     */
+    async testRpcConnection() {
+        const statusEl = document.getElementById('rpc-status');
+        const testBtn = document.getElementById('test-rpc-btn');
+        const presetSelect = document.getElementById('rpc-preset-select');
+        const customInput = document.getElementById('custom-rpc-url');
+        
+        if (!statusEl || !testBtn) return;
+        
+        // Disable button during test
+        testBtn.disabled = true;
+        testBtn.textContent = 'Testing...';
+        statusEl.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-yellow-400 mr-1.5 align-middle animate-pulse"></span><span class="align-middle">Testing...</span>';
+        
+        // Get URLs to test based on current selection
+        let urlsToTest = [];
+        const preset = presetSelect?.value || 'auto';
+        
+        if (preset === 'custom' && customInput?.value.trim()) {
+            urlsToTest = [customInput.value.trim()];
+        } else {
+            // Import dynamically to avoid circular dependencies
+            const { RPC_PRESETS } = await import('../config.js');
+            urlsToTest = RPC_PRESETS[preset]?.urls || RPC_PRESETS['auto'].urls;
+        }
+        
+        // Test first 3 endpoints
+        const testUrls = urlsToTest.slice(0, 3);
+        let workingCount = 0;
+        
+        for (const url of testUrls) {
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        jsonrpc: '2.0',
+                        method: 'eth_blockNumber',
+                        params: [],
+                        id: 1
+                    }),
+                    signal: AbortSignal.timeout(5000)
+                });
+                
+                const data = await response.json();
+                if (data.result && !data.error) {
+                    workingCount++;
+                }
+            } catch (e) {
+                // Failed to connect
+                this.Logger?.debug('RPC test failed for', url, e.message);
+            }
+        }
+        
+        // Update status
+        testBtn.disabled = false;
+        testBtn.textContent = 'Test Connection';
+        
+        if (workingCount === 0) {
+            statusEl.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-red-500 mr-1.5 align-middle"></span><span class="align-middle text-red-400">All endpoints failed</span>';
+        } else if (workingCount < testUrls.length) {
+            statusEl.innerHTML = `<span class="inline-block w-2 h-2 rounded-full bg-yellow-400 mr-1.5 align-middle"></span><span class="align-middle text-yellow-400">${workingCount}/${testUrls.length} working</span>`;
+        } else {
+            statusEl.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-green-500 mr-1.5 align-middle"></span><span class="align-middle text-green-400">Connected</span>';
+        }
+    }
+
+    /**
+     * Update RPC status display when opening settings
+     */
+    updateRpcStatusDisplay() {
+        const presetSelect = document.getElementById('rpc-preset-select');
+        const customContainer = document.getElementById('custom-rpc-container');
+        const customInput = document.getElementById('custom-rpc-url');
+        const statusEl = document.getElementById('rpc-status');
+        
+        // Load saved preference
+        const saved = localStorage.getItem('pombo_rpc_preference');
+        if (saved && presetSelect) {
+            try {
+                const pref = JSON.parse(saved);
+                presetSelect.value = pref.preset || 'auto';
+                if (pref.preset === 'custom' && pref.customUrl && customInput) {
+                    customInput.value = pref.customUrl;
+                    customContainer?.classList.remove('hidden');
+                } else {
+                    customContainer?.classList.add('hidden');
+                }
+            } catch (e) {
+                presetSelect.value = 'auto';
+                customContainer?.classList.add('hidden');
+            }
+        }
+        
+        // Reset status to "Not tested"
+        if (statusEl) {
+            statusEl.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-white/20 mr-1.5 align-middle"></span><span class="align-middle">Not tested</span>';
+        }
     }
 }
 

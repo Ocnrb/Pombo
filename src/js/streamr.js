@@ -20,6 +20,8 @@ import { Logger } from './logger.js';
 import { cryptoManager } from './crypto.js';
 import { CONFIG, getRpcEndpoints } from './config.js';
 import { executeWithRetry, executeWithRetryAndVerify } from './utils/retry.js';
+import { isRpcError, createPermissionResult } from './utils/rpcErrors.js';
+import { authManager } from './auth.js';
 
 // === STREAM CONFIG (DUAL-STREAM ARCHITECTURE) ===
 const STREAM_CONFIG = {
@@ -166,9 +168,8 @@ class StreamrController {
             this.address = await this.client.getAddress();
             Logger.info('Streamr client initialized with address:', this.address);
 
-            // Pre-warm the network node in background (starts DHT, peer discovery)
-            // This speeds up first channel subscription significantly
-            this.warmupNetwork();
+            // Note: warmupNetwork() is called separately by app.js with the appropriate streamId
+            // based on whether there's a deep link or not
 
             return true;
         } catch (error) {
@@ -179,21 +180,21 @@ class StreamrController {
 
     /**
      * Pre-warm the network node for faster first subscription.
-     * Subscribes briefly to push stream to force node startup.
+     * Subscribes briefly to a stream to force node startup.
+     * @param {string} [streamId] - Optional stream ID to warm up with (uses push stream if not provided)
      */
-    async warmupNetwork() {
+    async warmupNetwork(streamId = null) {
         if (!this.client) return;
         
         try {
-            // Subscribing to ANY stream forces the network node to start
-            // We use the push stream which is always available
-            const pushStreamId = '0xae340e799e8151f6a4999d245e466197aa217667/push';
+            // Use provided streamId or fall back to push stream
+            const warmupStreamId = streamId || '0xae340e799e8151f6a4999d245e466197aa217667/push';
             
             // Subscribe and immediately unsubscribe - just to trigger node startup
-            const sub = await this.client.subscribe(pushStreamId, () => {});
+            const sub = await this.client.subscribe(warmupStreamId, () => {});
             await sub.unsubscribe();
             
-            Logger.debug('Network node pre-warmed via push stream');
+            Logger.debug('Network node pre-warmed via', streamId ? 'target stream' : 'push stream');
         } catch (err) {
             // Non-critical - node will start on first subscribe anyway
             Logger.debug('Network warmup skipped:', err.message);
@@ -1022,13 +1023,13 @@ class StreamrController {
      * Uses Streamr SDK hasPermission for real-time on-chain check
      * @param {string} streamId - Stream ID
      * @param {boolean} allowPublic - Whether to include public permissions (default: true)
-     * @returns {Promise<boolean>}
+     * @returns {Promise<{hasPermission: boolean|null, rpcError: boolean, errorMessage?: string}>}
+     *          hasPermission: true/false/null (null = unknown due to RPC error)
      */
     async hasPublishPermission(streamId, allowPublic = true) {
         if (!this.client) {
-            return false;
+            return createPermissionResult(false, false);
         }
-
 
         try {
             const stream = await this.client.getStream(streamId);
@@ -1036,12 +1037,12 @@ class StreamrController {
             
             if (!StreamPermission) {
                 Logger.warn('StreamPermission not available');
-                return false;
+                return createPermissionResult(false, false);
             }
 
             const currentAddress = await this.client.getAddress();
             if (!currentAddress) {
-                return false;
+                return createPermissionResult(false, false);
             }
 
             const hasPublish = await stream.hasPermission({
@@ -1051,10 +1052,15 @@ class StreamrController {
             });
             
             Logger.debug('hasPublishPermission check:', { streamId, currentAddress: currentAddress.slice(0,10), hasPublish, allowPublic });
-            return hasPublish;
+            return createPermissionResult(hasPublish, false);
         } catch (error) {
+            // Check if this is an RPC/network error vs actual permission error
+            if (isRpcError(error)) {
+                Logger.warn('RPC error checking PUBLISH permission:', error.message);
+                return createPermissionResult(null, true, error.message);
+            }
             Logger.error('Failed to check PUBLISH permission:', error);
-            return false;
+            return createPermissionResult(false, false);
         }
     }
 
@@ -1458,6 +1464,36 @@ class StreamrController {
         }
         
         this.address = null;
+    }
+
+    /**
+     * Reconnect Streamr client with new RPC endpoints
+     * Gets signer from authManager (avoids storing private key)
+     * Note: Active subscriptions are cleared - user needs to rejoin channels
+     * @returns {Promise<boolean>} - Success status
+     */
+    async reconnect() {
+        const signer = authManager.getSigner();
+        if (!signer) {
+            Logger.warn('Cannot reconnect: no signer available from authManager');
+            return false;
+        }
+
+        try {
+            Logger.info('Reconnecting Streamr client with new RPC endpoints...');
+            
+            // Disconnect current client (clears subscriptions)
+            await this.disconnect();
+            
+            // Re-initialize with fresh signer (will use new RPC endpoints)
+            await this.init(signer);
+            
+            Logger.info('Streamr client reconnected successfully');
+            return true;
+        } catch (error) {
+            Logger.error('Failed to reconnect Streamr client:', error);
+            return false;
+        }
     }
 
     // ==================== Storage Methods ====================

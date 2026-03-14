@@ -641,7 +641,7 @@ class App {
             // Note: Keystore V3 address doesn't include 0x prefix, but we need it normalized
             const rawAddress = backup.keystore.address.toLowerCase();
             const keystoreAddress = rawAddress.startsWith('0x') ? rawAddress : `0x${rawAddress}`;
-            const wallets = JSON.parse(localStorage.getItem('eth_chat_keystores') || '{}');
+            const wallets = JSON.parse(localStorage.getItem('pombo_keystores') || '{}');
             if (!wallets[keystoreAddress]) {
                 wallets[keystoreAddress] = {
                     name: result.data?.username || `Restored ${keystoreAddress.slice(0, 8)}`,
@@ -649,7 +649,7 @@ class App {
                     createdAt: Date.now(),
                     lastUsed: Date.now()
                 };
-                localStorage.setItem('eth_chat_keystores', JSON.stringify(wallets));
+                localStorage.setItem('pombo_keystores', JSON.stringify(wallets));
             }
 
             // Now unlock the wallet with the same password
@@ -1685,6 +1685,10 @@ class App {
             // Initialize Streamr client with private key
             await streamrController.init(signer);
 
+            // Pre-warm the network node - use deep link stream if available for faster load
+            const deepLinkStreamId = this._getDeepLinkStreamId();
+            streamrController.warmupNetwork(deepLinkStreamId);
+
             // Set media controller owner to load appropriate seed files
             await mediaController.setOwner(address);
 
@@ -2003,6 +2007,28 @@ class App {
      */
     dismissInvite(inviteId) {
         notificationManager.dismissInvite(inviteId);
+    }
+
+    /**
+     * Extract stream ID from deep link URL if present
+     * Used for network warmup optimization
+     * @returns {string|null} - Stream ID or null if no deep link
+     * @private
+     */
+    _getDeepLinkStreamId() {
+        try {
+            const hash = window.location.hash;
+            if (!hash) return null;
+            
+            // Match patterns like #/channel/0x.../name-1 or #/preview/0x.../name-1
+            const match = hash.match(/#\/(channel|preview)\/((0x[a-fA-F0-9]+)\/[^\/]+)/);
+            if (match && match[2]) {
+                return match[2]; // Return the full stream ID
+            }
+        } catch (e) {
+            // Ignore parsing errors
+        }
+        return null;
     }
 }
 

@@ -1640,14 +1640,22 @@ class ChannelManager {
             } else {
                 // Check via Streamr SDK (real-time on-chain)
                 try {
-                    canPublish = await streamrController.hasPublishPermission(messageStreamId, true);
-                    // Cache the result
-                    channel._publishPermCache = {
-                        address: currentAddress,
-                        canPublish: canPublish,
-                        timestamp: Date.now()
-                    };
-                    Logger.debug('Publish permission check via SDK:', { streamId: messageStreamId, canPublish });
+                    const result = await streamrController.hasPublishPermission(messageStreamId, true);
+                    
+                    // Handle RPC error - be optimistic and try to publish anyway
+                    if (result.rpcError) {
+                        Logger.warn('RPC error checking publish permission, proceeding optimistically');
+                        canPublish = true;
+                    } else {
+                        canPublish = result.hasPermission;
+                        // Cache the result (only if we got a definitive answer)
+                        channel._publishPermCache = {
+                            address: currentAddress,
+                            canPublish: canPublish,
+                            timestamp: Date.now()
+                        };
+                    }
+                    Logger.debug('Publish permission check via SDK:', { streamId: messageStreamId, canPublish, rpcError: result.rpcError });
                 } catch (error) {
                     Logger.warn('Failed to check publish permission via SDK:', error);
                     // On error, try to publish anyway - the network will reject if no permission

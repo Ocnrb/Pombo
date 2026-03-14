@@ -2,7 +2,7 @@
 <html lang="pt">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-vvt4KWwuNr51XfE5m+hzeNEGhiOfZzG97ccfqGsPwvE='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; connect-src 'self' wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://polygon-bor-rpc.publicnode.com https://gasstation.polygon.technology https://eth.llamarpc.com https://*.thegraph.com https://*.ens.domains https://euc.li https://*.logstore.usher.so https://fcm.googleapis.com https://*.push.services.mozilla.com https://updates.push.services.mozilla.com; base-uri 'self'; form-action 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-vvt4KWwuNr51XfE5m+hzeNEGhiOfZzG97ccfqGsPwvE='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; connect-src 'self' wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://polygon-bor-rpc.publicnode.com https://gasstation.polygon.technology https://*.llamarpc.com https://1rpc.io https://*.meowrpc.com https://*.gateway.tenderly.co https://*.thegraph.com https://*.ens.domains https://euc.li https://*.logstore.usher.so https://fcm.googleapis.com https://*.push.services.mozilla.com https://updates.push.services.mozilla.com; base-uri 'self'; form-action 'self'">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Pombo - P2P Decentralized Chat</title>
 
@@ -1822,6 +1822,46 @@
                                 </p>
                             </div>
                             <div id="graph-api-status" class="text-xs"></div>
+                            
+                            <!-- RPC Endpoints Configuration -->
+                            <div class="mt-6 pt-6 border-t border-white/5">
+                                <label class="block text-xs font-medium text-white/40 uppercase tracking-wider mb-2">Polygon RPC Endpoint</label>
+                                
+                                <!-- Preset selection -->
+                                <select id="rpc-preset-select" class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition mb-3 appearance-none cursor-pointer">
+                                    <option value="drpc">dRPC (Recommended)</option>
+                                    <option value="auto">Auto (try all endpoints)</option>
+                                    <option value="publicnode">PublicNode</option>
+                                    <option value="ankr">Ankr</option>
+                                    <option value="meowrpc">Meow RPC</option>
+                                    <option value="tenderly">Tenderly</option>
+                                    <option value="llamarpc">Llama RPC</option>
+                                    <option value="1rpc">1RPC (Privacy)</option>
+                                    <option value="custom">Custom URL...</option>
+                                </select>
+                                
+                                <!-- Custom RPC input (hidden by default) -->
+                                <div id="custom-rpc-container" class="hidden mb-3">
+                                    <input
+                                        type="url"
+                                        id="custom-rpc-url"
+                                        placeholder="https://your-rpc-endpoint.com"
+                                        class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20"
+                                    />
+                                    <p class="text-xs text-white/30 mt-1">Enter a valid Polygon RPC endpoint URL</p>
+                                </div>
+                                
+                                <!-- RPC Status -->
+                                <div class="flex items-center justify-between">
+                                    <div id="rpc-status" class="text-xs text-white/40">
+                                        <span class="inline-block w-2 h-2 rounded-full bg-white/20 mr-1.5 align-middle"></span>
+                                        <span class="align-middle">Not tested</span>
+                                    </div>
+                                    <button id="test-rpc-btn" class="text-xs text-white/60 hover:text-white transition px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10">
+                                        Test Connection
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     </div>
 

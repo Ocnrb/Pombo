@@ -11,7 +11,7 @@
 import { Logger } from './logger.js';
 
 // Storage key for wallets (keystores are NOT encrypted - they already are)
-const WALLETS_STORAGE_KEY = 'eth_chat_keystores';
+const WALLETS_STORAGE_KEY = 'pombo_keystores';
 
 class AuthManager {
     constructor() {

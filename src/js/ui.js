@@ -1925,12 +1925,38 @@ class UIController {
             return;
         }
 
-        // Default to disabled while checking permission
-        this.setReadOnlyInputState(true);
+        // Default to enabled while checking (optimistic for public channels)
+        // This prevents the annoying flash of "read-only" before verification completes
+        if (channel.type === 'public' || channel.type === 'password') {
+            this.setReadOnlyInputState(false);
+        } else {
+            this.setReadOnlyInputState(true);
+        }
 
         // Check actual permission from blockchain via Streamr SDK
         try {
-            const canPublish = await streamrController.hasPublishPermission(channel.messageStreamId, true);
+            const result = await streamrController.hasPublishPermission(channel.messageStreamId, true);
+            
+            // Handle RPC error - use optimistic approach for public channels
+            if (result.rpcError) {
+                Logger.warn('RPC error in updateReadOnlyUI, using optimistic state');
+                
+                // For public/password channels, assume user can publish
+                // The server will reject if not allowed anyway
+                if (channel.type === 'public' || channel.type === 'password') {
+                    this.setReadOnlyInputState(false);
+                    return;
+                }
+                
+                // For native/private channels, use cache or stay disabled for safety
+                if (cacheValid) {
+                    const cachedCanPublish = channel._publishPermCache.canPublish;
+                    this.setReadOnlyInputState(!cachedCanPublish, cachedCanPublish && channel.readOnly);
+                }
+                return;
+            }
+            
+            const canPublish = result.hasPermission;
             
             // Cache the result
             channel._publishPermCache = {
@@ -1957,8 +1983,10 @@ class UIController {
             });
         } catch (error) {
             Logger.warn('Failed to check publish permission:', error);
-            // On error, disable input for safety
-            this.setReadOnlyInputState(true);
+            // On error with public channel, stay optimistic
+            if (channel.type === 'public' || channel.type === 'password') {
+                this.setReadOnlyInputState(false);
+            }
         }
     }
 
