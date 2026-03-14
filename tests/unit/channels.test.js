@@ -27,7 +27,7 @@ vi.mock('../../src/js/streamr.js', () => ({
         getStoredMessages: vi.fn().mockResolvedValue([]),
         getStreamMetadata: vi.fn().mockResolvedValue(null),
         hasPermission: vi.fn().mockResolvedValue(true),
-        hasPublishPermission: vi.fn().mockResolvedValue(true),
+        hasPublishPermission: vi.fn().mockResolvedValue({ hasPermission: true, rpcError: false }),
         hasDeletePermission: vi.fn().mockResolvedValue(false),
         grantPublicPermissions: vi.fn(),
         resend: vi.fn(),
