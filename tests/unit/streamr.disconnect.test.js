@@ -1,13 +1,22 @@
 /**
- * Streamr Controller - disconnect() Tests
+ * Streamr Controller - disconnect() and reconnect() Tests
  * Tests that disconnect gracefully handles errors in unsubscribe and client.destroy
+ * Tests that reconnect properly gets signer from authManager
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+// Mock authManager before importing streamrController
+vi.mock('../../src/js/auth.js', () => ({
+    authManager: {
+        getSigner: vi.fn()
+    }
+}));
 
 // We test the disconnect logic in isolation by importing the module
 // and directly manipulating the singleton's internal state.
 import { streamrController } from '../../src/js/streamr.js';
+import { authManager } from '../../src/js/auth.js';
 
 describe('streamrController.disconnect()', () => {
     let mockClient;
@@ -116,5 +125,99 @@ describe('streamrController.disconnect()', () => {
 
         // Restore
         streamrController.unsubscribe = originalUnsubscribe;
+    });
+});
+
+describe('streamrController.reconnect()', () => {
+    let mockClient;
+    let mockSigner;
+
+    beforeEach(() => {
+        // Create a mock Streamr client
+        mockClient = {
+            destroy: vi.fn().mockResolvedValue(undefined),
+            unsubscribe: vi.fn().mockResolvedValue(undefined),
+            getAddress: vi.fn().mockResolvedValue('0xtest123'),
+        };
+
+        // Create a mock signer
+        mockSigner = {
+            privateKey: '0x1234567890abcdef'
+        };
+
+        // Inject mocks
+        streamrController.client = mockClient;
+        streamrController.address = '0xtest123';
+        streamrController.subscriptions = new Map();
+        
+        // Default: authManager returns a signer
+        authManager.getSigner.mockReturnValue(mockSigner);
+    });
+
+    afterEach(() => {
+        streamrController.client = null;
+        streamrController.address = null;
+        vi.clearAllMocks();
+    });
+
+    it('should return false if authManager has no signer', async () => {
+        authManager.getSigner.mockReturnValue(null);
+
+        const result = await streamrController.reconnect();
+
+        expect(result).toBe(false);
+    });
+
+    it('should get signer from authManager', async () => {
+        const originalInit = streamrController.init.bind(streamrController);
+        streamrController.init = vi.fn().mockResolvedValue(true);
+        
+        await streamrController.reconnect();
+
+        expect(authManager.getSigner).toHaveBeenCalled();
+        
+        streamrController.init = originalInit;
+    });
+
+    it('should call disconnect before reinitializing', async () => {
+        // Mock init to avoid actual StreamrClient creation
+        const originalInit = streamrController.init.bind(streamrController);
+        streamrController.init = vi.fn().mockResolvedValue(true);
+        
+        // Spy on disconnect
+        const disconnectSpy = vi.spyOn(streamrController, 'disconnect');
+
+        await streamrController.reconnect();
+
+        expect(disconnectSpy).toHaveBeenCalled();
+        expect(streamrController.init).toHaveBeenCalledWith(mockSigner);
+
+        // Restore
+        streamrController.init = originalInit;
+        disconnectSpy.mockRestore();
+    });
+
+    it('should return true on successful reconnect', async () => {
+        const originalInit = streamrController.init.bind(streamrController);
+        streamrController.init = vi.fn().mockResolvedValue(true);
+
+        const result = await streamrController.reconnect();
+
+        expect(result).toBe(true);
+
+        // Restore
+        streamrController.init = originalInit;
+    });
+
+    it('should return false if init fails', async () => {
+        const originalInit = streamrController.init.bind(streamrController);
+        streamrController.init = vi.fn().mockRejectedValue(new Error('Init failed'));
+
+        const result = await streamrController.reconnect();
+
+        expect(result).toBe(false);
+
+        // Restore
+        streamrController.init = originalInit;
     });
 });
