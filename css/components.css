@@ -288,7 +288,7 @@ body {
 }
 
 /* ----- Avatar SVG Scaling (ensure SVGs fill their containers) ----- */
-/* ID selector needed for #desktop-account-avatar, class selector catches all *avatar* classes */
+/* Covers all containers with "avatar" in class name, plus specific IDs */
 #desktop-account-avatar svg,
 [class*="avatar"] svg {
     width: 100%;
