@@ -633,7 +633,8 @@ export function generateAvatar(address, size = 32, borderRadius = 0.2) {
     const faceRng = createRng((seed ^ 0x51f15eed) + 0xFACE);
     const faceElement = generateFace(faceRng, size, bgColor);
     
-    // Deterministic ID for clip path (based on address seed)
+    // Base ID for clip path (deterministic, based on seed)
+    // Unique suffix is added by getAvatar() to prevent DOM conflicts
     const clipId = `avatar-clip-${seed.toString(36)}`;
     
     // Frame element (internal border with background color)
@@ -641,8 +642,9 @@ export function generateAvatar(address, size = 32, borderRadius = 0.2) {
     const innerSize = size - fw * 2;
     const frameElement = `<path d="M0,0 h${size} v${size} h-${size} Z M${fw},${fw} v${innerSize} h${innerSize} v-${innerSize} Z" fill="${bgColor}" fill-rule="evenodd"/>`;
     
-    // Use 100% dimensions to scale to container while viewBox maintains internal coordinates
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="100%" height="100%" style="display:block">
+    // SVG with fixed dimensions matching the requested size
+    // CSS will handle scaling to container if needed
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" style="display:block">
         <defs>
             <clipPath id="${clipId}">
                 <rect width="${size}" height="${size}" rx="${rx}"/>
@@ -675,24 +677,44 @@ const avatarCache = new Map();
 const MAX_CACHE_SIZE = 200;
 
 /**
+ * Replace clipPath ID in cached SVG with a unique one
+ * This prevents DOM conflicts when same avatar appears multiple times
+ */
+function makeClipIdUnique(svg) {
+    const uniqueId = Math.random().toString(36).substring(2, 8);
+    // Replace the clipPath ID and reference with unique version
+    return svg.replace(
+        /id="(avatar-clip-[^"]+)"/g,
+        `id="$1-${uniqueId}"`
+    ).replace(
+        /url\(#(avatar-clip-[^)]+)\)/g,
+        `url(#$1-${uniqueId})`
+    );
+}
+
+/**
  * Get cached avatar or generate new one
+ * Each call returns SVG with unique clipPath ID to prevent DOM conflicts
  */
 export function getAvatar(address, size = 32, borderRadius = 0.2) {
     const key = `${address?.toLowerCase()}-${size}-${borderRadius}`;
     
+    let svg;
     if (avatarCache.has(key)) {
-        return avatarCache.get(key);
+        svg = avatarCache.get(key);
+    } else {
+        svg = generateAvatar(address, size, borderRadius);
+        
+        if (avatarCache.size >= MAX_CACHE_SIZE) {
+            const firstKey = avatarCache.keys().next().value;
+            avatarCache.delete(firstKey);
+        }
+        
+        avatarCache.set(key, svg);
     }
     
-    const svg = generateAvatar(address, size, borderRadius);
-    
-    if (avatarCache.size >= MAX_CACHE_SIZE) {
-        const firstKey = avatarCache.keys().next().value;
-        avatarCache.delete(firstKey);
-    }
-    
-    avatarCache.set(key, svg);
-    return svg;
+    // Always return with unique clipPath ID to prevent DOM conflicts
+    return makeClipIdUnique(svg);
 }
 
 /**
