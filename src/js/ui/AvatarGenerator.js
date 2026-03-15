@@ -1,56 +1,86 @@
 /**
- * Avatar Generator
+ * Avatar Generator v2
  * Generates deterministic SVG avatars based on Ethereum addresses
- * Procedural polygon generation 
+ * Procedural polygon generation with face layer (pareidolia)
+ * 8 eyes × 9 mouths × 4 expressions = 288 unique face personalities
  */
 
-// Dark background colors (expanded palette)
-const BACKGROUND_COLORS = [
-    // Azuis Profundos & Slate Blues
-    '#12182B', '#151C33', '#1D1F2E', '#181536', '#141A2F', '#101726', '#171C2B',
-    '#1A2847', '#1E3055', '#1B2A4A', '#182845', '#1F3358',
-    // Indigo & Violets
-    '#19142A', '#1C1633', '#1A1230', '#201238', '#23113A',
-    '#231845', '#28204F', '#261C4A', '#2A2255', '#2D2560',
-    // Purples & Magentas
-    '#1D122B', '#211529', '#241024', '#291425', '#2A1028',
-    '#2E1850', '#321C58', '#2F1A52', '#351F5E', '#382262',
-    '#3A1845', '#3E1C4A', '#3C1A48', '#421F50', '#452252',
-    // Reds & Wines
-    '#2B1212', '#2E151A', '#2E1622', '#261518', '#2A1416', '#241012',
-    '#3D1830', '#421C35', '#401A32', '#461F38', '#4A223C',
-    '#3A1820', '#3E1C24', '#3C1A22', '#421F28', '#45222C',
-    // Deep Dark Greens/Teals
-    '#0F1F1A', '#0E1B17', '#0C1A16', '#0F201C', '#101C18',
-    '#152D35', '#183540', '#1A3842', '#173038', '#1C3A45',
-    // Cool Neutrals
-    '#1A1C23', '#181B22', '#161A20'
-];
+// ==========================================
+// Constants 
+// ==========================================
 
-// Vibrant shape colors (expanded palette, no orange/amber)
-const SHAPE_COLORS = [
-    // Azuis Profundos & Slate Blues
-    '#3B6BE3', '#4A81D9', '#5C7CFA', '#5D5FE3', '#4C6EDB', '#4462C9', '#6A7FDB',
-    '#3A5CAA', '#5B8DD9', '#4F7AC4',
-    // Indigo & Violets
-    '#6C5DD3', '#7A6CE0', '#5F55B5', '#7B4FE0', '#8A4BD6', '#5A4DB8', '#9066E8',
-    // Purples & Magentas
-    '#8E46E6', '#8952D9', '#B33DB3', '#C44994', '#A93FA0', '#9B3DC4', '#D44EC0', '#A855D9',
-    // Pinks & Roses
-    '#E85A8F', '#D4557A', '#E86B9A', '#CC4F88', '#B84D70', '#F07AA8',
-    // Reds & Wines
-    '#D93838', '#D94160', '#C93C75', '#C44B5A', '#B5424D', '#A63A44', '#E04545', '#9A3535',
-    // Deep Greens/Teals
-    '#1F8A70', '#1C7C68', '#207561', '#2C8C6A', '#3A7F66',
-    '#38A5B8', '#2E99A8', '#4AB4C4', '#3D8FA0', '#5CC4D4', '#2A8899', '#47A8B8',
-    // Cool Neutrals
-    '#7382A6', '#6F7C99', '#5F6B85', '#8894B0', '#5A6270', '#9AA4BA', '#7A8495'
-];
+// Polygon A configuration
+const POLYGON_A = {
+    verticesBase: 3, verticesRange: 5,       // 3-7 vertices
+    irregularityBase: 0.15, irregularityRange: 0.30,  // 15-45%
+    spikinessBase: 0.20, spikinessRange: 0.30,        // 20-50%
+    scaleBase: 0.75, scaleRange: 0.50                 // 75-125%
+};
+
+// Polygon B configuration
+const POLYGON_B = {
+    verticesBase: 3, verticesRange: 5,       // 3-7 vertices
+    irregularityBase: 0.15, irregularityRange: 0.30,  // 15-45%
+    spikinessBase: 0.20, spikinessRange: 0.30,        // 20-50%
+    scaleBase: 0.63, scaleRange: 0.50,                // 63-113%
+    overlapBase: 0.30, overlapRange: 0.50             // 30-80%
+};
+
+// Holes configuration
+const HOLES = {
+    min: 2, max: 4,                          // 2-4 holes
+    verticesBase: 3, verticesRange: 4,       // 3-6 vertices
+    irregularityBase: 0.10, irregularityRange: 0.20,  // 10-30%
+    spikinessBase: 0.10, spikinessRange: 0.20,        // 10-30%
+    scale1Base: 0.80, scale2Base: 0.65, scaleRange: 0.15,  // Single vs multiple hole sizes
+    offsetBase: 0, offsetRange: 0.50                  // 0-50% offset from center
+};
+
+// Smoothness (Catmull-Rom curve tension)
+const SMOOTHNESS = 0.30;  // 30% smooth corners
+
+// HSL Background spectrum
+const BG_COLOR = {
+    hueMin: 0, hueMax: 360,      // Full spectrum
+    satMin: 35, satMax: 55,      // 35-55% saturation
+    lightMin: 16, lightMax: 22   // 16-22% lightness (dark backgrounds)
+};
+
+// HSL Shape spectrum
+const SHAPE_COLOR = {
+    satMin: 55, satMax: 75,      // 55-75% saturation (vibrant)
+    lightMin: 45, lightMax: 65   // 45-65% lightness
+};
+
+// Color harmony
+const COLOR_HARMONY = {
+    mode: 'analogous',           // analogous colors (±40°)
+    variation: 80                // ±80° variation
+};
+
+// Face layer configuration
+const FACE = {
+    eyeSize: 0.10,               // 10% of avatar
+    eyeDistance: 0.26,           // 26% from center
+    eyeHeight: 0.38,             // 38% from top
+    mouthHeight: 0.58,           // 58% from top
+    opacity: 1.0                 // 100% opacity
+};
+
+// Frame (internal border with background color)
+const FRAME_WIDTH = 0.06;        // 6% of avatar size
+
+// Face feature types
+const EYE_TYPES = ['dot', 'round', 'oval', 'sleepy', 'blink', 'wink', 'happy', 'cute'];
+const MOUTH_TYPES = ['smile', 'grin', 'grinOpen', 'grinDark', 'smirk', 'neutral', 'line', 'cat', 'tongue'];
+const EXPRESSIONS = ['normal', 'tilt', 'happy', 'curious'];
+
+// ==========================================
+// Core Utility Functions
+// ==========================================
 
 /**
  * Hash a string to a number
- * @param {string} str - String to hash
- * @returns {number} - Hash value
  */
 function hashString(str) {
     let hash = 0;
@@ -65,7 +95,6 @@ function hashString(str) {
 
 /**
  * Simple seeded PRNG (mulberry32)
- * Creates deterministic pseudo-random numbers from a seed
  */
 function createRng(seed) {
     return function() {
@@ -76,68 +105,144 @@ function createRng(seed) {
     };
 }
 
+// ==========================================
+// Color Functions
+// ==========================================
+
 /**
- * Generate a procedural polygon path
- * @param {function} rng - Seeded random number generator
- * @param {number} cx - Center X
- * @param {number} cy - Center Y
- * @param {number} radius - Base radius
- * @param {number} numVertices - Number of vertices (3-8)
- * @param {number} irregularity - Angular variation (0-0.3)
- * @param {number} spikiness - Radius variation (0-0.5)
- * @returns {string} - SVG path string
+ * Convert HSL to hex color
+ */
+function hslToHex(h, s, l) {
+    s /= 100;
+    l /= 100;
+    const a = s * Math.min(l, 1 - l);
+    const f = n => {
+        const k = (n + h / 30) % 12;
+        const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+        return Math.round(255 * color).toString(16).padStart(2, '0');
+    };
+    return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+/**
+ * Generate a color from HSL spectrum
+ */
+function generateColorFromSpectrum(rng, hueMin, hueMax, satMin, satMax, lightMin, lightMax) {
+    let hue;
+    if (hueMin <= hueMax) {
+        hue = hueMin + rng() * (hueMax - hueMin);
+    } else {
+        // Wrap around (e.g., 350-30 goes through red)
+        const range = (360 - hueMin) + hueMax;
+        const h = rng() * range;
+        hue = h < (360 - hueMin) ? hueMin + h : h - (360 - hueMin);
+    }
+    const sat = satMin + rng() * (satMax - satMin);
+    const light = lightMin + rng() * (lightMax - lightMin);
+    return { hex: hslToHex(hue, sat, light), hue, sat, light };
+}
+
+/**
+ * Generate harmonic color based on base hue
+ */
+function generateHarmonicColor(rng, baseHue, satMin, satMax, lightMin, lightMax) {
+    const v = (rng() - 0.5) * 2 * COLOR_HARMONY.variation;
+    
+    let hueOffset;
+    switch (COLOR_HARMONY.mode) {
+        case 'complementary':
+            hueOffset = 180 + v;
+            break;
+        case 'analogous':
+            hueOffset = (rng() > 0.5 ? 40 : -40) + v;
+            break;
+        case 'triadic':
+            hueOffset = (rng() > 0.5 ? 120 : 240) + v;
+            break;
+        case 'split':
+            hueOffset = (rng() > 0.5 ? 150 : -150) + v;
+            break;
+        default:
+            hueOffset = v;
+    }
+    
+    const hue = (baseHue + hueOffset + 360) % 360;
+    const sat = satMin + rng() * (satMax - satMin);
+    const light = lightMin + rng() * (lightMax - lightMin);
+    return hslToHex(hue, sat, light);
+}
+
+// ==========================================
+// Shape Generation
+// ==========================================
+
+/**
+ * Generate a procedural polygon path with optional smoothing
  */
 function generatePolygonPath(rng, cx, cy, radius, numVertices, irregularity, spikiness) {
     const points = [];
     const angleStep = (Math.PI * 2) / numVertices;
     
     for (let i = 0; i < numVertices; i++) {
-        // Base angle with irregularity
-        const baseAngle = angleStep * i - Math.PI / 2; // Start from top
+        const baseAngle = angleStep * i - Math.PI / 2;
         const angleOffset = (rng() - 0.5) * 2 * irregularity * angleStep;
         const angle = baseAngle + angleOffset;
         
-        // Radius with spikiness variation
         const radiusOffset = 1 + (rng() - 0.5) * 2 * spikiness;
         const r = radius * radiusOffset;
         
-        // Calculate point
         const x = cx + r * Math.cos(angle);
         const y = cy + r * Math.sin(angle);
         points.push({ x, y });
     }
     
-    // Build path
-    const pathParts = points.map((p, i) => 
-        (i === 0 ? 'M' : 'L') + p.x.toFixed(2) + ',' + p.y.toFixed(2)
-    );
-    pathParts.push('Z');
+    if (SMOOTHNESS <= 0) {
+        const pathParts = points.map((p, i) => 
+            (i === 0 ? 'M' : 'L') + p.x.toFixed(2) + ',' + p.y.toFixed(2)
+        );
+        pathParts.push('Z');
+        return pathParts.join(' ');
+    }
     
-    return pathParts.join(' ');
+    // Smooth corners using Catmull-Rom to Bezier conversion
+    const n = points.length;
+    let path = `M${points[0].x.toFixed(2)},${points[0].y.toFixed(2)}`;
+    
+    for (let i = 0; i < n; i++) {
+        const p0 = points[(i - 1 + n) % n];
+        const p1 = points[i];
+        const p2 = points[(i + 1) % n];
+        const p3 = points[(i + 2) % n];
+        
+        const tension = 1 - SMOOTHNESS * 0.5;
+        const t = tension / 6;
+        
+        const cp1x = p1.x + (p2.x - p0.x) * t;
+        const cp1y = p1.y + (p2.y - p0.y) * t;
+        const cp2x = p2.x - (p3.x - p1.x) * t;
+        const cp2y = p2.y - (p3.y - p1.y) * t;
+        
+        path += ` C${cp1x.toFixed(2)},${cp1y.toFixed(2)} ${cp2x.toFixed(2)},${cp2y.toFixed(2)} ${p2.x.toFixed(2)},${p2.y.toFixed(2)}`;
+    }
+    
+    return path;
 }
 
 /**
- * Generate a procedural polygon with optional inner hole
- * @param {function} rng - Seeded random number generator
- * @param {number} cx - Center X
- * @param {number} cy - Center Y
- * @param {number} size - Canvas size
- * @returns {object} - { path, hasHoles }
+ * Generate the complete procedural shape (2 polygons + holes)
  */
 function generateProceduralShape(rng, cx, cy, size) {
-    // Margin from edge (5% on each side = 90% usable area)
     const margin = size * 0.05;
     const usableRadius = (size / 2) - margin;
-    const baseRadius = usableRadius * 0.9; // Base radius with small safety margin
+    const baseRadius = usableRadius * 0.9;
     
-    // === POLYGON A (central, large) ===
-    const numVerticesA = 3 + Math.floor(rng() * 4); // 3-6 vertices
-    const irregularityA = 0.1 + rng() * 0.25; // 10-35% irregularity
-    const spikinessA = 0.1 + rng() * 0.25; // 10-35% spikiness
-    const scaleA = 0.75 + rng() * 0.20; // 75-95%
+    // Polygon A (central, large)
+    const numVerticesA = POLYGON_A.verticesBase + Math.floor(rng() * POLYGON_A.verticesRange);
+    const irregularityA = POLYGON_A.irregularityBase + rng() * POLYGON_A.irregularityRange;
+    const spikinessA = POLYGON_A.spikinessBase + rng() * POLYGON_A.spikinessRange;
+    const scaleA = POLYGON_A.scaleBase + rng() * POLYGON_A.scaleRange;
     const radiusA = baseRadius * scaleA;
     
-    // Minimal offset from center to keep centered
     const offsetAx = (rng() - 0.5) * size * 0.02;
     const offsetAy = (rng() - 0.5) * size * 0.02;
     const cxA = cx + offsetAx;
@@ -145,93 +250,238 @@ function generateProceduralShape(rng, cx, cy, size) {
     
     const pathA = generatePolygonPath(rng, cxA, cyA, radiusA, numVerticesA, irregularityA, spikinessA);
     
-    // === POLYGON B (overlapping, different size) ===
-    const numVerticesB = 3 + Math.floor(rng() * 4); // 3-6 vertices
-    const irregularityB = 0.1 + rng() * 0.25;
-    const spikinessB = 0.1 + rng() * 0.25;
-    const scaleB = 0.50 + rng() * 0.35; // 50-85% (bigger range)
+    // Polygon B (overlapping)
+    const numVerticesB = POLYGON_B.verticesBase + Math.floor(rng() * POLYGON_B.verticesRange);
+    const irregularityB = POLYGON_B.irregularityBase + rng() * POLYGON_B.irregularityRange;
+    const spikinessB = POLYGON_B.spikinessBase + rng() * POLYGON_B.spikinessRange;
+    const scaleB = POLYGON_B.scaleBase + rng() * POLYGON_B.scaleRange;
     const radiusB = baseRadius * scaleB;
     
-    // Position B with visible offset - shapes should be distinguishable
-    const overlapFactor = 0.38 + rng() * 0.32; // 38-70% distance
-    const maxDistance = usableRadius - radiusB; // Ensure B stays within bounds
+    const overlapFactor = POLYGON_B.overlapBase + rng() * POLYGON_B.overlapRange;
+    const maxDistance = usableRadius - radiusB;
     const distanceAB = Math.min((radiusA + radiusB) * overlapFactor, maxDistance * 0.7);
-    const angleAB = rng() * Math.PI * 2; // Random direction
+    const angleAB = rng() * Math.PI * 2;
     
     const cxB = cxA + Math.cos(angleAB) * distanceAB;
     const cyB = cyA + Math.sin(angleAB) * distanceAB;
     
     const pathB = generatePolygonPath(rng, cxB, cyB, radiusB, numVerticesB, irregularityB, spikinessB);
     
-    // === HOLES (1-2, as separate shapes with background color) ===
-    const numHoles = rng() < 0.5 ? 1 : 2; // 50% one hole, 50% two holes
+    // Holes
+    const numHoles = HOLES.min + Math.floor(rng() * (HOLES.max - HOLES.min + 1));
     
-    // Calculate composition center (weighted average of both polygon centers)
+    if (numHoles === 0) {
+        return { path: pathA + ' ' + pathB, holesPath: '', hasHoles: false };
+    }
+    
     const compositeCx = (cxA + cxB) / 2;
     const compositeCy = (cyA + cyB) / 2;
     const compositeRadius = Math.max(radiusA, radiusB) * 0.6;
     
-    // Hole properties - same for all holes
-    const holeVertices = 3 + Math.floor(rng() * 3); // 3-5 vertices
-    const holeIrregularity = 0.1 + rng() * 0.2;
-    const holeSpikiness = 0.1 + rng() * 0.2;
-    const holeSizeBase = numHoles === 1 ? 0.90 : 0.60;
-    const holeScale = holeSizeBase + rng() * 0.10;
+    const holeVertices = HOLES.verticesBase + Math.floor(rng() * HOLES.verticesRange);
+    const holeIrregularity = HOLES.irregularityBase + rng() * HOLES.irregularityRange;
+    const holeSpikiness = HOLES.spikinessBase + rng() * HOLES.spikinessRange;
+    
+    const holeSizeBase = numHoles === 1 ? HOLES.scale1Base : HOLES.scale2Base;
+    const holeScale = holeSizeBase + rng() * HOLES.scaleRange;
     const holeRadius = compositeRadius * holeScale;
     
-    let holesPath = '';
+    const holeOffset = HOLES.offsetBase + rng() * HOLES.offsetRange;
     
-    // Pre-calculate hole positions to avoid overlap
+    let holesPath = '';
     const holePositions = [];
+    
     if (numHoles === 1) {
-        // Single hole: can be anywhere in composition
+        const angle = rng() * Math.PI * 2;
+        const distance = compositeRadius * holeOffset;
         holePositions.push({
-            x: compositeCx + (rng() - 0.5) * compositeRadius * 0.8,
-            y: compositeCy + (rng() - 0.5) * compositeRadius * 0.8
+            x: compositeCx + Math.cos(angle) * distance,
+            y: compositeCy + Math.sin(angle) * distance
         });
     } else {
-        // Two holes: place on opposite sides to avoid overlap
         const baseAngle = rng() * Math.PI * 2;
-        const minSeparation = holeRadius * 2.2; // Minimum distance between hole centers
-        const holeDistance = Math.max(minSeparation, compositeRadius * 0.5);
+        const minSeparation = holeRadius * 2.2;
+        const holeDistance = Math.max(minSeparation, compositeRadius * holeOffset);
         
-        // First hole
-        holePositions.push({
-            x: compositeCx + Math.cos(baseAngle) * holeDistance * 0.5,
-            y: compositeCy + Math.sin(baseAngle) * holeDistance * 0.5
-        });
-        // Second hole - opposite side
-        holePositions.push({
-            x: compositeCx + Math.cos(baseAngle + Math.PI) * holeDistance * 0.5,
-            y: compositeCy + Math.sin(baseAngle + Math.PI) * holeDistance * 0.5
-        });
+        for (let h = 0; h < numHoles; h++) {
+            const angle = baseAngle + (Math.PI * 2 * h / numHoles);
+            holePositions.push({
+                x: compositeCx + Math.cos(angle) * holeDistance,
+                y: compositeCy + Math.sin(angle) * holeDistance
+            });
+        }
     }
     
     for (let h = 0; h < numHoles; h++) {
         const holePath = generatePolygonPath(
-            rng,
-            holePositions[h].x,
-            holePositions[h].y,
-            holeRadius,
-            holeVertices,
-            holeIrregularity,
-            holeSpikiness
+            rng, holePositions[h].x, holePositions[h].y,
+            holeRadius, holeVertices, holeIrregularity, holeSpikiness
         );
-        
         holesPath += ' ' + holePath;
     }
     
-    // Return polygons and holes separately
-    return { 
-        path: pathA + ' ' + pathB,
-        holesPath: holesPath.trim(),
-        hasHoles: numHoles > 0
-    };
+    return { path: pathA + ' ' + pathB, holesPath: holesPath.trim(), hasHoles: true };
+}
+
+// ==========================================
+// Face Generation (Pareidolia Layer)
+// ==========================================
+
+/**
+ * Generate eye SVG element
+ */
+function generateEye(type, x, y, radius, color, opacity) {
+    const r = radius;
+    
+    switch (type) {
+        case 'dot':
+            return `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" opacity="${opacity}"/>`;
+            
+        case 'round':
+            return `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" opacity="${opacity}"/>
+                    <circle cx="${x}" cy="${y}" r="${r * 0.35}" fill="${color === '#1a1a24' ? '#f0f0f5' : '#1a1a24'}" opacity="${opacity}"/>`;
+            
+        case 'oval':
+            return `<ellipse cx="${x}" cy="${y}" rx="${r * 0.7}" ry="${r}" fill="${color}" opacity="${opacity}"/>`;
+            
+        case 'sleepy':
+            return `<line x1="${x - r}" y1="${y}" x2="${x + r}" y2="${y}" stroke="${color}" stroke-width="${r * 0.8}" stroke-linecap="round" opacity="${opacity}"/>`;
+            
+        case 'blink':
+            return `<path d="M${x - r} ${y} Q${x} ${y - r * 0.8} ${x + r} ${y}" fill="none" stroke="${color}" stroke-width="${r * 0.6}" stroke-linecap="round" opacity="${opacity}"/>`;
+            
+        case 'wink':
+            return `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" opacity="${opacity}"/>`;
+            
+        case 'happy':
+            return `<path d="M${x - r} ${y + r * 0.3} Q${x} ${y - r * 0.8} ${x + r} ${y + r * 0.3}" fill="none" stroke="${color}" stroke-width="${r * 0.6}" stroke-linecap="round" opacity="${opacity}"/>`;
+            
+        case 'cute':
+            const hlX = x - r * 0.3;
+            const hlY = y - r * 0.3;
+            return `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" opacity="${opacity}"/>
+                    <circle cx="${hlX}" cy="${hlY}" r="${r * 0.25}" fill="${color === '#1a1a24' ? '#f0f0f5' : '#1a1a24'}" opacity="${opacity * 0.8}"/>`;
+            
+        default:
+            return `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" opacity="${opacity}"/>`;
+    }
 }
 
 /**
+ * Generate mouth SVG element
+ */
+function generateMouth(type, x, y, width, height, color, opacity) {
+    const w = width;
+    const h = height;
+    
+    switch (type) {
+        case 'smile':
+            return `<path d="M${x - w} ${y} Q${x} ${y + h * 2.5} ${x + w} ${y}" fill="none" stroke="${color}" stroke-width="${h * 0.7}" stroke-linecap="round" opacity="${opacity}"/>`;
+            
+        case 'grin':
+            return `<path d="M${x - w * 1.2} ${y - h * 0.3} Q${x} ${y + h * 3.5} ${x + w * 1.2} ${y - h * 0.3}" fill="none" stroke="${color}" stroke-width="${h * 0.7}" stroke-linecap="round" opacity="${opacity}"/>`;
+            
+        case 'grinOpen':
+            const gw = w * 1.1;
+            const gh = h * 2.2;
+            return `<path d="M${x - gw} ${y - gh * 0.2} L${x - gw} ${y + gh * 0.6} Q${x} ${y + gh * 1.4} ${x + gw} ${y + gh * 0.6} L${x + gw} ${y - gh * 0.2} Z" fill="${color}" opacity="${opacity * 0.9}"/>
+                    <rect x="${x - gw * 0.7}" y="${y - gh * 0.15}" width="${gw * 1.4}" height="${gh * 0.35}" fill="white" opacity="${opacity * 0.95}" rx="${gh * 0.1}"/>`;
+            
+        case 'grinDark':
+            const gdw = w * 1.1;
+            const gdh = h * 2.2;
+            return `<path d="M${x - gdw} ${y - gdh * 0.2} L${x - gdw} ${y + gdh * 0.6} Q${x} ${y + gdh * 1.4} ${x + gdw} ${y + gdh * 0.6} L${x + gdw} ${y - gdh * 0.2} Z" fill="${color}" opacity="${opacity * 0.9}"/>`;
+            
+        case 'smirk':
+            return `<path d="M${x - w * 0.8} ${y + h * 0.3} Q${x} ${y + h * 1.5} ${x + w * 0.8} ${y - h * 0.5}" fill="none" stroke="${color}" stroke-width="${h * 0.6}" stroke-linecap="round" opacity="${opacity}"/>`;
+            
+        case 'neutral':
+            return `<line x1="${x - w * 0.8}" y1="${y}" x2="${x + w * 0.8}" y2="${y}" stroke="${color}" stroke-width="${h * 0.7}" stroke-linecap="round" opacity="${opacity}"/>`;
+            
+        case 'line':
+            return `<path d="M${x - w * 0.6} ${y - h * 0.2} Q${x} ${y + h * 1.2} ${x + w * 0.6} ${y - h * 0.2}" fill="none" stroke="${color}" stroke-width="${h * 0.6}" stroke-linecap="round" opacity="${opacity}"/>`;
+            
+        case 'cat':
+            return `<path d="M${x - w * 0.6} ${y} Q${x - w * 0.3} ${y + h * 1.2} ${x} ${y} Q${x + w * 0.3} ${y + h * 1.2} ${x + w * 0.6} ${y}" fill="none" stroke="${color}" stroke-width="${h * 0.6}" stroke-linecap="round" opacity="${opacity}"/>`;
+            
+        case 'tongue':
+            return `<path d="M${x - w * 0.7} ${y} Q${x} ${y + h * 2} ${x + w * 0.7} ${y}" fill="none" stroke="${color}" stroke-width="${h * 0.6}" stroke-linecap="round" opacity="${opacity}"/>
+                    <ellipse cx="${x}" cy="${y + h * 1.8}" rx="${w * 0.25}" ry="${h * 0.8}" fill="${color}" opacity="${opacity * 0.8}"/>`;
+            
+        default:
+            return '';
+    }
+}
+
+/**
+ * Generate face SVG elements
+ */
+function generateFace(rng, size, bgColor) {
+    // Procedural face features from seed
+    const eyeType = EYE_TYPES[Math.floor(rng() * EYE_TYPES.length)];
+    const mouthType = MOUTH_TYPES[Math.floor(rng() * MOUTH_TYPES.length)];
+    const expression = EXPRESSIONS[Math.floor(rng() * EXPRESSIONS.length)];
+    
+    // Face color is background color
+    const faceColorHex = bgColor;
+    
+    const opacity = FACE.opacity;
+    const cx = size / 2;
+    const cy = size / 2;
+    
+    // Eye positions
+    const eyeRadius = size * FACE.eyeSize / 2;
+    const eyeSpacing = size * FACE.eyeDistance / 2;
+    const eyeY = size * FACE.eyeHeight;
+    
+    // Expression modifiers
+    let tiltAngle = 0;
+    let eyeOffsetY = 0;
+    let mouthWidthMod = 1;
+    
+    switch (expression) {
+        case 'tilt':
+            tiltAngle = (rng() > 0.5 ? 1 : -1) * (5 + rng() * 10);
+            break;
+        case 'happy':
+            eyeOffsetY = -size * 0.02;
+            mouthWidthMod = 1.2;
+            break;
+        case 'curious':
+            eyeOffsetY = (rng() > 0.5 ? 1 : -1) * size * 0.015;
+            break;
+    }
+    
+    let faceElements = '';
+    
+    // Generate eyes
+    const leftEyeX = cx - eyeSpacing;
+    const rightEyeX = cx + eyeSpacing;
+    const leftEyeY = eyeY + (expression === 'curious' ? eyeOffsetY : 0);
+    const rightEyeY = eyeY + (expression === 'curious' ? -eyeOffsetY : 0);
+    
+    faceElements += generateEye(eyeType, leftEyeX, leftEyeY, eyeRadius, faceColorHex, opacity);
+    faceElements += generateEye(eyeType === 'wink' ? 'blink' : eyeType, rightEyeX, rightEyeY, eyeRadius, faceColorHex, opacity);
+    
+    // Generate mouth
+    const mouthY = size * FACE.mouthHeight;
+    const mouthWidth = size * 0.15 * mouthWidthMod;
+    faceElements += generateMouth(mouthType, cx, mouthY, mouthWidth, eyeRadius * 1.0, faceColorHex, opacity);
+    
+    // Wrap with rotation if tilted
+    if (tiltAngle !== 0) {
+        return `<g transform="rotate(${tiltAngle.toFixed(1)} ${cx} ${cy})" opacity="${opacity}">${faceElements}</g>`;
+    }
+    
+    return faceElements;
+}
+
+// ==========================================
+// Main Avatar Generation
+// ==========================================
+
+/**
  * Generate a deterministic avatar SVG based on an Ethereum address
- * Uses procedural polygon generation - infinite unique shapes
  * @param {string} address - Ethereum address (0x...)
  * @param {number} size - Avatar size in pixels
  * @param {number} borderRadius - Border radius (0-1, percentage of size)
@@ -246,60 +496,83 @@ export function generateAvatar(address, size = 32, borderRadius = 0.2) {
     const seed = hashString(normalizedAddress);
     const rng = createRng(seed);
     
-    // Select colors (only 2: background + shape)
-    const bgColor = BACKGROUND_COLORS[Math.floor(rng() * BACKGROUND_COLORS.length)];
-    const shapeColor = SHAPE_COLORS[Math.floor(rng() * SHAPE_COLORS.length)];
+    // Generate background color from HSL spectrum
+    const bgResult = generateColorFromSpectrum(
+        rng,
+        BG_COLOR.hueMin, BG_COLOR.hueMax,
+        BG_COLOR.satMin, BG_COLOR.satMax,
+        BG_COLOR.lightMin, BG_COLOR.lightMax
+    );
+    const bgColor = bgResult.hex;
     
-    // Center position (fixed, no offset to keep composition centered)
+    // Generate shape color with color harmony
+    const shapeColor = generateHarmonicColor(
+        rng,
+        bgResult.hue,
+        SHAPE_COLOR.satMin, SHAPE_COLOR.satMax,
+        SHAPE_COLOR.lightMin, SHAPE_COLOR.lightMax
+    );
+    
     const cx = size / 2;
     const cy = size / 2;
     
-    // Generate the procedural shape (2 polygons + optional holes)
+    // Generate procedural shape
     const { path, holesPath, hasHoles } = generateProceduralShape(rng, cx, cy, size);
     
-    // Rotation
+    // Random rotation
     const rotation = Math.floor(rng() * 360);
-    
-    // Calculate border radius in pixels
     const rx = size * borderRadius;
     
-    // Build SVG - holes drawn with background color to "subtract"
+    // Holes element (drawn with background color to "subtract")
     const holesElement = hasHoles ? `<path d="${holesPath}" fill="${bgColor}"/>` : '';
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
-        <rect width="${size}" height="${size}" rx="${rx}" fill="${bgColor}"/>
-        <g transform="rotate(${rotation} ${cx} ${cy})">
-            <path d="${path}" fill="${shapeColor}"/>
-            ${holesElement}
+    
+    // Face layer with separate RNG for deterministic face independent of shape
+    const faceRng = createRng(seed + 0xFACE);
+    const faceElement = generateFace(faceRng, size, bgColor);
+    
+    // Deterministic ID for clip path (based on address seed)
+    const clipId = `avatar-clip-${seed.toString(36)}`;
+    
+    // Frame element (internal border with background color)
+    const fw = size * FRAME_WIDTH;
+    const innerSize = size - fw * 2;
+    const frameElement = `<path d="M0,0 h${size} v${size} h-${size} Z M${fw},${fw} v${innerSize} h${innerSize} v-${innerSize} Z" fill="${bgColor}" fill-rule="evenodd"/>`;
+    
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+        <defs>
+            <clipPath id="${clipId}">
+                <rect width="${size}" height="${size}" rx="${rx}"/>
+            </clipPath>
+        </defs>
+        <g clip-path="url(#${clipId})">
+            <rect width="${size}" height="${size}" fill="${bgColor}"/>
+            <g transform="rotate(${rotation} ${cx} ${cy})">
+                <path d="${path}" fill="${shapeColor}"/>
+                ${holesElement}
+            </g>
+            ${faceElement}
+            ${frameElement}
         </g>
     </svg>`;
-    
-    return svg;
 }
 
 /**
  * Generate avatar as a data URI for use in img src
- * @param {string} address - Ethereum address
- * @param {number} size - Avatar size
- * @param {number} borderRadius - Border radius (0-1)
- * @returns {string} - Data URI
  */
 export function generateAvatarDataUri(address, size = 32, borderRadius = 0.2) {
     const svg = generateAvatar(address, size, borderRadius);
     return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
-/**
- * Avatar cache for performance
- */
+// ==========================================
+// Cache System
+// ==========================================
+
 const avatarCache = new Map();
 const MAX_CACHE_SIZE = 200;
 
 /**
  * Get cached avatar or generate new one
- * @param {string} address - Ethereum address
- * @param {number} size - Avatar size
- * @param {number} borderRadius - Border radius
- * @returns {string} - SVG string
  */
 export function getAvatar(address, size = 32, borderRadius = 0.2) {
     const key = `${address?.toLowerCase()}-${size}-${borderRadius}`;
@@ -310,7 +583,6 @@ export function getAvatar(address, size = 32, borderRadius = 0.2) {
     
     const svg = generateAvatar(address, size, borderRadius);
     
-    // Manage cache size
     if (avatarCache.size >= MAX_CACHE_SIZE) {
         const firstKey = avatarCache.keys().next().value;
         avatarCache.delete(firstKey);
@@ -330,23 +602,37 @@ export function clearAvatarCache() {
 /**
  * Get the color associated with an address (matches avatar shape color)
  * Use this for username colors to maintain consistency with avatars
- * @param {string} address - Ethereum address (0x...)
- * @returns {string} - Hex color code
  */
 export function getAddressColor(address) {
     if (!address || typeof address !== 'string') {
-        return SHAPE_COLORS[0]; // Default shape color
+        return '#6C5DD3'; // Default purple
     }
+    
     const normalizedAddress = address.toLowerCase();
     const seed = hashString(normalizedAddress);
     const rng = createRng(seed);
-    // Skip background selection, get shape color
-    rng(); // background
-    const colorIndex = Math.floor(rng() * SHAPE_COLORS.length);
-    return SHAPE_COLORS[colorIndex];
+    
+    // Generate bg hue first (same sequence as in generateAvatar)
+    const bgResult = generateColorFromSpectrum(
+        rng,
+        BG_COLOR.hueMin, BG_COLOR.hueMax,
+        BG_COLOR.satMin, BG_COLOR.satMax,
+        BG_COLOR.lightMin, BG_COLOR.lightMax
+    );
+    
+    // Return shape color with harmony
+    return generateHarmonicColor(
+        rng,
+        bgResult.hue,
+        SHAPE_COLOR.satMin, SHAPE_COLOR.satMax,
+        SHAPE_COLOR.lightMin, SHAPE_COLOR.lightMax
+    );
 }
 
-// Export singleton-style access
+// ==========================================
+// Exports
+// ==========================================
+
 export const avatarGenerator = {
     generate: generateAvatar,
     generateDataUri: generateAvatarDataUri,
