@@ -13,6 +13,12 @@ import {
     avatarGenerator
 } from '../../src/js/ui/AvatarGenerator.js';
 
+/**
+ * Normalize SVG by removing unique clipPath IDs
+ * Used for comparing avatar appearance (colors, shapes) ignoring unique IDs
+ */
+const normalizeSvg = svg => svg.replace(/avatar-clip-[a-z0-9-]+/g, 'avatar-clip-X');
+
 describe('AvatarGenerator', () => {
     // Clear cache before each test to ensure isolation
     beforeEach(() => {
@@ -28,39 +34,41 @@ describe('AvatarGenerator', () => {
             expect(svg).toContain('xmlns="http://www.w3.org/2000/svg"');
         });
 
-        it('should generate consistent avatar for same address', () => {
+        it('should generate consistent avatar appearance for same address', () => {
             const address = '0xabcdef1234567890abcdef1234567890abcdef12';
             const svg1 = generateAvatar(address);
             const svg2 = generateAvatar(address);
-            expect(svg1).toBe(svg2);
+            // ClipPath IDs are unique per call, but colors and shapes are deterministic
+            expect(normalizeSvg(svg1)).toBe(normalizeSvg(svg2));
         });
 
         it('should generate different avatars for different addresses', () => {
             const svg1 = generateAvatar('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
             const svg2 = generateAvatar('0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
-            expect(svg1).not.toBe(svg2);
+            // Should be different (different colors/shapes)
+            expect(normalizeSvg(svg1)).not.toBe(normalizeSvg(svg2));
         });
 
         it('should be case-insensitive for addresses', () => {
             const address = '0xAbCdEf1234567890ABCDEF1234567890abcdef12';
             const svg1 = generateAvatar(address.toLowerCase());
             const svg2 = generateAvatar(address.toUpperCase());
-            expect(svg1).toBe(svg2);
+            expect(normalizeSvg(svg1)).toBe(normalizeSvg(svg2));
         });
 
         it('should use default size of 32 in viewBox', () => {
             const svg = generateAvatar('0x1234567890abcdef1234567890abcdef12345678');
-            // SVG uses 100% dimensions for responsive scaling, viewBox defines internal coordinates
-            expect(svg).toContain('width="100%"');
-            expect(svg).toContain('height="100%"');
+            // SVG uses fixed dimensions matching the requested size
+            expect(svg).toContain('width="32"');
+            expect(svg).toContain('height="32"');
             expect(svg).toContain('viewBox="0 0 32 32"');
         });
 
         it('should respect custom size in viewBox', () => {
             const svg = generateAvatar('0x1234567890abcdef1234567890abcdef12345678', 64);
-            // SVG uses 100% dimensions for responsive scaling, viewBox defines internal coordinates
-            expect(svg).toContain('width="100%"');
-            expect(svg).toContain('height="100%"');
+            // SVG uses fixed dimensions matching the requested size
+            expect(svg).toContain('width="64"');
+            expect(svg).toContain('height="64"');
             expect(svg).toContain('viewBox="0 0 64 64"');
         });
 
@@ -121,41 +129,67 @@ describe('AvatarGenerator', () => {
             expect(dataUri).toContain('%3Csvg');  // Encoded <svg
         });
 
-        it('should be consistent for same address', () => {
+        it('should be consistent for same address (normalized)', () => {
             const address = '0xabcdef1234567890abcdef1234567890abcdef12';
             const dataUri1 = generateAvatarDataUri(address);
             const dataUri2 = generateAvatarDataUri(address);
-            expect(dataUri1).toBe(dataUri2);
+            // Normalize to compare visual content, ignoring unique IDs
+            expect(normalizeSvg(decodeURIComponent(dataUri1))).toBe(normalizeSvg(decodeURIComponent(dataUri2)));
         });
     });
 
     describe('getAvatar (cached)', () => {
-        it('should return same result as generateAvatar', () => {
+        it('should return visually same result as generateAvatar', () => {
             const address = '0x1234567890abcdef1234567890abcdef12345678';
             const generated = generateAvatar(address);
             const cached = getAvatar(address);
-            expect(cached).toBe(generated);
+            // Visual content should match, IDs may differ
+            expect(normalizeSvg(cached)).toBe(normalizeSvg(generated));
         });
 
-        it('should cache results', () => {
+        it('should cache results with unique IDs per call', () => {
             const address = '0x1234567890abcdef1234567890abcdef12345678';
             const result1 = getAvatar(address);
             const result2 = getAvatar(address);
-            expect(result1).toBe(result2);
+            // Visual content same, but IDs unique to prevent DOM conflicts
+            expect(normalizeSvg(result1)).toBe(normalizeSvg(result2));
+            // IDs should be different
+            expect(result1).not.toBe(result2);
+        });
+
+        it('should generate unique clipPath IDs to prevent DOM conflicts', () => {
+            const address = '0x1234567890abcdef1234567890abcdef12345678';
+            const svg1 = getAvatar(address);
+            const svg2 = getAvatar(address);
+            const svg3 = getAvatar(address);
+            
+            // Extract clipPath IDs
+            const extractClipId = svg => svg.match(/id="(avatar-clip-[^"]+)"/)?.[1];
+            const id1 = extractClipId(svg1);
+            const id2 = extractClipId(svg2);
+            const id3 = extractClipId(svg3);
+            
+            // All IDs should be unique
+            expect(id1).toBeDefined();
+            expect(id2).toBeDefined();
+            expect(id3).toBeDefined();
+            expect(id1).not.toBe(id2);
+            expect(id2).not.toBe(id3);
+            expect(id1).not.toBe(id3);
         });
 
         it('should use different cache keys for different sizes', () => {
             const address = '0x1234567890abcdef1234567890abcdef12345678';
             const svg32 = getAvatar(address, 32);
             const svg64 = getAvatar(address, 64);
-            expect(svg32).not.toBe(svg64);
+            expect(normalizeSvg(svg32)).not.toBe(normalizeSvg(svg64));
         });
 
         it('should use different cache keys for different border radius', () => {
             const address = '0x1234567890abcdef1234567890abcdef12345678';
             const svg1 = getAvatar(address, 32, 0);
             const svg2 = getAvatar(address, 32, 0.5);
-            expect(svg1).not.toBe(svg2);
+            expect(normalizeSvg(svg1)).not.toBe(normalizeSvg(svg2));
         });
 
         it('should handle null address', () => {
@@ -176,8 +210,8 @@ describe('AvatarGenerator', () => {
             const svg1 = getAvatar(address);
             clearAvatarCache();
             const svg2 = getAvatar(address);
-            // Should still be the same result (deterministic)
-            expect(svg1).toBe(svg2);
+            // Visual content should be the same (deterministic)
+            expect(normalizeSvg(svg1)).toBe(normalizeSvg(svg2));
         });
     });
 
@@ -246,9 +280,9 @@ describe('AvatarGenerator', () => {
             expect(typeof avatarGenerator.getColor).toBe('function');
         });
 
-        it('should produce same results as direct functions', () => {
+        it('should produce same visual results as direct functions', () => {
             const address = '0x1234567890abcdef1234567890abcdef12345678';
-            expect(avatarGenerator.generate(address)).toBe(generateAvatar(address));
+            expect(normalizeSvg(avatarGenerator.generate(address))).toBe(normalizeSvg(generateAvatar(address)));
             expect(avatarGenerator.getColor(address)).toBe(getAddressColor(address));
         });
     });
@@ -318,7 +352,7 @@ describe('AvatarGenerator', () => {
             expect(svg).toContain('<svg');
         });
 
-        it('should return same result after cache eviction', () => {
+        it('should return same visual result after cache eviction', () => {
             clearAvatarCache();
             
             const testAddress = '0x1111111111111111111111111111111111111111';
@@ -329,9 +363,9 @@ describe('AvatarGenerator', () => {
                 getAvatar(`0x${i.toString(16).padStart(40, '0')}`);
             }
             
-            // Should still generate same avatar (deterministic)
+            // Should still generate same visual avatar (deterministic, only ID differs)
             const afterEviction = getAvatar(testAddress);
-            expect(afterEviction).toBe(original);
+            expect(normalizeSvg(afterEviction)).toBe(normalizeSvg(original));
         });
     });
 
@@ -378,11 +412,11 @@ describe('AvatarGenerator', () => {
     });
 
     describe('hashString behavior', () => {
-        it('should produce consistent results', () => {
+        it('should produce consistent visual results', () => {
             const address = '0xabcdef';
             const svg1 = generateAvatar(address);
             const svg2 = generateAvatar(address);
-            expect(svg1).toBe(svg2);
+            expect(normalizeSvg(svg1)).toBe(normalizeSvg(svg2));
         });
 
         it('should differentiate similar addresses', () => {
