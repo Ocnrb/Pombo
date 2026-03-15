@@ -641,7 +641,8 @@ export function generateAvatar(address, size = 32, borderRadius = 0.2) {
     const innerSize = size - fw * 2;
     const frameElement = `<path d="M0,0 h${size} v${size} h-${size} Z M${fw},${fw} v${innerSize} h${innerSize} v-${innerSize} Z" fill="${bgColor}" fill-rule="evenodd"/>`;
     
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+    // Use 100% dimensions to scale to container while viewBox maintains internal coordinates
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="100%" height="100%" style="display:block">
         <defs>
             <clipPath id="${clipId}">
                 <rect width="${size}" height="${size}" rx="${rx}"/>
