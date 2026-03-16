@@ -295,7 +295,7 @@ class ExploreUI {
 
         listEl.innerHTML = channels.map(ch => {
             const readOnlyBadge = ch.readOnly 
-                ? '<span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-amber-500/15 text-amber-400/80 text-[9px] font-medium rounded">RO</span>' 
+                ? '<svg class="w-3.5 h-3.5 md:w-5 md:h-5 text-white/50 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"/></svg>' 
                 : '';
             const categoryBadge = ch.category && ch.category !== 'general'
                 ? `<span class="px-1.5 py-0.5 bg-white/5 text-white/50 text-[9px] font-medium rounded">${escapeHtml(categoryNames[ch.category] || ch.category)}</span>`
@@ -313,8 +313,8 @@ class ExploreUI {
                 <div class="flex items-start justify-between gap-3">
                     <div class="flex-1 min-w-0">
                         <div class="flex items-center gap-2 flex-wrap">
-                            <h4 class="text-sm font-medium text-white/90 truncate">${escapeHtml(sanitizeText(ch.name || ch.displayName || 'Unknown'))}</h4>
                             ${readOnlyBadge}
+                            <h4 class="text-sm font-medium text-white/90 truncate">${escapeHtml(sanitizeText(ch.name || ch.displayName || 'Unknown'))}</h4>
                         </div>
                         ${description}
                     </div>

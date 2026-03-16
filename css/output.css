@@ -1734,10 +1734,6 @@ video {
   background-color: rgb(245 158 11 / 0.1);
 }
 
-.bg-amber-500\/15 {
-  background-color: rgb(245 158 11 / 0.15);
-}
-
 .bg-amber-500\/20 {
   background-color: rgb(245 158 11 / 0.2);
 }
@@ -2989,6 +2985,14 @@ select option {
     display: block;
   }
 
+  .md\:h-4 {
+    height: 1rem;
+  }
+
+  .md\:h-5 {
+    height: 1.25rem;
+  }
+
   .md\:h-auto {
     height: auto;
   }
@@ -2999,6 +3003,14 @@ select option {
 
   .md\:max-h-\[90vh\] {
     max-height: 90vh;
+  }
+
+  .md\:w-4 {
+    width: 1rem;
+  }
+
+  .md\:w-5 {
+    width: 1.25rem;
   }
 
   .md\:w-\[520px\] {

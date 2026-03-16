@@ -2,7 +2,7 @@
  * Avatar Generator v3
  * Generates deterministic SVG avatars based on Ethereum addresses
  * Organic blob shapes with face layer (pareidolia)
- * 8 eyes × 8 mouths × 4 expressions = 256 unique face personalities
+ * 5 eyes × 6 mouths × 4 expressions = 120 unique face personalities
  */
 
 // ==========================================
@@ -30,21 +30,21 @@ const SMOOTHNESS = 0.30;  // 30% smooth corners
 // HSL Background spectrum
 const BG_COLOR = {
     hueMin: 0, hueMax: 360,      // Full spectrum
-    satMin: 35, satMax: 55,      // 35-55% saturation
+    satMin: 35, satMax: 50,      // 35-50% saturation
     lightMin: 10, lightMax: 15   // 10-15% lightness (dark backgrounds)
 };
 
 // HSL Shape spectrum
 const SHAPE_COLOR = {
     hueMin: 0, hueMax: 360,      // Full spectrum (for independent mode)
-    satMin: 55, satMax: 65,      // 55-65% saturation (vibrant)
+    satMin: 40, satMax: 55,      // 40-55% saturation
     lightMin: 45, lightMax: 65   // 45-65% lightness
 };
 
 // Color harmony
 const COLOR_HARMONY = {
     mode: 'analogous',           // analogous colors (±40°)
-    variation: 80                // ±80° variation
+    variation: 50                // ±50° variation
 };
 
 // Face layer configuration
@@ -61,8 +61,8 @@ const FACE = {
 const FRAME_WIDTH = 0.06;        // 6% of avatar size
 
 // Face feature types
-const EYE_TYPES = ['dot', 'round', 'oval', 'sleepy', 'blink', 'wink', 'happy', 'cute'];
-const MOUTH_TYPES = ['smile', 'grin', 'grinDark', 'smirk', 'neutral', 'line', 'cat', 'tongue'];
+const EYE_TYPES = ['dot', 'round', 'oval', 'sleepy', 'blink'];
+const MOUTH_TYPES = ['smile', 'grin', 'grinDark', 'smirk', 'neutral', 'line'];
 const EXPRESSIONS = ['normal', 'tilt', 'happy', 'curious'];
 
 // ==========================================
@@ -339,7 +339,7 @@ function createFaceLayoutVariation(rng, size, expression) {
 /**
  * Create variation for eye rendering
  */
-function createEyeVariation(type, side, rng, expression, isWinkPair = false) {
+function createEyeVariation(type, side, rng, expression) {
     const variation = {
         radiusScale: 0.88 + rng() * 0.24,
         archHeight: 0.65 + rng() * 0.65,
@@ -350,12 +350,6 @@ function createEyeVariation(type, side, rng, expression, isWinkPair = false) {
 
     if (expression === 'happy') {
         variation.archHeight += 0.15;
-    }
-
-    if (type === 'wink' || isWinkPair) {
-        variation.radiusScale = 0.80 + rng() * 0.28;
-        variation.archHeight = 0.45 + rng() * 0.85;
-        variation.archWidth = 0.85 + rng() * 0.35;
     }
 
     if (side === 'right') {
@@ -423,18 +417,6 @@ function generateEye(type, x, y, radius, color, opacity, variant = {}) {
         case 'blink':
             return `<path d="M${leftX} ${leftY} Q${x} ${y - r * archHeight} ${rightX} ${rightY}" fill="none" stroke="${color}" stroke-width="${r * 0.6}" stroke-linecap="round" opacity="${opacity}"/>`;
             
-        case 'wink':
-            return `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" opacity="${opacity}"/>`;
-            
-        case 'happy':
-            return `<path d="M${leftX} ${leftY + r * 0.3} Q${x} ${y - r * archHeight} ${rightX} ${rightY + r * 0.3}" fill="none" stroke="${color}" stroke-width="${r * 0.6}" stroke-linecap="round" opacity="${opacity}"/>`;
-            
-        case 'cute':
-            const hlX = x - r * 0.3;
-            const hlY = y - r * 0.3;
-            return `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" opacity="${opacity}"/>
-                    <circle cx="${hlX}" cy="${hlY}" r="${r * 0.25}" fill="${color === '#1a1a24' ? '#f0f0f5' : '#1a1a24'}" opacity="${opacity * 0.8}"/>`;
-            
         default:
             return `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" opacity="${opacity}"/>`;
     }
@@ -459,7 +441,8 @@ function generateMouth(type, x, y, width, height, color, opacity, variant = {}) 
             return `<path d="M${x - w * widthScale} ${leftY} Q${x} ${y + h * (1.8 + curveDepth)} ${x + w * widthScale} ${rightY}" fill="none" stroke="${color}" stroke-width="${h * 0.7}" stroke-linecap="round" opacity="${opacity}"/>`;
             
         case 'grin':
-            return `<path d="M${x - w * 1.2 * widthScale} ${y - h * (0.15 + topLift * 0.4) - h * 0.2 * tilt} Q${x} ${y + h * (2.4 + curveDepth * 1.2)} ${x + w * 1.2 * widthScale} ${y - h * (0.15 + topLift * 0.4) + h * 0.2 * tilt}" fill="none" stroke="${color}" stroke-width="${h * 0.7}" stroke-linecap="round" opacity="${opacity}"/>`;
+            // Subtle grin - limited width and curvature for mature look
+            return `<path d="M${x - w * 0.95 * widthScale} ${y - h * (0.08 + topLift * 0.2) - h * 0.15 * tilt} Q${x} ${y + h * (1.6 + curveDepth * 0.5)} ${x + w * 0.95 * widthScale} ${y - h * (0.08 + topLift * 0.2) + h * 0.15 * tilt}" fill="none" stroke="${color}" stroke-width="${h * 0.65}" stroke-linecap="round" opacity="${opacity}"/>`;
             
         case 'grinDark':
             const gdw = w * (0.9 + widthScale * 0.35);
@@ -479,17 +462,6 @@ function generateMouth(type, x, y, width, height, color, opacity, variant = {}) 
             
         case 'line':
             return `<path d="M${x - w * 0.6 * widthScale} ${leftY - h * 0.2} Q${x} ${y + h * (0.7 + curveDepth * 0.5)} ${x + w * 0.6 * widthScale} ${rightY - h * 0.2}" fill="none" stroke="${color}" stroke-width="${h * 0.6}" stroke-linecap="round" opacity="${opacity}"/>`;
-            
-        case 'cat':
-            return `<path d="M${x - w * 0.6 * widthScale} ${leftY} Q${x - w * 0.3 * widthScale} ${y + h * (0.9 + curveDepth * 0.45) - h * 0.18 * tilt} ${x} ${y + h * topLift * 0.15} Q${x + w * 0.3 * widthScale} ${y + h * (0.9 + curveDepth * 0.45) + h * 0.18 * tilt} ${x + w * 0.6 * widthScale} ${rightY}" fill="none" stroke="${color}" stroke-width="${h * 0.6}" stroke-linecap="round" opacity="${opacity}"/>`;
-            
-        case 'tongue':
-            const tongueCx = x + w * 0.10 * tilt;
-            const tongueCy = y + h * (1.2 + openScale * 0.7 + topLift * 0.25);
-            const tongueRx = w * (0.18 + widthScale * 0.08);
-            const tongueRy = h * (0.45 + openScale * 0.35);
-            return `<path d="M${x - w * 0.7 * widthScale} ${leftY} Q${x} ${y + h * (1.4 + curveDepth * 0.9)} ${x + w * 0.7 * widthScale} ${rightY}" fill="none" stroke="${color}" stroke-width="${h * 0.6}" stroke-linecap="round" opacity="${opacity}"/>
-                    <ellipse cx="${tongueCx}" cy="${tongueCy}" rx="${tongueRx}" ry="${tongueRy}" fill="${color}" opacity="${opacity * 0.8}" transform="rotate(${tilt * 12} ${tongueCx} ${tongueCy})"/>`;
             
         default:
             return '';
@@ -555,17 +527,12 @@ function generateFace(rng, size, bgColor) {
     const leftEyeY = eyeY + layoutVariant.faceShiftY + layoutVariant.eyeTiltOffset + (expression === 'curious' ? eyeOffsetY : 0);
     const rightEyeY = eyeY + layoutVariant.faceShiftY - layoutVariant.eyeTiltOffset + (expression === 'curious' ? -eyeOffsetY : 0);
     
-    // Handle wink (one eye becomes blink)
-    const winkClosedSide = eyeType === 'wink' ? (rng() > 0.5 ? 'left' : 'right') : null;
-    const leftEyeType = winkClosedSide === 'left' ? 'blink' : eyeType;
-    const rightEyeType = winkClosedSide === 'right' ? 'blink' : eyeType;
-    
     // Create eye variations
-    const leftEyeVariant = createEyeVariation(leftEyeType, 'left', rng, expression, winkClosedSide === 'left');
-    const rightEyeVariant = createEyeVariation(rightEyeType, 'right', rng, expression, winkClosedSide === 'right');
+    const leftEyeVariant = createEyeVariation(eyeType, 'left', rng, expression);
+    const rightEyeVariant = createEyeVariation(eyeType, 'right', rng, expression);
     
-    faceElements += generateEye(leftEyeType, leftEyeX, leftEyeY, eyeRadius, faceColorHex, opacity, leftEyeVariant);
-    faceElements += generateEye(rightEyeType, rightEyeX, rightEyeY, eyeRadius, faceColorHex, opacity, rightEyeVariant);
+    faceElements += generateEye(eyeType, leftEyeX, leftEyeY, eyeRadius, faceColorHex, opacity, leftEyeVariant);
+    faceElements += generateEye(eyeType, rightEyeX, rightEyeY, eyeRadius, faceColorHex, opacity, rightEyeVariant);
     
     // Generate mouth with variation
     const mouthY = size * FACE.mouthHeight + layoutVariant.mouthShiftY;
