@@ -81,6 +81,9 @@ vi.mock('../../src/js/streamr.js', () => ({
         unsubscribe: vi.fn().mockResolvedValue(undefined),
         publishMessage: vi.fn().mockResolvedValue(undefined),
         getDMPublicKey: vi.fn().mockResolvedValue('0x02peerpubkey'),
+        setDMEncryptionKey: vi.fn().mockResolvedValue(undefined),
+        setDMPublishKey: vi.fn().mockResolvedValue(undefined),
+        addDMDecryptKey: vi.fn().mockResolvedValue(undefined),
         client: {
             getStream: vi.fn().mockRejectedValue(new Error('not found'))
         }

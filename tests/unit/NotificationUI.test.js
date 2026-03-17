@@ -405,4 +405,178 @@ describe('NotificationUI', () => {
             expect(overlay.classList.contains('active')).toBe(false);
         });
     });
+
+    describe('_isPersistent()', () => {
+        it('should return true for loading type', () => {
+            const toast = document.createElement('div');
+            toast.className = 'toast loading';
+            
+            expect(notificationUI._isPersistent(toast)).toBe(true);
+        });
+        
+        it('should return true for error type', () => {
+            const toast = document.createElement('div');
+            toast.className = 'toast error';
+            
+            expect(notificationUI._isPersistent(toast)).toBe(true);
+        });
+        
+        it('should return true for invite type', () => {
+            const toast = document.createElement('div');
+            toast.className = 'toast invite';
+            
+            expect(notificationUI._isPersistent(toast)).toBe(true);
+        });
+        
+        it('should return false for success type', () => {
+            const toast = document.createElement('div');
+            toast.className = 'toast success';
+            
+            expect(notificationUI._isPersistent(toast)).toBe(false);
+        });
+        
+        it('should return false for info type', () => {
+            const toast = document.createElement('div');
+            toast.className = 'toast info';
+            
+            expect(notificationUI._isPersistent(toast)).toBe(false);
+        });
+        
+        it('should return false for warning type', () => {
+            const toast = document.createElement('div');
+            toast.className = 'toast warning';
+            
+            expect(notificationUI._isPersistent(toast)).toBe(false);
+        });
+    });
+
+    describe('_dismissToast()', () => {
+        let container;
+        
+        beforeEach(() => {
+            container = document.createElement('div');
+            container.id = 'toast-container';
+            document.body.appendChild(container);
+            vi.useFakeTimers();
+        });
+        
+        it('should add toast-exit class', () => {
+            const toast = document.createElement('div');
+            toast.className = 'toast info';
+            container.appendChild(toast);
+            
+            notificationUI._dismissToast(toast);
+            
+            expect(toast.classList.contains('toast-exit')).toBe(true);
+        });
+        
+        it('should clear pending timeout', () => {
+            const toast = document.createElement('div');
+            toast.className = 'toast info';
+            container.appendChild(toast);
+            
+            const timeoutId = setTimeout(() => {}, 5000);
+            toast._dismissTimeout = timeoutId;
+            
+            notificationUI._dismissToast(toast);
+            
+            expect(toast._dismissTimeout).toBeNull();
+        });
+        
+        it('should remove toast after animation delay', () => {
+            const toast = document.createElement('div');
+            toast.className = 'toast info';
+            container.appendChild(toast);
+            
+            notificationUI._dismissToast(toast);
+            
+            expect(container.contains(toast)).toBe(true);
+            
+            vi.advanceTimersByTime(250);
+            
+            expect(container.contains(toast)).toBe(false);
+        });
+        
+        it('should handle null toast gracefully', () => {
+            // Should not throw
+            notificationUI._dismissToast(null);
+        });
+        
+        it('should handle orphaned toast (no parent) gracefully', () => {
+            const toast = document.createElement('div');
+            toast.className = 'toast info';
+            // Not appended to any container
+            
+            // Should not throw
+            notificationUI._dismissToast(toast);
+        });
+    });
+
+    describe('restoreToast()', () => {
+        it('should remove toast-minimized class', () => {
+            const toast = document.createElement('div');
+            toast.className = 'toast info toast-minimized';
+            
+            notificationUI.restoreToast(toast);
+            
+            expect(toast.classList.contains('toast-minimized')).toBe(false);
+        });
+        
+        it('should clear inline transform style', () => {
+            const toast = document.createElement('div');
+            toast.className = 'toast info toast-minimized';
+            toast.style.transform = 'translateX(calc(100% - 12px))';
+            
+            notificationUI.restoreToast(toast);
+            
+            expect(toast.style.transform).toBe('');
+        });
+        
+        it('should clear inline opacity style', () => {
+            const toast = document.createElement('div');
+            toast.className = 'toast info toast-minimized';
+            toast.style.opacity = '0.7';
+            
+            notificationUI.restoreToast(toast);
+            
+            expect(toast.style.opacity).toBe('');
+        });
+        
+        it('should resume progress bar animation', () => {
+            const toast = document.createElement('div');
+            toast.className = 'toast info toast-minimized';
+            const progressBar = document.createElement('div');
+            progressBar.className = 'toast-progress';
+            progressBar.style.animationPlayState = 'paused';
+            toast.appendChild(progressBar);
+            
+            notificationUI.restoreToast(toast);
+            
+            expect(progressBar.style.animationPlayState).toBe('running');
+        });
+        
+        it('should handle toast without progress bar', () => {
+            const toast = document.createElement('div');
+            toast.className = 'toast info toast-minimized';
+            
+            // Should not throw
+            notificationUI.restoreToast(toast);
+        });
+        
+        it('should not modify non-minimized toast', () => {
+            const toast = document.createElement('div');
+            toast.className = 'toast info';
+            toast.style.transform = 'translateX(50px)';
+            
+            notificationUI.restoreToast(toast);
+            
+            // Should remain unchanged
+            expect(toast.style.transform).toBe('translateX(50px)');
+        });
+        
+        it('should handle null gracefully', () => {
+            // Should not throw
+            notificationUI.restoreToast(null);
+        });
+    });
 });

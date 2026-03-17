@@ -337,6 +337,35 @@ describe('HistoryManager', () => {
             
             expect(callback).not.toHaveBeenCalled();
         });
+        
+        it('should not call callback for modal states', () => {
+            const callback = vi.fn();
+            historyManager.init(callback);
+            
+            // This is a modal state pushed by ModalManager
+            historyManager._handlePopState({ state: { modal: 'new-channel-modal' } });
+            
+            expect(callback).not.toHaveBeenCalled();
+        });
+        
+        it('should skip navigation for any modal state', () => {
+            const callback = vi.fn();
+            historyManager.init(callback);
+            
+            historyManager._handlePopState({ state: { modal: 'settings-modal' } });
+            historyManager._handlePopState({ state: { modal: 'contacts-modal' } });
+            
+            expect(callback).not.toHaveBeenCalled();
+        });
+        
+        it('should not set isNavigating flag for modal states', () => {
+            historyManager.init(vi.fn());
+            historyManager.isNavigating = false;
+            
+            historyManager._handlePopState({ state: { modal: 'new-channel-modal' } });
+            
+            expect(historyManager.isNavigating).toBe(false);
+        });
     });
 
     describe('destroy()', () => {
