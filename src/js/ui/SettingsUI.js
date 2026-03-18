@@ -877,17 +877,21 @@ class SettingsUI {
 
             // Add settings-open class for mobile slide-in effect
             if (this.isMobileView && this.isMobileView()) {
+                // Add settings-open class FIRST (before closing contacts)
+                // so that contacts _cleanupOnHide knows we're switching tabs
+                document.body.classList.add('settings-open');
+                
                 // Close contacts modal if open (always use modalManager to keep stack in sync)
+                // Use skipHistory to prevent async history.back() from closing settings modal
                 if (this.modalManager?.isVisible('contacts-modal')) {
                     if (this.deps.contactsUI?.hide) {
-                        this.deps.contactsUI.hide();
+                        this.deps.contactsUI.hide({ skipHistory: true });
                     } else {
                         // Fallback: use modalManager to ensure stack stays in sync
-                        this.modalManager?.hide('contacts-modal');
+                        this.modalManager?.hide('contacts-modal', { skipHistory: true });
                         document.body.classList.remove('contacts-open');
                     }
                 }
-                document.body.classList.add('settings-open');
                 // Update pill nav active tab
                 document.querySelectorAll('.pill-nav-item[data-pill-tab]').forEach(item => {
                     item.classList.toggle('active', item.dataset.pillTab === 'settings');
@@ -905,17 +909,21 @@ class SettingsUI {
     _cleanupOnHide() {
         // Remove settings-open class for mobile
         document.body.classList.remove('settings-open');
-        // Reset pill nav to chats tab
-        document.querySelectorAll('.pill-nav-item[data-pill-tab]').forEach(item => {
-            item.classList.toggle('active', item.dataset.pillTab === 'chats');
-        });
+        // Only reset pill nav to chats tab if NOT switching to another tab-modal (contacts)
+        // If contacts-open is present, it means we're switching to contacts, so don't reset
+        if (!document.body.classList.contains('contacts-open')) {
+            document.querySelectorAll('.pill-nav-item[data-pill-tab]').forEach(item => {
+                item.classList.toggle('active', item.dataset.pillTab === 'chats');
+            });
+        }
     }
 
     /**
      * Hide settings modal
+     * @param {Object} options - Optional config { skipHistory: boolean }
      */
-    hide() {
-        this.modalManager?.hide('settings-modal');
+    hide(options = {}) {
+        this.modalManager?.hide('settings-modal', options);
     }
 
     /**

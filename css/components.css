@@ -50,16 +50,23 @@
 
 /* ----- Base Layout ----- */
 html {
-    background-color: #09090b;
+    background-color: #000000;
     color-scheme: dark;
+}
+
+/* PWA standalone mode - force true black */
+@media (display-mode: standalone) {
+    html, body {
+        background-color: #000000 !important;
+    }
 }
 
 body {
     font-family: 'Inter', sans-serif;
-    background-color: #09090b;
+    background-color: #000000;
     color: rgba(255, 255, 255, 0.87);
     margin: 0;
-    padding: env(safe-area-inset-top, 0px) 0 0 0;
+    padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px) 0;
 }
 
 .app-container {
@@ -104,6 +111,7 @@ body {
 .message-bubble {
     padding: 0.2rem 0.7rem;
     position: relative;
+    min-width: 0;
 }
 
 /* ----- Bubble Tail ----- */
@@ -235,6 +243,11 @@ body {
         display: none !important;
     }
     
+    /* Hide mobile channel menu button (kebab) on desktop - use chevron */
+    .mobile-channel-menu-btn {
+        display: none !important;
+    }
+    
     /* Modal close buttons: show X on desktop, hide back arrow */
     .modal-close-btn .icon-back {
         display: none !important;
@@ -358,6 +371,7 @@ body {
     font-size: 0.95rem;
     line-height: 1.4rem;
     word-wrap: break-word;
+    overflow-wrap: break-word;
 }
 
 /* Inline emojis - slightly larger than text */
@@ -1216,6 +1230,11 @@ body {
    Sidebar = initial view, Chat = push navigation
    =========================================== */
 @media (max-width: 767px) {
+    /* Force true black on mobile for Samsung/Android nav bar */
+    html {
+        background-color: #000000 !important;
+    }
+    
     /* Modal close buttons: show back arrow on mobile, hide X */
     .modal-close-btn .icon-back {
         display: block !important;
@@ -1233,6 +1252,8 @@ body {
     /* Use dynamic viewport height for mobile browsers */
     body {
         height: 100dvh;
+        touch-action: pan-y;
+        overscroll-behavior-y: none;
     }
     
     .app-container {
@@ -1385,6 +1406,16 @@ body {
     /* Hide desktop close button on mobile */
     .desktop-close-btn {
         display: none !important;
+    }
+    
+    /* Hide desktop channel menu button (chevron) on mobile - use kebab */
+    .desktop-channel-menu-btn {
+        display: none !important;
+    }
+    
+    /* Show mobile channel menu button (kebab) on mobile */
+    .mobile-channel-menu-btn {
+        display: flex !important;
     }
     
     /* ----- INPUT BUTTONS SMALLER ON MOBILE ----- */

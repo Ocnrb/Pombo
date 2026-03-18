@@ -239,6 +239,7 @@ class UIController {
             currentChannelName: document.getElementById('current-channel-name'),
             currentChannelInfo: document.getElementById('current-channel-info'),
             channelMenuBtn: document.getElementById('channel-menu-btn'),
+            channelMenuBtnMobile: document.getElementById('channel-menu-btn-mobile'),
             closeChannelBtn: document.getElementById('close-channel-btn'),
             messagesArea: document.getElementById('messages-area'),
             messageInput: document.getElementById('message-input'),
@@ -894,6 +895,14 @@ class UIController {
             });
         }
 
+        // Mobile channel menu button (kebab - same action as chevron)
+        if (this.elements.channelMenuBtnMobile) {
+            this.elements.channelMenuBtnMobile.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.showChannelDropdown(e);
+            });
+        }
+
         // Close channel button (X) - handles both mobile (left) and desktop (right) buttons
         if (this.elements.closeChannelBtn) {
             this.elements.closeChannelBtn.addEventListener('click', async () => {
@@ -1163,6 +1172,7 @@ class UIController {
         
         this.elements.inviteUsersBtn?.classList.add('hidden');
         this.elements.channelMenuBtn?.classList.add('hidden');
+        this.elements.channelMenuBtnMobile?.classList.add('hidden');
         this.elements.closeChannelBtn?.classList.add('hidden');
         this.elements.closeChannelBtnDesktop?.classList.add('hidden');
         this.elements.onlineHeader?.classList.add('hidden');
@@ -1379,12 +1389,15 @@ class UIController {
     
     /**
      * Show channel dropdown menu
+     * @param {Event} e - Click event (currentTarget is the button clicked)
      */
     showChannelDropdown(e) {
         const currentChannel = this.getActiveChannel();
         if (!currentChannel) return;
         const isPreviewMode = previewModeUI.isInPreviewMode();
-        dropdownManager.showChannelDropdown(e, this.elements.channelMenuBtn, currentChannel, isPreviewMode);
+        // Use the actual button that was clicked for positioning
+        const menuBtn = e.currentTarget || this.elements.channelMenuBtn;
+        dropdownManager.showChannelDropdown(e, menuBtn, currentChannel, isPreviewMode);
     }
     
     /**

@@ -704,6 +704,57 @@ class SecureStorage {
         };
     }
 
+    // ==================== Cross-Device Sync ====================
+
+    /**
+     * Export state for cross-device sync.
+     * Same data as account backup, but without sensitive session data.
+     * @returns {Object} - State to sync
+     */
+    exportForSync() {
+        if (!this.isUnlocked || !this.cache) {
+            throw new Error('Storage not unlocked');
+        }
+
+        return {
+            sentMessages: this.cache.sentMessages || {},
+            channels: this.cache.channels || [],
+            trustedContacts: this.cache.trustedContacts || {},
+            ensCache: this.cache.ensCache || {},
+            username: this.cache.username || null,
+            graphApiKey: this.cache.graphApiKey || null
+        };
+    }
+
+    /**
+     * Import merged state from sync.
+     * Replaces local state with merged data from sync process.
+     * @param {Object} data - Merged state from syncManager
+     * @returns {Promise<boolean>} - True if channels were updated (caller should reload UI)
+     */
+    async importFromSync(data) {
+        if (!this.isUnlocked || !this.cache) {
+            throw new Error('Storage not unlocked');
+        }
+
+        let channelsUpdated = false;
+
+        if (data.sentMessages !== undefined) this.cache.sentMessages = data.sentMessages;
+        if (data.channels !== undefined) {
+            this.cache.channels = data.channels;
+            channelsUpdated = true;
+        }
+        if (data.trustedContacts !== undefined) this.cache.trustedContacts = data.trustedContacts;
+        if (data.ensCache !== undefined) this.cache.ensCache = data.ensCache;
+        if (data.username !== undefined) this.cache.username = data.username;
+        if (data.graphApiKey !== undefined) this.cache.graphApiKey = data.graphApiKey;
+
+        await this.saveToStorage();
+        Logger.info('📥 Imported sync data');
+        
+        return channelsUpdated;
+    }
+
     // ==================== Account Backup with Scrypt ====================
 
     /**
@@ -719,19 +770,12 @@ class SecureStorage {
             throw new Error('Storage not unlocked');
         }
 
-        // Prepare data to encrypt
+        // Prepare data to encrypt (reuse sync export structure)
         const dataToBackup = {
             version: 3,
             exportedAt: new Date().toISOString(),
             address: this.address,
-            data: {
-                channels: this.cache.channels || [],
-                trustedContacts: this.cache.trustedContacts || {},
-                ensCache: this.cache.ensCache || {},
-                username: this.cache.username,
-                graphApiKey: this.cache.graphApiKey,
-                sentMessages: this.cache.sentMessages || {}
-            }
+            data: this.exportForSync()
         };
 
         // Generate random salt for scrypt (different from keystore's salt)

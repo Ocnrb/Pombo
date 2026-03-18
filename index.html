@@ -12,10 +12,10 @@
     <link rel="shortcut icon" href="/favicon/favicon.ico">
     <link rel="apple-touch-icon" sizes="180x180" href="/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/favicon/site.webmanifest">
-    <meta name="theme-color" content="#09090b">
+    <meta name="theme-color" content="#000000">
     <!-- Android: additional theme colors for dark mode detection -->
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#09090b">
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#09090b">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#000000">
     <meta name="color-scheme" content="dark">
     <!-- iOS PWA -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -40,16 +40,7 @@
         <!-- Left side: Logo and brand -->
         <div class="flex items-center gap-3">
             <!-- Logo -->
-            <svg viewBox="0 0 512 512" class="w-12 h-12 header-logo" fill="#ff5c00">
-                <g transform="translate(0,512) scale(0.1,-0.1)">
-                    <path d="M3138 4803 c-88 -35 -88 -35 -88 -89 0 -52 1 -54 28 -54 15 -1 43 -3 62 -6 34 -5 37 -2 112 91 78 95 78 95 25 94 -34 -1 -82 -13 -139 -36z m88 -13 c11 0 12 -3 4 -12 -6 -7 -24 -31 -41 -53 -17 -22 -37 -39 -45 -39 -8 1 -20 2 -27 3 -17 1 -42 51 -26 51 6 0 8 4 5 9 -3 5 1 12 10 15 9 4 13 2 8 -5 -4 -7 6 -3 22 8 49 32 69 41 72 32 2 -5 10 -9 18 -9z"/>
-                    <path d="M2878 4730 c-63 -5 -101 -14 -142 -34 -144 -70 -260 -256 -272 -434 -8 -122 7 -216 71 -456 55 -203 56 -212 54 -325 -3 -136 -17 -219 -57 -334 -28 -84 -28 -84 141 -25 169 58 169 58 371 -3 202 -62 202 -62 226 -103 13 -23 67 -107 121 -188 99 -148 99 -148 88 -370 -12 -241 5 -204 -312 -685 -24 -36 -545 -362 -612 -383 -22 -7 -87 -30 -145 -50 -485 -176 -450 -165 -1035 -315 -141 -36 -186 -52 -210 -73 -16 -15 -127 -122 -246 -239 -215 -213 -215 -213 173 -213 388 0 388 0 551 217 89 120 165 222 168 226 3 5 116 37 250 71 134 35 254 66 267 70 21 7 22 5 22 -49 0 -56 0 -56 123 -189 67 -73 136 -152 152 -176 29 -42 29 -42 -3 -71 -24 -21 -43 -29 -71 -29 -36 0 -107 -39 -126 -69 -11 -19 86 -13 141 8 51 20 51 20 254 -15 169 -29 224 -34 322 -32 118 3 118 3 96 35 -38 53 -73 63 -216 63 -181 0 -188 4 -320 189 -92 129 -102 147 -92 166 6 12 73 101 148 198 130 167 143 180 242 250 275 192 498 357 504 372 2 7 69 116 147 242 158 252 152 236 164 442 3 58 8 143 11 188 5 76 2 96 -46 270 -148 541 -118 469 -348 838 -113 182 -220 353 -237 382 -35 57 -37 76 -39 360 -1 123 -1 123 -73 124 -40 1 -79 2 -85 3 -9 1 -14 26 -16 79 -2 42 -6 76 -10 76 -4 -1 -46 -5 -94 -9z"/>
-                    <path d="M2730 4570 c-8 -5 -25 -10 -37 -10 -13 0 -22 -3 -21 -7 1 -5 -6 -23 -15 -40 -22 -41 -22 -39 -2 -70 9 -14 12 -22 6 -19 -6 4 -9 2 -5 -6 8 -21 53 -50 82 -53 35 -4 104 28 120 55 8 12 9 19 3 15 -6 -3 -11 -2 -11 4 0 5 4 12 9 15 10 7 9 19 -7 59 -7 16 -12 33 -12 39 0 6 -3 8 -6 5 -4 -3 -16 0 -28 8 -24 17 -54 19 -76 5z m69 -25 c33 -16 41 -33 41 -80 0 -42 -38 -75 -86 -75 -87 0 -112 118 -34 157 32 16 45 16 79 -2z"/>
-                    <path d="M2645 3034 c-190 -65 -190 -65 -331 -242 -77 -97 -206 -258 -286 -357 -146 -180 -146 -180 -112 -394 19 -121 39 -220 46 -227 7 -6 75 -64 151 -127 138 -115 138 -115 304 -162 166 -46 166 -46 247 5 44 27 159 98 255 157 173 108 173 108 265 248 50 77 119 182 154 234 60 92 62 97 62 161 0 36 3 124 6 197 6 132 6 132 -101 298 -60 91 -111 168 -115 170 -7 4 -348 105 -352 104 -2 0 -88 -30 -193 -65z"/>
-                    <path d="M1730 2057 c-47 -61 -156 -203 -242 -316 -158 -205 -158 -205 -430 -423 -249 -199 -275 -222 -301 -273 -15 -32 -27 -58 -25 -59 2 -1 20 -7 41 -13 34 -10 75 -2 430 88 215 54 462 117 547 139 175 46 705 229 693 240 -4 3 -55 19 -113 35 -58 15 -114 33 -125 40 -16 10 -285 234 -319 266 -5 5 -22 92 -37 194 -14 102 -28 187 -30 189 -2 2 -42 -47 -89 -107z"/>
-                    <path d="M3050 1305 c-69 -51 -136 -108 -151 -126 -14 -19 -54 -72 -90 -119 -36 -47 -68 -91 -73 -97 -4 -8 29 -53 93 -125 56 -62 101 -116 101 -120 0 -3 -11 -20 -25 -36 -14 -17 -25 -33 -25 -36 0 -3 56 -6 124 -6 142 0 211 -17 256 -62 28 -28 28 -28 170 -28 137 0 140 0 130 20 -6 11 -27 31 -48 45 -35 24 -44 25 -172 25 -218 0 -240 12 -352 190 -44 69 -82 131 -85 137 -3 7 50 93 118 190 67 98 131 191 142 206 10 16 18 30 16 32 -2 2 -60 -38 -129 -90z"/>
-                </g>
-            </svg>
+            <img src="favicon/favicon.svg" alt="Pombo" class="w-12 h-12 header-logo">
             <!-- Status dot and Pombo name -->
             <div class="flex flex-col">
                 <div class="flex items-center gap-1.5" title="Streamr Network">
@@ -87,6 +78,12 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"/>
                         </svg>
                         Switch Account
+                    </button>
+                    <button id="sync-devices-btn" class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] text-white/60 hover:bg-white/[0.06] transition text-left">
+                        <svg class="w-4 h-4 flex-shrink-0 sync-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/>
+                        </svg>
+                        <span class="sync-btn-text">Sync Devices</span>
                     </button>
                     <button id="disconnect-wallet" class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] text-red-400 hover:bg-white/[0.06] transition text-left">
                         <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -246,6 +243,12 @@
                     <div id="pill-profile-dropdown" class="pill-profile-dropdown hidden">
                         <div id="pill-profile-address" class="pill-dropdown-address"></div>
                         <div id="pill-profile-accounts" class="pill-dropdown-accounts"></div>
+                        <button id="pill-sync-devices-btn" class="pill-dropdown-item">
+                            <svg class="w-4 h-4 sync-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/>
+                            </svg>
+                            <span class="sync-btn-text">Sync Devices</span>
+                        </button>
                         <button id="pill-disconnect-btn" class="pill-dropdown-item pill-dropdown-disconnect">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9"/>
@@ -275,7 +278,7 @@
                 <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2">
                         <h2 id="current-channel-name" class="text-lg font-semibold truncate">Explore Channels</h2>
-                        <button id="channel-menu-btn" class="hidden p-1 hover:bg-white/10 rounded transition text-white/30 hover:text-white/70" title="Channel options">
+                        <button id="channel-menu-btn" class="hidden p-1 hover:bg-white/10 rounded transition text-white/30 hover:text-white/70 desktop-channel-menu-btn" title="Channel options">
                             <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
                                 <path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/>
                             </svg>
@@ -317,6 +320,12 @@
                     <button id="invite-users-btn" class="p-2 hover:bg-white/10 rounded-xl transition hidden" title="Invite Users">
                         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path>
+                        </svg>
+                    </button>
+                    <!-- Channel menu button (mobile: kebab menu on right side) -->
+                    <button id="channel-menu-btn-mobile" class="hidden p-2 hover:bg-white/10 rounded-xl transition text-white/30 hover:text-white mobile-channel-menu-btn" title="Channel options">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z"/>
                         </svg>
                     </button>
                     <!-- Close button (desktop: right side) -->
@@ -1678,6 +1687,7 @@
                                     type="text"
                                     id="settings-username"
                                     placeholder="Enter your name"
+                                    maxlength="18"
                                     class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20"
                                 />
                                 <p class="text-xs text-white/30 mt-2">Visible to other users</p>

@@ -61,11 +61,12 @@ const STREAM_CONFIG = {
     // Number of messages to load on scroll (pagination)
     LOAD_MORE_COUNT: 30,
     
-    // Message Stream (with storage): only 1 partition needed
+    // Message Stream (with storage): 2 partitions (messages + sync)
     MESSAGE_STREAM: {
         SUFFIX: '-1',
-        PARTITIONS: 1,
-        MESSAGES: 0  // Text, reactions, images, video announcements
+        PARTITIONS: 2,
+        MESSAGES: 0,  // Text, reactions, images, video announcements
+        SYNC: 1       // Cross-device sync payloads (self → self)
     },
     
     // Ephemeral Stream (no storage): 2 partitions
@@ -1891,6 +1892,83 @@ class StreamrController {
             return messages;
         } catch (error) {
             Logger.warn('History fetch error:', error.message);
+            return messages;
+        }
+    }
+
+    /**
+     * Fetch history from a specific partition with full message metadata.
+     * Used for sync to get publisherId for sender verification.
+     * @param {string} streamId - Stream ID
+     * @param {number} partition - Partition number
+     * @param {number} limit - Max messages to fetch
+     * @returns {Promise<Array<{content: Object, publisherId: string, timestamp: number}>>}
+     */
+    async fetchPartitionHistory(streamId, partition, limit = 10) {
+        if (!this.client) {
+            throw new Error('Client not initialized');
+        }
+
+        const messages = [];
+
+        try {
+            Logger.info(`fetchPartitionHistory: resending from ${streamId} partition ${partition}, last ${limit}`);
+            
+            // Streamr SDK v103+: first arg is { streamId, partition }, second is resend options
+            const resend = await this.client.resend(
+                { streamId: streamId, partition: partition },
+                { last: limit }
+            );
+
+            Logger.info('fetchPartitionHistory: resend object obtained, iterating...');
+
+            // Manual iteration to catch errors per-message
+            const iterator = resend[Symbol.asyncIterator]();
+            let iteratorDone = false;
+            
+            while (!iteratorDone) {
+                try {
+                    const result = await iterator.next();
+                    iteratorDone = result.done;
+                    
+                    if (!iteratorDone && result.value) {
+                        const msg = result.value;
+                        // Get publisherId - v103+ uses getPublisherId() method
+                        const publisherId = typeof msg.getPublisherId === 'function'
+                            ? msg.getPublisherId()
+                            : msg.publisherId;
+                        
+                        // Get partition from message to verify
+                        const msgPartition = typeof msg.getPartition === 'function'
+                            ? msg.getPartition()
+                            : msg.partition;
+                        
+                        Logger.debug('fetchPartitionHistory: got message', { 
+                            publisherId, 
+                            msgPartition,
+                            requestedPartition: partition,
+                            hasContent: !!msg.content,
+                            contentType: typeof msg.content,
+                            contentKeys: msg.content ? Object.keys(msg.content) : []
+                        });
+                        
+                        messages.push({
+                            content: msg.content,
+                            publisherId: publisherId,
+                            timestamp: msg.timestamp
+                        });
+                    }
+                } catch (iterError) {
+                    Logger.warn('fetchPartitionHistory: iteration error', iterError.message, iterError.code);
+                    // Continue to next message
+                    continue;
+                }
+            }
+
+            Logger.info(`fetchPartitionHistory: ${messages.length} messages from partition ${partition}`);
+            return messages;
+        } catch (error) {
+            Logger.error('fetchPartitionHistory error:', error);
             return messages;
         }
     }

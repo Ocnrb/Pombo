@@ -14,6 +14,7 @@ import { mediaController } from './media.js';
 import { subscriptionManager } from './subscriptionManager.js';
 import { relayManager } from './relayManager.js';
 import { dmManager } from './dm.js';
+import { syncManager } from './syncManager.js';
 import { Logger } from './logger.js';
 import { getAvatar } from './ui/AvatarGenerator.js';
 import { escapeHtml, escapeAttr } from './ui/utils.js';
@@ -139,6 +140,8 @@ class App {
         const connectBtn = document.getElementById('connect-wallet');
         const disconnectBtn = document.getElementById('disconnect-wallet');
         const switchBtn = document.getElementById('switch-wallet');
+        const syncBtn = document.getElementById('sync-devices-btn');
+        const pillSyncBtn = document.getElementById('pill-sync-devices-btn');
 
         connectBtn.addEventListener('click', async () => {
             await this.connectWallet();
@@ -152,6 +155,66 @@ class App {
         switchBtn?.addEventListener('click', async () => {
             headerUI._closeDesktopDropdown();
             await this.switchWallet();
+        });
+
+        // Sync buttons (desktop + mobile)
+        const handleSync = async (btn) => {
+            if (authManager.isGuestMode()) {
+                uiController.showNotification('Sync not available in guest mode', 'warning');
+                return;
+            }
+
+            const textEl = btn.querySelector('.sync-btn-text');
+            const iconEl = btn.querySelector('.sync-icon');
+            const originalText = textEl?.textContent;
+
+            try {
+                btn.disabled = true;
+                if (textEl) textEl.textContent = 'Syncing...';
+                if (iconEl) iconEl.classList.add('animate-spin');
+
+                const result = await syncManager.smartSync();
+
+                if (result.noInbox) {
+                    uiController.showNotification('Create DM inbox first to enable sync', 'warning');
+                } else if (result.pulled && result.pushed) {
+                    uiController.renderChannelList();
+                    uiController.showNotification('Devices synced successfully', 'success');
+                } else if (result.pushed) {
+                    uiController.showNotification('State pushed to storage', 'success');
+                } else {
+                    uiController.showNotification('Already in sync', 'info');
+                }
+            } catch (err) {
+                Logger.error('Sync failed:', err);
+                uiController.showNotification('Sync failed: ' + err.message, 'error');
+            } finally {
+                btn.disabled = false;
+                if (textEl) textEl.textContent = originalText;
+                if (iconEl) iconEl.classList.remove('animate-spin');
+            }
+        };
+
+        syncBtn?.addEventListener('click', async () => {
+            headerUI._closeDesktopDropdown();
+            await handleSync(syncBtn);
+        });
+
+        pillSyncBtn?.addEventListener('click', async () => {
+            await handleSync(pillSyncBtn);
+        });
+
+        // Auto-push on page unload
+        window.addEventListener('beforeunload', () => {
+            syncManager.forcePushNow();
+        });
+
+        // Auto-push when app goes to background (mobile reliability)
+        // On Android/iOS, beforeunload doesn't fire when swiping away the app
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') {
+                syncManager.scheduleAutoPush(5000);
+            }
         });
     }
 
@@ -1716,6 +1779,16 @@ class App {
             try {
                 await dmManager.init();
                 Logger.info('DM manager initialized');
+                
+                // Pull sync from other devices (non-blocking, best-effort)
+                if (dmManager.inboxReady) {
+                    syncManager.pullSync().then(() => {
+                        Logger.info('Sync: Initial pull complete');
+                        uiController.renderChannelList();
+                    }).catch(e => {
+                        Logger.debug('Sync: Initial pull failed (non-critical):', e.message);
+                    });
+                }
             } catch (dmError) {
                 Logger.warn('Failed to init DM manager (non-critical):', dmError);
             }
@@ -2043,4 +2116,5 @@ document.addEventListener('DOMContentLoaded', () => {
     // Expose managers for testing
     window.relayManager = relayManager;
     window.channelManager = channelManager;
+    window.syncManager = syncManager;
 });

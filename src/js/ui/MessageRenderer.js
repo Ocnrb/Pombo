@@ -130,6 +130,7 @@ class MessageRenderer {
         if (!replyTo) return '';
         
         const displayName = replyTo.senderName || formatAddress(replyTo.sender);
+        const truncatedName = displayName.length > 18 ? displayName.substring(0, 18) + '...' : displayName;
         // Defense-in-depth: sanitize network content
         const previewText = replyTo.text 
             ? escapeHtml(sanitizeText(replyTo.text.substring(0, 50))) + (replyTo.text.length > 50 ? '...' : '') 
@@ -137,7 +138,7 @@ class MessageRenderer {
         
         return `
             <div class="reply-preview" data-reply-to-id="${escapeAttr(replyTo.id)}">
-                <span class="reply-preview-name">${escapeHtml(sanitizeText(displayName))}</span>
+                <span class="reply-preview-name">${escapeHtml(sanitizeText(truncatedName))}</span>
                 <span class="reply-preview-text">${previewText}</span>
             </div>
         `;
@@ -379,10 +380,11 @@ class MessageRenderer {
         const showSender = shouldShowSenderName(groupPosition);
         const senderColor = addressToColor(msg.sender);
         // Defense-in-depth: sanitize network-provided displayName
+        const truncatedName = displayName.length > 18 ? displayName.substring(0, 18) + '...' : displayName;
         const senderRowHtml = showSender ? `
                     <div class="message-sender-row flex items-center gap-1 mb-1">
                         ${badge.html}
-                        <span class="text-xs font-medium" style="color: ${senderColor}">${escapeHtml(sanitizeText(displayName))}</span>
+                        <span class="text-xs font-medium" style="color: ${senderColor}">${escapeHtml(sanitizeText(truncatedName))}</span>
                     </div>` : '';
         
         // Avatar visible only on last/single messages in group, but placeholder for alignment

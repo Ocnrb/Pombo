@@ -227,6 +227,9 @@ class PreviewModeUI {
         if (elements.channelMenuBtn) {
             elements.channelMenuBtn.classList.remove('hidden');
         }
+        if (elements.channelMenuBtnMobile) {
+            elements.channelMenuBtnMobile.classList.remove('hidden');
+        }
 
         // Show close channel buttons
         if (elements.closeChannelBtn) {

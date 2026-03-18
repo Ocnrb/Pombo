@@ -132,8 +132,9 @@ class ModalManager {
     /**
      * Hide a modal by ID
      * @param {string} modalId - Modal element ID
+     * @param {Object} options - Optional config { skipHistory: boolean }
      */
-    hide(modalId) {
+    hide(modalId, options = {}) {
         const modal = document.getElementById(modalId);
         if (!modal) return;
         
@@ -150,8 +151,9 @@ class ModalManager {
             const stackIndex = this.modalStack.indexOf(modalId);
             if (stackIndex !== -1) {
                 this.modalStack.splice(stackIndex, 1);
-                // Go back to remove the history entry we added (only if not handling popstate)
-                if (!this._handlingPopState) {
+                // Go back to remove the history entry we added
+                // Skip if: handling popstate, or skipHistory option is set (e.g., switching modals)
+                if (!this._handlingPopState && !options.skipHistory) {
                     window.history.back();
                 }
             }

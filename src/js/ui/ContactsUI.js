@@ -76,17 +76,21 @@ class ContactsUI {
         this.renderList();
         // Add contacts-open class for mobile
         if (window.innerWidth < 768) {
+            // Add contacts-open class FIRST (before closing settings)
+            // so that settings _cleanupOnHide knows we're switching tabs
+            document.body.classList.add('contacts-open');
+            
             // Close settings modal if open (always use modalManager to keep stack in sync)
+            // Use skipHistory to prevent async history.back() from closing contacts modal
             if (modalManager.isVisible('settings-modal')) {
                 if (this.deps?.settingsUI?.hide) {
-                    this.deps.settingsUI.hide();
+                    this.deps.settingsUI.hide({ skipHistory: true });
                 } else {
                     // Fallback: use modalManager to ensure stack stays in sync
-                    modalManager.hide('settings-modal');
+                    modalManager.hide('settings-modal', { skipHistory: true });
                     document.body.classList.remove('settings-open');
                 }
             }
-            document.body.classList.add('contacts-open');
             // Update pill nav active tab
             document.querySelectorAll('.pill-nav-item[data-pill-tab]').forEach(item => {
                 item.classList.toggle('active', item.dataset.pillTab === 'contacts');
@@ -97,9 +101,10 @@ class ContactsUI {
 
     /**
      * Hide contacts modal
+     * @param {Object} options - Optional config { skipHistory: boolean }
      */
-    hide() {
-        modalManager.hide('contacts-modal');
+    hide(options = {}) {
+        modalManager.hide('contacts-modal', options);
     }
 
     /**
@@ -109,10 +114,13 @@ class ContactsUI {
     _cleanupOnHide() {
         // Remove contacts-open class for mobile
         document.body.classList.remove('contacts-open');
-        // Reset pill nav to chats tab
-        document.querySelectorAll('.pill-nav-item[data-pill-tab]').forEach(item => {
-            item.classList.toggle('active', item.dataset.pillTab === 'chats');
-        });
+        // Only reset pill nav to chats tab if NOT switching to another tab-modal (settings)
+        // If settings-open is present, it means we're switching to settings, so don't reset
+        if (!document.body.classList.contains('settings-open')) {
+            document.querySelectorAll('.pill-nav-item[data-pill-tab]').forEach(item => {
+                item.classList.toggle('active', item.dataset.pillTab === 'chats');
+            });
+        }
         // Clear inputs
         if (this.elements.addContactAddress) this.elements.addContactAddress.value = '';
         if (this.elements.addContactNickname) this.elements.addContactNickname.value = '';
@@ -257,6 +265,12 @@ class ContactsUI {
             this.init();
         }
         
+        // Block scroll on messages area while menu is open
+        const messagesArea = document.getElementById('messages-area');
+        if (messagesArea) {
+            messagesArea.style.overflow = 'hidden';
+        }
+        
         if (this.elements.contextMenu) {
             // Temporarily show to measure dimensions
             this.elements.contextMenu.style.visibility = 'hidden';
@@ -292,6 +306,12 @@ class ContactsUI {
      */
     hideContextMenu() {
         this.elements.contextMenu?.classList.add('hidden');
+        
+        // Re-enable scroll on messages area
+        const messagesArea = document.getElementById('messages-area');
+        if (messagesArea) {
+            messagesArea.style.overflow = '';
+        }
     }
 
     /**

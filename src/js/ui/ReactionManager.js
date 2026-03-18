@@ -217,6 +217,12 @@ class ReactionManager {
             this.reactionPickerTimeout = null;
         }
         
+        // Block scroll on messages area while picker is open
+        const messagesArea = document.getElementById('messages-area');
+        if (messagesArea) {
+            messagesArea.style.overflow = 'hidden';
+        }
+        
         // Position near the button
         const rect = e.target.getBoundingClientRect();
         
@@ -257,14 +263,14 @@ class ReactionManager {
         picker.querySelectorAll('span').forEach(span => {
             span.onclick = () => {
                 this.toggleReaction(msgId, span.dataset.emoji);
-                picker.style.display = 'none';
+                this.hideReactionPicker();
             };
         });
         
         // Setup mouse leave handlers
         const hidePickerWithDelay = () => {
             this.reactionPickerTimeout = setTimeout(() => {
-                picker.style.display = 'none';
+                this.hideReactionPicker();
             }, 150);
         };
         
@@ -320,7 +326,7 @@ class ReactionManager {
             // Also close reaction picker
             const reactionPicker = document.getElementById('reaction-picker');
             if (reactionPicker && !reactionPicker.contains(e.target)) {
-                reactionPicker.style.display = 'none';
+                this.hideReactionPicker();
             }
             
             // Also close attach menu
@@ -397,6 +403,28 @@ class ReactionManager {
                 if (onFileDownload) await onFileDownload(fileId);
             });
         });
+    }
+
+    /**
+     * Hide the reaction picker
+     */
+    hideReactionPicker() {
+        const reactionPicker = document.getElementById('reaction-picker');
+        if (reactionPicker) {
+            reactionPicker.style.display = 'none';
+        }
+        
+        // Re-enable scroll on messages area
+        const messagesArea = document.getElementById('messages-area');
+        if (messagesArea) {
+            messagesArea.style.overflow = '';
+        }
+        
+        // Also clear any pending hide timeout
+        if (this.reactionPickerTimeout) {
+            clearTimeout(this.reactionPickerTimeout);
+            this.reactionPickerTimeout = null;
+        }
     }
 }
 

@@ -63,7 +63,8 @@ class IdentityManager {
      * @param {string} name - Username to set
      */
     async setUsername(name) {
-        this.username = name ? name.trim() : null;
+        const trimmed = name ? name.trim() : null;
+        this.username = trimmed ? trimmed.substring(0, 18) : null;
         await this.saveUsername();
     }
 

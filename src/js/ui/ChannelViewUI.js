@@ -120,6 +120,7 @@ class ChannelViewUI {
             this.elements.inviteUsersBtn?.classList.remove('hidden');
         }
         this.elements.channelMenuBtn?.classList.remove('hidden');
+        this.elements.channelMenuBtnMobile?.classList.remove('hidden');
         this.elements.closeChannelBtn?.classList.remove('hidden');
         this.elements.closeChannelBtnDesktop?.classList.remove('hidden');
         
@@ -196,6 +197,7 @@ class ChannelViewUI {
         this.elements.inviteUsersBtn?.classList.add('hidden');
         this.elements.joinChannelBtn?.classList.add('hidden');
         this.elements.channelMenuBtn?.classList.add('hidden');
+        this.elements.channelMenuBtnMobile?.classList.add('hidden');
         this.elements.closeChannelBtn?.classList.add('hidden');
         this.elements.closeChannelBtnDesktop?.classList.add('hidden');
         this.elements.onlineHeader?.classList.add('hidden');
@@ -239,6 +241,7 @@ class ChannelViewUI {
         this.elements.inviteUsersBtn?.classList.add('hidden');
         this.elements.joinChannelBtn?.classList.add('hidden');
         this.elements.channelMenuBtn?.classList.add('hidden');
+        this.elements.channelMenuBtnMobile?.classList.add('hidden');
         this.elements.onlineHeader?.classList.add('hidden');
         this.elements.onlineSeparator?.classList.add('hidden');
         
@@ -281,6 +284,7 @@ class ChannelViewUI {
         // Hide all channel buttons
         this.elements.inviteUsersBtn?.classList.add('hidden');
         this.elements.channelMenuBtn?.classList.add('hidden');
+        this.elements.channelMenuBtnMobile?.classList.add('hidden');
         this.elements.closeChannelBtn?.classList.add('hidden');
         this.elements.closeChannelBtnDesktop?.classList.add('hidden');
         this.elements.onlineHeader?.classList.add('hidden');

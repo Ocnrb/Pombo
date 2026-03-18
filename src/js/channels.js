@@ -70,17 +70,29 @@ class ChannelManager {
 
             if (channelsData && channelsData.length > 0) {
                 for (const channel of channelsData) {
-                    // Initialize empty arrays - messages loaded from storage on demand
-                    channel.messages = [];
-                    channel.reactions = {};
-                    channel.historyLoaded = false;  // Track if initial history was loaded
-                    channel.hasMoreHistory = true;  // Assume there's more until proven otherwise
-                    channel.loadingHistory = false; // Prevent concurrent loads
-                    channel.oldestTimestamp = null; // For pagination
-                    channel.streamId = channel.messageStreamId;  // Alias for convenience
+                    const existing = this.channels.get(channel.messageStreamId);
                     
-                    // Key by messageStreamId
-                    this.channels.set(channel.messageStreamId, channel);
+                    if (existing) {
+                        // Channel already in memory — update metadata only,
+                        // preserve in-memory state (messages, reactions, history flags)
+                        const preserve = ['messages', 'reactions', 'historyLoaded', 'hasMoreHistory',
+                            'loadingHistory', 'oldestTimestamp', 'streamId'];
+                        for (const [key, value] of Object.entries(channel)) {
+                            if (!preserve.includes(key)) {
+                                existing[key] = value;
+                            }
+                        }
+                    } else {
+                        // New channel — initialize empty runtime state
+                        channel.messages = [];
+                        channel.reactions = {};
+                        channel.historyLoaded = false;
+                        channel.hasMoreHistory = true;
+                        channel.loadingHistory = false;
+                        channel.oldestTimestamp = null;
+                        channel.streamId = channel.messageStreamId;
+                        this.channels.set(channel.messageStreamId, channel);
+                    }
                 }
 
                 Logger.debug(`Loaded ${channelsData.length} channels from secure storage (metadata only)`);
@@ -135,6 +147,9 @@ class ChannelManager {
 
             await secureStorage.setChannels(channelsData);
             Logger.debug('Channels saved to secure storage (metadata only)');
+
+            // Schedule auto-push to sync (debounced 30s)
+            window.syncManager?.scheduleAutoPush();
         } catch (error) {
             Logger.error('Failed to save channels:', error);
         }
