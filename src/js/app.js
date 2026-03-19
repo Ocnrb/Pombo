@@ -1866,7 +1866,7 @@ class App {
                 
                 // Only show message if it's from the current channel
                 if (data.streamId === currentStreamId) {
-                    chatAreaUI.addMessage(data.message, () => {
+                    chatAreaUI.addMessage(data.message, data.streamId, () => {
                         reactionManager.attachReactionListeners(
                             (msgId) => {
                                 chatAreaUI.startReply(msgId);

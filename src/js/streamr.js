@@ -126,6 +126,7 @@ class StreamrController {
         
         // DM decrypt key recovery tracking
         this._dmKeyAddedForPublisher = new Set();  // Publishers we've added Pombo key for
+        this._dmPublishKeySet = new Set();  // Streams we've already set publish key for
     }
 
     /**
@@ -659,6 +660,11 @@ class StreamrController {
         if (!streamId.toLowerCase().includes('/pombo-dm-')) {
             return;
         }
+
+        // Skip if already set for this stream (avoids repeated rekey on heartbeat)
+        if (this._dmPublishKeySet.has(streamId)) {
+            return;
+        }
         
         try {
             const key = this._createPomboKey();
@@ -674,6 +680,7 @@ class StreamrController {
                     key: key,
                     distributionMethod: 'rekey'
                 });
+                this._dmPublishKeySet.add(streamId);
                 Logger.debug('DM publish key set for', streamId);
             }
         } catch (e) {
@@ -1683,6 +1690,7 @@ class StreamrController {
         
         // Clear DM key tracking
         this._dmKeyAddedForPublisher.clear();
+        this._dmPublishKeySet.clear();
     }
 
     /**
@@ -1985,7 +1993,7 @@ class StreamrController {
      * @param {string} password - Password for encrypted channels (optional)
      * @returns {Promise<{messages: Array, hasMore: boolean}>} - Messages and pagination info
      */
-    async fetchOlderHistory(messageStreamId, partition = 0, beforeTimestamp, count = STREAM_CONFIG.LOAD_MORE_COUNT, password = null) {
+    async fetchOlderHistory(messageStreamId, partition = 0, beforeTimestamp, count = STREAM_CONFIG.LOAD_MORE_COUNT, password = null, signal = null) {
         if (!this.client) {
             throw new Error('Client not initialized');
         }
@@ -2028,6 +2036,12 @@ class StreamrController {
             let decryptErrors = 0;
             
             while (!iteratorDone) {
+                // Early exit if fetch was aborted (e.g. channel switch)
+                if (signal?.aborted) {
+                    Logger.debug('fetchOlderHistory aborted for', messageStreamId.slice(-20));
+                    break;
+                }
+                
                 let message;
                 try {
                     const result = await iterator.next();

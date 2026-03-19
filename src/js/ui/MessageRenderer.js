@@ -113,7 +113,7 @@ class MessageRenderer {
         for (const [emoji, users] of Object.entries(reactions)) {
             if (users.length > 0) {
                 const userReacted = users.some(u => u.toLowerCase() === currentAddress);
-                html += `<span class="reaction-badge ${userReacted ? 'user-reacted' : ''}" data-emoji="${escapeAttr(emoji)}" data-msg-id="${escapeAttr(msgId)}"><span class="reaction-emoji">${emoji}</span>${users.length}</span>`;
+                html += `<span class="reaction-badge ${userReacted ? 'user-reacted' : ''}" data-emoji="${escapeAttr(emoji)}" data-msg-id="${escapeAttr(msgId)}"><span class="reaction-emoji">${escapeHtml(emoji)}</span>${users.length}</span>`;
             }
         }
         

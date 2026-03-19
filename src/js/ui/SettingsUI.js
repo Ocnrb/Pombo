@@ -56,8 +56,8 @@ class SettingsUI {
         modal.innerHTML = `
             <div class="bg-[#111113] rounded-2xl w-[300px] overflow-hidden shadow-2xl border border-white/[0.06]">
                 <div class="px-5 pt-5 pb-2">
-                    <h3 class="text-[14px] font-medium text-white">${title}</h3>
-                    <p class="text-[11px] text-white/30 mt-0.5">${subtitle}</p>
+                    <h3 class="text-[14px] font-medium text-white">${_escapeHtml(title)}</h3>
+                    <p class="text-[11px] text-white/30 mt-0.5">${_escapeHtml(subtitle)}</p>
                 </div>
                 <div class="px-5 pb-5 pt-3">
                     <div class="flex items-center justify-between mb-1.5">

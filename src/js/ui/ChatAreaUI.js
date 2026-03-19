@@ -72,6 +72,7 @@ class ChatAreaUI {
         if (!channel || !channel.hasMoreHistory) return;
         
         this.isLoadingMore = true;
+        const generationAtStart = channelManager.switchGeneration;
         
         // Show loading indicator at top
         this.showLoadingMoreIndicator();
@@ -82,6 +83,9 @@ class ChatAreaUI {
         
         try {
             const result = await channelManager.loadMoreHistory(channel.streamId);
+            
+            // Discard results if user switched channels during load
+            if (channelManager.switchGeneration !== generationAtStart) return;
             
             if (result.loaded > 0) {
                 // Re-render all messages
@@ -311,12 +315,13 @@ class ChatAreaUI {
     /**
      * Add a new message to the UI
      * @param {Object} message - Message object
+     * @param {string} streamId - Stream ID the message belongs to
      * @param {Function} onRenderComplete - Callback after render
      */
-    addMessage(message, onRenderComplete = null) {
+    addMessage(message, streamId, onRenderComplete = null) {
         const { channelManager } = this.deps;
         const channel = channelManager?.getCurrentChannel();
-        if (channel) {
+        if (channel && channel.streamId === streamId) {
             this.renderMessages(channel.messages, onRenderComplete);
             this.updateUnreadCount(channel.streamId);
         }

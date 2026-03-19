@@ -94,10 +94,10 @@ body {
     width: fit-content;
 }
 
-/* Only last/single messages get extra padding for avatar overhang */
+/* Only last/single messages get margin for avatar overhang (margin collapses with spacing system) */
 .message-entry.msg-group-last,
 .message-entry.msg-group-single {
-    padding-bottom: 12px;
+    margin-bottom: 12px;
 }
 
 .own-message {
@@ -266,7 +266,7 @@ body {
 
 .msg-group-last,
 .msg-group-single {
-    margin-bottom: 0;
+    margin-bottom: 12px;
 }
 
 /* ----- 3-level spacing system (margin-top) ----- */
@@ -302,6 +302,7 @@ body {
     overflow: hidden;
     position: relative;
     top: 12px; /* Avatar hangs below the bubble ~50% */
+    margin-top: -46px; /* Neutralize height in flex cross-axis */
 }
 
 .message-avatar svg {
@@ -310,9 +311,12 @@ body {
     display: block;
 }
 
-.message-avatar-hidden {
+.message-avatar.message-avatar-hidden {
     opacity: 0;
-    top: 0; /* Reset offset for hidden avatars */
+    height: 0;
+    overflow: hidden;
+    top: 0;
+    margin-top: 0;
 }
 
 /* ----- Video & Image Message Styles ----- */
@@ -1633,6 +1637,7 @@ body {
     .message-avatar {
         width: 36px;
         height: 36px;
+        margin-top: -36px;
     }
     
     /* Message input area - flush at bottom */
@@ -1944,6 +1949,7 @@ body {
     .message-avatar {
         width: 32px;
         height: 32px;
+        margin-top: -32px;
     }
     
     /* Channel list items compact */

@@ -23,6 +23,7 @@ class ChannelManager {
     constructor() {
         this.channels = new Map(); // streamId -> channel object
         this.currentChannel = null;
+        this.switchGeneration = 0; // Incremented on every channel switch to detect stale async results
         this.messageHandlers = [];
         
         // Deduplication: track message IDs currently being processed (receive-side)
@@ -53,6 +54,9 @@ class ChannelManager {
         this.pendingVerifications = new Map(); // streamId -> { messages: [], timer: null }
         this.BATCH_WINDOW_MS = 100; // Window to collect messages for batch processing
         this.BATCH_MAX_SIZE = 50; // Maximum batch size before flushing
+        
+        // AbortController for in-flight history fetches - aborted on channel switch
+        this.historyAbortController = null;
     }
 
     /**
@@ -160,12 +164,17 @@ class ChannelManager {
      */
     clearChannels() {
         this.channels.clear();
-        this.currentChannel = null;
+        this.setCurrentChannel(null);
         this.onlineUsers.clear();
         this.processingMessages.clear();
         this.pendingMessages.clear();
         this.sendingMessages.clear();
         this.pendingReactions.clear();
+        // Cancel all pending batch verifications
+        for (const [streamId, batch] of this.pendingVerifications) {
+            if (batch.timer) clearTimeout(batch.timer);
+        }
+        this.pendingVerifications.clear();
         Logger.debug('Channels cleared from memory');
     }
 
@@ -1536,6 +1545,8 @@ class ChannelManager {
         batch.messages = [];
         batch.timer = null;
         
+        const generationAtStart = this.switchGeneration;
+        
         Logger.debug(`Batch verifying ${messagesToProcess.length} historical messages for ${streamId.slice(-20)}`);
         
         // Verify all messages in parallel using Promise.all
@@ -1552,6 +1563,12 @@ class ChannelManager {
         });
         
         const verifiedMessages = await Promise.all(verificationPromises);
+        
+        // Discard results if user switched channels during batch verification
+        if (this.switchGeneration !== generationAtStart) {
+            Logger.debug('Channel switched during batch verification, discarding results for', streamId.slice(-20));
+            return;
+        }
         
         // Add all verified messages to channel
         let addedCount = 0;
@@ -1850,6 +1867,12 @@ class ChannelManager {
         channel.loadingHistory = true;
         this.notifyHandlers('history_loading', { streamId: messageStreamId, loading: true });
         
+        const generationAtStart = this.switchGeneration;
+        
+        // Create AbortController for this fetch - will be aborted on channel switch
+        this.historyAbortController = new AbortController();
+        const signal = this.historyAbortController.signal;
+        
         try {
             Logger.debug('Loading more history before:', new Date(beforeTimestamp).toISOString());
             
@@ -1859,8 +1882,16 @@ class ChannelManager {
                 STREAM_CONFIG.MESSAGE_STREAM.MESSAGES, // partition 0
                 beforeTimestamp,
                 STREAM_CONFIG.LOAD_MORE_COUNT,
-                channel.password
+                channel.password,
+                signal
             );
+            
+            // Discard results if user switched channels during fetch
+            if (this.switchGeneration !== generationAtStart) {
+                Logger.debug('Channel switched during history fetch, discarding results for', messageStreamId.slice(-20));
+                channel.loadingHistory = false;
+                return { loaded: 0, hasMore: channel.hasMoreHistory };
+            }
             
             if (result.messages.length > 0) {
                 // Filter out duplicates first
@@ -1886,6 +1917,13 @@ class ChannelManager {
                     
                     // Wait for all verifications to complete in parallel
                     const verifiedMessages = await Promise.all(verificationPromises);
+                    
+                    // Discard results if user switched channels during verification
+                    if (this.switchGeneration !== generationAtStart) {
+                        Logger.debug('Channel switched during history verification, discarding results for', messageStreamId.slice(-20));
+                        channel.loadingHistory = false;
+                        return { loaded: 0, hasMore: channel.hasMoreHistory };
+                    }
                     
                     // Add all verified messages to channel
                     for (const msg of verifiedMessages) {
@@ -2103,6 +2141,9 @@ class ChannelManager {
             // Unsubscribe from both streams
             await streamrController.unsubscribeFromDualStream(messageStreamId, ephemeralStreamId);
             
+            // Cancel any pending batch verifications for this channel
+            this.cancelPendingVerifications(messageStreamId);
+            
             this.channels.delete(messageStreamId);
             await this.saveChannels();
             
@@ -2110,7 +2151,7 @@ class ChannelManager {
             await secureStorage.removeFromChannelOrder(messageStreamId);
 
             if (this.currentChannel === messageStreamId) {
-                this.currentChannel = null;
+                this.setCurrentChannel(null);
             }
 
             Logger.debug('Left channel:', messageStreamId);
@@ -2134,10 +2175,15 @@ class ChannelManager {
                 }
             }
             this.channels.clear();
-            this.currentChannel = null;
+            this.setCurrentChannel(null);
             this.onlineUsers.clear();
             this.processingMessages.clear();
             this.pendingMessages.clear();
+            // Cancel all pending batch verifications
+            for (const [, batch] of this.pendingVerifications) {
+                if (batch.timer) clearTimeout(batch.timer);
+            }
+            this.pendingVerifications.clear();
             // Don't clear from localStorage - keep for reconnect
             Logger.debug('Left all channels');
         } catch (error) {
@@ -2177,11 +2223,14 @@ class ChannelManager {
             this.channels.delete(streamId);
             await this.saveChannels();
             
+            // Cancel any pending batch verifications for this channel
+            this.cancelPendingVerifications(streamId);
+            
             // Remove from channel order
             await secureStorage.removeFromChannelOrder(streamId);
 
             if (this.currentChannel === streamId) {
-                this.currentChannel = null;
+                this.setCurrentChannel(null);
             }
 
             Logger.info('Channel removed:', streamId);
@@ -2196,7 +2245,40 @@ class ChannelManager {
      * @param {string} streamId - Stream ID
      */
     setCurrentChannel(streamId) {
+        const previousChannel = this.currentChannel;
         this.currentChannel = streamId;
+        this.switchGeneration++;
+        
+        // Abort any in-flight history fetch for the previous channel
+        if (this.historyAbortController) {
+            this.historyAbortController.abort();
+            this.historyAbortController = null;
+        }
+        
+        // Cancel any pending batch verifications for the previous channel
+        // to avoid stale messages being processed after the switch
+        if (previousChannel && previousChannel !== streamId) {
+            this.cancelPendingVerifications(previousChannel);
+        }
+    }
+
+    /**
+     * Cancel pending batch verifications for a stream
+     * Called on channel switch to discard queued work for the previous channel
+     * @param {string} streamId - Stream ID to cancel
+     */
+    cancelPendingVerifications(streamId) {
+        const batch = this.pendingVerifications.get(streamId);
+        if (batch) {
+            if (batch.timer) {
+                clearTimeout(batch.timer);
+            }
+            const discarded = batch.messages.length;
+            this.pendingVerifications.delete(streamId);
+            if (discarded > 0) {
+                Logger.debug(`Cancelled ${discarded} pending batch verifications for`, streamId.slice(-20));
+            }
+        }
     }
 
     /**

@@ -903,7 +903,7 @@ class ChannelSettingsUI {
             const members = await this.deps.channelManager.getChannelMembers(currentChannel.streamId);
             this.renderMembersList(members, currentChannel);
         } catch (error) {
-            this.elements.membersList.innerHTML = `<div class="text-center text-red-400/80 py-4 text-sm">Failed to load: ${sanitizeText(error.message)}</div>`;
+            this.elements.membersList.innerHTML = `<div class="text-center text-red-400/80 py-4 text-sm">Failed to load: ${escapeHtml(sanitizeText(error.message))}</div>`;
         }
     }
 
@@ -1392,7 +1392,7 @@ class ChannelSettingsUI {
             this.elements.permissionsList.innerHTML = formatted + legend;
             
         } catch (error) {
-            this.elements.permissionsList.innerHTML = `<div class="text-red-400/80 text-sm">Error: ${sanitizeText(error.message)}</div>`;
+            this.elements.permissionsList.innerHTML = `<div class="text-red-400/80 text-sm">Error: ${escapeHtml(sanitizeText(error.message))}</div>`;
         }
     }
 
