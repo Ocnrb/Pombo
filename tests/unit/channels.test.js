@@ -31,10 +31,13 @@ vi.mock('../../src/js/streamr.js', () => ({
         hasDeletePermission: vi.fn().mockResolvedValue(false),
         grantPublicPermissions: vi.fn(),
         resend: vi.fn(),
-        unsubscribeFromDualStream: vi.fn().mockResolvedValue(undefined)
+        unsubscribeFromDualStream: vi.fn().mockResolvedValue(undefined),
+        fetchOlderHistory: vi.fn().mockResolvedValue({ messages: [], hasMore: false })
     },
     STREAM_CONFIG: {
-        partitions: 1
+        partitions: 1,
+        LOAD_MORE_COUNT: 20,
+        MESSAGE_STREAM: { MESSAGES: 0 }
     },
     deriveEphemeralId: vi.fn((id) => `${id}-ephemeral`),
     deriveMessageId: vi.fn((id) => `${id}-message`)
@@ -53,7 +56,8 @@ vi.mock('../../src/js/identity.js', () => ({
     identityManager: {
         getUserNickname: vi.fn().mockReturnValue('TestUser'),
         getCurrentIdentity: vi.fn().mockReturnValue({ nickname: 'TestUser', address: '0xmyaddress' }),
-        generateSignature: vi.fn().mockResolvedValue('sig123')
+        generateSignature: vi.fn().mockResolvedValue('sig123'),
+        verifyMessage: vi.fn().mockResolvedValue({ valid: true, trustLevel: 1 })
     }
 }));
 
@@ -97,12 +101,17 @@ import { channelManager } from '../../src/js/channels.js';
 import { authManager } from '../../src/js/auth.js';
 import { secureStorage } from '../../src/js/secureStorage.js';
 import { graphAPI } from '../../src/js/graph.js';
+import { streamrController } from '../../src/js/streamr.js';
+import { identityManager } from '../../src/js/identity.js';
 
 describe('ChannelManager', () => {
     beforeEach(() => {
         // Reset channel state
         channelManager.channels.clear();
         channelManager.currentChannel = null;
+        channelManager.switchGeneration = 0;
+        channelManager.historyAbortController = null;
+        channelManager.pendingVerifications.clear();
         channelManager.messageHandlers = [];
         channelManager.processingMessages.clear();
         channelManager.sendingMessages.clear();
@@ -1102,6 +1111,341 @@ describe('ChannelManager', () => {
             expect(dmCrypto.peerPublicKeys.has(peerAddress)).toBe(false);
             expect(dmManager.conversations.has(peerAddress)).toBe(false);
             expect(channelManager.channels.has(streamId)).toBe(false);
+        });
+    });
+
+    // =========================================================================
+    // Race Condition Protection Tests (switchGeneration, AbortController, etc.)
+    // =========================================================================
+
+    describe('switchGeneration - channel switch race condition protection', () => {
+        it('should increment switchGeneration on every setCurrentChannel call', () => {
+            expect(channelManager.switchGeneration).toBe(0);
+            
+            channelManager.setCurrentChannel('stream-a');
+            expect(channelManager.switchGeneration).toBe(1);
+            
+            channelManager.setCurrentChannel('stream-b');
+            expect(channelManager.switchGeneration).toBe(2);
+            
+            channelManager.setCurrentChannel(null);
+            expect(channelManager.switchGeneration).toBe(3);
+        });
+
+        it('should increment switchGeneration via clearChannels()', () => {
+            channelManager.setCurrentChannel('stream-a');
+            const genBefore = channelManager.switchGeneration;
+            
+            channelManager.clearChannels();
+            
+            expect(channelManager.switchGeneration).toBeGreaterThan(genBefore);
+        });
+
+        it('should increment switchGeneration when re-selecting the same channel', () => {
+            channelManager.setCurrentChannel('stream-a');
+            const gen1 = channelManager.switchGeneration;
+            
+            channelManager.setCurrentChannel('stream-a');
+            expect(channelManager.switchGeneration).toBe(gen1 + 1);
+        });
+    });
+
+    describe('cancelPendingVerifications()', () => {
+        it('should clear timer and delete batch for a stream', () => {
+            const timer = setTimeout(() => {}, 10000);
+            channelManager.pendingVerifications.set('stream-a', {
+                messages: [{ data: {}, channel: {} }, { data: {}, channel: {} }],
+                timer
+            });
+            
+            channelManager.cancelPendingVerifications('stream-a');
+            
+            expect(channelManager.pendingVerifications.has('stream-a')).toBe(false);
+        });
+
+        it('should be a no-op for non-existent stream', () => {
+            expect(() => channelManager.cancelPendingVerifications('non-existent')).not.toThrow();
+        });
+
+        it('should handle batch with null timer', () => {
+            channelManager.pendingVerifications.set('stream-a', {
+                messages: [{ data: {}, channel: {} }],
+                timer: null
+            });
+            
+            channelManager.cancelPendingVerifications('stream-a');
+            
+            expect(channelManager.pendingVerifications.has('stream-a')).toBe(false);
+        });
+    });
+
+    describe('setCurrentChannel() - cleanup on switch', () => {
+        it('should cancel pending verifications for previous channel', () => {
+            channelManager.pendingVerifications.set('stream-a', {
+                messages: [{ data: {}, channel: {} }],
+                timer: setTimeout(() => {}, 10000)
+            });
+            
+            channelManager.setCurrentChannel('stream-a');
+            // Now switch away
+            channelManager.setCurrentChannel('stream-b');
+            
+            expect(channelManager.pendingVerifications.has('stream-a')).toBe(false);
+        });
+
+        it('should NOT cancel verifications when re-selecting same channel', () => {
+            channelManager.setCurrentChannel('stream-a');
+            channelManager.pendingVerifications.set('stream-a', {
+                messages: [{ data: {}, channel: {} }],
+                timer: null
+            });
+            
+            channelManager.setCurrentChannel('stream-a');
+            
+            // Should still be there since we didn't actually switch
+            expect(channelManager.pendingVerifications.has('stream-a')).toBe(true);
+        });
+
+        it('should abort historyAbortController on switch', () => {
+            const controller = new AbortController();
+            channelManager.historyAbortController = controller;
+            
+            channelManager.setCurrentChannel('stream-b');
+            
+            expect(controller.signal.aborted).toBe(true);
+            expect(channelManager.historyAbortController).toBeNull();
+        });
+
+        it('should handle null historyAbortController gracefully', () => {
+            channelManager.historyAbortController = null;
+            
+            expect(() => channelManager.setCurrentChannel('stream-a')).not.toThrow();
+        });
+    });
+
+    describe('clearChannels() - cleanup', () => {
+        it('should clear all pending verifications with timers', () => {
+            const timer1 = setTimeout(() => {}, 10000);
+            const timer2 = setTimeout(() => {}, 10000);
+            channelManager.pendingVerifications.set('stream-a', {
+                messages: [{ data: {}, channel: {} }],
+                timer: timer1
+            });
+            channelManager.pendingVerifications.set('stream-b', {
+                messages: [{ data: {}, channel: {} }],
+                timer: timer2
+            });
+            
+            channelManager.clearChannels();
+            
+            expect(channelManager.pendingVerifications.size).toBe(0);
+        });
+
+        it('should abort historyAbortController', () => {
+            const controller = new AbortController();
+            channelManager.historyAbortController = controller;
+            channelManager.currentChannel = 'stream-a';
+            
+            channelManager.clearChannels();
+            
+            expect(controller.signal.aborted).toBe(true);
+        });
+    });
+
+    describe('loadMoreHistory() - switchGeneration guard', () => {
+        const streamId = 'test-stream-1';
+
+        beforeEach(() => {
+            identityManager.verifyMessage.mockResolvedValue({ valid: true, trustLevel: 1 });
+            channelManager.channels.set(streamId, {
+                streamId,
+                name: 'Test',
+                type: 'public',
+                messages: [{ id: 'msg-1', timestamp: 1000, text: 'hello', sender: '0x1' }],
+                hasMoreHistory: true,
+                oldestTimestamp: 1000,
+                loadingHistory: false,
+                password: null
+            });
+            channelManager.setCurrentChannel(streamId);
+        });
+
+        it('should return messages when channel does not switch', async () => {
+            const newMsg = { id: 'msg-old', timestamp: 500, text: 'older', sender: '0x2' };
+            streamrController.fetchOlderHistory.mockResolvedValue({
+                messages: [newMsg],
+                hasMore: false
+            });
+            
+            const result = await channelManager.loadMoreHistory(streamId);
+            
+            expect(result.loaded).toBe(1);
+            const channel = channelManager.channels.get(streamId);
+            expect(channel.messages.some(m => m.id === 'msg-old')).toBe(true);
+        });
+
+        it('should discard results when channel switches during fetch', async () => {
+            // fetchOlderHistory simulates a slow response; we switch channel mid-await
+            streamrController.fetchOlderHistory.mockImplementation(async () => {
+                // Simulate channel switch happening during the fetch
+                channelManager.setCurrentChannel('other-stream');
+                return { messages: [{ id: 'stale-msg', timestamp: 500, text: 'stale', sender: '0x2' }], hasMore: true };
+            });
+            
+            const result = await channelManager.loadMoreHistory(streamId);
+            
+            expect(result.loaded).toBe(0);
+            const channel = channelManager.channels.get(streamId);
+            expect(channel.messages.some(m => m.id === 'stale-msg')).toBe(false);
+        });
+
+        it('should discard results when channel switches during verification', async () => {
+            const newMsg = { id: 'msg-verify', timestamp: 500, text: 'test', sender: '0x2' };
+            streamrController.fetchOlderHistory.mockResolvedValue({
+                messages: [newMsg],
+                hasMore: false
+            });
+            
+            // Switch channel during verification
+            identityManager.verifyMessage.mockImplementation(async () => {
+                channelManager.setCurrentChannel('other-stream');
+                return { valid: true, trustLevel: 1 };
+            });
+            
+            const result = await channelManager.loadMoreHistory(streamId);
+            
+            expect(result.loaded).toBe(0);
+            const channel = channelManager.channels.get(streamId);
+            expect(channel.messages.some(m => m.id === 'msg-verify')).toBe(false);
+        });
+
+        it('should pass abort signal to fetchOlderHistory', async () => {
+            streamrController.fetchOlderHistory.mockResolvedValue({ messages: [], hasMore: false });
+            
+            await channelManager.loadMoreHistory(streamId);
+            
+            // Verify signal was passed (6th argument)
+            const call = streamrController.fetchOlderHistory.mock.calls[0];
+            expect(call[5]).toBeInstanceOf(AbortSignal);
+        });
+
+        it('should set loadingHistory false on stale discard after fetch', async () => {
+            streamrController.fetchOlderHistory.mockImplementation(async () => {
+                channelManager.setCurrentChannel('other-stream');
+                return { messages: [{ id: 'x', timestamp: 500, text: 't', sender: '0x2' }], hasMore: true };
+            });
+            
+            await channelManager.loadMoreHistory(streamId);
+            
+            const channel = channelManager.channels.get(streamId);
+            expect(channel.loadingHistory).toBe(false);
+        });
+    });
+
+    describe('flushBatchVerification() - switchGeneration guard', () => {
+        const streamId = 'test-stream-1';
+
+        beforeEach(() => {
+            identityManager.verifyMessage.mockResolvedValue({ valid: true, trustLevel: 1 });
+            channelManager.channels.set(streamId, {
+                streamId,
+                name: 'Test',
+                type: 'public',
+                messages: [],
+                hasMoreHistory: true
+            });
+            channelManager.setCurrentChannel(streamId);
+        });
+
+        it('should add messages when channel does not switch', async () => {
+            const channel = channelManager.channels.get(streamId);
+            channelManager.pendingVerifications.set(streamId, {
+                messages: [
+                    { data: { id: 'batch-1', timestamp: 100, text: 'hi', sender: '0x1' }, channel },
+                    { data: { id: 'batch-2', timestamp: 200, text: 'yo', sender: '0x2' }, channel }
+                ],
+                timer: null
+            });
+
+            await channelManager.flushBatchVerification(streamId);
+            
+            expect(channel.messages.length).toBe(2);
+            expect(channel.messages.some(m => m.id === 'batch-1')).toBe(true);
+            expect(channel.messages.some(m => m.id === 'batch-2')).toBe(true);
+        });
+
+        it('should discard results when channel switches during verification', async () => {
+            const channel = channelManager.channels.get(streamId);
+            channelManager.pendingVerifications.set(streamId, {
+                messages: [
+                    { data: { id: 'stale-batch', timestamp: 100, text: 'stale', sender: '0x1' }, channel }
+                ],
+                timer: null
+            });
+
+            // Switch channel during verification
+            identityManager.verifyMessage.mockImplementation(async () => {
+                channelManager.setCurrentChannel('other-stream');
+                return { valid: true, trustLevel: 1 };
+            });
+
+            await channelManager.flushBatchVerification(streamId);
+            
+            expect(channel.messages.length).toBe(0);
+        });
+
+        it('should not emit history_batch_loaded when results discarded', async () => {
+            const handler = vi.fn();
+            channelManager.onMessage(handler);
+            
+            const channel = channelManager.channels.get(streamId);
+            channelManager.pendingVerifications.set(streamId, {
+                messages: [
+                    { data: { id: 'x', timestamp: 100, text: 't', sender: '0x1' }, channel }
+                ],
+                timer: null
+            });
+
+            identityManager.verifyMessage.mockImplementation(async () => {
+                channelManager.setCurrentChannel('other-stream');
+                return { valid: true, trustLevel: 1 };
+            });
+
+            await channelManager.flushBatchVerification(streamId);
+            
+            const batchEvents = handler.mock.calls.filter(c => c[0] === 'history_batch_loaded');
+            expect(batchEvents.length).toBe(0);
+        });
+
+        it('should emit history_batch_loaded when channel stays the same', async () => {
+            const handler = vi.fn();
+            channelManager.onMessage(handler);
+            
+            const channel = channelManager.channels.get(streamId);
+            channelManager.pendingVerifications.set(streamId, {
+                messages: [
+                    { data: { id: 'ok-msg', timestamp: 100, text: 'ok', sender: '0x1' }, channel }
+                ],
+                timer: null
+            });
+
+            await channelManager.flushBatchVerification(streamId);
+            
+            const batchEvents = handler.mock.calls.filter(c => c[0] === 'history_batch_loaded');
+            expect(batchEvents.length).toBe(1);
+            expect(batchEvents[0][1].loaded).toBe(1);
+        });
+
+        it('should be a no-op when batch is empty', async () => {
+            channelManager.pendingVerifications.set(streamId, {
+                messages: [],
+                timer: null
+            });
+
+            await channelManager.flushBatchVerification(streamId);
+            
+            const channel = channelManager.channels.get(streamId);
+            expect(channel.messages.length).toBe(0);
         });
     });
 });
