@@ -65,7 +65,10 @@ vi.mock('../../src/js/secureStorage.js', () => ({
         getSentMessages: vi.fn().mockReturnValue([]),
         addSentMessage: vi.fn().mockResolvedValue(undefined),
         getTrustedContacts: vi.fn().mockReturnValue({}),
-        getSentReactions: vi.fn().mockReturnValue({})
+        getSentReactions: vi.fn().mockReturnValue({}),
+        isBlocked: vi.fn().mockReturnValue(false),
+        getDMLeftAt: vi.fn().mockReturnValue(null),
+        clearDMLeftAt: vi.fn().mockResolvedValue(undefined)
     }
 }));
 
@@ -490,6 +493,84 @@ describe('DMManager', () => {
                 })
             );
         });
+
+        it('should ignore messages from blocked peers', async () => {
+            const peerAddress = '0xblocked11111111111111111111111111111111';
+            const streamId = `${peerAddress}/Pombo-DM-1`;
+            const channel = {
+                messageStreamId: streamId,
+                type: 'dm',
+                peerAddress,
+                messages: []
+            };
+            channelManager.channels.set(streamId, channel);
+            dmManager.conversations.set(peerAddress, streamId);
+
+            secureStorage.isBlocked.mockReturnValueOnce(true);
+
+            await dmManager.routeInboxMessage({
+                senderId: peerAddress,
+                id: 'blocked-msg-1',
+                text: 'You should not see this',
+                timestamp: Date.now()
+            });
+
+            expect(channel.messages).toHaveLength(0);
+            expect(channelManager.notifyHandlers).not.toHaveBeenCalled();
+        });
+
+        it('should ignore messages older than dmLeftAt timestamp', async () => {
+            const peerAddress = '0xleft22222222222222222222222222222222222222';
+            const streamId = `${peerAddress}/Pombo-DM-1`;
+            const channel = {
+                messageStreamId: streamId,
+                type: 'dm',
+                peerAddress,
+                messages: []
+            };
+            channelManager.channels.set(streamId, channel);
+            dmManager.conversations.set(peerAddress, streamId);
+
+            const leaveTs = 1000000;
+            secureStorage.getDMLeftAt.mockReturnValueOnce(leaveTs);
+
+            await dmManager.routeInboxMessage({
+                senderId: peerAddress,
+                id: 'old-msg',
+                text: 'Old message',
+                timestamp: leaveTs - 100 // older than leave
+            });
+
+            expect(channel.messages).toHaveLength(0);
+            expect(secureStorage.clearDMLeftAt).not.toHaveBeenCalled();
+        });
+
+        it('should resurface conversation when message is newer than dmLeftAt', async () => {
+            const peerAddress = '0xleft33333333333333333333333333333333333333';
+            const streamId = `${peerAddress}/Pombo-DM-1`;
+            const channel = {
+                messageStreamId: streamId,
+                type: 'dm',
+                peerAddress,
+                messages: []
+            };
+            channelManager.channels.set(streamId, channel);
+            dmManager.conversations.set(peerAddress, streamId);
+
+            const leaveTs = 1000000;
+            secureStorage.getDMLeftAt.mockReturnValueOnce(leaveTs);
+
+            await dmManager.routeInboxMessage({
+                senderId: peerAddress,
+                id: 'new-msg',
+                text: 'New message!',
+                timestamp: leaveTs + 500 // newer than leave
+            });
+
+            expect(secureStorage.clearDMLeftAt).toHaveBeenCalledWith(peerAddress);
+            expect(channel.messages).toHaveLength(1);
+            expect(channel.messages[0].text).toBe('New message!');
+        });
     });
 
     // ==================== routeInboxControl() ====================
@@ -514,6 +595,38 @@ describe('DMManager', () => {
             await dmManager.routeInboxControl({
                 senderId: '0xunknown',
                 type: 'typing'
+            });
+
+            expect(channelManager.handleControlMessage).not.toHaveBeenCalled();
+        });
+
+        it('should ignore control messages from blocked peers', async () => {
+            const peerAddress = '0xblocked55555555555555555555555555555555';
+            const streamId = `${peerAddress}/Pombo-DM-1`;
+            dmManager.conversations.set(peerAddress, streamId);
+
+            secureStorage.isBlocked.mockReturnValueOnce(true);
+
+            await dmManager.routeInboxControl({
+                senderId: peerAddress,
+                type: 'typing',
+                isTyping: true
+            });
+
+            expect(channelManager.handleControlMessage).not.toHaveBeenCalled();
+        });
+
+        it('should ignore control messages from soft-left peers', async () => {
+            const peerAddress = '0xleft66666666666666666666666666666666666';
+            const streamId = `${peerAddress}/Pombo-DM-1`;
+            dmManager.conversations.set(peerAddress, streamId);
+
+            secureStorage.getDMLeftAt.mockReturnValueOnce(1000);
+
+            await dmManager.routeInboxControl({
+                senderId: peerAddress,
+                type: 'typing',
+                isTyping: true
             });
 
             expect(channelManager.handleControlMessage).not.toHaveBeenCalled();

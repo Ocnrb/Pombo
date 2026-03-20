@@ -50,7 +50,10 @@ vi.mock('../../src/js/secureStorage.js', () => ({
     secureStorage: {
         exportForSync: vi.fn().mockReturnValue({
             sentMessages: {},
+            sentReactions: {},
             channels: [],
+            blockedPeers: [],
+            dmLeftAt: {},
             trustedContacts: {},
             ensCache: {},
             username: null,
@@ -355,7 +358,7 @@ describe('syncManager', () => {
             expect(result.sentMessages.stream1).toHaveLength(1);
         });
 
-        it('should merge channels by streamId', () => {
+        it('should use latest channels from incoming (latest-wins)', () => {
             const base = {
                 channels: [{ messageStreamId: 'ch1', name: 'Channel 1' }]
             };
@@ -365,7 +368,9 @@ describe('syncManager', () => {
             
             const result = syncManager.mergeState(base, incoming);
             
-            expect(result.channels).toHaveLength(2);
+            // Incoming wins — only ch2, ch1 is gone
+            expect(result.channels).toHaveLength(1);
+            expect(result.channels[0].messageStreamId).toBe('ch2');
         });
 
         it('should prefer incoming username if set', () => {
@@ -395,6 +400,84 @@ describe('syncManager', () => {
             expect(result.trustedContacts['0x1']).toBeDefined();
             expect(result.trustedContacts['0x2']).toBeDefined();
         });
+
+        it('should merge sentReactions with remote-wins strategy', () => {
+            const base = {
+                sentReactions: {
+                    'stream1': { 'msg1': { '👍': ['0x1'] }, 'msg2': { '❤️': ['0x1'] } }
+                }
+            };
+            const incoming = {
+                sentReactions: {
+                    'stream1': { 'msg1': { '🔥': ['0x1'] } },
+                    'stream2': { 'msg3': { '👍': ['0x2'] } }
+                }
+            };
+
+            const result = syncManager.mergeState(base, incoming);
+
+            // msg1: remote wins (🔥 replaces 👍)
+            expect(result.sentReactions.stream1.msg1['🔥']).toEqual(['0x1']);
+            expect(result.sentReactions.stream1.msg1['👍']).toBeUndefined();
+            // msg2: local-only preserved
+            expect(result.sentReactions.stream1.msg2['❤️']).toEqual(['0x1']);
+            // stream2: from remote
+            expect(result.sentReactions.stream2.msg3['👍']).toEqual(['0x2']);
+        });
+
+        it('should use latest blockedPeers from incoming', () => {
+            const base = { blockedPeers: ['0xaaa'] };
+            const incoming = { blockedPeers: ['0xaaa', '0xbbb'] };
+
+            const result = syncManager.mergeState(base, incoming);
+
+            expect(result.blockedPeers).toEqual(['0xaaa', '0xbbb']);
+        });
+
+        it('should keep base blockedPeers when incoming is undefined', () => {
+            const base = { blockedPeers: ['0xaaa'] };
+            const incoming = {};
+
+            const result = syncManager.mergeState(base, incoming);
+
+            expect(result.blockedPeers).toEqual(['0xaaa']);
+        });
+
+        it('should propagate unblock via latest-wins', () => {
+            const base = { blockedPeers: ['0xaaa', '0xbbb'] };
+            const incoming = { blockedPeers: ['0xbbb'] }; // 0xaaa unblocked remotely
+
+            const result = syncManager.mergeState(base, incoming);
+
+            expect(result.blockedPeers).toEqual(['0xbbb']);
+        });
+
+        it('should use latest dmLeftAt from incoming', () => {
+            const base = { dmLeftAt: { '0xaaa': 100, '0xbbb': 300 } };
+            const incoming = { dmLeftAt: { '0xaaa': 200, '0xccc': 400 } };
+
+            const result = syncManager.mergeState(base, incoming);
+
+            expect(result.dmLeftAt).toEqual({ '0xaaa': 200, '0xccc': 400 });
+        });
+
+        it('should keep base dmLeftAt when incoming is undefined', () => {
+            const base = { dmLeftAt: { '0xaaa': 100 } };
+            const incoming = {};
+
+            const result = syncManager.mergeState(base, incoming);
+
+            expect(result.dmLeftAt).toEqual({ '0xaaa': 100 });
+        });
+
+        it('should propagate clearDMLeftAt via latest-wins', () => {
+            const base = { dmLeftAt: { '0xaaa': 100, '0xbbb': 200 } };
+            const incoming = { dmLeftAt: {} }; // all cleared remotely
+
+            const result = syncManager.mergeState(base, incoming);
+
+            expect(result.dmLeftAt).toEqual({});
+        });
     });
 
     describe('mergeSentMessages', () => {
@@ -419,41 +502,75 @@ describe('syncManager', () => {
         });
     });
 
-    describe('mergeChannels', () => {
-        it('should union channels from both sources', () => {
-            const local = [{ messageStreamId: 'ch1' }];
-            const remote = [{ messageStreamId: 'ch2' }];
-            
-            const result = syncManager.mergeChannels(local, remote);
-            
-            expect(result).toHaveLength(2);
+    describe('mergeSentReactions', () => {
+        it('should merge reactions from different streams', () => {
+            const local = { 'stream1': { 'msg1': { '👍': ['0x1'] } } };
+            const remote = { 'stream2': { 'msg2': { '❤️': ['0x2'] } } };
+
+            const result = syncManager.mergeSentReactions(local, remote);
+
+            expect(result.stream1.msg1['👍']).toEqual(['0x1']);
+            expect(result.stream2.msg2['❤️']).toEqual(['0x2']);
         });
 
-        it('should merge metadata for same channel', () => {
-            const local = [{ messageStreamId: 'ch1', name: 'Old Name' }];
-            const remote = [{ messageStreamId: 'ch1', name: 'New Name', extra: 'data' }];
-            
-            const result = syncManager.mergeChannels(local, remote);
-            
-            expect(result).toHaveLength(1);
-            expect(result[0].name).toBe('New Name');
-            expect(result[0].extra).toBe('data');
+        it('should prefer remote state when same messageId exists in both', () => {
+            const local = { 'stream1': { 'msg1': { '👍': ['0x1'] } } };
+            const remote = { 'stream1': { 'msg1': { '❤️': ['0x1'] } } };
+
+            const result = syncManager.mergeSentReactions(local, remote);
+
+            // Remote wins — only ❤️, no 👍
+            expect(result.stream1.msg1['❤️']).toEqual(['0x1']);
+            expect(result.stream1.msg1['👍']).toBeUndefined();
+        });
+
+        it('should handle reaction removal via remote (empty message entry)', () => {
+            const local = { 'stream1': { 'msg1': { '👍': ['0x1'] } } };
+            const remote = { 'stream1': { 'msg1': {} } };
+
+            const result = syncManager.mergeSentReactions(local, remote);
+
+            // Remote removed all reactions for msg1
+            expect(result.stream1).toBeUndefined();
+        });
+
+        it('should preserve local-only entries not in remote', () => {
+            const local = { 'stream1': { 'msg1': { '👍': ['0x1'] }, 'msg2': { '❤️': ['0x1'] } } };
+            const remote = { 'stream1': { 'msg1': { '🔥': ['0x1'] } } };
+
+            const result = syncManager.mergeSentReactions(local, remote);
+
+            // msg1: remote wins
+            expect(result.stream1.msg1['🔥']).toEqual(['0x1']);
+            expect(result.stream1.msg1['👍']).toBeUndefined();
+            // msg2: local preserved (not in remote)
+            expect(result.stream1.msg2['❤️']).toEqual(['0x1']);
+        });
+
+        it('should handle empty inputs', () => {
+            expect(syncManager.mergeSentReactions({}, {})).toEqual({});
+            expect(syncManager.mergeSentReactions(
+                { 'stream1': { 'msg1': { '👍': ['0x1'] } } },
+                {}
+            ).stream1.msg1['👍']).toEqual(['0x1']);
         });
     });
 
     describe('fullSync', () => {
-        it('should call pull then push', async () => {
+        it('should call push then pull (push-first order)', async () => {
             authManager.wallet = { privateKey: '0x1234' };
-            const pullSpy = vi.spyOn(syncManager, 'pullSync').mockResolvedValue(null);
-            const pushSpy = vi.spyOn(syncManager, 'pushSync').mockResolvedValue(undefined);
+            const order = [];
+            const pushSpy = vi.spyOn(syncManager, 'pushSync').mockImplementation(async () => { order.push('push'); });
+            const pullSpy = vi.spyOn(syncManager, 'pullSync').mockImplementation(async () => { order.push('pull'); return null; });
             
             await syncManager.fullSync();
             
-            expect(pullSpy).toHaveBeenCalled();
             expect(pushSpy).toHaveBeenCalled();
+            expect(pullSpy).toHaveBeenCalled();
+            expect(order).toEqual(['push', 'pull']);
             
-            pullSpy.mockRestore();
             pushSpy.mockRestore();
+            pullSpy.mockRestore();
         });
     });
 

@@ -86,6 +86,16 @@ if (!globalThis.indexedDB) {
     Object.defineProperty(globalThis, 'indexedDB', { value: indexedDBMock, writable: true });
 }
 
+// CSS.escape polyfill for test environment
+if (!globalThis.CSS) {
+    globalThis.CSS = {};
+}
+if (!globalThis.CSS.escape) {
+    globalThis.CSS.escape = function(value) {
+        return String(value).replace(/([^\w-])/g, '\\$1');
+    };
+}
+
 // ============================================
 // Clipboard API Mock
 // ============================================

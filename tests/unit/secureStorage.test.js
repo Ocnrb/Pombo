@@ -1172,6 +1172,9 @@ describe('secureStorage', () => {
                 secureStorage.cache.username = 'testuser';
                 secureStorage.cache.graphApiKey = 'api123';
                 secureStorage.cache.sentMessages = { 'stream1': [{ id: 'msg1' }] };
+                secureStorage.cache.sentReactions = { 'stream1': { 'msg1': { '👍': ['0xuser1'] } } };
+                secureStorage.cache.blockedPeers = ['0xblocked1'];
+                secureStorage.cache.dmLeftAt = { '0xpeer1': 12345 };
                 
                 const result = secureStorage.exportForSync();
                 
@@ -1181,6 +1184,9 @@ describe('secureStorage', () => {
                 expect(result.username).toBe('testuser');
                 expect(result.graphApiKey).toBe('api123');
                 expect(result.sentMessages.stream1).toHaveLength(1);
+                expect(result.sentReactions.stream1.msg1['👍']).toEqual(['0xuser1']);
+                expect(result.blockedPeers).toEqual(['0xblocked1']);
+                expect(result.dmLeftAt).toEqual({ '0xpeer1': 12345 });
             });
 
             it('should return empty values when cache is empty', () => {
@@ -1194,6 +1200,9 @@ describe('secureStorage', () => {
                 expect(result.username).toBe(null);
                 expect(result.graphApiKey).toBe(null);
                 expect(result.sentMessages).toEqual({});
+                expect(result.sentReactions).toEqual({});
+                expect(result.blockedPeers).toEqual([]);
+                expect(result.dmLeftAt).toEqual({});
             });
 
             it('should not include non-syncable fields', () => {
@@ -1225,7 +1234,10 @@ describe('secureStorage', () => {
                     ensCache: { '0xens': 'new.eth' },
                     username: 'newuser',
                     graphApiKey: 'newapi',
-                    sentMessages: { 'newStream': [{ id: 'new1' }] }
+                    sentMessages: { 'newStream': [{ id: 'new1' }] },
+                    sentReactions: { 'newStream': { 'msg1': { '❤️': ['0xnew'] } } },
+                    blockedPeers: ['0xblocked'],
+                    dmLeftAt: { '0xpeer': 99999 }
                 };
                 
                 await secureStorage.importFromSync(data);
@@ -1236,6 +1248,9 @@ describe('secureStorage', () => {
                 expect(secureStorage.cache.username).toBe('newuser');
                 expect(secureStorage.cache.graphApiKey).toBe('newapi');
                 expect(secureStorage.cache.sentMessages).toEqual(data.sentMessages);
+                expect(secureStorage.cache.sentReactions).toEqual(data.sentReactions);
+                expect(secureStorage.cache.blockedPeers).toEqual(['0xblocked']);
+                expect(secureStorage.cache.dmLeftAt).toEqual({ '0xpeer': 99999 });
             });
 
             it('should return true when channels are updated', async () => {
@@ -1282,6 +1297,109 @@ describe('secureStorage', () => {
                 // undefined should not trigger update
                 expect(secureStorage.cache.username).toBe('keep');
             });
+        });
+    });
+
+    // ==================== blockedPeers ====================
+    describe('blockedPeers', () => {
+        beforeEach(() => {
+            secureStorage.initAsGuest('0xBlockTest');
+        });
+
+        it('getBlockedPeers should return empty array by default', () => {
+            expect(secureStorage.getBlockedPeers()).toEqual([]);
+        });
+
+        it('addBlockedPeer should add normalized address and deduplicate', async () => {
+            await secureStorage.addBlockedPeer('0xABC');
+            await secureStorage.addBlockedPeer('0xabc'); // duplicate (different case)
+            await secureStorage.addBlockedPeer('0xDEF');
+
+            const peers = secureStorage.getBlockedPeers();
+            expect(peers).toEqual(['0xabc', '0xdef']);
+        });
+
+        it('isBlocked should match case-insensitively', async () => {
+            await secureStorage.addBlockedPeer('0xAbCdEf');
+
+            expect(secureStorage.isBlocked('0xabcdef')).toBe(true);
+            expect(secureStorage.isBlocked('0xABCDEF')).toBe(true);
+            expect(secureStorage.isBlocked('0x999999')).toBe(false);
+        });
+
+        it('isBlocked should return false when locked', () => {
+            secureStorage.isUnlocked = false;
+            expect(secureStorage.isBlocked('0xabc')).toBe(false);
+        });
+
+        it('removeBlockedPeer should remove by normalized address', async () => {
+            await secureStorage.addBlockedPeer('0xaaa');
+            await secureStorage.addBlockedPeer('0xbbb');
+            await secureStorage.removeBlockedPeer('0xAAA');
+
+            expect(secureStorage.getBlockedPeers()).toEqual(['0xbbb']);
+        });
+
+        it('removeBlockedPeer should be safe when no blockedPeers array', async () => {
+            delete secureStorage.cache.blockedPeers;
+            // should not throw
+            await secureStorage.removeBlockedPeer('0xabc');
+        });
+    });
+
+    // ==================== dmLeftAt ====================
+    describe('dmLeftAt', () => {
+        beforeEach(() => {
+            secureStorage.initAsGuest('0xLeftAtTest');
+        });
+
+        it('getDMLeftAt should return null by default', () => {
+            expect(secureStorage.getDMLeftAt('0xpeer')).toBeNull();
+        });
+
+        it('setDMLeftAt + getDMLeftAt round-trip with normalization', async () => {
+            await secureStorage.setDMLeftAt('0xPEER', 12345);
+
+            expect(secureStorage.getDMLeftAt('0xpeer')).toBe(12345);
+            expect(secureStorage.getDMLeftAt('0xPEER')).toBe(12345);
+        });
+
+        it('getAllDMLeftAt should return all entries', async () => {
+            await secureStorage.setDMLeftAt('0xaaa', 100);
+            await secureStorage.setDMLeftAt('0xbbb', 200);
+
+            expect(secureStorage.getAllDMLeftAt()).toEqual({ '0xaaa': 100, '0xbbb': 200 });
+        });
+
+        it('clearDMLeftAt should remove specific entry', async () => {
+            await secureStorage.setDMLeftAt('0xaaa', 100);
+            await secureStorage.setDMLeftAt('0xbbb', 200);
+            await secureStorage.clearDMLeftAt('0xAAA');
+
+            expect(secureStorage.getDMLeftAt('0xaaa')).toBeNull();
+            expect(secureStorage.getDMLeftAt('0xbbb')).toBe(200);
+        });
+
+        it('clearDMLeftAt should not crash on missing map', async () => {
+            delete secureStorage.cache.dmLeftAt;
+            await secureStorage.clearDMLeftAt('0xabc');
+            // should not throw
+        });
+
+        it('getDMLeftAt should return null when locked', () => {
+            secureStorage.isUnlocked = false;
+            expect(secureStorage.getDMLeftAt('0xabc')).toBeNull();
+        });
+
+        it('getAllDMLeftAt should return empty when locked', () => {
+            secureStorage.isUnlocked = false;
+            expect(secureStorage.getAllDMLeftAt()).toEqual({});
+        });
+
+        it('initAsGuest should initialize blockedPeers and dmLeftAt', () => {
+            secureStorage.initAsGuest('0xNewGuest');
+            expect(secureStorage.cache.blockedPeers).toEqual([]);
+            expect(secureStorage.cache.dmLeftAt).toEqual({});
         });
     });
 });

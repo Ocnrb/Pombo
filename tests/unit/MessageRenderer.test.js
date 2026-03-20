@@ -691,5 +691,95 @@ describe('MessageRenderer', () => {
             expect(result).toContain('data-file-id="file-456"');
             expect(result).toContain('video.mp4');
         });
+
+        it('should show downloading state with progress when download is active', () => {
+            messageRenderer.setDependencies({
+                getFileUrl: () => null,
+                getCurrentAddress: () => '0x123',
+                isSeeding: () => false,
+                isDownloading: () => true,
+                getDownloadProgress: () => ({ percent: 45, received: 9, total: 20, fileSize: 10485760 })
+            });
+            
+            const msg = {
+                type: 'video_announce',
+                metadata: {
+                    fileId: 'file-dl-1',
+                    fileName: 'movie.mp4',
+                    fileType: 'video/mp4',
+                    fileSize: 10485760
+                }
+            };
+            
+            const result = messageRenderer.renderVideoContent(msg);
+            // Progress overlay should be visible (no 'hidden' class)
+            expect(result).not.toMatch(/data-progress-overlay="file-dl-1"[^>]*class="hidden/);
+            // Should show percentage
+            expect(result).toContain('45%');
+            // Progress bar should reflect percentage
+            expect(result).toContain('width: 45%');
+            // Download button should be disabled
+            expect(result).toContain('disabled');
+            expect(result).toContain('cursor-not-allowed');
+            // Play icon hidden, loading icon visible
+            expect(result).toMatch(/download-play-icon[^"]*hidden/);
+            expect(result).not.toMatch(/download-loading-icon[^"]*hidden/);
+            // Should show MB progress
+            expect(result).toContain('/ 10.0 MB');
+        });
+
+        it('should show idle state when not downloading and no URL', () => {
+            messageRenderer.setDependencies({
+                getFileUrl: () => null,
+                getCurrentAddress: () => '0x123',
+                isSeeding: () => false,
+                isDownloading: () => false,
+                getDownloadProgress: () => null
+            });
+            
+            const msg = {
+                type: 'video_announce',
+                metadata: {
+                    fileId: 'file-idle-1',
+                    fileName: 'clip.mp4',
+                    fileType: 'video/mp4',
+                    fileSize: 2048000
+                }
+            };
+            
+            const result = messageRenderer.renderVideoContent(msg);
+            // Progress overlay should be hidden
+            expect(result).toMatch(/data-progress-overlay="file-idle-1"[^>]*class="hidden/);
+            // Button should NOT be disabled
+            expect(result).not.toContain('disabled');
+            // Play icon visible
+            expect(result).not.toMatch(/download-play-icon[^"]*hidden/);
+            // Loading icon hidden
+            expect(result).toMatch(/download-loading-icon[^"]*hidden/);
+        });
+
+        it('should fallback gracefully when isDownloading dep is not wired', () => {
+            messageRenderer.setDependencies({
+                getFileUrl: () => null,
+                getCurrentAddress: () => '0x123',
+                isSeeding: () => false
+                // isDownloading and getDownloadProgress NOT provided
+            });
+            
+            const msg = {
+                type: 'video_announce',
+                metadata: {
+                    fileId: 'file-compat-1',
+                    fileName: 'old.mp4',
+                    fileType: 'video/mp4',
+                    fileSize: 1024000
+                }
+            };
+            
+            const result = messageRenderer.renderVideoContent(msg);
+            // Should render normal idle state (backward compatible)
+            expect(result).toMatch(/data-progress-overlay="file-compat-1"[^>]*class="hidden/);
+            expect(result).not.toContain('disabled');
+        });
     });
 });

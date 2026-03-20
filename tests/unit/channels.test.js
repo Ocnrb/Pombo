@@ -68,7 +68,12 @@ vi.mock('../../src/js/secureStorage.js', () => ({
         saveChannels: vi.fn(),
         setChannels: vi.fn(),
         getChannel: vi.fn(),
-        setChannel: vi.fn()
+        setChannel: vi.fn(),
+        clearSentMessages: vi.fn().mockResolvedValue(undefined),
+        clearSentReactions: vi.fn().mockResolvedValue(undefined),
+        removeFromChannelOrder: vi.fn().mockResolvedValue(undefined),
+        setDMLeftAt: vi.fn().mockResolvedValue(undefined),
+        addBlockedPeer: vi.fn().mockResolvedValue(undefined)
     }
 }));
 
@@ -1081,15 +1086,10 @@ describe('ChannelManager', () => {
 
     // ==================== leaveChannel() DM cleanup ====================
     describe('leaveChannel() DM cleanup', () => {
-        it('should clean up DM-specific data when leaving DM channel', async () => {
+        it('should soft-leave DM channel by default (setDMLeftAt)', async () => {
             const { dmManager } = await import('../../src/js/dm.js');
             const { dmCrypto } = await import('../../src/js/dmCrypto.js');
             const { secureStorage } = await import('../../src/js/secureStorage.js');
-            
-            // Setup mock functions
-            secureStorage.clearSentMessages = vi.fn().mockResolvedValue(undefined);
-            secureStorage.clearSentReactions = vi.fn().mockResolvedValue(undefined);
-            secureStorage.removeFromChannelOrder = vi.fn().mockResolvedValue(undefined);
             
             const peerAddress = '0xpeer123456789012345678901234567890123456';
             const streamId = `${peerAddress}/Pombo-DM-1`;
@@ -1106,10 +1106,45 @@ describe('ChannelManager', () => {
             
             await channelManager.leaveChannel(streamId);
             
+            // Soft leave: should set dmLeftAt, not addBlockedPeer
+            expect(secureStorage.setDMLeftAt).toHaveBeenCalledWith(peerAddress, expect.any(Number));
+            expect(secureStorage.addBlockedPeer).not.toHaveBeenCalled();
             expect(secureStorage.clearSentMessages).toHaveBeenCalledWith(streamId);
             expect(secureStorage.clearSentReactions).toHaveBeenCalledWith(streamId);
             expect(dmCrypto.peerPublicKeys.has(peerAddress)).toBe(false);
             expect(dmManager.conversations.has(peerAddress)).toBe(false);
+            expect(channelManager.channels.has(streamId)).toBe(false);
+        });
+
+        it('should block peer when leaving DM with block option', async () => {
+            const { dmManager } = await import('../../src/js/dm.js');
+            const { dmCrypto } = await import('../../src/js/dmCrypto.js');
+            const { secureStorage } = await import('../../src/js/secureStorage.js');
+            
+            // Reset mocks from previous test
+            secureStorage.setDMLeftAt.mockClear();
+            secureStorage.addBlockedPeer.mockClear();
+            
+            const peerAddress = '0xpeer999999999999999999999999999999999999';
+            const streamId = `${peerAddress}/Pombo-DM-1`;
+            const ephemeralId = `${peerAddress}/Pombo-DM-2`;
+            
+            channelManager.channels.set(streamId, {
+                type: 'dm',
+                peerAddress,
+                messageStreamId: streamId,
+                ephemeralStreamId: ephemeralId
+            });
+            dmManager.conversations.set(peerAddress, streamId);
+            dmCrypto.peerPublicKeys.set(peerAddress, '0x02fakepubkey');
+            
+            await channelManager.leaveChannel(streamId, { block: true });
+            
+            // Block: should addBlockedPeer, not setDMLeftAt
+            expect(secureStorage.addBlockedPeer).toHaveBeenCalledWith(peerAddress);
+            expect(secureStorage.setDMLeftAt).not.toHaveBeenCalled();
+            expect(secureStorage.clearSentMessages).toHaveBeenCalledWith(streamId);
+            expect(secureStorage.clearSentReactions).toHaveBeenCalledWith(streamId);
             expect(channelManager.channels.has(streamId)).toBe(false);
         });
     });
@@ -1339,6 +1374,86 @@ describe('ChannelManager', () => {
             
             const channel = channelManager.channels.get(streamId);
             expect(channel.loadingHistory).toBe(false);
+        });
+
+        it('should use Date.now() when no messages and no oldestTimestamp (reactions-only history)', async () => {
+            // Channel has no text messages - only reactions were loaded
+            const channel = channelManager.channels.get(streamId);
+            channel.messages = [];
+            channel.oldestTimestamp = undefined;
+
+            const newMsg = { id: 'msg-old', timestamp: 500, text: 'found it', sender: '0x2' };
+            streamrController.fetchOlderHistory.mockResolvedValue({
+                messages: [newMsg],
+                hasMore: false
+            });
+
+            const result = await channelManager.loadMoreHistory(streamId);
+
+            expect(result.loaded).toBe(1);
+            expect(channel.messages.some(m => m.id === 'msg-old')).toBe(true);
+            // Should have called fetchOlderHistory with a timestamp close to now
+            const calledTimestamp = streamrController.fetchOlderHistory.mock.calls[0][2];
+            expect(calledTimestamp).toBeGreaterThan(Date.now() - 5000);
+        });
+
+        it('should route reactions to storeReaction instead of channel.messages', async () => {
+            const channel = channelManager.channels.get(streamId);
+            channel.reactions = {};
+
+            streamrController.fetchOlderHistory.mockResolvedValue({
+                messages: [
+                    { type: 'reaction', action: 'add', messageId: 'msg-1', emoji: '👍', senderId: '0xabc', timestamp: 800 },
+                    { id: 'msg-2', timestamp: 600, text: 'real message', sender: '0x2' }
+                ],
+                hasMore: false
+            });
+
+            const result = await channelManager.loadMoreHistory(streamId);
+
+            // Only the text message counts as loaded
+            expect(result.loaded).toBe(1);
+            // Reaction should NOT be in messages array
+            expect(channel.messages.some(m => m.type === 'reaction')).toBe(false);
+            // Reaction should be stored in channel.reactions
+            expect(channel.reactions['msg-1']).toBeDefined();
+            expect(channel.reactions['msg-1']['👍']).toContain('0xabc');
+        });
+
+        it('should update oldestTimestamp from reactions for pagination progress', async () => {
+            const channel = channelManager.channels.get(streamId);
+            channel.oldestTimestamp = 1000;
+
+            streamrController.fetchOlderHistory.mockResolvedValue({
+                messages: [
+                    { type: 'reaction', action: 'add', messageId: 'msg-1', emoji: '🔥', senderId: '0xdef', timestamp: 200 }
+                ],
+                hasMore: true
+            });
+
+            const result = await channelManager.loadMoreHistory(streamId);
+
+            expect(result.loaded).toBe(0);
+            expect(result.hasMore).toBe(true);
+            // Reaction timestamp should advance the pagination cursor
+            expect(channel.oldestTimestamp).toBe(200);
+        });
+
+        it('should return loaded=0 when all fetched messages are reactions', async () => {
+            const channel = channelManager.channels.get(streamId);
+
+            streamrController.fetchOlderHistory.mockResolvedValue({
+                messages: [
+                    { type: 'reaction', action: 'add', messageId: 'msg-1', emoji: '👍', senderId: '0xabc', timestamp: 900 },
+                    { type: 'reaction', action: 'remove', messageId: 'msg-1', emoji: '👍', senderId: '0xabc', timestamp: 950 }
+                ],
+                hasMore: true
+            });
+
+            const result = await channelManager.loadMoreHistory(streamId);
+
+            expect(result.loaded).toBe(0);
+            expect(result.hasMore).toBe(true);
         });
     });
 

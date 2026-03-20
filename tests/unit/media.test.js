@@ -433,6 +433,71 @@ describe('media.js', () => {
                 expect(mediaController.isSeeding('nonexistent')).toBe(false);
             });
         });
+
+        describe('isDownloading', () => {
+            it('returns true when file has active transfer', () => {
+                mediaController.incomingFiles.set('file-dl-1', { metadata: {} });
+                expect(mediaController.isDownloading('file-dl-1')).toBe(true);
+            });
+
+            it('returns false when no transfer exists', () => {
+                expect(mediaController.isDownloading('nonexistent')).toBe(false);
+            });
+
+            it('returns false after transfer is removed', () => {
+                mediaController.incomingFiles.set('file-dl-2', { metadata: {} });
+                mediaController.incomingFiles.delete('file-dl-2');
+                expect(mediaController.isDownloading('file-dl-2')).toBe(false);
+            });
+        });
+
+        describe('getDownloadProgress', () => {
+            it('returns progress for active transfer', () => {
+                mediaController.incomingFiles.set('file-p-1', {
+                    receivedCount: 5,
+                    metadata: { pieceCount: 10, fileSize: 1024000 }
+                });
+                const progress = mediaController.getDownloadProgress('file-p-1');
+                expect(progress).toEqual({
+                    percent: 50,
+                    received: 5,
+                    total: 10,
+                    fileSize: 1024000
+                });
+            });
+
+            it('returns null when no transfer exists', () => {
+                expect(mediaController.getDownloadProgress('nonexistent')).toBeNull();
+            });
+
+            it('returns 0% when no pieces received', () => {
+                mediaController.incomingFiles.set('file-p-2', {
+                    receivedCount: 0,
+                    metadata: { pieceCount: 20, fileSize: 2048000 }
+                });
+                const progress = mediaController.getDownloadProgress('file-p-2');
+                expect(progress.percent).toBe(0);
+                expect(progress.received).toBe(0);
+            });
+
+            it('returns 100% when all pieces received', () => {
+                mediaController.incomingFiles.set('file-p-3', {
+                    receivedCount: 8,
+                    metadata: { pieceCount: 8, fileSize: 524288 }
+                });
+                const progress = mediaController.getDownloadProgress('file-p-3');
+                expect(progress.percent).toBe(100);
+            });
+
+            it('handles pieceCount of 0 without division by zero', () => {
+                mediaController.incomingFiles.set('file-p-4', {
+                    receivedCount: 0,
+                    metadata: { pieceCount: 0, fileSize: 0 }
+                });
+                const progress = mediaController.getDownloadProgress('file-p-4');
+                expect(progress.percent).toBe(0);
+            });
+        });
     });
 
     // ==================== EVENT HANDLERS ====================
