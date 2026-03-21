@@ -20,7 +20,7 @@ const CONFIG = {
     // Image settings
     IMAGE_MAX_WIDTH: 1280,
     IMAGE_MAX_HEIGHT: 720,
-    IMAGE_QUALITY: 0.8,
+    IMAGE_QUALITY: 1.0,
     ALLOWED_IMAGE_TYPES: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
     
     // Video/File settings
@@ -29,10 +29,9 @@ const CONFIG = {
     ALLOWED_VIDEO_TYPES: ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-m4v', 'video/ogg'],
     // Browser-playable formats (for showing player vs download link)
     PLAYABLE_VIDEO_TYPES: ['video/mp4', 'video/webm', 'video/ogg', 'video/x-m4v', 'video/m4v'],
-    // Note: WebRTC DataChannel has ~256KB limit. Base64 adds 33% overhead.
-    // 64KB raw = ~85KB base64, well under limit
+
     PIECE_SIZE: 64 * 1024, // 64KB chunks (safe for WebRTC)
-    PIECE_SEND_DELAY: 5, // 5ms between piece sends 
+    PIECE_SEND_DELAY: 15, // 15ms between piece sends 
     MAX_CONCURRENT_REQUESTS: 8,
     PIECE_REQUEST_TIMEOUT: 10000, // 10 seconds
     MAX_FILE_SIZE: 500 * 1024 * 1024, // 500MB max
@@ -46,7 +45,7 @@ const CONFIG = {
     MAX_SEEDER_REQUESTS: 10,           // Max seeder request attempts
     
     // Seeding Persistence settings
-    MAX_SEED_STORAGE: 500 * 1024 * 1024,  // 500MB max persistent storage
+    MAX_SEED_STORAGE: 700 * 1024 * 1024,  // 700MB max persistent storage
     SEED_FILES_EXPIRE_DAYS: 7,             // Auto-clean after 7 days
     AUTO_SEED_ON_JOIN: true,               // Re-announce as seeder when joining channel
     PERSIST_PUBLIC_CHANNELS: true,         // Persist files from public channels

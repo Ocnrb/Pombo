@@ -206,7 +206,7 @@ class PreviewModeUI {
                     </div>
                 `;
             }
-        }, 20000); // 15 seconds timeout
+        }, 20000); // 20 seconds timeout
 
         // Update header
         elements.currentChannelName.textContent = this.previewChannel.name;

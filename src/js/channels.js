@@ -1943,8 +1943,12 @@ class ChannelManager {
                         return { loaded: 0, hasMore: channel.hasMoreHistory };
                     }
                     
-                    // Add all verified messages to channel
+                    // Add all verified messages to channel (with dedup re-check for race conditions)
                     for (const msg of verifiedMessages) {
+                        // Re-check dedup: real-time messages may have arrived during verification
+                        if (channel.messages.some(m => m.id === msg.id)) {
+                            continue;
+                        }
                         channel.messages.push(msg);
                         addedCount++;
                         

@@ -561,7 +561,12 @@ class SecureStorage {
             stored.text = message.text;
             stored.replyTo = message.replyTo || null;
         }
-        this.cache.sentMessages[streamId].push(stored);
+        // Dedup check: avoid adding same message twice
+        const existing = this.cache.sentMessages[streamId];
+        if (existing.some(m => m.id === stored.id)) {
+            return;
+        }
+        existing.push(stored);
         // Cap at 200 messages per channel
         if (this.cache.sentMessages[streamId].length > 200) {
             this.cache.sentMessages[streamId] = this.cache.sentMessages[streamId].slice(-200);

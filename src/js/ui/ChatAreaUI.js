@@ -88,7 +88,10 @@ class ChatAreaUI {
         this.isLoadingMore = true;
         const generationAtStart = channelManager.switchGeneration;
         
-        this.showLoadingMoreIndicator();
+        // Only show "Loading More" indicator if there are existing messages
+        // (otherwise the central spinner from renderMessages is already showing)
+        const showIndicator = channel.messages.length > 0;
+        if (showIndicator) this.showLoadingMoreIndicator();
         
         const previousScrollHeight = this.messagesArea.scrollHeight;
         const previousScrollTop = this.messagesArea.scrollTop;
@@ -106,11 +109,14 @@ class ChatAreaUI {
                 const newScrollHeight = this.messagesArea.scrollHeight;
                 const heightDiff = newScrollHeight - previousScrollHeight;
                 this.messagesArea.scrollTop = previousScrollTop + heightDiff;
+            } else if (channel.messages.length === 0) {
+                // No messages loaded and channel is empty - re-render to update spinner to "no messages"
+                this.renderMessages(channel.messages);
             }
         } catch (error) {
             this.deps.Logger?.error('Failed to load more messages:', error);
         } finally {
-            this.hideLoadingMoreIndicator();
+            if (showIndicator) this.hideLoadingMoreIndicator();
             this.isLoadingMore = false;
         }
     }
@@ -122,7 +128,10 @@ class ChatAreaUI {
     async _loadMorePreviewHistory(previewChannel) {
         this.isLoadingMore = true;
         
-        this.showLoadingMoreIndicator();
+        // Only show "Loading More" indicator if there are existing messages
+        // (otherwise the central spinner from renderMessages is already showing)
+        const showIndicator = previewChannel.messages.length > 0;
+        if (showIndicator) this.showLoadingMoreIndicator();
         
         const previousScrollHeight = this.messagesArea.scrollHeight;
         const previousScrollTop = this.messagesArea.scrollTop;
@@ -140,11 +149,14 @@ class ChatAreaUI {
                 const newScrollHeight = this.messagesArea.scrollHeight;
                 const heightDiff = newScrollHeight - previousScrollHeight;
                 this.messagesArea.scrollTop = previousScrollTop + heightDiff;
+            } else if (previewChannel.messages.length === 0) {
+                // No messages loaded and channel is empty - re-render to update spinner to "no messages"
+                this.renderMessages(previewChannel.messages);
             }
         } catch (error) {
             this.deps.Logger?.error('Failed to load more preview messages:', error);
         } finally {
-            this.hideLoadingMoreIndicator();
+            if (showIndicator) this.hideLoadingMoreIndicator();
             this.isLoadingMore = false;
         }
     }
@@ -197,12 +209,41 @@ class ChatAreaUI {
         
         if (!this.messagesArea) return;
         
+        // Clear any existing loading timeout
+        if (this._loadingTimeoutId) {
+            clearTimeout(this._loadingTimeoutId);
+            this._loadingTimeoutId = null;
+        }
+        
         if (messages.length === 0) {
-            this.messagesArea.innerHTML = `
-                <div class="flex items-center justify-center h-full text-white/40">
-                    No messages yet. Start the conversation!
-                </div>
-            `;
+            // If there might be more history to load, show loading spinner instead of "no messages"
+            if (hasMoreHistory) {
+                this.messagesArea.innerHTML = `
+                    <div class="flex flex-col items-center justify-center h-full text-white/40 gap-3">
+                        <div class="spinner" style="width: 24px; height: 24px;"></div>
+                        <span class="text-sm">Loading messages...</span>
+                    </div>
+                `;
+                // 20s timeout fallback - if loading never completes, show empty state
+                const channelId = channel?.streamId;
+                this._loadingTimeoutId = setTimeout(() => {
+                    const currentChannel = getActiveChannel ? getActiveChannel() : channelManager?.getCurrentChannel();
+                    // Only update if still on same channel and still empty
+                    if (currentChannel?.streamId === channelId && currentChannel?.messages?.length === 0) {
+                        this.messagesArea.innerHTML = `
+                            <div class="flex items-center justify-center h-full text-white/40">
+                                No messages yet. Start the conversation!
+                            </div>
+                        `;
+                    }
+                }, 20000);
+            } else {
+                this.messagesArea.innerHTML = `
+                    <div class="flex items-center justify-center h-full text-white/40">
+                        No messages yet. Start the conversation!
+                    </div>
+                `;
+            }
             // Still trigger auto-load — initial history may have been all reactions
             if (!this.isLoadingMore) {
                 requestAnimationFrame(() => this._autoLoadIfContentShort());
