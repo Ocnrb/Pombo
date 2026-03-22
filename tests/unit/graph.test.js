@@ -534,14 +534,15 @@ describe('GraphAPI', () => {
                 json: () => Promise.resolve({ data: { streamPermissions: mockPermissions } })
             });
 
-            const members = await graphAPI.getStreamMembers('test-stream');
+            const result = await graphAPI.getStreamMembers('test-stream');
 
-            expect(members).toHaveLength(2);
-            expect(members[0].address).toBe('0x123');
-            expect(members[0].isOwner).toBe(true);
-            expect(members[0].canPublish).toBe(true);
-            expect(members[1].address).toBe('0x456');
-            expect(members[1].isOwner).toBe(false);
+            expect(result.ok).toBe(true);
+            expect(result.data).toHaveLength(2);
+            expect(result.data[0].address).toBe('0x123');
+            expect(result.data[0].isOwner).toBe(true);
+            expect(result.data[0].canPublish).toBe(true);
+            expect(result.data[1].address).toBe('0x456');
+            expect(result.data[1].isOwner).toBe(false);
         });
 
         it('should filter out public address', async () => {
@@ -554,10 +555,11 @@ describe('GraphAPI', () => {
                 json: () => Promise.resolve({ data: { streamPermissions: mockPermissions } })
             });
 
-            const members = await graphAPI.getStreamMembers('test-stream');
+            const result = await graphAPI.getStreamMembers('test-stream');
 
-            expect(members).toHaveLength(1);
-            expect(members[0].address).toBe('0x123');
+            expect(result.ok).toBe(true);
+            expect(result.data).toHaveLength(1);
+            expect(result.data[0].address).toBe('0x123');
         });
 
         it('should filter out null userAddress', async () => {
@@ -570,9 +572,10 @@ describe('GraphAPI', () => {
                 json: () => Promise.resolve({ data: { streamPermissions: mockPermissions } })
             });
 
-            const members = await graphAPI.getStreamMembers('test-stream');
+            const result = await graphAPI.getStreamMembers('test-stream');
 
-            expect(members).toHaveLength(1);
+            expect(result.ok).toBe(true);
+            expect(result.data).toHaveLength(1);
         });
 
         it('should handle expired permissions', async () => {
@@ -592,19 +595,22 @@ describe('GraphAPI', () => {
                 json: () => Promise.resolve({ data: { streamPermissions: mockPermissions } })
             });
 
-            const members = await graphAPI.getStreamMembers('test-stream');
+            const result = await graphAPI.getStreamMembers('test-stream');
 
-            expect(members[0].canPublish).toBe(false);
-            expect(members[0].canSubscribe).toBe(true);
+            expect(result.ok).toBe(true);
+            expect(result.data[0].canPublish).toBe(false);
+            expect(result.data[0].canSubscribe).toBe(true);
         });
 
-        it('should return empty array on error', async () => {
+        it('should return Err result on error', async () => {
             globalThis.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
 
             graphAPI.clearCache();
-            const members = await graphAPI.getStreamMembers('test-stream');
+            const result = await graphAPI.getStreamMembers('test-stream');
 
-            expect(members).toEqual([]);
+            expect(result.ok).toBe(false);
+            expect(result.error).toBeDefined();
+            expect(result.error.code).toBe('GRAPH_MEMBERS_FAILED');
         });
     });
 
@@ -660,7 +666,8 @@ describe('GraphAPI', () => {
 
             const result = await graphAPI.searchStreams();
 
-            expect(result).toEqual(mockStreams);
+            expect(result.ok).toBe(true);
+            expect(result.data).toEqual(mockStreams);
         });
 
         it('should search by owner', async () => {
@@ -689,12 +696,14 @@ describe('GraphAPI', () => {
             expect(callBody.query).toContain('skip: 20');
         });
 
-        it('should return empty array on error', async () => {
+        it('should return Err result on error', async () => {
             globalThis.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
 
             const result = await graphAPI.searchStreams();
 
-            expect(result).toEqual([]);
+            expect(result.ok).toBe(false);
+            expect(result.error).toBeDefined();
+            expect(result.error.code).toBe('GRAPH_SEARCH_FAILED');
         });
     });
 

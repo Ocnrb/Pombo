@@ -969,17 +969,18 @@ describe('SubscriptionManager', () => {
             expect(channelManager.handleTextMessage).toHaveBeenCalledWith('stream1', msg);
         });
 
-        it('should forward to uiController if channel not in manager', () => {
+        it('should forward to onPreviewMessage callback if channel not in manager', () => {
             subscriptionManager.previewChannelId = 'stream1';
             channelManager.getChannel.mockReturnValue(null);
-            window.uiController = { handlePreviewMessage: vi.fn() };
+            const callback = vi.fn();
+            subscriptionManager.onPreviewMessage = callback;
             const msg = { id: 'msg1' };
             
             subscriptionManager._handlePreviewMessage(msg);
             
-            expect(window.uiController.handlePreviewMessage).toHaveBeenCalledWith(msg);
+            expect(callback).toHaveBeenCalledWith(msg);
             
-            delete window.uiController;
+            subscriptionManager.onPreviewMessage = null;
         });
 
         it('should use activeChannelId if previewChannelId is null', () => {

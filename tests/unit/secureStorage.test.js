@@ -821,19 +821,17 @@ describe('secureStorage', () => {
             expect(secureStorage.cache.trustedContacts).toEqual({});
         });
 
-        it('should handle corrupted JSON in localStorage', async () => {
+        it('should throw StorageError on corrupted JSON in localStorage', async () => {
             secureStorage.storageKey = await crypto.subtle.generateKey(
                 { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
             );
             localStorage.setItem(secureStorage.getStorageKey(), 'not valid json');
             
-            await secureStorage.loadFromStorage();
-            
-            // Should fallback to empty cache
-            expect(secureStorage.cache.channels).toEqual([]);
+            await expect(secureStorage.loadFromStorage())
+                .rejects.toThrow('Failed to decrypt storage');
         });
 
-        it('should handle corrupted encrypted data', async () => {
+        it('should throw StorageError on corrupted encrypted data', async () => {
             secureStorage.storageKey = await crypto.subtle.generateKey(
                 { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
             );
@@ -843,10 +841,8 @@ describe('secureStorage', () => {
                 ciphertext: [4, 5, 6]
             }));
             
-            await secureStorage.loadFromStorage();
-            
-            // Should fallback to empty cache
-            expect(secureStorage.cache.channels).toEqual([]);
+            await expect(secureStorage.loadFromStorage())
+                .rejects.toThrow('Failed to decrypt storage');
         });
     });
 

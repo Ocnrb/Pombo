@@ -468,12 +468,11 @@ describe('AuthManager', () => {
             expect(result).toEqual(wallets);
         });
 
-        it('should handle invalid JSON', () => {
+        it('should throw on invalid JSON', () => {
             localStorage.getItem.mockReturnValue('invalid json');
             
-            const result = authManager.loadAllKeystores();
-            
-            expect(result).toEqual({});
+            expect(() => authManager.loadAllKeystores())
+                .toThrow('Keystore data is corrupted');
         });
     });
 
@@ -533,18 +532,16 @@ describe('AuthManager', () => {
             expect(authManager.currentWalletName).toBe('New Name');
         });
 
-        it('should return false if wallet not found', () => {
-            const result = authManager.updateWalletName('New', '0xnotfound');
-            
-            expect(result).toBe(false);
+        it('should throw if wallet not found', () => {
+            expect(() => authManager.updateWalletName('New', '0xnotfound'))
+                .toThrow('Wallet not found');
         });
 
-        it('should return false if no address', () => {
+        it('should throw if no address', () => {
             authManager.address = null;
             
-            const result = authManager.updateWalletName('New');
-            
-            expect(result).toBe(false);
+            expect(() => authManager.updateWalletName('New'))
+                .toThrow('No wallet address available');
         });
     });
 

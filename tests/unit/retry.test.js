@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { executeWithRetry, executeWithRetryAndVerify } from '../../src/js/utils/retry.js';
+import { executeWithRetry, executeWithRetryAndVerify, withCircuitBreaker, resetCircuit, getCircuitState } from '../../src/js/utils/retry.js';
 
 describe('retry', () => {
     beforeEach(() => {
@@ -100,13 +100,14 @@ describe('retry', () => {
             
             await executeWithRetry('test', asyncFn, { 
                 maxRetries: 3, 
-                baseDelay: 50 
+                baseDelay: 50,
+                backoffMultiplier: 2
             });
             
             const elapsed = Date.now() - start;
-            // First retry: 1 * 50 = 50ms, Second retry would be 2 * 50 = 100ms
-            // But second succeeds, so total ~50ms minimum
-            expect(elapsed).toBeGreaterThanOrEqual(40);
+            // First retry: 50 * 2^0 = 50ms, Second retry: 50 * 2^1 = 100ms
+            // Total ~150ms minimum
+            expect(elapsed).toBeGreaterThanOrEqual(100);
         });
     });
 
@@ -177,6 +178,133 @@ describe('retry', () => {
             
             expect(asyncFn).toHaveBeenCalledTimes(2);
             expect(checkExistsFn).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    describe('withCircuitBreaker', () => {
+        const CB_NAME = 'test-circuit';
+
+        beforeEach(() => {
+            resetCircuit(CB_NAME);
+        });
+
+        it('should execute normally when circuit is closed', async () => {
+            const fn = vi.fn().mockResolvedValue('ok');
+            const result = await withCircuitBreaker(CB_NAME, fn);
+            expect(result).toBe('ok');
+            expect(fn).toHaveBeenCalledTimes(1);
+        });
+
+        it('should count failures but stay closed below threshold', async () => {
+            const fn = vi.fn().mockRejectedValue(new Error('fail'));
+            
+            for (let i = 0; i < 2; i++) {
+                await expect(withCircuitBreaker(CB_NAME, fn, { threshold: 3 })).rejects.toThrow('fail');
+            }
+            
+            const state = getCircuitState(CB_NAME);
+            expect(state.state).toBe('closed');
+            expect(state.failures).toBe(2);
+        });
+
+        it('should open circuit after threshold failures', async () => {
+            const fn = vi.fn().mockRejectedValue(new Error('fail'));
+            
+            for (let i = 0; i < 3; i++) {
+                await expect(withCircuitBreaker(CB_NAME, fn, { threshold: 3 })).rejects.toThrow('fail');
+            }
+            
+            const state = getCircuitState(CB_NAME);
+            expect(state.state).toBe('open');
+            expect(state.failures).toBe(3);
+        });
+
+        it('should skip calls when circuit is open', async () => {
+            const fn = vi.fn().mockRejectedValue(new Error('fail'));
+            
+            // Trip the circuit
+            for (let i = 0; i < 3; i++) {
+                await expect(withCircuitBreaker(CB_NAME, fn, { threshold: 3, resetTimeoutMs: 60000 })).rejects.toThrow();
+            }
+            
+            fn.mockClear();
+            fn.mockResolvedValue('ok');
+            
+            // Should skip without calling fn
+            const result = await withCircuitBreaker(CB_NAME, fn, { threshold: 3, resetTimeoutMs: 60000 });
+            expect(result).toBeUndefined();
+            expect(fn).not.toHaveBeenCalled();
+        });
+
+        it('should transition to half-open after cooldown expires', async () => {
+            const fn = vi.fn().mockRejectedValue(new Error('fail'));
+            
+            // Trip the circuit
+            for (let i = 0; i < 3; i++) {
+                await expect(withCircuitBreaker(CB_NAME, fn, { threshold: 3, resetTimeoutMs: 50 })).rejects.toThrow();
+            }
+            
+            expect(getCircuitState(CB_NAME).state).toBe('open');
+            
+            // Wait for cooldown
+            await new Promise(r => setTimeout(r, 60));
+            
+            fn.mockClear();
+            fn.mockResolvedValue('recovered');
+            
+            const result = await withCircuitBreaker(CB_NAME, fn, { threshold: 3, resetTimeoutMs: 50 });
+            expect(result).toBe('recovered');
+            expect(fn).toHaveBeenCalledTimes(1);
+            expect(getCircuitState(CB_NAME).state).toBe('closed');
+        });
+
+        it('should re-open circuit on half-open probe failure', async () => {
+            const fn = vi.fn().mockRejectedValue(new Error('fail'));
+            
+            // Trip the circuit
+            for (let i = 0; i < 3; i++) {
+                await expect(withCircuitBreaker(CB_NAME, fn, { threshold: 3, resetTimeoutMs: 50 })).rejects.toThrow();
+            }
+            
+            // Wait for cooldown
+            await new Promise(r => setTimeout(r, 60));
+            
+            // Probe fails → re-opens
+            await expect(withCircuitBreaker(CB_NAME, fn, { threshold: 3, resetTimeoutMs: 50 })).rejects.toThrow();
+            expect(getCircuitState(CB_NAME).state).toBe('open');
+        });
+
+        it('should reset circuit via resetCircuit()', async () => {
+            const fn = vi.fn().mockRejectedValue(new Error('fail'));
+            
+            // Trip the circuit
+            for (let i = 0; i < 3; i++) {
+                await expect(withCircuitBreaker(CB_NAME, fn, { threshold: 3 })).rejects.toThrow();
+            }
+            expect(getCircuitState(CB_NAME).state).toBe('open');
+            
+            resetCircuit(CB_NAME);
+            expect(getCircuitState(CB_NAME)).toBeUndefined();
+            
+            // Should work again
+            fn.mockResolvedValue('fresh');
+            const result = await withCircuitBreaker(CB_NAME, fn, { threshold: 3 });
+            expect(result).toBe('fresh');
+        });
+
+        it('should reset failure count on success', async () => {
+            const fn = vi.fn()
+                .mockRejectedValueOnce(new Error('fail'))
+                .mockRejectedValueOnce(new Error('fail'))
+                .mockResolvedValueOnce('ok');
+            
+            await expect(withCircuitBreaker(CB_NAME, fn, { threshold: 5 })).rejects.toThrow();
+            await expect(withCircuitBreaker(CB_NAME, fn, { threshold: 5 })).rejects.toThrow();
+            expect(getCircuitState(CB_NAME).failures).toBe(2);
+            
+            await withCircuitBreaker(CB_NAME, fn, { threshold: 5 });
+            expect(getCircuitState(CB_NAME).failures).toBe(0);
+            expect(getCircuitState(CB_NAME).state).toBe('closed');
         });
     });
 });

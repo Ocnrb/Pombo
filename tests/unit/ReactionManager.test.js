@@ -441,12 +441,17 @@ describe('ReactionManager', () => {
 
             const messagesArea = document.createElement('div');
             messagesArea.id = 'messages-area';
-            messagesArea.style.overflow = 'hidden';
             document.body.appendChild(messagesArea);
+
+            // Simulate _blockScroll having been called
+            const prevent = (e) => e.preventDefault();
+            messagesArea.addEventListener('wheel', prevent, { passive: false });
+            messagesArea.addEventListener('touchmove', prevent, { passive: false });
+            reactionManager._scrollBlocker = { el: messagesArea, handler: prevent };
 
             reactionManager.hideReactionPicker();
 
-            expect(messagesArea.style.overflow).toBe('');
+            expect(reactionManager._scrollBlocker).toBeNull();
         });
 
         it('should clear pending hide timeout', () => {
