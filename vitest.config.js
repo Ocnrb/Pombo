@@ -20,11 +20,10 @@ export default defineConfig({
       ],
       thresholds: {
         // Threshold mínimo para prevenir regressões
-        // Atual: ~23% global - definir 20% como piso
-        statements: 20,
-        branches: 20,
-        functions: 25,
-        lines: 20
+        statements: 50,
+        branches: 50,
+        functions: 50,
+        lines: 50
       }
     },
     

@@ -1079,18 +1079,44 @@ class ChannelManager {
         // DM channels: load merged timeline (sent local + received from inbox)
         if (channel?.type === 'dm') {
             Logger.debug('DM channel - loading merged timeline:', messageStreamId);
+            // Gate renders while loading — inbox messages may still arrive via routeInboxMessage()
+            channel.initialLoadInProgress = true;
             dmManager.loadDMTimeline(channel.peerAddress);
             channel.historyLoaded = true;
             channel.hasMoreHistory = false;
             // Subscribe to DM-2 ephemeral on-demand (typing/presence)
             dmManager.subscribeDMEphemeral();
+            // Clear gate after a microtask to let selectChannel()'s renderMessages() run first,
+            // then do a single catch-up render for any inbox messages that arrived during the gate
+            Promise.resolve().then(() => {
+                if (!channel.initialLoadInProgress) return;
+                channel.initialLoadInProgress = false;
+                this.notifyHandlers('initial_history_complete', { streamId: messageStreamId });
+            });
             return;
         }
 
         // Get or derive ephemeral stream ID
         const ephemeralStreamId = channel?.ephemeralStreamId || deriveEphemeralId(messageStreamId);
 
-        // Use dual-stream subscription
+        // Mark channel as loading initial history (suppresses per-message renders)
+        if (channel) {
+            channel.initialLoadInProgress = true;
+        }
+
+        // Use dual-stream subscription with onHistoryComplete callback
+        const onHistoryComplete = async () => {
+            if (!channel || !channel.initialLoadInProgress) return;
+            
+            // Flush any remaining batch verifications before signaling completion
+            await this.flushBatchVerification(messageStreamId);
+            
+            channel.initialLoadInProgress = false;
+            Logger.debug('Initial history load complete for', messageStreamId.slice(-20));
+            
+            this.notifyHandlers('initial_history_complete', { streamId: messageStreamId });
+        };
+
         await streamrController.subscribeToDualStream(
             messageStreamId,
             ephemeralStreamId,
@@ -1100,7 +1126,8 @@ class ChannelManager {
                 onMedia: (data) => this.handleMediaMessage(messageStreamId, data)
             },
             pwd,
-            STREAM_CONFIG.INITIAL_MESSAGES
+            STREAM_CONFIG.INITIAL_MESSAGES,
+            onHistoryComplete
         );
         
         Logger.debug('Subscribed to dual-stream channel:', messageStreamId);
@@ -1346,7 +1373,7 @@ class ChannelManager {
         // Handle different control message types
         // Use senderId from Streamr SDK (cryptographically guaranteed) instead of self-reported fields
         if (data.type === 'typing') {
-            this.notifyHandlers('typing', { streamId, user: data.senderId || data.user });
+            this.notifyHandlers('typing', { streamId, user: data.senderId || data.user, nickname: data.nickname || null });
         } else if (data.type === 'presence') {
             // Handle presence update
             this.handlePresenceMessage(streamId, data);
@@ -2020,7 +2047,7 @@ class ChannelManager {
                     const peerPubKey = await dmManager.getPeerPublicKey(channel.peerAddress);
                     if (peerPubKey) {
                         const aesKey = await dmCrypto.getSharedKey(privateKey, channel.peerAddress, peerPubKey);
-                        const encrypted = await dmCrypto.encrypt({ type: 'typing', timestamp: Date.now() }, aesKey);
+                        const encrypted = await dmCrypto.encrypt({ type: 'typing', nickname: identityManager.getUsername?.() || null, timestamp: Date.now() }, aesKey);
                         // Set Pombo key for publishing to peer's ephemeral stream
                         await streamrController.setDMPublishKey(ephemeralStreamId);
                         await streamrController.publishControl(ephemeralStreamId, encrypted, null);
@@ -2032,7 +2059,7 @@ class ChannelManager {
             // Non-DM channels: no self-reported user field (senderId from SDK provides identity)
             await streamrController.publishControl(
                 ephemeralStreamId,
-                { type: 'typing', timestamp: Date.now() },
+                { type: 'typing', nickname: identityManager.getUsername?.() || null, timestamp: Date.now() },
                 channel.password
             );
         } catch (error) {

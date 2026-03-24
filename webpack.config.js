@@ -43,6 +43,11 @@ module.exports = {
       'setimmediate': false,
     }
   },
+  optimization: {
+    // Disable automatic chunk splitting - vendor entry already bundles ethers/Streamr
+    splitChunks: false,
+  },
+  devtool: false, // Disable eval() devtool (CSP-safe, cleaner output)
   performance: {
     hints: false,
     maxEntrypointSize: 2048000,

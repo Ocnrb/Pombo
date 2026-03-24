@@ -142,11 +142,11 @@ export const CONFIG = {
         maxImageCacheBytes: 100 * 1024 * 1024,            // 100MB max image cache in memory
         imageMaxWidth: 1280,
         imageMaxHeight: 720,
-        imageQuality: 1.0,
+        imageQuality: 0.92,
         pieceSize: 64 * 1024,                  // 64KB chunks
-        pieceSendDelayMs: 15,                  // Delay between piece sends
+        pieceSendDelayMs: 5,                  // Delay between piece sends
         maxConcurrentRequests: 8,
-        pieceRequestTimeoutMs: 10000,          // 10s per piece
+        pieceRequestTimeoutMs: 5000,          // 5s per piece
         maxFileSize: 500 * 1024 * 1024,        // 500MB max upload
         minSeeders: 1,
         preferredSeeders: 3,

@@ -300,6 +300,9 @@ class ChatAreaUI {
 
         if (!this.isLoadingMore) {
             this.messagesArea.scrollTop = this.messagesArea.scrollHeight;
+        } else {
+            // Re-insert loading indicator destroyed by innerHTML replacement
+            this.showLoadingMoreIndicator();
         }
         
         // Call render complete callback for attaching listeners
@@ -443,7 +446,7 @@ class ChatAreaUI {
             return;
         }
         
-        const names = users.map(u => formatAddress(u)).join(', ');
+        const names = users.map(u => u.nickname || formatAddress(u.address || u)).join(', ');
         usersSpan.textContent = names + (users.length === 1 ? ' is' : ' are');
         indicator.classList.remove('hidden');
     }

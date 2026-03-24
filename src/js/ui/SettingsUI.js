@@ -334,12 +334,12 @@ class SettingsUI {
                     const text = await file.text();
                     const data = JSON.parse(text);
                     
-                    if (data.format === 'pombo-account-backup' && data.version === 3) {
+                    if (data.format === 'pombo-account-backup' && data.version === 1) {
                         // Scrypt-encrypted account backup
                         await this.handleAccountBackupImport(data, showPasswordPrompt);
                     }
                     else {
-                        throw new Error('Unknown backup format. Only pombo-account-backup v3 is supported.');
+                        throw new Error('Unknown backup format. Only pombo-account-backup v1 is supported.');
                     }
                 } catch (error) {
                     this.Logger?.error('Import failed:', error);
@@ -496,7 +496,7 @@ class SettingsUI {
     }
 
     /**
-     * Handle new account backup import (pombo-account-backup v3)
+     * Handle new account backup import (pombo-account-backup v1)
      * This imports data (channels, contacts) from a backup into the current account
      */
     async handleAccountBackupImport(backup, showPasswordPrompt) {
@@ -514,8 +514,8 @@ class SettingsUI {
 
         // Show progress modal
         const progressModal = this.showProgressModal(
-            'Decrypting Backup',
-            'Using scrypt decryption...'
+            'Restoring Backup',
+            'Unlocking your data...'
         );
 
         try {
@@ -628,6 +628,11 @@ class SettingsUI {
 
             // Save
             await this.secureStorage.saveToStorage();
+
+            // Import image blobs from backup into IDB ledger
+            if (result.imageBlobs && result.imageBlobs.length > 0) {
+                await this.secureStorage.importImageBlobs(result.imageBlobs);
+            }
 
             this.showNotification(
                 `Imported: ${channelsImported} channels, ${contactsImported} contacts` +

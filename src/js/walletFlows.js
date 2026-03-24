@@ -148,8 +148,11 @@ class WalletFlows {
             const singleWallet = wallets.length === 1;
             const wallet = singleWallet ? wallets[0] : null;
             
-            // Helper to get display name - use stored name or fallback to "Account N"
+            // Helper to get display name - prefer username from settings/sync, then wallet name
             const getDisplayName = (w, index) => {
+                // Check for username stored in plain localStorage (set via settings or sync)
+                const username = localStorage.getItem(`pombo_username_${w.address.toLowerCase()}`);
+                if (username) return username;
                 // If name looks like auto-generated default, show "Account N"
                 const isDefaultName = !w.name || w.name.startsWith('Wallet ') || w.name.startsWith('Imported ') || w.name.startsWith('Account ');
                 return isDefaultName ? `Account ${index + 1}` : w.name;
@@ -432,8 +435,8 @@ class WalletFlows {
         const backup = JSON.parse(text);
 
         // Validate backup format
-        if (backup.format !== 'pombo-account-backup' || backup.version !== 3) {
-            throw new Error('Invalid backup format. Only pombo-account-backup v3 is supported.');
+        if (backup.format !== 'pombo-account-backup' || backup.version !== 1) {
+            throw new Error('Invalid backup format. Only pombo-account-backup v1 is supported.');
         }
 
         // Get password to decrypt
@@ -445,7 +448,7 @@ class WalletFlows {
         if (!password) throw new Error('cancelled');
 
         // Show progress modal
-        const progressModal = this.showProgressModal('Restoring Account', 'Decrypting with scrypt...');
+        const progressModal = this.showProgressModal('Restoring Account', 'Unlocking your backup...');
 
         try {
             // Decrypt using the password (this verifies the password)
@@ -568,6 +571,12 @@ class WalletFlows {
 
                 // Save to storage
                 await secureStorage.saveToStorage();
+
+                // Import image blobs from backup into IDB ledger
+                // (must happen AFTER loadWalletWithProgress → init → storageKey is set)
+                if (result.imageBlobs && result.imageBlobs.length > 0) {
+                    await secureStorage.importImageBlobs(result.imageBlobs);
+                }
 
                 // If data was imported, reload channels and re-render UI
                 if (dataImported) {
@@ -1335,7 +1344,7 @@ class WalletFlows {
      * @param {string} address - Optional specific wallet address
      */
     async loadWalletWithProgress(password, address = null) {
-        const modal = this.showProgressModal('Decrypting Account', 'Verifying Keystore V3...');
+        const modal = this.showProgressModal('Unlocking Account', 'Verifying your password...');
         
         try {
             const result = await authManager.loadWalletEncrypted(password, address, (progress) => {

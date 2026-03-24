@@ -19,6 +19,7 @@ class DMModalsUI {
     get dmManager() { return this.deps.dmManager; }
     get modalManager() { return this.deps.modalManager; }
     get authManager() { return this.deps.authManager; }
+    get notificationUI() { return this.deps.notificationUI; }
     get Logger() { return this.deps.Logger; }
 
     showNotification(message, type) {
@@ -100,11 +101,15 @@ class DMModalsUI {
 
         // Storage days slider
         const storageDaysSlider = document.getElementById('dm-storage-days-input');
-        storageDaysSlider?.addEventListener('input', () => {
-            const value = parseInt(storageDaysSlider.value);
-            this.selectedStorageDays = value;
-            this.updateStorageDaysDisplay(value);
-        });
+        if (storageDaysSlider) {
+            this.updateSliderProgress(storageDaysSlider);
+            storageDaysSlider.addEventListener('input', () => {
+                const value = parseInt(storageDaysSlider.value);
+                this.selectedStorageDays = value;
+                this.updateStorageDaysDisplay(value);
+                this.updateSliderProgress(storageDaysSlider);
+            });
+        }
 
         // Learn more buttons - open storage info modal
         const learnMoreBtns = modal.querySelectorAll('.dm-storage-learn-more-btn');
@@ -153,6 +158,17 @@ class DMModalsUI {
         if (display) {
             display.textContent = `${days} day${days !== 1 ? 's' : ''}`;
         }
+    }
+
+    /**
+     * Update slider progress CSS variable so the track color follows the thumb
+     */
+    updateSliderProgress(slider) {
+        const min = parseFloat(slider.min) || 0;
+        const max = parseFloat(slider.max) || 100;
+        const val = parseFloat(slider.value) || 0;
+        const percent = ((val - min) / (max - min)) * 100;
+        slider.style.setProperty('--slider-progress', `${percent}%`);
     }
 
     /**
@@ -242,27 +258,25 @@ class DMModalsUI {
         const btn = document.getElementById('create-dm-inbox-btn');
         if (!btn) return;
 
-        const originalText = btn.innerHTML;
-        btn.disabled = true;
-        btn.innerHTML = '<span class="animate-pulse">Creating inbox...</span>';
+        // Prepare options based on user selection
+        const options = {
+            storageProvider: this.selectedStorageProvider,
+            storageDays: this.selectedStorageProvider === 'streamr' ? this.selectedStorageDays : null
+        };
+
+        // Close modal immediately and show loading toast (like channel creation)
+        this.hideCreateInboxModal();
+        this.notificationUI?.showLoadingToast('Creating DM inbox...', 'This may take a minute');
 
         try {
-            // Prepare options based on user selection
-            const options = {
-                storageProvider: this.selectedStorageProvider,
-                storageDays: this.selectedStorageProvider === 'streamr' ? this.selectedStorageDays : null
-            };
-
             await this.dmManager.createInbox(options);
-            this.hideCreateInboxModal();
             this.showNotification('DM inbox created!', 'success');
             await this.updateVisibility();
         } catch (err) {
             this.Logger?.error('DMModalsUI: Failed to create inbox', err);
             this.showNotification('Failed to create DM inbox', 'error');
         } finally {
-            btn.disabled = false;
-            btn.innerHTML = originalText;
+            this.notificationUI?.hideLoadingToast();
         }
     }
 

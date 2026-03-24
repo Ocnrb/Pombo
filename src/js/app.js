@@ -138,7 +138,7 @@ class App {
                     uiController.renderChannelList();
                     uiController.showNotification('Devices synced successfully', 'success');
                 } else if (result.pushed) {
-                    uiController.showNotification('State pushed to storage', 'success');
+                    uiController.showNotification('Your data has been saved', 'success');
                 } else {
                     uiController.showNotification('Already in sync', 'info');
                 }
@@ -288,9 +288,27 @@ class App {
                 await dmManager.init();
                 Logger.info('DM manager initialized');
                 if (dmManager.inboxReady) {
-                    syncManager.pullSync().then(() => {
+                    // Wire blob_pulled events to update image placeholders in real-time
+                    syncManager.on('blob_pulled', ({ imageId, data }) => {
+                        mediaController.handleImageData({ type: 'image_data', imageId, data });
+                    });
+
+                    uiController.showNotification('Syncing your data...', 'info');
+                    syncManager.pullSync().then(async () => {
                         Logger.info('Sync: Initial pull complete');
                         uiController.renderChannelList();
+
+                        // Update header with synced username
+                        const syncedUsername = identityManager.getUsername();
+                        if (syncedUsername) headerUI.updateDisplayName(syncedUsername);
+                        // Pull image blobs (partition 2) after state sync
+                        try {
+                            await syncManager.pullImageBlobs();
+                            Logger.info('Sync: Initial image blob pull complete');
+                        } catch (e) {
+                            Logger.debug('Sync: Image blob pull failed (non-critical):', e.message);
+                        }
+                        uiController.showNotification('Your data is up to date', 'success');
                     }).catch(e => {
                         Logger.debug('Sync: Initial pull failed (non-critical):', e.message);
                     });
@@ -353,6 +371,8 @@ class App {
             if (event === 'message') {
                 chatAreaUI.updateUnreadCount(data.streamId);
                 if (data.streamId === currentStreamId) {
+                    // Skip render during initial history load — will render once when complete
+                    if (currentChannel?.initialLoadInProgress) return;
                     chatAreaUI.addMessage(data.message, data.streamId, () => {
                         uiController.attachReactionListeners();
                         mediaHandler.attachLightboxListeners();
@@ -362,6 +382,7 @@ class App {
                 if (data.streamId !== currentStreamId) return;
                 
                 const user = data.user;
+                const nickname = data.nickname || null;
                 const myAddress = authManager.getAddress();
                 if (user?.toLowerCase() === myAddress?.toLowerCase()) return;
                 
@@ -369,20 +390,22 @@ class App {
                     typingUsers.set(data.streamId, new Map());
                 }
                 const channelTyping = typingUsers.get(data.streamId);
-                channelTyping.set(user, Date.now());
+                channelTyping.set(user, { time: Date.now(), nickname });
                 
                 const now = Date.now();
-                for (const [u, time] of channelTyping) {
-                    if (now - time > 3000) channelTyping.delete(u);
+                for (const [u, info] of channelTyping) {
+                    if (now - info.time > 3000) channelTyping.delete(u);
                 }
                 
-                chatAreaUI.showTypingIndicator(Array.from(channelTyping.keys()));
+                const typingList = Array.from(channelTyping.entries()).map(([addr, info]) => ({ address: addr, nickname: info.nickname }));
+                chatAreaUI.showTypingIndicator(typingList);
                 
                 setTimeout(() => {
                     channelTyping.delete(user);
                     const stillCurrentChannel = channelManager.getCurrentChannel();
                     if (stillCurrentChannel?.streamId === data.streamId) {
-                        chatAreaUI.showTypingIndicator(Array.from(channelTyping.keys()));
+                        const remaining = Array.from(channelTyping.entries()).map(([addr, info]) => ({ address: addr, nickname: info.nickname }));
+                        chatAreaUI.showTypingIndicator(remaining);
                     }
                 }, 3000);
                 
@@ -410,11 +433,25 @@ class App {
                 if (data.streamId === currentStreamId) {
                     const channel = channelManager.getCurrentChannel();
                     if (channel) {
+                        // Skip render during initial history load — will render once when complete
+                        if (!channel.initialLoadInProgress) {
+                            chatAreaUI.renderMessages(channel.messages, () => {
+                                uiController.attachReactionListeners();
+                                mediaHandler.attachLightboxListeners();
+                            });
+                        }
+                        Logger.debug(`History batch loaded: ${data.loaded}/${data.total} messages`);
+                    }
+                }
+            } else if (event === 'initial_history_complete') {
+                if (data.streamId === currentStreamId) {
+                    const channel = channelManager.getCurrentChannel();
+                    if (channel) {
                         chatAreaUI.renderMessages(channel.messages, () => {
                             uiController.attachReactionListeners();
                             mediaHandler.attachLightboxListeners();
                         });
-                        Logger.debug(`History batch loaded: ${data.loaded}/${data.total} messages`);
+                        Logger.info(`Initial history complete — rendered ${channel.messages.length} messages`);
                     }
                 }
             }

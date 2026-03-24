@@ -398,21 +398,17 @@ class MediaController {
                 img.onload = () => {
                     let { width, height } = img;
                     
-                    // Check if resize needed
-                    if (width <= CONFIG.IMAGE_MAX_WIDTH && height <= CONFIG.IMAGE_MAX_HEIGHT) {
-                        resolve(e.target.result);
-                        return;
+                    // Calculate scale if resize needed
+                    if (width > CONFIG.IMAGE_MAX_WIDTH || height > CONFIG.IMAGE_MAX_HEIGHT) {
+                        const scaleW = CONFIG.IMAGE_MAX_WIDTH / width;
+                        const scaleH = CONFIG.IMAGE_MAX_HEIGHT / height;
+                        const scale = Math.min(scaleW, scaleH);
+                        width = Math.round(width * scale);
+                        height = Math.round(height * scale);
                     }
                     
-                    // Calculate scale
-                    const scaleW = CONFIG.IMAGE_MAX_WIDTH / width;
-                    const scaleH = CONFIG.IMAGE_MAX_HEIGHT / height;
-                    const scale = Math.min(scaleW, scaleH);
-                    
-                    width = Math.round(width * scale);
-                    height = Math.round(height * scale);
-                    
-                    // Draw to canvas
+                    // Always re-encode through canvas as JPEG to ensure
+                    // consistent format and size (PNGs/WebPs can be huge)
                     const canvas = document.createElement('canvas');
                     canvas.width = width;
                     canvas.height = height;
@@ -446,6 +442,8 @@ class MediaController {
         this.imageCache.set(data.imageId, data.data);
         this.imageCacheBytes += data.data.length * 2;
         this.evictImageCacheIfNeeded();
+        // Clear from pending requests (image arrived)
+        this._pendingImageRequests?.delete(data.imageId);
         Logger.debug('Image received:', data.imageId);
         
         // Notify handlers
@@ -565,6 +563,15 @@ class MediaController {
      * @param {string} password - Channel password (optional)
      */
     async requestImage(messageStreamId, imageId, password = null) {
+        // Dedup: skip if already requested recently (30s cooldown)
+        if (!this._pendingImageRequests) this._pendingImageRequests = new Map();
+        const now = Date.now();
+        if (this._pendingImageRequests.has(imageId)) {
+            const lastReq = this._pendingImageRequests.get(imageId);
+            if (now - lastReq < 30000) return;
+        }
+        this._pendingImageRequests.set(imageId, now);
+
         const ephemeralStreamId = deriveEphemeralId(messageStreamId);
         const request = {
             type: 'image_request',

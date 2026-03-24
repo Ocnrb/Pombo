@@ -61,12 +61,13 @@ const STREAM_CONFIG = {
     // Number of messages to load on scroll (pagination)
     LOAD_MORE_COUNT: CONFIG.stream.loadMoreCount,
     
-    // Message Stream (with storage): 2 partitions (messages + sync)
+    // Message Stream (with storage): 3 partitions (messages + sync state + sync blobs)
     MESSAGE_STREAM: {
         SUFFIX: '-1',
-        PARTITIONS: 2,
-        MESSAGES: 0,  // Text, reactions, images, video announcements
-        SYNC: 1       // Cross-device sync payloads (self → self)
+        PARTITIONS: 3,
+        MESSAGES: 0,    // Text, reactions, images, video announcements
+        SYNC: 1,        // Cross-device sync payloads (self → self)
+        SYNC_BLOBS: 2   // Image blobs sync (heavy payloads, separate partition)
     },
     
     // Ephemeral Stream (no storage): 2 partitions
@@ -2119,7 +2120,7 @@ class StreamrController {
      * @param {string} password - Password for encrypted channels (optional)
      * @returns {Promise<Object>} - Subscription object
      */
-    async subscribeWithHistory(streamId, partition, handler, historyCount = STREAM_CONFIG.INITIAL_MESSAGES, password = null) {
+    async subscribeWithHistory(streamId, partition, handler, historyCount = STREAM_CONFIG.INITIAL_MESSAGES, password = null, onHistoryComplete = null) {
         if (!this.client) {
             throw new Error('Client not initialized');
         }
@@ -2181,7 +2182,10 @@ class StreamrController {
             // Fetch history separately (may fail due to CORS on localhost)
             // This is non-blocking and fails gracefully
             // Pass password for decryption of encrypted channels
-            this.fetchHistoryAsync(streamId, partition, historyCount, handler, password);
+            this.fetchHistoryAsync(streamId, partition, historyCount, handler, password, onHistoryComplete);
+        } else if (onHistoryComplete) {
+            // No history to fetch, signal completion immediately
+            try { onHistoryComplete(); } catch (e) { Logger.warn('onHistoryComplete error:', e); }
         }
         
         return subscription;
@@ -2197,7 +2201,7 @@ class StreamrController {
      * @param {Function} handler - Message handler
      * @param {string} password - Password for decryption (optional)
      */
-    async fetchHistoryAsync(streamId, partition, count, handler, password = null) {
+    async fetchHistoryAsync(streamId, partition, count, handler, password = null, onHistoryComplete = null) {
         try {
             Logger.debug(`Fetching ${count} historical messages for partition ${partition}${password ? ' (encrypted)' : ''}...`);
             
@@ -2343,6 +2347,11 @@ class StreamrController {
         } catch (error) {
             // CORS errors and other network issues are caught here
             Logger.warn(`History fetch failed for partition ${partition} (may be CORS on localhost):`, error.message);
+        } finally {
+            // Signal that initial history fetch is complete (success or failure)
+            if (onHistoryComplete) {
+                try { onHistoryComplete(); } catch (e) { Logger.warn('onHistoryComplete error:', e); }
+            }
         }
     }
 
@@ -2363,7 +2372,7 @@ class StreamrController {
      * @param {number} historyCount - Number of historical messages to fetch
      * @returns {Promise<boolean>} - Success
      */
-    async subscribeToDualStream(messageStreamId, ephemeralStreamId, handlers, password = null, historyCount = STREAM_CONFIG.INITIAL_MESSAGES) {
+    async subscribeToDualStream(messageStreamId, ephemeralStreamId, handlers, password = null, historyCount = STREAM_CONFIG.INITIAL_MESSAGES, onHistoryComplete = null) {
         if (!this.client) {
             throw new Error('Streamr client not initialized');
         }
@@ -2389,7 +2398,8 @@ class StreamrController {
                         STREAM_CONFIG.MESSAGE_STREAM.MESSAGES,
                         handlers.onMessage,
                         historyCount,
-                        password
+                        password,
+                        onHistoryComplete
                     );
                 }
                 

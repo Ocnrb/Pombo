@@ -111,6 +111,13 @@ class UIController {
             getImage: (imageId) => mediaController.getImage(imageId),
             cacheImage: (imageId, data) => mediaController.cacheImage(imageId, data),
             requestImage: (streamId, imageId, password) => mediaController.requestImage(streamId, imageId, password),
+            loadImageFromLedger: (imageId) => {
+                secureStorage.getImageBlob(imageId).then(data => {
+                    if (data) {
+                        mediaController.handleImageData({ type: 'image_data', imageId, data });
+                    }
+                }).catch(() => {});
+            },
             getCurrentChannel: () => this.getActiveChannel(),
             getFileUrl: (fileId) => mediaController.getFileUrl(fileId),
             isSeeding: (fileId) => mediaController.isSeeding(fileId),
@@ -211,6 +218,7 @@ class UIController {
             dmManager,
             modalManager,
             authManager,
+            notificationUI,
             Logger,
             showNotification: (msg, type) => this.showNotification(msg, type),
             renderChannelList: () => this.renderChannelList()

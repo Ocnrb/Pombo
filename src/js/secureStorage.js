@@ -12,6 +12,7 @@
 import { Logger } from './logger.js';
 import { CONFIG } from './config.js';
 import { StorageError } from './utils/errors.js';
+import { cryptoWorkerPool } from './workers/cryptoWorkerPool.js';
 
 class SecureStorage {
     constructor() {
@@ -22,6 +23,11 @@ class SecureStorage {
         this.isGuestMode = false;     // Guest mode - no persistence
         this.STORAGE_PREFIX = 'pombo_secure_';
         this.PBKDF2_ITERATIONS = CONFIG.crypto.pbkdf2Iterations;
+        // Image ledger (IndexedDB)
+        this.imageDB = null;          // IDBDatabase for PomboImageStore
+        this.imageBlobCache = null;   // Map<imageId, imageData> in-memory LRU
+        this.imageBlobCacheBytes = 0; // Tracked size for eviction
+        this.IMAGE_CACHE_MAX_BYTES = 10 * 1024 * 1024; // 10 MB cap for in-memory cache
     }
 
     /**
@@ -46,31 +52,29 @@ class SecureStorage {
         // Create deterministic salt from address
         const salt = new TextEncoder().encode(`pombo_salt_${normalizedAddress}`);
         
-        // Import signature as key material
-        const keyMaterial = await crypto.subtle.importKey(
-            'raw',
-            new TextEncoder().encode(signature),
-            'PBKDF2',
-            false,
-            ['deriveKey']
-        );
-        
-        // Derive AES-256-GCM key using PBKDF2
-        const key = await crypto.subtle.deriveKey(
-            {
-                name: 'PBKDF2',
-                salt: salt,
-                iterations: this.PBKDF2_ITERATIONS,
-                hash: 'SHA-256'
-            },
-            keyMaterial,
-            { name: 'AES-GCM', length: 256 },
-            false,
-            ['encrypt', 'decrypt']
-        );
-        
-        Logger.debug('Storage key derived successfully');
-        return key;
+        // Offload PBKDF2 (310k iterations, ~500-800ms) to worker pool
+        // to avoid blocking the main thread during app init.
+        // Falls back to main-thread crypto if the worker task fails.
+        try {
+            const key = await cryptoWorkerPool.execute('DERIVE_KEY', {
+                password: signature,
+                salt: Array.from(salt),
+                iterations: this.PBKDF2_ITERATIONS
+            });
+            Logger.debug('Storage key derived successfully');
+            return key;
+        } catch (workerError) {
+            Logger.warn('Worker DERIVE_KEY failed, falling back to main thread:', workerError.message);
+            const keyMaterial = await crypto.subtle.importKey(
+                'raw', new TextEncoder().encode(signature), 'PBKDF2', false, ['deriveKey']
+            );
+            const key = await crypto.subtle.deriveKey(
+                { name: 'PBKDF2', salt, iterations: this.PBKDF2_ITERATIONS, hash: 'SHA-256' },
+                keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+            );
+            Logger.debug('Storage key derived successfully (main-thread fallback)');
+            return key;
+        }
     }
 
     /**
@@ -80,6 +84,7 @@ class SecureStorage {
      */
     async init(signer, address) {
         this.address = address.toLowerCase();
+        this.isGuestMode = false;
         
         try {
             // Derive encryption key from wallet signature
@@ -88,7 +93,22 @@ class SecureStorage {
             // Load existing encrypted data or initialize empty
             await this.loadFromStorage();
             
+            // Initialize image ledger (IndexedDB)
+            await this.initImageStore();
+
+            // Ensure any cached images are flushed to IDB
+            // (guards against data loss if images were cached before IDB was available)
+            await this._flushCachedImagesToLedger();
+            
             this.isUnlocked = true;
+
+            // Sync username to plain localStorage for pre-unlock display
+            if (this.cache.username) {
+                localStorage.setItem(`pombo_username_${this.address}`, this.cache.username);
+            } else {
+                localStorage.removeItem(`pombo_username_${this.address}`);
+            }
+
             Logger.info('🔓 Secure storage unlocked for:', this.address.slice(0, 8) + '...');
             
             return true;
@@ -225,6 +245,7 @@ class SecureStorage {
 
     /**
      * Save encrypted data to localStorage
+     * Automatically trims imageData from old messages if quota is exceeded
      */
     async saveToStorage() {
         // Guest mode: keep in memory only, don't persist
@@ -243,12 +264,98 @@ class SecureStorage {
             localStorage.setItem(this.getStorageKey(), JSON.stringify(encrypted));
             Logger.debug('💾 Saved encrypted data to storage');
         } catch (error) {
-            Logger.error('Failed to save to secure storage:', error);
+            if (!this._isQuotaError(error)) {
+                Logger.error('Failed to save to secure storage:', error);
+                throw new StorageError(
+                    'Failed to save encrypted data to storage',
+                    'STORAGE_SAVE_FAILED',
+                    { cause: error }
+                );
+            }
+            // Progressive trim: oldest half first, then all imageData
+            const passes = ['half', 'all'];
+            for (const pass of passes) {
+                Logger.warn(`localStorage quota reached — trimming image data (${pass})`);
+                this._trimImageDataFromCache(pass === 'all');
+                try {
+                    const encrypted = await this.encrypt(this.cache);
+                    localStorage.setItem(this.getStorageKey(), JSON.stringify(encrypted));
+                    Logger.info(`💾 Saved after trimming image data (${pass})`);
+                    return;
+                } catch (retryError) {
+                    if (!this._isQuotaError(retryError)) {
+                        throw new StorageError(
+                            'Failed to save encrypted data to storage',
+                            'STORAGE_SAVE_FAILED',
+                            { cause: retryError }
+                        );
+                    }
+                    // Continue to next pass
+                }
+            }
+            Logger.error('Failed to save even after stripping all image data');
             throw new StorageError(
-                'Failed to save encrypted data to storage',
+                'Failed to save encrypted data to storage — quota exceeded',
                 'STORAGE_SAVE_FAILED',
                 { cause: error }
             );
+        }
+    }
+
+    /**
+     * Check if an error is a localStorage quota exceeded error
+     * @param {Error} error
+     * @returns {boolean}
+     */
+    _isQuotaError(error) {
+        return error?.name === 'QuotaExceededError' ||
+               error?.code === 22 ||
+               error?.code === 1014;  // Firefox
+    }
+
+    /**
+     * Remove imageData from old sent messages in cache to free localStorage space.
+     * Trims oldest-first. When forceAll is false, strips half the image messages;
+     * when true (or IDB unavailable), strips all to guarantee the save succeeds.
+     * Images remain accessible via getImageBlob() (IndexedDB ledger).
+     * @param {boolean} [forceAll=false] - Strip all imageData regardless of IDB
+     */
+    _trimImageDataFromCache(forceAll = false) {
+        const allImageMsgs = [];
+        for (const [streamId, msgs] of Object.entries(this.cache.sentMessages || {})) {
+            for (const msg of msgs) {
+                if (msg.type === 'image' && msg.imageData) {
+                    allImageMsgs.push({ streamId, msg });
+                }
+            }
+        }
+        if (allImageMsgs.length === 0) return;
+        allImageMsgs.sort((a, b) => a.msg.timestamp - b.msg.timestamp);
+        // Strip all when forced or IDB unavailable; otherwise strip oldest half
+        const trimCount = (forceAll || !this.imageDB)
+            ? allImageMsgs.length
+            : Math.max(Math.ceil(allImageMsgs.length / 2), 1);
+        for (let i = 0; i < trimCount; i++) {
+            delete allImageMsgs[i].msg.imageData;
+        }
+    }
+
+    /**
+     * Add an entry to imageBlobCache, evicting oldest entries if over cap.
+     * @param {string} imageId
+     * @param {string} data - base64 image data
+     */
+    _warmImageCache(imageId, data) {
+        if (!this.imageBlobCache) return;
+        if (this.imageBlobCache.has(imageId)) return;
+        this.imageBlobCache.set(imageId, data);
+        this.imageBlobCacheBytes += data.length;
+        // LRU eviction: drop oldest entries (Map insertion order) until under cap
+        while (this.imageBlobCacheBytes > this.IMAGE_CACHE_MAX_BYTES && this.imageBlobCache.size > 1) {
+            const oldest = this.imageBlobCache.keys().next().value;
+            const oldLen = this.imageBlobCache.get(oldest)?.length || 0;
+            this.imageBlobCache.delete(oldest);
+            this.imageBlobCacheBytes -= oldLen;
         }
     }
 
@@ -319,6 +426,15 @@ class SecureStorage {
     async setUsername(username) {
         if (!this.isUnlocked) return;
         this.cache.username = username;
+        // Also store in plain localStorage for pre-unlock display (unlock modal)
+        // Skip in guest mode — guest sessions are memory-only
+        if (this.address && !this.isGuestMode) {
+            if (username) {
+                localStorage.setItem(`pombo_username_${this.address}`, username);
+            } else {
+                localStorage.removeItem(`pombo_username_${this.address}`);
+            }
+        }
         await this.saveToStorage();
     }
 
@@ -568,6 +684,12 @@ class SecureStorage {
         if (this.cache.sentMessages[streamId].length > 200) {
             this.cache.sentMessages[streamId] = this.cache.sentMessages[streamId].slice(-200);
         }
+        // Flush image to IndexedDB ledger before saving to localStorage
+        if (message.type === 'image' && message.imageData) {
+            await this.saveImageToLedger(message.imageId, message.imageData, streamId);
+            // Image is safe in IDB — strip from cache to avoid bloating localStorage
+            delete stored.imageData;
+        }
         await this.saveToStorage();
     }
 
@@ -580,6 +702,7 @@ class SecureStorage {
         if (this.cache.sentMessages?.[streamId]) {
             delete this.cache.sentMessages[streamId];
             await this.saveToStorage();
+            await this.clearImagesForStream(streamId);
         }
     }
 
@@ -767,6 +890,330 @@ class SecureStorage {
         await this.saveToStorage();
     }
 
+    // ==================== Image Ledger (IndexedDB) ====================
+
+    /**
+     * Open (or create) the PomboImageStore IndexedDB.
+     * Schema: { imageId (PK), streamId (indexed), encryptedData, iv, synced, ts }
+     */
+    async initImageStore() {
+        if (this.isGuestMode) return;
+        this.imageBlobCache = new Map();
+        this.imageBlobCacheBytes = 0;
+
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open('PomboImageStore', 1);
+
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+                if (!db.objectStoreNames.contains('images')) {
+                    const store = db.createObjectStore('images', { keyPath: 'imageId' });
+                    store.createIndex('byStream', 'streamId', { unique: false });
+                    store.createIndex('bySynced', 'synced', { unique: false });
+                }
+            };
+
+            request.onsuccess = (event) => {
+                this.imageDB = event.target.result;
+                Logger.info('📦 PomboImageStore opened');
+                // Housekeeping: trim oldest images if ledger exceeds threshold
+                this.evictOldImagesFromLedger().catch(() => {});
+                // Request persistent storage to prevent browser eviction
+                navigator.storage?.persist?.().catch(() => {});
+                resolve();
+            };
+
+            request.onerror = (event) => {
+                Logger.error('Failed to open PomboImageStore:', event.target.error);
+                // Non-fatal: app keeps working, only IDB persistence lost
+                resolve();
+            };
+        });
+    }
+
+    /**
+     * Flush any images with inline imageData in sentMessages to the IDB ledger.
+     * Idempotent: saveImageToLedger deduplicates by imageId.
+     */
+    async _flushCachedImagesToLedger() {
+        if (!this.imageDB) return;
+        for (const [streamId, msgs] of Object.entries(this.cache?.sentMessages || {})) {
+            for (const msg of msgs) {
+                if (msg.type === 'image' && msg.imageData && msg.imageId) {
+                    await this.saveImageToLedger(msg.imageId, msg.imageData, streamId);
+                }
+            }
+        }
+    }
+
+    /**
+     * Encrypt a base64 image string with the current storage key.
+     * Crypto is done OUTSIDE the IDB transaction to avoid TransactionInactiveError.
+     * @param {string} data - base64 image data
+     * @returns {Promise<{encryptedData: ArrayBuffer, iv: Uint8Array}>}
+     */
+    async encryptBlob(data) {
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const encoded = new TextEncoder().encode(data);
+        const encryptedData = await crypto.subtle.encrypt(
+            { name: 'AES-GCM', iv },
+            this.storageKey,
+            encoded
+        );
+        return { encryptedData, iv };
+    }
+
+    /**
+     * Decrypt a blob previously encrypted with encryptBlob.
+     * @param {ArrayBuffer} encryptedData
+     * @param {Uint8Array} iv
+     * @returns {Promise<string>} base64 image data
+     */
+    async decryptBlob(encryptedData, iv) {
+        const decrypted = await crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: new Uint8Array(iv) },
+            this.storageKey,
+            encryptedData
+        );
+        return new TextDecoder().decode(decrypted);
+    }
+
+    /**
+     * Persist an image to the IndexedDB ledger.
+     * Deduplicates by imageId, encrypts outside transaction.
+     * @param {string} imageId
+     * @param {string} imageData - base64 data
+     * @param {string} streamId
+     */
+    async saveImageToLedger(imageId, imageData, streamId) {
+        if (!this.imageDB) return;
+
+        try {
+            // Check if already stored (read tx)
+            const exists = await new Promise((resolve, reject) => {
+                const tx = this.imageDB.transaction('images', 'readonly');
+                const req = tx.objectStore('images').count(imageId);
+                req.onsuccess = () => resolve(req.result > 0);
+                req.onerror = () => reject(req.error);
+            });
+            if (exists) return false;
+
+            // Encrypt OUTSIDE transaction
+            const { encryptedData, iv } = await this.encryptBlob(imageData);
+
+            // Write (new tx after async gap)
+            await new Promise((resolve, reject) => {
+                const tx = this.imageDB.transaction('images', 'readwrite');
+                tx.objectStore('images').put({
+                    imageId,
+                    streamId,
+                    encryptedData,
+                    iv: Array.from(iv),
+                    synced: 0,
+                    ts: Date.now()
+                });
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+
+            // Update in-memory cache
+            this._warmImageCache(imageId, imageData);
+            Logger.debug(`📦 Image ${imageId.slice(0, 8)} saved to ledger`);
+            return true;
+        } catch (error) {
+            Logger.error('saveImageToLedger failed:', error);
+            // Non-fatal: image stays in localStorage cache anyway
+            return false;
+        }
+    }
+
+    /**
+     * Retrieve image data with fallback chain:
+     * 1. In-memory imageBlobCache
+     * 2. cache.sentMessages scan
+     * 3. IndexedDB ledger
+     * @param {string} imageId
+     * @returns {Promise<string|null>} base64 image data or null
+     */
+    async getImageBlob(imageId) {
+        // 1. In-memory cache
+        if (this.imageBlobCache?.has(imageId)) {
+            return this.imageBlobCache.get(imageId);
+        }
+
+        // 2. Cache sentMessages scan
+        if (this.cache?.sentMessages) {
+            for (const msgs of Object.values(this.cache.sentMessages)) {
+                for (const m of msgs) {
+                    if (m.imageId === imageId && m.imageData) {
+                        return m.imageData;
+                    }
+                }
+            }
+        }
+
+        // 3. IndexedDB
+        if (!this.imageDB || !this.storageKey) return null;
+        try {
+            const record = await new Promise((resolve, reject) => {
+                const tx = this.imageDB.transaction('images', 'readonly');
+                const req = tx.objectStore('images').get(imageId);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+            if (!record) return null;
+            const data = await this.decryptBlob(record.encryptedData, record.iv);
+            // Warm in-memory cache
+            this._warmImageCache(imageId, data);
+            return data;
+        } catch (error) {
+            Logger.error('getImageBlob IDB read failed:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Delete all images for a given stream from the IndexedDB ledger.
+     * @param {string} streamId
+     */
+    async clearImagesForStream(streamId) {
+        if (!this.imageDB) return;
+        try {
+            await new Promise((resolve, reject) => {
+                const tx = this.imageDB.transaction('images', 'readwrite');
+                const store = tx.objectStore('images');
+                const index = store.index('byStream');
+                const req = index.openCursor(IDBKeyRange.only(streamId));
+                req.onsuccess = (event) => {
+                    const cursor = event.target.result;
+                    if (cursor) {
+                        // Evict from memory cache too
+                        const id = cursor.value.imageId;
+                        if (this.imageBlobCache?.has(id)) {
+                            this.imageBlobCacheBytes -= (this.imageBlobCache.get(id)?.length || 0);
+                            this.imageBlobCache.delete(id);
+                        }
+                        cursor.delete();
+                        cursor.continue();
+                    }
+                };
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+            Logger.debug(`📦 Cleared images for stream ${streamId.slice(0, 12)}`);
+        } catch (error) {
+            Logger.error('clearImagesForStream failed:', error);
+        }
+    }
+
+    /**
+     * Evict oldest images when ledger exceeds a threshold.
+     * Uses cursor on the default key (imageId) sorted by ts.
+     * @param {number} [maxRecords=500] - Max images to keep
+     */
+    async evictOldImagesFromLedger(maxRecords = 500) {
+        if (!this.imageDB) return;
+        try {
+            const count = await new Promise((resolve, reject) => {
+                const tx = this.imageDB.transaction('images', 'readonly');
+                const req = tx.objectStore('images').count();
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+            if (count <= maxRecords) return;
+
+            // Collect all records sorted by ts, delete oldest
+            const toDelete = await new Promise((resolve, reject) => {
+                const ids = [];
+                const tx = this.imageDB.transaction('images', 'readonly');
+                const req = tx.objectStore('images').openCursor();
+                const allRecords = [];
+                req.onsuccess = (event) => {
+                    const cursor = event.target.result;
+                    if (cursor) {
+                        allRecords.push({ imageId: cursor.value.imageId, ts: cursor.value.ts });
+                        cursor.continue();
+                    }
+                };
+                tx.oncomplete = () => {
+                    allRecords.sort((a, b) => a.ts - b.ts);
+                    const excess = allRecords.slice(0, count - maxRecords);
+                    resolve(excess.map(r => r.imageId));
+                };
+                tx.onerror = () => reject(tx.error);
+            });
+
+            if (toDelete.length === 0) return;
+            await new Promise((resolve, reject) => {
+                const tx = this.imageDB.transaction('images', 'readwrite');
+                const store = tx.objectStore('images');
+                for (const id of toDelete) {
+                    store.delete(id);
+                    if (this.imageBlobCache?.has(id)) {
+                        this.imageBlobCacheBytes -= (this.imageBlobCache.get(id)?.length || 0);
+                        this.imageBlobCache.delete(id);
+                    }
+                }
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+            Logger.info(`📦 Evicted ${toDelete.length} old images from ledger`);
+        } catch (error) {
+            Logger.error('evictOldImagesFromLedger failed:', error);
+        }
+    }
+
+    /**
+     * Get all unsynced image records (for blob sync — Fase 2).
+     * Returns an async generator to avoid loading all blobs at once.
+     * @yields {{ imageId: string, streamId: string, encryptedData: ArrayBuffer, iv: number[] }}
+     */
+    async *getUnsyncedImages() {
+        if (!this.imageDB) return;
+        const keys = await new Promise((resolve, reject) => {
+            const tx = this.imageDB.transaction('images', 'readonly');
+            const index = tx.objectStore('images').index('bySynced');
+            const req = index.getAllKeys(IDBKeyRange.only(0));
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+        for (const imageId of keys) {
+            const record = await new Promise((resolve, reject) => {
+                const tx = this.imageDB.transaction('images', 'readonly');
+                const req = tx.objectStore('images').get(imageId);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+            if (record) yield record;
+        }
+    }
+
+    /**
+     * Mark an image as synced in the ledger.
+     * @param {string} imageId
+     */
+    async markImageSynced(imageId) {
+        if (!this.imageDB) return;
+        try {
+            await new Promise((resolve, reject) => {
+                const tx = this.imageDB.transaction('images', 'readwrite');
+                const store = tx.objectStore('images');
+                const req = store.get(imageId);
+                req.onsuccess = () => {
+                    const record = req.result;
+                    if (record) {
+                        record.synced = 1;
+                        store.put(record);
+                    }
+                };
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        } catch (error) {
+            Logger.error('markImageSynced failed:', error);
+        }
+    }
+
     // ==================== Lifecycle ==
 
     /**
@@ -778,6 +1225,12 @@ class SecureStorage {
         this.isUnlocked = false;
         this.address = null;
         this.isGuestMode = false;
+        if (this.imageDB) {
+            this.imageDB.close();
+            this.imageDB = null;
+        }
+        this.imageBlobCache = null;
+        this.imageBlobCacheBytes = 0;
         Logger.info('🔒 Secure storage locked');
     }
 
@@ -828,8 +1281,20 @@ class SecureStorage {
             throw new Error('Storage not unlocked');
         }
 
+        // Strip imageData from sent messages (synced separately via blob sync)
+        const sentMessages = {};
+        for (const [streamId, msgs] of Object.entries(this.cache.sentMessages || {})) {
+            sentMessages[streamId] = msgs.map(m => {
+                if (m.type === 'image') {
+                    const { imageData, ...rest } = m;
+                    return rest;
+                }
+                return m;
+            });
+        }
+
         return {
-            sentMessages: this.cache.sentMessages || {},
+            sentMessages,
             sentReactions: this.cache.sentReactions || {},
             channels: this.cache.channels || [],
             blockedPeers: this.cache.blockedPeers || [],
@@ -864,10 +1329,23 @@ class SecureStorage {
         if (data.dmLeftAt !== undefined) this.cache.dmLeftAt = data.dmLeftAt;
         if (data.trustedContacts !== undefined) this.cache.trustedContacts = data.trustedContacts;
         if (data.ensCache !== undefined) this.cache.ensCache = data.ensCache;
-        if (data.username !== undefined) this.cache.username = data.username;
+        if (data.username !== undefined) {
+            this.cache.username = data.username;
+            // Also store in plain localStorage for pre-unlock display (unlock modal)
+            if (this.address) {
+                if (data.username) {
+                    localStorage.setItem(`pombo_username_${this.address}`, data.username);
+                } else {
+                    localStorage.removeItem(`pombo_username_${this.address}`);
+                }
+            }
+        }
         if (data.graphApiKey !== undefined) this.cache.graphApiKey = data.graphApiKey;
 
         await this.saveToStorage();
+        // Flush any imageData present in imported messages to IDB ledger
+        // (preserves images that survived the merge but aren't yet in IDB)
+        await this._flushCachedImagesToLedger();
         Logger.info('📥 Imported sync data');
         
         return channelsUpdated;
@@ -888,12 +1366,13 @@ class SecureStorage {
             throw new Error('Storage not unlocked');
         }
 
-        // Prepare data to encrypt (reuse sync export structure)
+        // Prepare data to encrypt — full state including images
         const dataToBackup = {
-            version: 3,
+            version: 1,
             exportedAt: new Date().toISOString(),
             address: this.address,
-            data: this.exportForSync()
+            data: this.exportForBackup(),
+            imageBlobs: await this.exportImageBlobs()
         };
 
         // Generate random salt for scrypt (different from keystore's salt)
@@ -945,7 +1424,7 @@ class SecureStorage {
 
         return {
             format: 'pombo-account-backup',
-            version: 3,
+            version: 1,
             exportedAt: new Date().toISOString(),
             // Include the keystore (already encrypted with scrypt)
             keystore: keystore,
@@ -976,8 +1455,8 @@ class SecureStorage {
      * @returns {Promise<Object>} - { wallet, summary }
      */
     async importAccountBackup(backup, password, progressCallback = null) {
-        if (backup.format !== 'pombo-account-backup' || backup.version !== 3) {
-            throw new Error('Invalid backup format. Expected pombo-account-backup v3');
+        if (backup.format !== 'pombo-account-backup' || backup.version !== 1) {
+            throw new Error('Invalid backup format. Expected pombo-account-backup v1');
         }
 
         // Step 1: Decrypt keystore to recover wallet (verifies password)
@@ -1064,8 +1543,93 @@ class SecureStorage {
             keystore: backup.keystore,
             data: decryptedData.data,
             address: decryptedData.address,
-            exportedAt: decryptedData.exportedAt
+            exportedAt: decryptedData.exportedAt,
+            imageBlobs: decryptedData.imageBlobs || []
         };
+    }
+
+    /**
+     * Export full state for backup (includes imageData in sent messages).
+     * Unlike exportForSync(), does NOT strip imageData.
+     * @returns {Object} - Full state
+     */
+    exportForBackup() {
+        if (!this.isUnlocked || !this.cache) {
+            throw new Error('Storage not unlocked');
+        }
+
+        return {
+            sentMessages: this.cache.sentMessages || {},
+            sentReactions: this.cache.sentReactions || {},
+            channels: this.cache.channels || [],
+            blockedPeers: this.cache.blockedPeers || [],
+            dmLeftAt: this.cache.dmLeftAt || {},
+            trustedContacts: this.cache.trustedContacts || {},
+            ensCache: this.cache.ensCache || {},
+            username: this.cache.username || null,
+            graphApiKey: this.cache.graphApiKey || null
+        };
+    }
+
+    /**
+     * Export all images from the IndexedDB ledger for backup.
+     * Decrypts each image so the backup is self-contained.
+     * @returns {Promise<Array<{imageId: string, streamId: string, data: string}>>}
+     */
+    async exportImageBlobs() {
+        if (!this.imageDB || !this.storageKey) return [];
+        try {
+            const records = await new Promise((resolve, reject) => {
+                const tx = this.imageDB.transaction('images', 'readonly');
+                const all = [];
+                const req = tx.objectStore('images').openCursor();
+                req.onsuccess = (event) => {
+                    const cursor = event.target.result;
+                    if (cursor) {
+                        all.push(cursor.value);
+                        cursor.continue();
+                    }
+                };
+                tx.oncomplete = () => resolve(all);
+                tx.onerror = () => reject(tx.error);
+            });
+            const blobs = [];
+            for (const record of records) {
+                try {
+                    const data = await this.decryptBlob(record.encryptedData, record.iv);
+                    blobs.push({ imageId: record.imageId, streamId: record.streamId, data });
+                } catch {
+                    Logger.warn(`Backup: Failed to decrypt image ${record.imageId}, skipping`);
+                }
+            }
+            Logger.info(`📤 Exported ${blobs.length} image(s) for backup`);
+            return blobs;
+        } catch (error) {
+            Logger.error('exportImageBlobs failed:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Import image blobs from a backup into the IndexedDB ledger.
+     * @param {Array<{imageId: string, streamId: string, data: string}>} blobs
+     */
+    async importImageBlobs(blobs) {
+        if (!this.imageDB) {
+            await this.initImageStore();
+        }
+        let imported = 0;
+        for (const { imageId, data, streamId } of blobs) {
+            try {
+                await this.saveImageToLedger(imageId, data, streamId);
+                // Mark as synced — came from backup, no need to push
+                await this.markImageSynced(imageId);
+                imported++;
+            } catch {
+                Logger.warn(`Backup: Failed to import image ${imageId}, skipping`);
+            }
+        }
+        Logger.info(`📥 Imported ${imported} image(s) from backup`);
     }
 }
 

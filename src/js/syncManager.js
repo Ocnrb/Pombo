@@ -1,12 +1,13 @@
 /**
  * Sync Manager
- * Cross-device synchronization using DM inbox Partition 1.
+ * Cross-device synchronization using DM inbox.
  * 
  * Architecture:
- * - Users publish encrypted sync payloads to their own inbox (Partition 1)
+ * - Partition 1 (SYNC): state payloads (channels, messages metadata, reactions)
+ * - Partition 2 (SYNC_BLOBS): image blobs (heavy, incremental)
  * - ECDH self-encryption: only the owner can decrypt
  * - Pull fetches history from storage nodes, merges chronologically
- * - Push uploads current local state
+ * - Push uploads current local state + unsynced blobs
  * 
  * Requirements:
  * - User must have created their DM inbox first (dmManager.createInbox)
@@ -21,6 +22,7 @@ import { authManager } from './auth.js';
 import { dmCrypto } from './dmCrypto.js';
 import { channelManager } from './channels.js';
 import { dmManager } from './dm.js';
+import { identityManager } from './identity.js';
 
 class SyncManager {
     constructor() {
@@ -249,8 +251,12 @@ class SyncManager {
             // Sort by timestamp (oldest first) and merge all
             decrypted.sort((a, b) => a.ts - b.ts);
 
-            // Progressive merge: start with local, apply each remote chronologically
-            let merged = secureStorage.exportForSync();
+            // Progressive merge: start with local state (preserving imageData),
+            // apply each remote chronologically. Using exportForBackup() instead
+            // of exportForSync() so local imageData is not stripped before merge.
+            // The merge dedup keeps local versions, so images we already have
+            // won't be lost when the remote version lacks imageData.
+            let merged = secureStorage.exportForBackup();
             for (const payload of decrypted) {
                 merged = this.mergeState(merged, payload.data);
             }
@@ -263,6 +269,9 @@ class SyncManager {
                 channelManager.loadChannels();
                 Logger.info('Sync: Reloaded channel list');
             }
+
+            // Reload username in identity manager
+            identityManager.loadUsername();
 
             const latestTs = decrypted[decrypted.length - 1].ts;
             this.lastSyncTs = latestTs;
@@ -348,17 +357,25 @@ class SyncManager {
      * @returns {Object} - Merged sentMessages
      */
     mergeSentMessages(local, remote) {
-        const result = { ...local };
+        // Defensive copy — never mutate caller's arrays or message objects
+        const result = {};
+        for (const [k, v] of Object.entries(local)) {
+            result[k] = v.map(m => ({ ...m }));
+        }
 
         for (const [streamId, remoteMessages] of Object.entries(remote)) {
             if (!result[streamId]) {
-                result[streamId] = remoteMessages;
+                result[streamId] = remoteMessages.map(m => ({ ...m }));
             } else {
-                // Merge by message ID
-                const localIds = new Set(result[streamId].map(m => m.id));
+                // Merge by message ID, preserving imageData from either side
+                const localById = new Map(result[streamId].map(m => [m.id, m]));
                 for (const msg of remoteMessages) {
-                    if (!localIds.has(msg.id)) {
-                        result[streamId].push(msg);
+                    const existing = localById.get(msg.id);
+                    if (!existing) {
+                        result[streamId].push({ ...msg });
+                    } else if (msg.type === 'image' && msg.imageData && !existing.imageData) {
+                        // Remote has imageData that local lost — adopt it
+                        existing.imageData = msg.imageData;
                     }
                 }
                 // Sort by timestamp
@@ -421,9 +438,131 @@ class SyncManager {
     }
 
     /**
+     * Push unsynced image blobs to Partition 2 (SYNC_BLOBS).
+     * Each image is published as a separate message to avoid payload limits.
+     * Uses async generator to stream images one-at-a-time.
+     */
+    async pushImageBlobs() {
+        if (authManager.isGuestMode()) return;
+        if (this.isSyncing) return;
+
+        const hasInbox = await dmManager.hasInbox();
+        if (!hasInbox) return;
+
+        const privateKey = authManager.wallet?.privateKey;
+        if (!privateKey) return;
+
+        const inboxStreamId = this.getInboxStreamId();
+        if (!inboxStreamId) return;
+
+        const myPubKey = dmCrypto.getMyPublicKey(privateKey);
+        const aesKey = await dmCrypto.deriveSharedKey(privateKey, myPubKey);
+
+        await streamrController.setDMPublishKey(inboxStreamId);
+
+        let count = 0;
+        for await (const record of secureStorage.getUnsyncedImages()) {
+            try {
+                const imageData = await secureStorage.decryptBlob(record.encryptedData, record.iv);
+
+                const payload = {
+                    type: 'sync_blob',
+                    v: 2,
+                    ts: Date.now(),
+                    imageId: record.imageId,
+                    streamId: record.streamId,
+                    data: imageData
+                };
+
+                const encrypted = await dmCrypto.encrypt(payload, aesKey);
+                await streamrController.publish(
+                    inboxStreamId,
+                    STREAM_CONFIG.MESSAGE_STREAM.SYNC_BLOBS,
+                    encrypted
+                );
+
+                await secureStorage.markImageSynced(record.imageId);
+                count++;
+            } catch (err) {
+                Logger.warn('Sync: Failed to push blob', record.imageId, err.message);
+            }
+        }
+
+        if (count > 0) {
+            Logger.info(`Sync: Pushed ${count} image blob(s)`);
+        }
+    }
+
+    /**
+     * Pull image blobs from Partition 2 (SYNC_BLOBS).
+     * Imports blobs from other devices into the local IndexedDB ledger.
+     * @param {Object} options
+     * @param {number} options.limit - Max messages to fetch (default: 50)
+     */
+    async pullImageBlobs(options = {}) {
+        if (authManager.isGuestMode()) return;
+        if (this.isSyncing) return;
+
+        const hasInbox = await dmManager.hasInbox();
+        if (!hasInbox) return;
+
+        const privateKey = authManager.wallet?.privateKey;
+        if (!privateKey) return;
+
+        const myAddress = authManager.getAddress()?.toLowerCase();
+        const inboxStreamId = this.getInboxStreamId();
+        if (!inboxStreamId) return;
+
+        await streamrController.addDMDecryptKey(myAddress);
+
+        const messages = await streamrController.fetchPartitionHistory(
+            inboxStreamId,
+            STREAM_CONFIG.MESSAGE_STREAM.SYNC_BLOBS,
+            options.limit || 50
+        );
+
+        if (!messages.length) return;
+
+        const myPubKey = dmCrypto.getMyPublicKey(privateKey);
+        const aesKey = await dmCrypto.deriveSharedKey(privateKey, myPubKey);
+
+        let imported = 0;
+        for (const msg of messages) {
+            if (msg.publisherId?.toLowerCase() !== myAddress) continue;
+            if (!dmCrypto.isEncrypted(msg.content)) continue;
+
+            try {
+                const payload = await dmCrypto.decrypt(msg.content, aesKey);
+                if (payload.type !== 'sync_blob' || payload.v !== 2) continue;
+
+                const saved = await secureStorage.saveImageToLedger(
+                    payload.imageId,
+                    payload.data,
+                    payload.streamId
+                );
+                // Mark as synced immediately — this image came FROM the network,
+                // so it doesn't need to be pushed back on next sync cycle
+                await secureStorage.markImageSynced(payload.imageId);
+                if (saved) {
+                    imported++;
+                    // Notify UI so placeholders get replaced in real-time
+                    this.notifyHandlers('blob_pulled', { imageId: payload.imageId, data: payload.data });
+                }
+            } catch (err) {
+                Logger.warn('Sync: Failed to import blob', err.message);
+            }
+        }
+
+        if (imported > 0) {
+            Logger.info(`Sync: Imported ${imported} image blob(s)`);
+        }
+    }
+
+    /**
      * Smart sync: push first (snapshot local state), then pull (accept latest remote).
      * Push-first ensures our state is on the storage node before we pull,
      * so leaving a channel is respected (our push without the channel is the latest).
+     * Also syncs image blobs via Partition 2.
      * @returns {Promise<{pulled: boolean, pushed: boolean, noInbox: boolean}>}
      */
     async smartSync() {
@@ -443,13 +582,19 @@ class SyncManager {
         const result = { pulled: false, pushed: false, noInbox: false };
 
         try {
-            // Push first — snapshot current state to storage node
+            // Push state (partition 1)
             await this.pushSync();
             result.pushed = true;
 
-            // Pull — accept latest remote state (our push is the latest or near-latest)
+            // Push image blobs (partition 2) — incremental, non-blocking
+            await this.pushImageBlobs();
+
+            // Pull state (partition 1)
             const pullResult = await this.pullSync();
             result.pulled = pullResult !== null;
+
+            // Pull image blobs (partition 2)
+            await this.pullImageBlobs();
 
             Logger.info('Sync: Smart sync completed', result);
             this.notifyHandlers('sync_complete', result);
@@ -478,15 +623,17 @@ class SyncManager {
         }
 
         try {
-            // Push first
+            // Push first (state + blobs)
             await this.pushSync();
+            await this.pushImageBlobs();
             
             // Wait for storage propagation
             Logger.info(`Sync: Waiting ${delay}ms for storage propagation...`);
             await new Promise(resolve => setTimeout(resolve, delay));
             
-            // Pull to verify
+            // Pull to verify (state + blobs)
             const pullResult = await this.pullSync();
+            await this.pullImageBlobs();
             
             return { 
                 pushed: true, 
@@ -547,12 +694,14 @@ class SyncManager {
     }
 
     /**
-     * Full sync: push then pull.
+     * Full sync: push then pull (state + blobs).
      * Push first to snapshot local state, then pull and merge remote changes.
      */
     async fullSync() {
         await this.pushSync();
+        await this.pushImageBlobs();
         await this.pullSync();
+        await this.pullImageBlobs();
     }
 
     /**

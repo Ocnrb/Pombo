@@ -185,6 +185,8 @@ class MessageRenderer {
             if (channel) {
                 this.deps.requestImage?.(channel.streamId, msg.imageId, channel.password);
             }
+            // Also try IndexedDB ledger (async, will replace placeholder when ready)
+            this.deps.loadImageFromLedger?.(msg.imageId);
             // Include channel ID in placeholder to verify channel context when image arrives
             const channelId = channel?.streamId || '';
             return `

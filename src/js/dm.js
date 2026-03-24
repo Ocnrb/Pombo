@@ -706,10 +706,15 @@ class DMManager {
         const received = channel.messages.filter(m => m._dmReceived);
 
         // Merge: combine sent + received, deduplicate by id, sort by timestamp
+        // Prefer versions that have imageData (LogStore messages may have it when sentMessages lost it)
         const allMessages = [...sent, ...received];
         const unique = new Map();
         for (const msg of allMessages) {
-            if (msg.id && !unique.has(msg.id)) {
+            if (!msg.id) continue;
+            const existing = unique.get(msg.id);
+            if (!existing) {
+                unique.set(msg.id, msg);
+            } else if (msg.type === 'image' && msg.imageData && !existing.imageData) {
                 unique.set(msg.id, msg);
             }
         }
