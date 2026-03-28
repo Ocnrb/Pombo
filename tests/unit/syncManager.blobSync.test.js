@@ -23,7 +23,8 @@ vi.mock('../../src/js/streamr.js', () => ({
     },
     STREAM_CONFIG: {
         MESSAGE_STREAM: {
-            PARTITIONS: 3,
+            PARTITIONS: 1,
+            DM_PARTITIONS: 3,
             MESSAGES: 0,
             SYNC: 1,
             SYNC_BLOBS: 2

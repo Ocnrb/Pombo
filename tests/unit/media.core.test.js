@@ -9,9 +9,19 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 vi.mock('../../src/js/streamr.js', () => ({
     streamrController: {
         publishMessage: vi.fn().mockResolvedValue(undefined),
-        publishMedia: vi.fn().mockResolvedValue(undefined)
+        publishMediaSignal: vi.fn().mockResolvedValue(undefined),
+        publishMediaData: vi.fn().mockResolvedValue(undefined),
+        ensureMediaSubscription: vi.fn().mockResolvedValue(undefined)
     },
-    deriveEphemeralId: vi.fn((id) => `ephemeral-${id}`)
+    deriveEphemeralId: vi.fn((id) => `ephemeral-${id}`),
+    STREAM_CONFIG: {
+        EPHEMERAL_STREAM: {
+            PARTITIONS: 3,
+            CONTROL: 0,
+            MEDIA_SIGNALS: 1,
+            MEDIA_DATA: 2
+        }
+    }
 }));
 
 vi.mock('../../src/js/auth.js', () => ({
@@ -191,10 +201,10 @@ describe('media.js core', () => {
 
             it('resets piece send queue', () => {
                 mediaController.pieceSendQueue = [{ some: 'item' }];
-                mediaController.isSendingPieces = true;
+                mediaController.activeSends = 2;
                 mediaController.reset();
                 expect(mediaController.pieceSendQueue).toEqual([]);
-                expect(mediaController.isSendingPieces).toBe(false);
+                expect(mediaController.activeSends).toBe(0);
             });
 
             it('resets currentOwnerAddress', () => {
@@ -234,20 +244,6 @@ describe('media.js core', () => {
 
     // ==================== handleMediaMessage DISPATCH ====================
     describe('handleMediaMessage dispatch', () => {
-        it('dispatches image_data to handleImageData', () => {
-            const spy = vi.spyOn(mediaController, 'handleImageData');
-            mediaController.handleMediaMessage('stream-1', { type: 'image_data', imageId: 'img1', data: 'base64' });
-            expect(spy).toHaveBeenCalledWith({ type: 'image_data', imageId: 'img1', data: 'base64' });
-            spy.mockRestore();
-        });
-
-        it('dispatches image_request to handleImageRequest', () => {
-            const spy = vi.spyOn(mediaController, 'handleImageRequest');
-            mediaController.handleMediaMessage('stream-1', { type: 'image_request', imageId: 'img1' });
-            expect(spy).toHaveBeenCalledWith('stream-1', { type: 'image_request', imageId: 'img1' });
-            spy.mockRestore();
-        });
-
         it('dispatches piece_request to handlePieceRequest', () => {
             const spy = vi.spyOn(mediaController, 'handlePieceRequest');
             mediaController.handleMediaMessage('stream-1', { type: 'piece_request', fileId: 'f1' });
@@ -370,63 +366,6 @@ describe('media.js core', () => {
                 mediaController.evictImageCacheIfNeeded();
                 // 'first' should be evicted first, then 'second'
                 expect(mediaController.imageCache.has('first')).toBe(false);
-            });
-        });
-
-        describe('handleImageRequest', () => {
-            it('sends cached image data to ephemeral stream', async () => {
-                mediaController.imageCache.set('img1', 'base64_image_data');
-                channelManager.getChannel.mockReturnValue({ password: null });
-
-                await mediaController.handleImageRequest('stream-1', { imageId: 'img1' });
-
-                expect(deriveEphemeralId).toHaveBeenCalledWith('stream-1');
-                expect(streamrController.publishMedia).toHaveBeenCalledWith(
-                    'ephemeral-stream-1',
-                    { type: 'image_data', imageId: 'img1', data: 'base64_image_data' },
-                    null
-                );
-            });
-
-            it('sends with password for encrypted channels', async () => {
-                mediaController.imageCache.set('img1', 'data');
-                channelManager.getChannel.mockReturnValue({ password: 'secret' });
-
-                await mediaController.handleImageRequest('stream-1', { imageId: 'img1' });
-
-                expect(streamrController.publishMedia).toHaveBeenCalledWith(
-                    'ephemeral-stream-1',
-                    expect.objectContaining({ type: 'image_data' }),
-                    'secret'
-                );
-            });
-
-            it('does nothing if image not cached', async () => {
-                await mediaController.handleImageRequest('stream-1', { imageId: 'nonexistent' });
-                expect(streamrController.publishMedia).not.toHaveBeenCalled();
-            });
-        });
-
-        describe('requestImage', () => {
-            it('publishes image request to ephemeral stream', async () => {
-                await mediaController.requestImage('stream-1', 'img1');
-
-                expect(deriveEphemeralId).toHaveBeenCalledWith('stream-1');
-                expect(streamrController.publishMedia).toHaveBeenCalledWith(
-                    'ephemeral-stream-1',
-                    { type: 'image_request', imageId: 'img1' },
-                    null
-                );
-            });
-
-            it('passes password for encrypted channels', async () => {
-                await mediaController.requestImage('stream-1', 'img1', 'password123');
-
-                expect(streamrController.publishMedia).toHaveBeenCalledWith(
-                    'ephemeral-stream-1',
-                    { type: 'image_request', imageId: 'img1' },
-                    'password123'
-                );
             });
         });
     });
@@ -808,16 +747,16 @@ describe('media.js core', () => {
 
             await mediaController.sendPiece('stream-1', 'file-1', 0);
 
-            expect(streamrController.publishMedia).toHaveBeenCalledWith(
+            expect(streamrController.publishMediaData).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
-                expect.objectContaining({ type: 'file_piece', fileId: 'file-1', pieceIndex: 0 }),
+                expect.any(Uint8Array),
                 null
             );
         });
 
         it('_sendPieceImmediate skips if file not found', async () => {
             await mediaController._sendPieceImmediate('stream-1', 'nonexistent', 0);
-            expect(streamrController.publishMedia).not.toHaveBeenCalled();
+            expect(streamrController.publishMediaData).not.toHaveBeenCalled();
         });
 
         it('sends with encryption password', async () => {
@@ -830,9 +769,9 @@ describe('media.js core', () => {
 
             await mediaController._sendPieceImmediate('stream-1', 'file-1', 0);
 
-            expect(streamrController.publishMedia).toHaveBeenCalledWith(
+            expect(streamrController.publishMediaData).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
-                expect.objectContaining({ type: 'file_piece' }),
+                expect.any(Uint8Array),
                 'secret123'
             );
         });
@@ -843,7 +782,7 @@ describe('media.js core', () => {
         it('publishes source_request to ephemeral stream', async () => {
             await mediaController.requestFileSources('stream-1', 'file-1');
 
-            expect(streamrController.publishMedia).toHaveBeenCalledWith(
+            expect(streamrController.publishMediaSignal).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
                 { type: 'source_request', fileId: 'file-1' },
                 null
@@ -853,7 +792,7 @@ describe('media.js core', () => {
         it('passes password for encrypted channels', async () => {
             await mediaController.requestFileSources('stream-1', 'file-1', 'pwd');
 
-            expect(streamrController.publishMedia).toHaveBeenCalledWith(
+            expect(streamrController.publishMediaSignal).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
                 { type: 'source_request', fileId: 'file-1' },
                 'pwd'
@@ -900,7 +839,7 @@ describe('media.js core', () => {
         it('publishes source_announce to ephemeral stream', async () => {
             await mediaController.announceFileSource('stream-1', 'file-1');
 
-            expect(streamrController.publishMedia).toHaveBeenCalledWith(
+            expect(streamrController.publishMediaSignal).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
                 { type: 'source_announce', fileId: 'file-1' },
                 null
@@ -910,7 +849,7 @@ describe('media.js core', () => {
         it('passes password for encryption', async () => {
             await mediaController.announceFileSource('stream-1', 'file-1', 'pwd');
 
-            expect(streamrController.publishMedia).toHaveBeenCalledWith(
+            expect(streamrController.publishMediaSignal).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
                 { type: 'source_announce', fileId: 'file-1' },
                 'pwd'
@@ -1017,7 +956,7 @@ describe('media.js core', () => {
 
             await mediaController.requestPiece('file-1', 0, '0xseeder');
 
-            expect(streamrController.publishMedia).toHaveBeenCalledWith(
+            expect(streamrController.publishMediaSignal).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
                 { type: 'piece_request', fileId: 'file-1', pieceIndex: 0, targetSeederId: '0xseeder' },
                 null
@@ -1026,7 +965,7 @@ describe('media.js core', () => {
 
         it('does nothing if transfer not found', async () => {
             await mediaController.requestPiece('no-file', 0, '0xseeder');
-            expect(streamrController.publishMedia).not.toHaveBeenCalled();
+            expect(streamrController.publishMediaSignal).not.toHaveBeenCalled();
         });
     });
 

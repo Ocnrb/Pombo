@@ -33,7 +33,8 @@ vi.mock('../../src/js/streamr.js', () => ({
     },
     STREAM_CONFIG: {
         MESSAGE_STREAM: {
-            PARTITIONS: 3,
+            PARTITIONS: 1,
+            DM_PARTITIONS: 3,
             MESSAGES: 0,
             SYNC: 1,
             SYNC_BLOBS: 2
@@ -106,6 +107,12 @@ vi.mock('../../src/js/channels.js', () => ({
 vi.mock('../../src/js/identity.js', () => ({
     identityManager: {
         loadUsername: vi.fn()
+    }
+}));
+
+vi.mock('../../src/js/media.js', () => ({
+    mediaController: {
+        handleMediaMessage: vi.fn()
     }
 }));
 

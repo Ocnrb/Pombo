@@ -164,16 +164,24 @@ describe('STREAM_CONFIG', () => {
         expect(STREAM_CONFIG.EPHEMERAL_STREAM.CONTROL).toBe(0);
     });
 
-    it('should have MEDIA partition at 1', () => {
-        expect(STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA).toBe(1);
+    it('should have MEDIA_SIGNALS partition at 1', () => {
+        expect(STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_SIGNALS).toBe(1);
     });
 
-    it('should have 3 partitions for message stream', () => {
-        expect(STREAM_CONFIG.MESSAGE_STREAM.PARTITIONS).toBe(3);
+    it('should have MEDIA_DATA partition at 2', () => {
+        expect(STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_DATA).toBe(2);
     });
 
-    it('should have 2 partitions for ephemeral stream', () => {
-        expect(STREAM_CONFIG.EPHEMERAL_STREAM.PARTITIONS).toBe(2);
+    it('should have 1 partition for message stream (channels)', () => {
+        expect(STREAM_CONFIG.MESSAGE_STREAM.PARTITIONS).toBe(1);
+    });
+
+    it('should have 3 partitions for DM inbox message stream', () => {
+        expect(STREAM_CONFIG.MESSAGE_STREAM.DM_PARTITIONS).toBe(3);
+    });
+
+    it('should have 3 partitions for ephemeral stream', () => {
+        expect(STREAM_CONFIG.EPHEMERAL_STREAM.PARTITIONS).toBe(3);
     });
 
     it('should have positive INITIAL_MESSAGES', () => {

@@ -10,7 +10,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 vi.mock('../../src/js/streamr.js', () => ({
     streamrController: {
         publishMessage: vi.fn().mockResolvedValue(undefined),
-        publishMedia: vi.fn().mockResolvedValue(undefined)
+        publishMediaSignal: vi.fn().mockResolvedValue(undefined),
+        publishMediaData: vi.fn().mockResolvedValue(undefined),
+        ensureMediaSubscription: vi.fn().mockResolvedValue(undefined)
     },
     deriveEphemeralId: vi.fn((id) => `ephemeral-${id}`)
 }));
@@ -55,13 +57,16 @@ vi.mock('../../src/js/dm.js', () => ({
 vi.mock('../../src/js/dmCrypto.js', () => ({
     dmCrypto: {
         getSharedKey: vi.fn().mockResolvedValue('sharedAesKey'),
-        encrypt: vi.fn().mockResolvedValue({ encrypted: true })
+        encrypt: vi.fn().mockResolvedValue({ ct: 'enc', iv: 'iv', e: 'aes-256-gcm' }),
+        encryptBinary: vi.fn().mockImplementation(async (data) => new Uint8Array([0xFF, ...data]))
     }
 }));
 
 import { mediaController, MEDIA_CONFIG } from '../../src/js/media.js';
 import { streamrController } from '../../src/js/streamr.js';
 import { channelManager } from '../../src/js/channels.js';
+import { dmCrypto } from '../../src/js/dmCrypto.js';
+import { dmManager } from '../../src/js/dm.js';
 import { Logger } from '../../src/js/logger.js';
 
 describe('media.js extended', () => {
@@ -259,8 +264,8 @@ describe('media.js extended', () => {
 
     // ==================== processPieceQueue() ====================
     describe('processPieceQueue()', () => {
-        it('should return immediately if already sending', async () => {
-            mediaController.isSendingPieces = true;
+        it('should not process more items when at max concurrency', async () => {
+            mediaController.activeSends = 3; // At max (CONCURRENT_SENDS = 3)
             mediaController.pieceSendQueue.push({ messageStreamId: 'test', fileId: 'f1', pieceIndex: 0, resolve: vi.fn() });
 
             await mediaController.processPieceQueue();
@@ -270,15 +275,15 @@ describe('media.js extended', () => {
         });
 
         it('should return immediately if queue is empty', async () => {
-            mediaController.isSendingPieces = false;
+            mediaController.activeSends = 0;
 
             await mediaController.processPieceQueue();
 
-            expect(mediaController.isSendingPieces).toBe(false);
+            expect(mediaController.activeSends).toBe(0);
         });
 
         it('should process queue items and call resolve', async () => {
-            mediaController.isSendingPieces = false;
+            mediaController.activeSends = 0;
             const resolveFn = vi.fn();
 
             // Mock _sendPieceImmediate
@@ -289,14 +294,16 @@ describe('media.js extended', () => {
             });
 
             await mediaController.processPieceQueue();
+            // Wait for concurrent sends to complete
+            await new Promise(r => setTimeout(r, 50));
 
             expect(sendSpy).toHaveBeenCalledWith('stream-1', 'file-1', 0);
             expect(resolveFn).toHaveBeenCalled();
-            expect(mediaController.isSendingPieces).toBe(false);
+            expect(mediaController.activeSends).toBe(0);
             expect(mediaController.pieceSendQueue).toHaveLength(0);
         });
 
-        it('should process multiple items sequentially', async () => {
+        it('should process multiple items concurrently', async () => {
             const resolve1 = vi.fn();
             const resolve2 = vi.fn();
             const sendSpy = vi.spyOn(mediaController, '_sendPieceImmediate').mockResolvedValue(undefined);
@@ -307,6 +314,8 @@ describe('media.js extended', () => {
             );
 
             await mediaController.processPieceQueue();
+            // Wait for concurrent sends to complete
+            await new Promise(r => setTimeout(r, 50));
 
             expect(sendSpy).toHaveBeenCalledTimes(2);
             expect(resolve1).toHaveBeenCalled();
@@ -322,6 +331,7 @@ describe('media.js extended', () => {
             });
 
             await mediaController.processPieceQueue();
+            await new Promise(r => setTimeout(r, 50));
 
             expect(mediaController.lastPieceSentTime).toBeGreaterThan(0);
         });
@@ -332,7 +342,7 @@ describe('media.js extended', () => {
         it('should return early if file not found', async () => {
             await mediaController._sendPieceImmediate('stream-1', 'nonexistent', 0);
 
-            expect(streamrController.publishMedia).not.toHaveBeenCalled();
+            expect(streamrController.publishMediaData).not.toHaveBeenCalled();
         });
 
         it('should slice file and publish piece', async () => {
@@ -350,14 +360,9 @@ describe('media.js extended', () => {
 
             await mediaController._sendPieceImmediate('stream-1', 'test-file', 0);
 
-            expect(streamrController.publishMedia).toHaveBeenCalledWith(
+            expect(streamrController.publishMediaData).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
-                expect.objectContaining({
-                    type: 'file_piece',
-                    fileId: 'test-file',
-                    pieceIndex: 0,
-                    data: expect.any(String) // base64
-                }),
+                expect.any(Uint8Array),
                 null // no password
             );
         });
@@ -374,9 +379,9 @@ describe('media.js extended', () => {
 
             await mediaController._sendPieceImmediate('stream-priv', 'private-file', 0);
 
-            expect(streamrController.publishMedia).toHaveBeenCalledWith(
+            expect(streamrController.publishMediaData).toHaveBeenCalledWith(
                 expect.any(String),
-                expect.any(Object),
+                expect.any(Uint8Array),
                 'secret123'
             );
         });
@@ -763,44 +768,6 @@ describe('media.js extended', () => {
         });
     });
 
-    // ==================== handleImageRequest() ====================
-    describe('handleImageRequest()', () => {
-        it('should ignore request for unknown image', async () => {
-            await mediaController.handleImageRequest('stream-1', { imageId: 'unknown' });
-            expect(streamrController.publishMedia).not.toHaveBeenCalled();
-        });
-
-        it('should send cached image data', async () => {
-            mediaController.imageCache.set('img-1', 'data:image/png;base64,ABC');
-            channelManager.getChannel.mockReturnValue(null);
-
-            await mediaController.handleImageRequest('stream-1', { imageId: 'img-1' });
-
-            expect(streamrController.publishMedia).toHaveBeenCalledWith(
-                'ephemeral-stream-1',
-                expect.objectContaining({
-                    type: 'image_data',
-                    imageId: 'img-1',
-                    data: 'data:image/png;base64,ABC'
-                }),
-                null
-            );
-        });
-
-        it('should use password for private channels', async () => {
-            mediaController.imageCache.set('img-2', 'data:image/png;base64,XYZ');
-            channelManager.getChannel.mockReturnValue({ password: 'mypass' });
-
-            await mediaController.handleImageRequest('stream-priv', { imageId: 'img-2' });
-
-            expect(streamrController.publishMedia).toHaveBeenCalledWith(
-                expect.any(String),
-                expect.any(Object),
-                'mypass'
-            );
-        });
-    });
-
     // ==================== handleMediaMessage() dispatch ====================
     describe('handleMediaMessage() extended dispatch', () => {
         it('should handle source_request', async () => {
@@ -1003,7 +970,7 @@ describe('media.js extended', () => {
         it('should publish announcement on ephemeral stream', async () => {
             await mediaController.announceFileSource('stream-1', 'f1', null);
 
-            expect(streamrController.publishMedia).toHaveBeenCalledWith(
+            expect(streamrController.publishMediaSignal).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
                 expect.objectContaining({
                     type: 'source_announce',
@@ -1016,7 +983,7 @@ describe('media.js extended', () => {
         it('should use password when provided', async () => {
             await mediaController.announceFileSource('stream-1', 'f1', 'mypassword');
 
-            expect(streamrController.publishMedia).toHaveBeenCalledWith(
+            expect(streamrController.publishMediaSignal).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
                 expect.any(Object),
                 'mypassword'
@@ -1032,13 +999,105 @@ describe('media.js extended', () => {
 
             await mediaController.handleSourceRequest('stream-1', { fileId: 'f1' });
 
-            expect(streamrController.publishMedia).toHaveBeenCalled();
+            expect(streamrController.publishMediaSignal).toHaveBeenCalled();
         });
 
         it('should not announce if file not found', async () => {
             await mediaController.handleSourceRequest('stream-1', { fileId: 'nonexistent' });
 
-            expect(streamrController.publishMedia).not.toHaveBeenCalled();
+            expect(streamrController.publishMediaSignal).not.toHaveBeenCalled();
+        });
+    });
+
+    // ==================== DM ECDH Media Encryption ====================
+    describe('DM ECDH media encryption', () => {
+        const dmStreamId = '0xpeer/Pombo-DM-1';
+        const dmChannel = { type: 'dm', peerAddress: '0xpeeraddr', password: null };
+
+        beforeEach(() => {
+            channelManager.getChannel.mockReturnValue(dmChannel);
+            dmManager.getPeerPublicKey.mockResolvedValue('0x02peerpubkey');
+            vi.clearAllMocks();
+            channelManager.getChannel.mockReturnValue(dmChannel);
+            dmManager.getPeerPublicKey.mockResolvedValue('0x02peerpubkey');
+        });
+
+        describe('_getDMMediaKey()', () => {
+            it('should return ECDH key for DM channels', async () => {
+                const key = await mediaController._getDMMediaKey(dmStreamId);
+                expect(key).toBe('sharedAesKey');
+                expect(dmCrypto.getSharedKey).toHaveBeenCalled();
+            });
+
+            it('should return null for non-DM channels', async () => {
+                channelManager.getChannel.mockReturnValue({ type: 'public', password: 'pass' });
+                const key = await mediaController._getDMMediaKey('some-stream-1');
+                expect(key).toBeNull();
+            });
+
+            it('should return null if no peer public key', async () => {
+                dmManager.getPeerPublicKey.mockResolvedValue(null);
+                const key = await mediaController._getDMMediaKey(dmStreamId);
+                expect(key).toBeNull();
+            });
+
+            it('should return null for channel without peerAddress', async () => {
+                channelManager.getChannel.mockReturnValue({ type: 'dm', peerAddress: null });
+                const key = await mediaController._getDMMediaKey(dmStreamId);
+                expect(key).toBeNull();
+            });
+        });
+
+        describe('_sendPieceImmediate() for DM', () => {
+            it('should encrypt binary with ECDH key', async () => {
+                const blob = new Blob([new Uint8Array(100)]);
+                mediaController.localFiles.set('dm-file', {
+                    file: blob,
+                    metadata: { fileId: 'dm-file', pieceCount: 1 },
+                    streamId: dmStreamId
+                });
+
+                await mediaController._sendPieceImmediate(dmStreamId, 'dm-file', 0);
+
+                expect(dmCrypto.encryptBinary).toHaveBeenCalled();
+                expect(streamrController.publishMediaData).toHaveBeenCalledWith(
+                    expect.any(String),
+                    expect.any(Uint8Array),
+                    null  // password=null for DM ECDH
+                );
+            });
+        });
+
+        describe('announceFileSource() for DM', () => {
+            it('should encrypt announce signal with ECDH key', async () => {
+                await mediaController.announceFileSource(dmStreamId, 'file-1');
+
+                expect(dmCrypto.encrypt).toHaveBeenCalledWith(
+                    expect.objectContaining({ type: 'source_announce', fileId: 'file-1' }),
+                    'sharedAesKey'
+                );
+                expect(streamrController.publishMediaSignal).toHaveBeenCalledWith(
+                    expect.any(String),
+                    expect.objectContaining({ ct: 'enc' }),
+                    null
+                );
+            });
+        });
+
+        describe('requestFileSources() for DM', () => {
+            it('should encrypt source_request signal with ECDH key', async () => {
+                await mediaController.requestFileSources(dmStreamId, 'file-2');
+
+                expect(dmCrypto.encrypt).toHaveBeenCalledWith(
+                    expect.objectContaining({ type: 'source_request', fileId: 'file-2' }),
+                    'sharedAesKey'
+                );
+                expect(streamrController.publishMediaSignal).toHaveBeenCalledWith(
+                    expect.any(String),
+                    expect.objectContaining({ ct: 'enc' }),
+                    null
+                );
+            });
         });
     });
 });

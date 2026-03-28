@@ -388,7 +388,7 @@ describe('MessageRenderer', () => {
             messageRenderer.setDependencies({
                 getImage: () => null,
                 getCurrentChannel: () => ({ streamId: 'ch-123' }),
-                requestImage: vi.fn()
+                loadImageFromLedger: vi.fn()
             });
             
             const msg = { type: 'image', imageId: 'img-123' };
@@ -445,23 +445,6 @@ describe('MessageRenderer', () => {
             const result = messageRenderer.renderImageContent(msg);
             
             expect(result).toContain('Invalid image data');
-        });
-        
-        it('should request image from network when not available', () => {
-            const requestImage = vi.fn();
-            messageRenderer.setDependencies({
-                getImage: () => null,
-                getCurrentChannel: () => ({ 
-                    streamId: 'ch-123', 
-                    password: 'secret' 
-                }),
-                requestImage
-            });
-            
-            const msg = { type: 'image', imageId: 'img-4' };
-            messageRenderer.renderImageContent(msg);
-            
-            expect(requestImage).toHaveBeenCalledWith('ch-123', 'img-4', 'secret');
         });
     });
 

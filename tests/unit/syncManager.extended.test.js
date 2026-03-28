@@ -22,7 +22,7 @@ vi.mock('../../src/js/streamr.js', () => ({
         setDMPublishKey: vi.fn().mockResolvedValue(undefined),
         addDMDecryptKey: vi.fn().mockResolvedValue(undefined)
     },
-    STREAM_CONFIG: { MESSAGE_STREAM: { PARTITIONS: 3, MESSAGES: 0, SYNC: 1, SYNC_BLOBS: 2 } }
+    STREAM_CONFIG: { MESSAGE_STREAM: { PARTITIONS: 1, DM_PARTITIONS: 3, MESSAGES: 0, SYNC: 1, SYNC_BLOBS: 2 } }
 }));
 
 vi.mock('../../src/js/dm.js', () => ({

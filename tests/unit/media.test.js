@@ -9,7 +9,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 vi.mock('../../src/js/streamr.js', () => ({
     streamrController: {
         publishMessage: vi.fn(),
-        publishMedia: vi.fn()
+        publishMediaSignal: vi.fn(),
+        publishMediaData: vi.fn()
     }
 }));
 
@@ -58,8 +59,8 @@ import { mediaController, MEDIA_CONFIG } from '../../src/js/media.js';
 describe('media.js', () => {
     // ==================== CONFIG CONSTANTS ====================
     describe('MEDIA_CONFIG', () => {
-        it('defines PIECE_SIZE as 64KB', () => {
-            expect(MEDIA_CONFIG.PIECE_SIZE).toBe(64 * 1024);
+        it('defines PIECE_SIZE', () => {
+            expect(MEDIA_CONFIG.PIECE_SIZE).toBe(220 * 1024);
         });
 
         it('defines MAX_FILE_SIZE as 500MB', () => {

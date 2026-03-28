@@ -18,6 +18,7 @@ vi.mock('../../src/js/streamr.js', () => ({
     streamrController: {
         unsubscribe: vi.fn(),
         unsubscribeFromDualStream: vi.fn(),
+        unsubscribeFromPartition: vi.fn().mockResolvedValue(undefined),
         subscribe: vi.fn(),
         resend: vi.fn().mockResolvedValue([]),
         isInitialized: vi.fn().mockReturnValue(true),
@@ -29,7 +30,8 @@ vi.mock('../../src/js/streamr.js', () => ({
     STREAM_CONFIG: { 
         partitions: 1,
         INITIAL_MESSAGES: 50,
-        MESSAGE_STREAM: { MESSAGES: 0 }
+        MESSAGE_STREAM: { MESSAGES: 0 },
+        EPHEMERAL_STREAM: { CONTROL: 0, MEDIA_SIGNALS: 1, MEDIA_DATA: 2 }
     },
     deriveEphemeralId: vi.fn((id) => `${id}/ephemeral`)
 }));
@@ -70,15 +72,17 @@ vi.mock('../../src/js/identity.js', () => ({
 
 vi.mock('../../src/js/media.js', () => ({
     mediaController: {
-        processIncomingMediaChunk: vi.fn()
+        processIncomingMediaChunk: vi.fn(),
+        hasActiveMediaTransfers: vi.fn().mockReturnValue(false)
     }
 }));
 
 // Import after mocks
 import { subscriptionManager } from '../../src/js/subscriptionManager.js';
 import { channelManager } from '../../src/js/channels.js';
-import { streamrController } from '../../src/js/streamr.js';
+import { streamrController, STREAM_CONFIG } from '../../src/js/streamr.js';
 import { secureStorage } from '../../src/js/secureStorage.js';
+import { mediaController } from '../../src/js/media.js';
 
 describe('SubscriptionManager', () => {
     beforeEach(() => {

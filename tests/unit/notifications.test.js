@@ -59,6 +59,12 @@ vi.mock('../../src/js/config.js', () => ({
     }
 }));
 
+vi.mock('../../src/js/media.js', () => ({
+    mediaController: {
+        handleMediaMessage: vi.fn()
+    }
+}));
+
 import { notificationManager } from '../../src/js/notifications.js';
 import { streamrController } from '../../src/js/streamr.js';
 import { authManager } from '../../src/js/auth.js';

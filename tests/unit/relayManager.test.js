@@ -43,6 +43,12 @@ vi.mock('../../src/js/pushProtocol.js', () => ({
     }
 }));
 
+vi.mock('../../src/js/media.js', () => ({
+    mediaController: {
+        handleMediaMessage: vi.fn()
+    }
+}));
+
 import { relayManager } from '../../src/js/relayManager.js';
 import { channelManager } from '../../src/js/channels.js';
 import { calculateChannelTag, calculateNativeChannelTag } from '../../src/js/pushProtocol.js';

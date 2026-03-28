@@ -134,6 +134,12 @@ vi.mock('../../src/js/dmCrypto.js', () => ({
     }
 }));
 
+vi.mock('../../src/js/media.js', () => ({
+    mediaController: {
+        handleMediaMessage: vi.fn()
+    }
+}));
+
 // Import after mocks
 import { channelManager } from '../../src/js/channels.js';
 import { authManager } from '../../src/js/auth.js';

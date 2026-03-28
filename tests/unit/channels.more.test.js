@@ -152,6 +152,12 @@ vi.mock('../../src/js/utils/chainErrors.js', () => ({
     parseChainError: vi.fn((err) => err)
 }));
 
+vi.mock('../../src/js/media.js', () => ({
+    mediaController: {
+        handleMediaMessage: vi.fn()
+    }
+}));
+
 import { channelManager } from '../../src/js/channels.js';
 import { authManager } from '../../src/js/auth.js';
 import { secureStorage } from '../../src/js/secureStorage.js';

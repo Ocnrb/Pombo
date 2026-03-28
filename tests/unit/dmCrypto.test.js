@@ -322,4 +322,111 @@ describe('DMCrypto', () => {
             expect(restored.length).toBe(0);
         });
     });
+
+    // ========================================
+    // encryptBinary
+    // ========================================
+    describe('encryptBinary()', () => {
+        it('should encrypt Uint8Array with AES-GCM', async () => {
+            const data = new Uint8Array([10, 20, 30, 40, 50]);
+            const result = await dmCrypto.encryptBinary(data, mockAesKey);
+            expect(crypto.subtle.encrypt).toHaveBeenCalled();
+            const call = crypto.subtle.encrypt.mock.calls[0];
+            expect(call[0].name).toBe('AES-GCM');
+            expect(call[1]).toBe(mockAesKey);
+            expect(call[2]).toBe(data);
+        });
+
+        it('should return Uint8Array with 12B iv prefix', async () => {
+            const data = new Uint8Array([10, 20, 30]);
+            const result = await dmCrypto.encryptBinary(data, mockAesKey);
+            expect(result).toBeInstanceOf(Uint8Array);
+            // 12 bytes IV + mockCiphertext (8 bytes)
+            expect(result.length).toBe(12 + 8);
+        });
+
+        it('should embed the IV in the first 12 bytes', async () => {
+            const data = new Uint8Array([1, 2, 3]);
+            const result = await dmCrypto.encryptBinary(data, mockAesKey);
+            const iv = result.slice(0, 12);
+            // getRandomValues mock fills with 0,1,2,...,11
+            for (let i = 0; i < 12; i++) {
+                expect(iv[i]).toBe(i % 256);
+            }
+        });
+
+        it('should embed ciphertext after the IV', async () => {
+            const data = new Uint8Array([1, 2, 3]);
+            const result = await dmCrypto.encryptBinary(data, mockAesKey);
+            const ct = result.slice(12);
+            // mockCiphertext is [1,2,3,4,5,6,7,8]
+            expect(ct).toEqual(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]));
+        });
+    });
+
+    // ========================================
+    // decryptBinary
+    // ========================================
+    describe('decryptBinary()', () => {
+        it('should extract IV and ciphertext from packed format', async () => {
+            // Pack: [12B iv][16+B ciphertext] — minimum 28 bytes
+            const packed = new Uint8Array(28);
+            // Set IV bytes
+            for (let i = 0; i < 12; i++) packed[i] = i;
+            // Set ciphertext bytes
+            for (let i = 12; i < 28; i++) packed[i] = i + 100;
+
+            // Mock decrypt to return raw binary
+            const decryptedBuf = new Uint8Array([10, 20, 30]).buffer;
+            crypto.subtle.decrypt.mockResolvedValueOnce(decryptedBuf);
+
+            const result = await dmCrypto.decryptBinary(packed, mockAesKey);
+            expect(crypto.subtle.decrypt).toHaveBeenCalledWith(
+                expect.objectContaining({ name: 'AES-GCM' }),
+                mockAesKey,
+                expect.any(Uint8Array)
+            );
+            expect(result).toBeInstanceOf(Uint8Array);
+            expect(result).toEqual(new Uint8Array([10, 20, 30]));
+        });
+
+        it('should pass correct IV to decrypt', async () => {
+            const packed = new Uint8Array(28);
+            packed[0] = 0xAA; packed[11] = 0xBB;  // distinctive IV bytes
+            crypto.subtle.decrypt.mockResolvedValueOnce(new Uint8Array([1]).buffer);
+
+            await dmCrypto.decryptBinary(packed, mockAesKey);
+            const call = crypto.subtle.decrypt.mock.calls[0];
+            const iv = call[0].iv;
+            expect(iv[0]).toBe(0xAA);
+            expect(iv[11]).toBe(0xBB);
+        });
+
+        it('should propagate decrypt errors', async () => {
+            crypto.subtle.decrypt.mockRejectedValueOnce(new Error('Auth tag mismatch'));
+            const packed = new Uint8Array(28);
+            await expect(dmCrypto.decryptBinary(packed, mockAesKey)).rejects.toThrow('Auth tag mismatch');
+        });
+
+        it('should reject data shorter than 28 bytes (12B IV + 16B tag)', async () => {
+            const tooShort = new Uint8Array(27);
+            await expect(dmCrypto.decryptBinary(tooShort, mockAesKey)).rejects.toThrow('Invalid encrypted binary');
+        });
+
+        it('should reject empty Uint8Array', async () => {
+            await expect(dmCrypto.decryptBinary(new Uint8Array(0), mockAesKey)).rejects.toThrow('Invalid encrypted binary');
+        });
+
+        it('should reject non-Uint8Array input', async () => {
+            await expect(dmCrypto.decryptBinary('not-binary', mockAesKey)).rejects.toThrow('Invalid encrypted binary');
+            await expect(dmCrypto.decryptBinary(null, mockAesKey)).rejects.toThrow('Invalid encrypted binary');
+        });
+
+        it('should accept exactly 28 bytes (12 IV + 16 tag, empty plaintext)', async () => {
+            const minimal = new Uint8Array(28);
+            crypto.subtle.decrypt.mockResolvedValueOnce(new Uint8Array(0).buffer);
+            const result = await dmCrypto.decryptBinary(minimal, mockAesKey);
+            expect(result).toEqual(new Uint8Array(0));
+        });
+    });
 });

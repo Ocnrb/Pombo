@@ -93,6 +93,12 @@ vi.mock('../../src/js/ui/modalUtils.js', () => {
     };
 });
 
+vi.mock('../../src/js/media.js', () => ({
+    mediaController: {
+        handleMediaMessage: vi.fn()
+    }
+}));
+
 import { walletFlows } from '../../src/js/walletFlows.js';
 import { authManager } from '../../src/js/auth.js';
 import { secureStorage } from '../../src/js/secureStorage.js';

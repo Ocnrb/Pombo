@@ -81,6 +81,7 @@ vi.mock('../../src/js/streamr.js', () => ({
             ephemeralStreamId: '0xmyaddress1234567890abcdef12345678/Pombo-DM-2'
         }),
         subscribeWithHistory: vi.fn().mockResolvedValue({ id: 'mock-sub' }),
+        subscribeToPartition: vi.fn().mockResolvedValue({ id: 'mock-partition-sub' }),
         unsubscribe: vi.fn().mockResolvedValue(undefined),
         publishMessage: vi.fn().mockResolvedValue(undefined),
         getDMPublicKey: vi.fn().mockResolvedValue('0x02peerpubkey'),
@@ -89,6 +90,13 @@ vi.mock('../../src/js/streamr.js', () => ({
         addDMDecryptKey: vi.fn().mockResolvedValue(undefined),
         client: {
             getStream: vi.fn().mockRejectedValue(new Error('not found'))
+        }
+    },
+    STREAM_CONFIG: {
+        EPHEMERAL_STREAM: {
+            CONTROL: 0,
+            MEDIA_SIGNALS: 1,
+            MEDIA_DATA: 2
         }
     }
 }));
@@ -99,6 +107,8 @@ vi.mock('../../src/js/dmCrypto.js', () => ({
         getSharedKey: vi.fn().mockResolvedValue('mock-aes-key'),
         encrypt: vi.fn().mockImplementation(async (msg) => ({ ct: 'enc', iv: 'iv', e: 'aes-256-gcm', _original: msg })),
         decrypt: vi.fn().mockImplementation(async (env) => env._original || { text: 'decrypted' }),
+        encryptBinary: vi.fn().mockImplementation(async (data) => new Uint8Array([0xFF, ...data])),
+        decryptBinary: vi.fn().mockImplementation(async (data) => data.slice(1)),
         isEncrypted: vi.fn().mockReturnValue(false),
         peerPublicKeys: new Map(),
         sharedKeys: new Map(),
@@ -117,6 +127,12 @@ vi.mock('../../src/js/channels.js', () => ({
     }
 }));
 
+vi.mock('../../src/js/media.js', () => ({
+    mediaController: {
+        handleMediaMessage: vi.fn()
+    }
+}));
+
 import { dmManager } from '../../src/js/dm.js';
 import { authManager } from '../../src/js/auth.js';
 import { streamrController } from '../../src/js/streamr.js';
@@ -124,6 +140,7 @@ import { channelManager } from '../../src/js/channels.js';
 import { secureStorage } from '../../src/js/secureStorage.js';
 import { dmCrypto } from '../../src/js/dmCrypto.js';
 import { relayManager } from '../../src/js/relayManager.js';
+import { mediaController } from '../../src/js/media.js';
 
 describe('DMManager', () => {
     beforeEach(() => {
@@ -263,8 +280,16 @@ describe('DMManager', () => {
 
             await dmManager.subscribeDMEphemeral();
 
+            // P0: control partition via subscribeWithHistory
             expect(streamrController.subscribeWithHistory).toHaveBeenCalledWith(
                 '0xmy/Pombo-DM-2', 0, expect.any(Function), 0, null
+            );
+            // P1: media signals, P2: media data via subscribeToPartition
+            expect(streamrController.subscribeToPartition).toHaveBeenCalledWith(
+                '0xmy/Pombo-DM-2', 1, expect.any(Function), null
+            );
+            expect(streamrController.subscribeToPartition).toHaveBeenCalledWith(
+                '0xmy/Pombo-DM-2', 2, expect.any(Function), null
             );
             expect(dmManager.inboxEphemeralSubscription).toBeTruthy();
         });
@@ -1291,6 +1316,119 @@ describe('DMManager', () => {
             await dmManager.subscribeInboxPush();
 
             expect(global.localStorage.getItem).toHaveBeenCalledWith('pombo_dm_push_0xmyaddress1234');
+        });
+    });
+
+    // ==================== routeInboxMedia() ====================
+    describe('routeInboxMedia()', () => {
+        const peerAddress = '0xpeeraddress1234567890abcdef12345678';
+        const peerInboxId = `${peerAddress}/Pombo-DM-1`;
+
+        beforeEach(() => {
+            // Setup a conversation
+            dmManager.conversations.set(peerAddress, peerInboxId);
+            channelManager.channels.set(peerInboxId, {
+                messageStreamId: peerInboxId,
+                type: 'dm',
+                peerAddress
+            });
+            streamrController.getDMPublicKey.mockResolvedValue('0x02peerpubkey');
+        });
+
+        it('should forward JSON signal to mediaController', async () => {
+            const data = { type: 'image_request', imageId: 'img-1', senderId: peerAddress };
+            await dmManager.routeInboxMedia(data);
+
+            expect(mediaController.handleMediaMessage).toHaveBeenCalledWith(
+                peerInboxId, data, undefined
+            );
+        });
+
+        it('should forward binary data with ECDH decryption to mediaController', async () => {
+            const binaryData = new Uint8Array([0x01, 10, 20, 30]);
+            // decryptBinary mock strips first byte
+            dmCrypto.decryptBinary.mockResolvedValue(new Uint8Array([10, 20, 30]));
+
+            await dmManager.routeInboxMedia(binaryData, peerAddress);
+
+            expect(dmCrypto.decryptBinary).toHaveBeenCalledWith(binaryData, 'mock-aes-key');
+            expect(mediaController.handleMediaMessage).toHaveBeenCalledWith(
+                peerInboxId, new Uint8Array([10, 20, 30]), peerAddress
+            );
+        });
+
+        it('should decrypt encrypted JSON signal with ECDH key', async () => {
+            const envelope = { ct: 'enc', iv: 'iv', e: 'aes-256-gcm', senderId: peerAddress };
+            dmCrypto.isEncrypted.mockReturnValue(true);
+            dmCrypto.decrypt.mockResolvedValue({ type: 'piece_request', fileId: 'f1' });
+
+            await dmManager.routeInboxMedia(envelope);
+
+            expect(dmCrypto.getSharedKey).toHaveBeenCalled();
+            expect(dmCrypto.decrypt).toHaveBeenCalledWith(envelope, 'mock-aes-key');
+            const calledData = mediaController.handleMediaMessage.mock.calls[0][1];
+            expect(calledData.type).toBe('piece_request');
+            expect(calledData.senderId).toBe(peerAddress);
+        });
+
+        it('should decrypt binary with ECDH decryptBinary', async () => {
+            const encrypted = new Uint8Array([0xFF, 0x01, 10, 20]);
+            dmCrypto.decryptBinary.mockResolvedValue(new Uint8Array([0x01, 10, 20]));
+
+            await dmManager.routeInboxMedia(encrypted, peerAddress);
+
+            expect(dmCrypto.decryptBinary).toHaveBeenCalledWith(encrypted, 'mock-aes-key');
+            const calledData = mediaController.handleMediaMessage.mock.calls[0][1];
+            expect(calledData).toEqual(new Uint8Array([0x01, 10, 20]));
+        });
+
+        it('should ignore messages from self', async () => {
+            const data = { type: 'image_request', senderId: '0xmyaddress1234567890abcdef12345678' };
+            await dmManager.routeInboxMedia(data);
+
+            expect(mediaController.handleMediaMessage).not.toHaveBeenCalled();
+        });
+
+        it('should ignore messages without senderId', async () => {
+            await dmManager.routeInboxMedia({});
+
+            expect(mediaController.handleMediaMessage).not.toHaveBeenCalled();
+        });
+
+        it('should ignore messages from blocked senders', async () => {
+            secureStorage.isBlocked.mockReturnValue(true);
+            const data = { type: 'image_request', senderId: peerAddress };
+            await dmManager.routeInboxMedia(data);
+
+            expect(mediaController.handleMediaMessage).not.toHaveBeenCalled();
+            secureStorage.isBlocked.mockReturnValue(false);
+        });
+
+        it('should ignore messages from unknown senders', async () => {
+            const data = { type: 'image_request', senderId: '0xunknownpeer' };
+            await dmManager.routeInboxMedia(data);
+
+            expect(mediaController.handleMediaMessage).not.toHaveBeenCalled();
+        });
+
+        it('should silently skip decryption when peer public key unavailable', async () => {
+            dmCrypto.peerPublicKeys.clear();
+            streamrController.getDMPublicKey.mockResolvedValue(null);
+            const data = { type: 'source_announce', senderId: peerAddress };
+            await dmManager.routeInboxMedia(data);
+
+            expect(dmCrypto.decrypt).not.toHaveBeenCalled();
+            expect(mediaController.handleMediaMessage).toHaveBeenCalled();
+        });
+
+        it('should return early on decryption failure', async () => {
+            const envelope = { ct: 'bad', iv: 'iv', e: 'aes-256-gcm', senderId: peerAddress };
+            dmCrypto.isEncrypted.mockReturnValue(true);
+            dmCrypto.decrypt.mockRejectedValue(new Error('Auth tag mismatch'));
+
+            await dmManager.routeInboxMedia(envelope);
+
+            expect(mediaController.handleMediaMessage).not.toHaveBeenCalled();
         });
     });
 });

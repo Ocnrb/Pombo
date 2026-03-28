@@ -59,6 +59,12 @@ vi.mock('../../src/js/ui/modalUtils.js', () => ({
     $: vi.fn()
 }));
 
+vi.mock('../../src/js/media.js', () => ({
+    mediaController: {
+        handleMediaMessage: vi.fn()
+    }
+}));
+
 import { inviteHandler } from '../../src/js/inviteHandler.js';
 import { authManager } from '../../src/js/auth.js';
 import { channelManager } from '../../src/js/channels.js';

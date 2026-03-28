@@ -300,14 +300,25 @@ describe('StreamrController Core', () => {
         });
     });
 
-    // ==================== publishMedia() ====================
-    describe('publishMedia()', () => {
-        it('should publish to EPHEMERAL_STREAM.MEDIA partition', async () => {
-            const media = { type: 'chunk', data: 'base64...' };
-            await streamrController.publishMedia('stream-2', media);
+    // ==================== publishMediaSignal() / publishMediaData() ====================
+    describe('publishMediaSignal()', () => {
+        it('should publish to EPHEMERAL_STREAM.MEDIA_SIGNALS partition', async () => {
+            const signal = { type: 'image_request', imageId: 'img1' };
+            await streamrController.publishMediaSignal('stream-2', signal);
             expect(mockClient.publish).toHaveBeenCalledWith(
-                { streamId: 'stream-2', partition: STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA },
-                media
+                { streamId: 'stream-2', partition: STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_SIGNALS },
+                signal
+            );
+        });
+    });
+
+    describe('publishMediaData()', () => {
+        it('should publish to EPHEMERAL_STREAM.MEDIA_DATA partition', async () => {
+            const data = new Uint8Array([1, 2, 3]);
+            await streamrController.publishMediaData('stream-2', data);
+            expect(mockClient.publish).toHaveBeenCalledWith(
+                { streamId: 'stream-2', partition: STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_DATA },
+                data
             );
         });
     });
@@ -455,18 +466,23 @@ describe('StreamrController Core', () => {
 
     // ==================== ensureMediaSubscription() ====================
     describe('ensureMediaSubscription()', () => {
-        it('should subscribe to media partition if not subscribed', async () => {
+        it('should subscribe to both media partitions if not subscribed', async () => {
             const handler = vi.fn();
             await streamrController.ensureMediaSubscription('stream-2', handler);
             expect(mockClient.subscribe).toHaveBeenCalledWith(
-                { streamId: 'stream-2', partition: STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA },
+                { streamId: 'stream-2', partition: STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_SIGNALS },
+                expect.any(Function)
+            );
+            expect(mockClient.subscribe).toHaveBeenCalledWith(
+                { streamId: 'stream-2', partition: STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_DATA },
                 expect.any(Function)
             );
         });
 
-        it('should skip if already subscribed to media partition', async () => {
+        it('should skip if already subscribed to both media partitions', async () => {
             streamrController.subscriptions.set('stream-2', {
-                [STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA]: {}
+                [STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_SIGNALS]: {},
+                [STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_DATA]: {}
             });
             await streamrController.ensureMediaSubscription('stream-2', vi.fn());
             expect(mockClient.subscribe).not.toHaveBeenCalled();
@@ -1292,13 +1308,16 @@ describe('StreamrController Core', () => {
             expect(streamrController.subscriptions.has('stream-2')).toBe(true);
         });
 
-        it('should subscribe to ephemeral stream without history', async () => {
+        it('should store media handler for lazy P1/P2 subscription', async () => {
             mockClient.resend.mockResolvedValue(createMockAsyncIterator([]));
             const handlers = { onMessage: vi.fn(), onControl: vi.fn(), onMedia: vi.fn() };
             await streamrController.subscribeToDualStream('stream-1', 'stream-2', handlers);
 
-            // subscribe called for message(p0), control(p0), media(p1)
-            expect(mockClient.subscribe).toHaveBeenCalledTimes(3);
+            // subscribe called for message(p0), control(p0) only — P1/P2 are lazy
+            expect(mockClient.subscribe).toHaveBeenCalledTimes(2);
+            // Media handler stored for later ensureMediaSubscription()
+            expect(streamrController.mediaHandlers.has('stream-2')).toBe(true);
+            expect(streamrController.mediaHandlers.get('stream-2').handler).toBe(handlers.onMedia);
         });
 
         it('should skip already subscribed streams', async () => {
