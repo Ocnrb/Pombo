@@ -25,6 +25,7 @@ import { reactionManager } from './ui/ReactionManager.js';
 import { mediaHandler } from './ui/MediaHandler.js';
 import { walletFlows } from './walletFlows.js';
 import { inviteHandler } from './inviteHandler.js';
+import { channelModalsUI } from './ui/ChannelModalsUI.js';
 
 class App {
     constructor() {
@@ -69,6 +70,17 @@ class App {
                 onChatsTab: () => {
                     settingsUI.hide();
                     contactsUI.hide();
+                },
+                onExploreTab: () => {
+                    settingsUI.hide();
+                    contactsUI.hide();
+                    uiController.openExploreView();
+                },
+                onJoinWithId: () => {
+                    uiController.showQuickJoinModal();
+                },
+                onCreateChannel: () => {
+                    channelModalsUI.show();
                 }
             });
 

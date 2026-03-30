@@ -145,9 +145,9 @@ export const CONFIG = {
         imageQuality: 0.92,
         pieceSize: 220 * 1024,                  // 220KB chunks
         pieceSendDelayMs: 5,                    // 5ms delay between piece sends
-        maxConcurrentRequests: 10,
-        concurrentSends: 50,                     // Parallel Streamr publishes (bounded concurrency)
-        pieceRequestTimeoutMs: 8000,           // 8s per piece (cross-device RTT headroom)
+        maxConcurrentRequests: 8,
+        concurrentSends: 25,                     // Parallel Streamr publishes (bounded concurrency)
+        pieceRequestTimeoutMs: 5000,            // 5s per piece retry timeout
         maxFileSize: 500 * 1024 * 1024,        // 500MB max upload
         minSeeders: 1,
         preferredSeeders: 3,
@@ -156,7 +156,10 @@ export const CONFIG = {
         seederRefreshIntervalMs: 10000,
         maxSeederRequests: 10,
         maxSeedStorage: 700 * 1024 * 1024,     // 700MB persistent storage
-        seedFilesExpireDays: 7
+        seedFilesExpireDays: 7,
+        pushWatchdogIntervalMs: 3000,           // Check for missing pieces every 3s
+        pushWatchdogStartDelayMs: 2000,         // Wait 2s before first watchdog check
+        pushStallTimeoutMs: 5000                // If no new pieces in 5s, request missing
     },
 
     // Subscription Manager / Polling

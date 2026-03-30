@@ -751,6 +751,25 @@ class UIController {
             }
         });
 
+        // Quick Join modal (mobile pill) - Enter to join
+        const quickJoinModalInput = document.getElementById('quick-join-modal-input');
+        const quickJoinModal = document.getElementById('quick-join-modal');
+        quickJoinModalInput?.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                this._handleQuickJoinModal();
+            }
+        });
+        document.getElementById('confirm-quick-join-modal')?.addEventListener('click', () => {
+            this._handleQuickJoinModal();
+        });
+        document.getElementById('cancel-quick-join-modal')?.addEventListener('click', () => {
+            quickJoinModal?.classList.add('hidden');
+        });
+        // Close on backdrop click
+        quickJoinModal?.addEventListener('click', (e) => {
+            if (e.target === quickJoinModal) quickJoinModal.classList.add('hidden');
+        });
+
         // Join channel (in modal)
         this.elements.joinBtn?.addEventListener('click', () => {
             this.handleJoinChannel();
@@ -1808,6 +1827,8 @@ class UIController {
             document.body.classList.remove('chat-open');
             // Clean up any dangling modal body classes
             document.body.classList.remove('settings-open', 'contacts-open', 'new-channel-open');
+            // Reset pill tab to chats
+            headerUI.setActivePillTab('chats');
         }
     }
 
@@ -2077,6 +2098,45 @@ class UIController {
             (msg, type) => this.showNotification(msg, type),
             () => this.renderChannelList()
         );
+    }
+
+    /**
+     * Show the quick join modal (mobile pill)
+     */
+    showQuickJoinModal() {
+        const modal = document.getElementById('quick-join-modal');
+        const input = document.getElementById('quick-join-modal-input');
+        if (modal) {
+            modal.classList.remove('hidden');
+            setTimeout(() => input?.focus(), 100);
+        }
+    }
+
+    /**
+     * Handle join from the quick join modal
+     * @private
+     */
+    async _handleQuickJoinModal() {
+        const modal = document.getElementById('quick-join-modal');
+        const input = document.getElementById('quick-join-modal-input');
+        const streamId = input?.value.trim();
+
+        if (!streamId) {
+            this.showNotification('Please enter a channel ID', 'error');
+            return;
+        }
+
+        // Set the value in the sidebar input so handleQuickJoin can use it
+        if (this.elements.quickJoinInput) {
+            this.elements.quickJoinInput.value = streamId;
+        }
+
+        // Hide modal
+        modal?.classList.add('hidden');
+        if (input) input.value = '';
+
+        // Delegate to existing quick join logic
+        await this.handleQuickJoin();
     }
 
     async handleJoinChannel() {

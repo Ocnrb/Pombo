@@ -2141,12 +2141,20 @@ video {
   padding-left: 1.5rem;
 }
 
+.pl-7 {
+  padding-left: 1.75rem;
+}
+
 .pr-1 {
   padding-right: 0.25rem;
 }
 
 .pr-11 {
   padding-right: 2.75rem;
+}
+
+.pr-3 {
+  padding-right: 0.75rem;
 }
 
 .pr-4 {
@@ -3124,6 +3132,10 @@ select option {
 
   .md\:block {
     display: block;
+  }
+
+  .md\:hidden {
+    display: none;
   }
 
   .md\:h-4 {

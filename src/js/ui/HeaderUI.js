@@ -117,6 +117,11 @@ class HeaderUI {
                 // Mobile: show floating connect, hide pill nav
                 pill.connectFloat?.classList.remove('hidden');
                 pill.pillNav?.classList.add('hidden');
+                // Mobile only: guest gets explore button instead of create channel
+                if (window.innerWidth < 768) {
+                    pill.guestExploreBtn?.classList.remove('hidden');
+                    document.getElementById('new-channel-btn')?.classList.add('hidden');
+                }
             } else {
                 this._currentAddress = address;
                 const short = `${address.slice(0, 6)}...${address.slice(-4)}`;
@@ -146,6 +151,9 @@ class HeaderUI {
                 // Mobile: hide floating connect, show pill nav
                 pill.connectFloat?.classList.add('hidden');
                 pill.pillNav?.classList.remove('hidden');
+                // Mobile only: restore create channel button, hide guest explore
+                pill.guestExploreBtn?.classList.add('hidden');
+                document.getElementById('new-channel-btn')?.classList.remove('hidden');
                 // Update profile avatar in pill
                 if (pill.profileBtn) {
                     pill.profileBtn.innerHTML = generateAvatar(address, 32, 0.2);
@@ -181,6 +189,9 @@ class HeaderUI {
             // Mobile: hide both pill and float
             pill.connectFloat?.classList.add('hidden');
             pill.pillNav?.classList.add('hidden');
+            // Restore default state
+            pill.guestExploreBtn?.classList.add('hidden');
+            document.getElementById('new-channel-btn')?.classList.remove('hidden');
         }
     }
 
@@ -338,8 +349,12 @@ class HeaderUI {
             this._pillElements = {
                 connectFloat: document.getElementById('sidebar-connect-float'),
                 sidebarConnectBtn: document.getElementById('sidebar-connect-btn'),
+                guestExploreBtn: document.getElementById('guest-explore-btn'),
                 pillNav: document.getElementById('mobile-pill-nav'),
                 pillChatsBtn: document.getElementById('pill-chats-btn'),
+                pillExploreBtn: document.getElementById('pill-explore-btn'),
+                pillJoinIdBtn: document.getElementById('pill-join-id-btn'),
+                pillCreateChannelBtn: document.getElementById('pill-create-channel-btn'),
                 profileBtn: document.getElementById('pill-profile-btn'),
                 profileDropdown: document.getElementById('pill-profile-dropdown'),
                 profileAddress: document.getElementById('pill-profile-address'),
@@ -354,12 +369,35 @@ class HeaderUI {
      * Initialize mobile pill nav event handlers
      * Called from app.js after DOM is ready
      */
-    initPillNav({ onConnect, onDisconnect, onSwitchWallet, onChatsTab }) {
+    initPillNav({ onConnect, onDisconnect, onSwitchWallet, onChatsTab, onExploreTab, onJoinWithId, onCreateChannel }) {
         const pill = this._getPillElements();
 
         // Floating connect button triggers same action as header connect
         pill.sidebarConnectBtn?.addEventListener('click', () => {
             onConnect?.();
+        });
+
+        // Guest explore button (sidebar header, replaces + on mobile)
+        pill.guestExploreBtn?.addEventListener('click', () => {
+            onExploreTab?.();
+        });
+
+        // Explore pill tab
+        pill.pillExploreBtn?.addEventListener('click', () => {
+            this._setActivePillTab('explore');
+            onExploreTab?.();
+        });
+
+        // Create Channel from profile dropdown
+        pill.pillCreateChannelBtn?.addEventListener('click', () => {
+            this._closeProfileDropdown();
+            onCreateChannel?.();
+        });
+
+        // Join with ID from profile dropdown
+        pill.pillJoinIdBtn?.addEventListener('click', () => {
+            this._closeProfileDropdown();
+            onJoinWithId?.();
         });
 
         // Profile avatar toggles dropdown
@@ -465,6 +503,13 @@ class HeaderUI {
                 item.classList.remove('active');
             }
         });
+    }
+
+    /**
+     * Public accessor for setting active pill tab
+     */
+    setActivePillTab(tab) {
+        this._setActivePillTab(tab);
     }
 
     /**

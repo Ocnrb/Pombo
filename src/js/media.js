@@ -51,8 +51,12 @@ const CONFIG = {
     SEED_FILES_EXPIRE_DAYS: APP_CONFIG.media.seedFilesExpireDays,
     AUTO_SEED_ON_JOIN: true,               // Re-announce as seeder when joining channel
     PERSIST_PUBLIC_CHANNELS: true,         // Persist files from public channels
-    PERSIST_PRIVATE_CHANNELS: false        // Don't persist files from private channels (privacy)
+    PERSIST_PRIVATE_CHANNELS: false,       // Don't persist files from private channels (privacy)
     
+    // Push-first settings
+    PUSH_WATCHDOG_INTERVAL: APP_CONFIG.media.pushWatchdogIntervalMs,
+    PUSH_WATCHDOG_START_DELAY: APP_CONFIG.media.pushWatchdogStartDelayMs,
+    PUSH_STALL_TIMEOUT: APP_CONFIG.media.pushStallTimeoutMs
 };
 
 // ==================== BINARY PROTOCOL ====================
@@ -155,6 +159,9 @@ class MediaController {
         this.pieceSendQueue = [];
         this.activeSends = 0;
         this.lastPieceSentTime = 0;
+        
+        // Track files currently being push-sent (prevent duplicate pushes)
+        this.activePushes = new Set();
     }
 
     /**
@@ -192,6 +199,9 @@ class MediaController {
             if (transfer.seederDiscoveryTimer) {
                 clearTimeout(transfer.seederDiscoveryTimer);
             }
+            if (transfer.pushWatchdogTimer) {
+                clearTimeout(transfer.pushWatchdogTimer);
+            }
             // Also clear any piece request timeouts
             if (transfer.requestsInFlight) {
                 for (const [pieceIndex, request] of transfer.requestsInFlight) {
@@ -219,6 +229,7 @@ class MediaController {
         this.pieceSendQueue = [];
         this.activeSends = 0;
         this.lastPieceSentTime = 0;
+        this.activePushes.clear();
         
         // Reset owner
         this.currentOwnerAddress = null;
@@ -831,6 +842,9 @@ class MediaController {
             const currentTransfer = this.incomingFiles.get(fileId);
             if (!currentTransfer) return; // Download completed or cancelled
             
+            // Push-mode already started — no more discovery needed
+            if (currentTransfer.downloadStarted) return;
+            
             const currentSeeders = this.fileSeeders.get(fileId);
             const seederCount = currentSeeders?.size || 0;
             const now = Date.now();
@@ -845,13 +859,6 @@ class MediaController {
                 await this.requestFileSources(currentTransfer.streamId, fileId, currentTransfer.password);
                 currentTransfer.seederRequestCount++;
                 currentTransfer.lastSeederRequest = now;
-            }
-            
-            // Start downloading if we have minimum seeders and haven't started yet
-            if (seederCount >= CONFIG.MIN_SEEDERS && !currentTransfer.downloadStarted) {
-                currentTransfer.downloadStarted = true;
-                Logger.info(`Starting piece download with ${seederCount} seeders for ${fileId}`);
-                this.manageDownload(fileId);
             }
             
             // Continue discovery if download is in progress (for resilience)
@@ -896,9 +903,13 @@ class MediaController {
         const seederArray = Array.from(seeders);
         let seederIndex = 0;
         
+        // In push-mode retries: use same cap (watchdog handles scheduling)
+        // In request-mode: respect MAX_CONCURRENT_REQUESTS
+        const maxInFlight = CONFIG.MAX_CONCURRENT_REQUESTS;
+        
         // Find pieces to request using round-robin across seeders
         for (let i = 0; i < transfer.pieceStatus.length; i++) {
-            if (transfer.requestsInFlight.size >= CONFIG.MAX_CONCURRENT_REQUESTS) break;
+            if (transfer.requestsInFlight.size >= maxInFlight) break;
             
             if (transfer.pieceStatus[i] === 'pending') {
                 // Round-robin seeder selection for better load distribution
@@ -938,7 +949,10 @@ class MediaController {
                 Logger.debug(`Piece ${pieceIndex} timed out (was ${status})`);
                 transfer.pieceStatus[pieceIndex] = 'pending';
                 transfer.requestsInFlight.delete(pieceIndex);
-                this.manageDownload(fileId);
+                // In push-mode, watchdog handles retries — don't cascade
+                if (!transfer.pushMode) {
+                    this.manageDownload(fileId);
+                }
             }
         }, CONFIG.PIECE_REQUEST_TIMEOUT);
         
@@ -1089,13 +1103,16 @@ class MediaController {
         
         const { fileId, pieceIndex } = data;
         
-        // Skip if piece already done or not requested (prevents race conditions)
+        // Skip if piece already done
         if (transfer.pieceStatus[pieceIndex] === 'done') {
             Logger.debug('Piece already done, skipping:', pieceIndex);
             return;
         }
-        if (transfer.pieceStatus[pieceIndex] !== 'requested') {
-            Logger.debug('Piece not in requested state:', pieceIndex, transfer.pieceStatus[pieceIndex]);
+        // In push-mode, accept pieces that are 'pending' (not yet requested)
+        // In request-mode, only accept 'requested' pieces
+        const status = transfer.pieceStatus[pieceIndex];
+        if (status !== 'requested' && status !== 'pending' && status !== 'processing') {
+            Logger.debug('Piece in unexpected state:', pieceIndex, status);
             return;
         }
         
@@ -1143,6 +1160,7 @@ class MediaController {
         
         transfer.pieceStatus[pieceIndex] = 'done';
         transfer.receivedCount++;
+        transfer.lastPieceReceivedAt = Date.now();
         
         // Notify progress with file size for MB display
         const progress = Math.round((transfer.receivedCount / transfer.metadata.pieceCount) * 100);
@@ -1153,10 +1171,16 @@ class MediaController {
         // Check if complete - verify all pieces are done
         const doneCount = transfer.pieceStatus.filter(s => s === 'done').length;
         if (doneCount === transfer.metadata.pieceCount) {
+            // Clear watchdog timer on completion
+            if (transfer.pushWatchdogTimer) {
+                clearTimeout(transfer.pushWatchdogTimer);
+            }
             await this.assembleFile(fileId);
-        } else {
+        } else if (!transfer.pushMode) {
+            // Request-mode: request next pieces
             this.manageDownload(fileId);
         }
+        // Push-mode: watchdog handles retries for missing pieces
     }
 
     /**
@@ -1273,7 +1297,8 @@ class MediaController {
         const ephemeralStreamId = deriveEphemeralId(messageStreamId);
         const request = {
             type: 'source_request',
-            fileId
+            fileId,
+            wantPush: true
         };
 
         // DM channels: encrypt signal with ECDH shared key
@@ -1298,6 +1323,36 @@ class MediaController {
             const channel = channelManager.getChannel(messageStreamId);
             const password = channel?.password || null;
             await this.announceFileSource(messageStreamId, data.fileId, password);
+            
+            // Push-first: proactively send ALL pieces
+            if (data.wantPush) {
+                this.pushAllPieces(messageStreamId, data.fileId);
+            }
+        }
+    }
+
+    /**
+     * Push all pieces proactively (seeder-side)
+     * Queues every piece into the existing send queue with throttling
+     * @param {string} messageStreamId - Channel message stream ID
+     * @param {string} fileId - File ID
+     */
+    pushAllPieces(messageStreamId, fileId) {
+        const localFile = this.localFiles.get(fileId);
+        if (!localFile) return;
+        
+        // Prevent duplicate pushes for the same file
+        if (this.activePushes.has(fileId)) {
+            Logger.debug(`Already pushing ${fileId.slice(0, 8)}, skipping duplicate`);
+            return;
+        }
+        this.activePushes.add(fileId);
+        
+        const pieceCount = localFile.metadata.pieceCount;
+        Logger.info(`Push-sending all ${pieceCount} pieces for ${fileId.slice(0, 8)}`);
+        
+        for (let i = 0; i < pieceCount; i++) {
+            this.sendPiece(messageStreamId, fileId, i);
         }
     }
 
@@ -1308,9 +1363,12 @@ class MediaController {
      */
     async announceFileSource(messageStreamId, fileId, password = null) {
         const ephemeralStreamId = deriveEphemeralId(messageStreamId);
+        const localFile = this.localFiles.get(fileId);
         const announce = {
             type: 'source_announce',
-            fileId
+            fileId,
+            pieceCount: localFile?.metadata?.pieceCount || 0,
+            pushMode: true
         };
 
         // DM channels: encrypt signal with ECDH shared key
@@ -1341,13 +1399,67 @@ class MediaController {
                 this.handlers.onSeederUpdate(data.fileId, seeders.size);
             }
             
-            // Immediately trigger download if we have enough seeders (don't wait for discovery timer)
+            // Start download when we have enough seeders
             const transfer = this.incomingFiles.get(data.fileId);
             if (transfer && !transfer.downloadStarted && transfer.pieceStatus && seeders.size >= CONFIG.MIN_SEEDERS) {
                 transfer.downloadStarted = true;
-                Logger.info(`Seeder arrived early — starting download with ${seeders.size} seeders for ${data.fileId}`);
-                this.manageDownload(data.fileId);
+                
+                // Stop discovery loop — we have a seeder, no need for more source_requests
+                if (transfer.seederDiscoveryTimer) {
+                    clearTimeout(transfer.seederDiscoveryTimer);
+                    transfer.seederDiscoveryTimer = null;
+                }
+                
+                if (data.pushMode) {
+                    // Push-mode: seeder is sending all pieces proactively
+                    // Just start watchdog to detect and retry missing pieces
+                    Logger.info(`Push-mode download started for ${data.fileId} (${data.pieceCount} pieces)`);
+                    transfer.pushMode = true;
+                    transfer.lastPieceReceivedAt = Date.now();
+                    this.startPushWatchdog(data.fileId);
+                } else {
+                    // Legacy request-response mode
+                    Logger.info(`Request-mode download started for ${data.fileId}`);
+                    this.manageDownload(data.fileId);
+                }
             }
+        }
+    }
+
+    /**
+     * Push-mode watchdog: periodically check for missing pieces and request retries
+     * @param {string} fileId - File ID
+     */
+    startPushWatchdog(fileId) {
+        const check = () => {
+            const transfer = this.incomingFiles.get(fileId);
+            if (!transfer) return; // Download completed or cancelled
+            
+            const done = transfer.pieceStatus.filter(s => s === 'done').length;
+            const total = transfer.pieceStatus.length;
+            
+            if (done === total) return; // Complete
+            
+            const timeSinceLastPiece = Date.now() - (transfer.lastPieceReceivedAt || transfer.downloadStartTime);
+            
+            // Count pieces that are still pending (not received, not already in-flight)
+            const pending = transfer.pieceStatus.filter(s => s === 'pending').length;
+            
+            if (pending > 0 && timeSinceLastPiece > CONFIG.PUSH_STALL_TIMEOUT) {
+                // Stall detected — request only the missing pieces
+                Logger.info(`Push watchdog: ${pending} missing, ${done}/${total} done — requesting retries`);
+                this.manageDownload(fileId);
+            }
+            
+            // Continue watchdog if transfer still active
+            if (this.incomingFiles.has(fileId)) {
+                transfer.pushWatchdogTimer = setTimeout(check, CONFIG.PUSH_WATCHDOG_INTERVAL);
+            }
+        };
+        
+        const transfer = this.incomingFiles.get(fileId);
+        if (transfer) {
+            transfer.pushWatchdogTimer = setTimeout(check, CONFIG.PUSH_WATCHDOG_START_DELAY);
         }
     }
 
@@ -1361,6 +1473,11 @@ class MediaController {
         // Clear seeder discovery timer
         if (transfer.seederDiscoveryTimer) {
             clearTimeout(transfer.seederDiscoveryTimer);
+        }
+        
+        // Clear push watchdog timer
+        if (transfer.pushWatchdogTimer) {
+            clearTimeout(transfer.pushWatchdogTimer);
         }
         
         // Clear all piece request timeouts

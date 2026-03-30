@@ -986,6 +986,52 @@ class SettingsUI {
             });
         }
         this.initSettingsCarousel();
+        this.initSettingsMenu();
+    }
+
+    /**
+     * Initialize settings three-dot menu for mobile
+     */
+    initSettingsMenu() {
+        const menuBtn = document.getElementById('settings-menu-btn');
+        const dropdown = document.getElementById('settings-menu-dropdown');
+        if (!menuBtn || !dropdown) return;
+
+        menuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            dropdown.classList.toggle('hidden');
+        });
+
+        // Tab items in dropdown
+        dropdown.querySelectorAll('.settings-menu-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const tabName = item.dataset.settingsTab;
+                if (tabName) {
+                    this.selectSettingsTab(tabName);
+                    this._updateSettingsMenuActive(tabName);
+                }
+                dropdown.classList.add('hidden');
+            });
+        });
+
+        // Close dropdown on outside click
+        document.addEventListener('click', () => {
+            dropdown.classList.add('hidden');
+        });
+    }
+
+    /**
+     * Update active state in settings menu dropdown
+     */
+    _updateSettingsMenuActive(activeTab) {
+        const dropdown = document.getElementById('settings-menu-dropdown');
+        if (!dropdown) return;
+        dropdown.querySelectorAll('.settings-menu-item').forEach(item => {
+            const isActive = item.dataset.settingsTab === activeTab;
+            item.classList.toggle('text-[#F6851B]', isActive);
+            item.classList.toggle('bg-white/[0.04]', isActive);
+            item.classList.toggle('text-white/70', !isActive);
+        });
     }
 
     /**
@@ -1155,6 +1201,9 @@ class SettingsUI {
         if (tabName === 'privacy') {
             this.renderBlockedPeersList();
         }
+
+        // Sync menu dropdown active state
+        this._updateSettingsMenuActive(tabName);
 
         // Start animation lock
         if (direction !== 0) {

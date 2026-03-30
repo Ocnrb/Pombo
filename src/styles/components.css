@@ -1323,6 +1323,14 @@ body {
     #wallet-info {
         display: none !important;
     }
+
+    /* Hide desktop-only sidebar controls (moved to pill nav) */
+    #quick-join-row {
+        display: none !important;
+    }
+    #new-channel-btn {
+        display: none !important;
+    }
     
     /* ----- SIDEBAR: Full screen initial view ----- */
     .sidebar {
@@ -1742,14 +1750,19 @@ body {
         padding-bottom: 0 !important;
     }
 
-    /* Hide settings modal header on mobile (pill replaces close button) */
-    #settings-modal > div > .flex.border-b {
+    /* Hide settings modal close button on mobile (pill replaces it), keep header for dots menu */
+    #settings-modal #close-settings-btn {
         display: none !important;
     }
+    #settings-modal > div > .flex.border-b {
+        justify-content: flex-end !important;
+        align-items: center !important;
+        padding: 0.375rem 1rem !important;
+    }
 
-    /* Add top spacing to settings modal since header is hidden */
+    /* No extra top spacing needed since header is visible */
     #settings-modal > div {
-        padding-top: 2rem !important;
+        padding-top: 0 !important;
     }
 
     /* Hide contacts modal header and close button on mobile */
