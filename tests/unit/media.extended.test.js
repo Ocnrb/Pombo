@@ -265,7 +265,7 @@ describe('media.js extended', () => {
     // ==================== processPieceQueue() ====================
     describe('processPieceQueue()', () => {
         it('should not process more items when at max concurrency', async () => {
-            mediaController.activeSends = 3; // At max (CONCURRENT_SENDS = 3)
+            mediaController.activeSends = 25; // At max (CONCURRENT_SENDS = 25)
             mediaController.pieceSendQueue.push({ messageStreamId: 'test', fileId: 'f1', pieceIndex: 0, resolve: vi.fn() });
 
             await mediaController.processPieceQueue();
@@ -849,10 +849,10 @@ describe('media.js extended', () => {
             expect(Logger.debug).toHaveBeenCalledWith('Piece already done, skipping:', 0);
         });
 
-        it('should skip pieces not in requested state', async () => {
+        it('should skip pieces not in accepted state', async () => {
             mediaController.incomingFiles.set('f1', {
                 metadata: { pieceCount: 1, pieceHashes: ['abc'] },
-                pieceStatus: ['pending'],
+                pieceStatus: ['done'],
                 pieces: [null],
                 receivedCount: 0,
                 requestsInFlight: new Map()
@@ -865,7 +865,7 @@ describe('media.js extended', () => {
                 data: btoa('test')
             });
 
-            expect(Logger.debug).toHaveBeenCalledWith('Piece not in requested state:', 0, 'pending');
+            expect(Logger.debug).toHaveBeenCalledWith('Piece already done, skipping:', 0);
         });
     });
 

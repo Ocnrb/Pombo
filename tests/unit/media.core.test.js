@@ -432,10 +432,10 @@ describe('media.js core', () => {
             expect(transfer.receivedCount).toBe(0);
         });
 
-        it('skips unrequested pieces (not in requested state)', async () => {
+        it('skips already-done pieces', async () => {
             authManager.getAddress.mockReturnValue('0xme');
             const transfer = createTransfer();
-            transfer.pieceStatus[0] = 'pending'; // not 'requested'
+            transfer.pieceStatus[0] = 'done'; // already received
             mediaController.incomingFiles.set('file-1', transfer);
 
             await mediaController.handleFilePiece('stream-1', {
@@ -784,7 +784,7 @@ describe('media.js core', () => {
 
             expect(streamrController.publishMediaSignal).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
-                { type: 'source_request', fileId: 'file-1' },
+                { type: 'source_request', fileId: 'file-1', wantPush: true },
                 null
             );
         });
@@ -794,7 +794,7 @@ describe('media.js core', () => {
 
             expect(streamrController.publishMediaSignal).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
-                { type: 'source_request', fileId: 'file-1' },
+                { type: 'source_request', fileId: 'file-1', wantPush: true },
                 'pwd'
             );
         });
@@ -841,7 +841,7 @@ describe('media.js core', () => {
 
             expect(streamrController.publishMediaSignal).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
-                { type: 'source_announce', fileId: 'file-1' },
+                { type: 'source_announce', fileId: 'file-1', pieceCount: 0, pushMode: true },
                 null
             );
         });
@@ -851,7 +851,7 @@ describe('media.js core', () => {
 
             expect(streamrController.publishMediaSignal).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
-                { type: 'source_announce', fileId: 'file-1' },
+                { type: 'source_announce', fileId: 'file-1', pieceCount: 0, pushMode: true },
                 'pwd'
             );
         });
