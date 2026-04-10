@@ -11,7 +11,7 @@ class SettingsUI {
     constructor() {
         this.deps = {};
         this.elements = {};
-        this.settingsTabOrder = ['profile', 'wallet', 'notifications', 'api', 'linkpreviews', 'privacy', 'security', 'about'];
+        this.settingsTabOrder = ['profile', 'wallet', 'notifications', 'api', 'linkpreviews', 'privacy', 'security', 'repair', 'about'];
         this.currentSettingsTabIndex = 0;
         this.isAnimating = false; // Prevent multiple simultaneous animations
     }
@@ -850,6 +850,9 @@ class SettingsUI {
                 await this.secureStorage.setYouTubeEmbedsEnabled(e.target.checked);
             });
         }
+
+        // Initialize repair inbox UI
+        this.initRepairUI();
     }
 
     /**
@@ -956,12 +959,15 @@ class SettingsUI {
     _cleanupOnHide() {
         // Remove settings-open class for mobile
         document.body.classList.remove('settings-open');
-        // Only reset pill nav to chats tab if NOT switching to another tab-modal (contacts)
-        // If contacts-open is present, it means we're switching to contacts, so don't reset
-        if (!document.body.classList.contains('contacts-open')) {
-            document.querySelectorAll('.pill-nav-item[data-pill-tab]').forEach(item => {
-                item.classList.toggle('active', item.dataset.pillTab === 'chats');
-            });
+        // Only reset pill nav to chats if still on settings tab
+        // If pill was already switched (e.g. to explore), don't override
+        const activeTab = document.querySelector('.pill-nav-item[data-pill-tab].active');
+        if (!activeTab || activeTab.dataset.pillTab === 'settings') {
+            if (!document.body.classList.contains('contacts-open')) {
+                document.querySelectorAll('.pill-nav-item[data-pill-tab]').forEach(item => {
+                    item.classList.toggle('active', item.dataset.pillTab === 'chats');
+                });
+            }
         }
     }
 
@@ -1132,6 +1138,7 @@ class SettingsUI {
             'linkpreviews': 'Content',
             'privacy': 'Privacy',
             'security': 'Security',
+            'repair': 'Repair',
             'about': 'About'
         };
 
@@ -1200,6 +1207,11 @@ class SettingsUI {
         // Render blocked peers list when privacy tab is selected
         if (tabName === 'privacy') {
             this.renderBlockedPeersList();
+        }
+
+        // Auto-diagnose when repair tab is selected
+        if (tabName === 'repair') {
+            this.runDiagnosis();
         }
 
         // Sync menu dropdown active state
@@ -2012,6 +2024,200 @@ class SettingsUI {
         // Reset status to "Not tested"
         if (statusEl) {
             statusEl.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-white/20 mr-1.5 align-middle"></span><span class="align-middle">Not tested</span>';
+        }
+    }
+
+    // === REPAIR INBOX UI ===
+
+    /**
+     * Initialize repair inbox button listeners
+     */
+    initRepairUI() {
+        this._repairDiagnosis = null;
+
+        const diagnoseBtn = document.getElementById('repair-diagnose-btn');
+        const fixBtn = document.getElementById('repair-fix-btn');
+
+        diagnoseBtn?.addEventListener('click', () => this.runDiagnosis());
+        fixBtn?.addEventListener('click', () => this.runRepair());
+    }
+
+    /**
+     * Update the unified repair status card
+     * @param {'idle'|'loading'|'healthy'|'issues'|'error'|'repairing'|'repaired'} state
+     * @param {string} [detail] - Optional detail text
+     */
+    _setRepairStatus(state, detail) {
+        const card = document.getElementById('repair-status-card');
+        const icon = document.getElementById('repair-status-icon');
+        const title = document.getElementById('repair-status-title');
+        const detailEl = document.getElementById('repair-status-detail');
+        if (!card || !icon || !title || !detailEl) return;
+
+        const states = {
+            idle: {
+                icon: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/></svg>',
+                iconBg: 'bg-white/5 text-white/20',
+                border: 'border-white/5',
+                title: 'Not checked',
+                detail: 'Run a diagnosis to check inbox health'
+            },
+            loading: {
+                icon: '<svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>',
+                iconBg: 'bg-white/5 text-white/40',
+                border: 'border-white/5',
+                title: 'Diagnosing...',
+                detail: 'Checking streams, permissions and storage'
+            },
+            healthy: {
+                icon: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+                iconBg: 'bg-green-500/10 text-green-400',
+                border: 'border-green-500/10',
+                title: 'Inbox healthy',
+                detail: 'All checks passed'
+            },
+            issues: {
+                icon: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>',
+                iconBg: 'bg-yellow-500/10 text-yellow-400',
+                border: 'border-yellow-500/10',
+                title: 'Issues found',
+                detail: detail || 'Click Repair to fix'
+            },
+            error: {
+                icon: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+                iconBg: 'bg-red-500/10 text-red-400',
+                border: 'border-red-500/10',
+                title: 'Error',
+                detail: detail || 'Something went wrong'
+            },
+            repairing: {
+                icon: '<svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>',
+                iconBg: 'bg-[#F6851B]/10 text-[#F6851B]',
+                border: 'border-[#F6851B]/10',
+                title: 'Repairing...',
+                detail: detail || 'This may require gas'
+            },
+            repaired: {
+                icon: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+                iconBg: 'bg-green-500/10 text-green-400',
+                border: 'border-green-500/10',
+                title: 'Repaired',
+                detail: detail || 'All issues fixed'
+            }
+        };
+
+        const s = states[state] || states.idle;
+        icon.innerHTML = s.icon;
+        icon.className = `w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-full ${s.iconBg}`;
+        card.className = `p-4 rounded-xl bg-white/[0.03] border ${s.border}`;
+        title.textContent = s.title;
+        detailEl.textContent = detail || s.detail;
+    }
+
+    /**
+     * Run inbox diagnosis and update the unified status card
+     */
+    async runDiagnosis() {
+        if (!this.dmManager) {
+            this._setRepairStatus('error', 'DM system not available');
+            return;
+        }
+
+        this._setRepairStatus('loading');
+
+        const fixBtn = document.getElementById('repair-fix-btn');
+        const diagnoseBtn = document.getElementById('repair-diagnose-btn');
+        if (diagnoseBtn) diagnoseBtn.disabled = true;
+
+        try {
+            const diagnosis = await this.dmManager.diagnoseInbox();
+            this._repairDiagnosis = diagnosis;
+
+            // Count issues
+            const issues = [];
+            if (!diagnosis.messageStream.exists) issues.push('message stream');
+            if (!diagnosis.ephemeralStream.exists) issues.push('ephemeral stream');
+            if (diagnosis.messageStream.exists && !diagnosis.messageStream.publicKeyPresent) issues.push('public key');
+            if (!diagnosis.permissions.messagePublicPublish) issues.push('message permissions');
+            if (!diagnosis.permissions.ephemeralPublicPublish) issues.push('ephemeral permissions');
+            if (!diagnosis.storage.enabled) issues.push('storage');
+
+            if (issues.length > 0) {
+                const summary = issues.length === 1
+                    ? `Missing: ${issues[0]}`
+                    : `${issues.length} issues: ${issues.join(', ')}`;
+                this._setRepairStatus('issues', summary);
+                fixBtn?.classList.remove('hidden');
+            } else {
+                // Build a short summary line
+                const parts = [];
+                if (diagnosis.storage.provider) parts.push(diagnosis.storage.provider);
+                if (diagnosis.storage.storageDays) parts.push(`${diagnosis.storage.storageDays}d`);
+                this._setRepairStatus('healthy', parts.length ? `Storage: ${parts.join(' · ')}` : 'All checks passed');
+                fixBtn?.classList.add('hidden');
+            }
+        } catch (e) {
+            this._setRepairStatus('error', e.message);
+            fixBtn?.classList.add('hidden');
+        } finally {
+            if (diagnoseBtn) diagnoseBtn.disabled = false;
+        }
+    }
+
+    /**
+     * Run inbox repair using the last diagnosis
+     */
+    async runRepair() {
+        if (!this._repairDiagnosis || !this.dmManager) return;
+
+        const fixBtn = document.getElementById('repair-fix-btn');
+        const diagnoseBtn = document.getElementById('repair-diagnose-btn');
+        if (fixBtn) { fixBtn.disabled = true; fixBtn.querySelector('span').textContent = 'Repairing...'; }
+        if (diagnoseBtn) diagnoseBtn.disabled = true;
+
+        const stepLabels = {
+            messageStream: 'Creating message stream',
+            ephemeralStream: 'Creating ephemeral stream',
+            metadata: 'Updating metadata',
+            messagePermissions: 'Setting message permissions',
+            ephemeralPermissions: 'Setting ephemeral permissions',
+            storage: 'Enabling storage'
+        };
+
+        this._setRepairStatus('repairing', 'Starting...');
+
+        try {
+            const result = await this.dmManager.repairInbox(
+                this._repairDiagnosis,
+                {},
+                (stepName, status) => {
+                    if (status === 'start') {
+                        this._setRepairStatus('repairing', stepLabels[stepName] || stepName);
+                    }
+                }
+            );
+
+            const steps = result.steps;
+            const failed = Object.values(steps).filter(s => s === 'fail').length;
+            const fixed = Object.values(steps).filter(s => s === 'ok').length;
+
+            if (failed > 0) {
+                this._setRepairStatus('issues', `${fixed} fixed, ${failed} failed`);
+            } else {
+                this._setRepairStatus('repaired', fixed > 0 ? `${fixed} issue${fixed > 1 ? 's' : ''} fixed` : 'Nothing to repair');
+                fixBtn?.classList.add('hidden');
+            }
+
+            this.showNotification(
+                failed > 0 ? `Inbox repair: ${fixed} fixed, ${failed} failed` : 'Inbox repaired successfully',
+                failed > 0 ? 'warning' : 'success'
+            );
+        } catch (e) {
+            this._setRepairStatus('error', e.message);
+            this.showNotification('Inbox repair failed: ' + e.message, 'error');
+        } finally {
+            if (fixBtn) { fixBtn.disabled = false; fixBtn.querySelector('span').textContent = 'Repair'; }
+            if (diagnoseBtn) diagnoseBtn.disabled = false;
         }
     }
 }

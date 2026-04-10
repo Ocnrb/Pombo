@@ -994,6 +994,284 @@ class StreamrController {
     }
 
     /**
+     * Diagnose the health of a DM inbox — checks streams, permissions, metadata, storage.
+     * Read-only (no gas). Safe to call repeatedly.
+     * @param {string} address - Ethereum address of the inbox owner
+     * @returns {Promise<Object>} Diagnosis report
+     */
+    async diagnoseInbox(address) {
+        if (!this.client) {
+            throw new Error('Streamr client not initialized');
+        }
+
+        const messageStreamId = this.getDMInboxId(address);
+        const ephemeralStreamId = this.getDMEphemeralId(address);
+
+        const report = {
+            messageStream: { id: messageStreamId, exists: false, partitions: null, metadataOk: false, publicKeyPresent: false },
+            ephemeralStream: { id: ephemeralStreamId, exists: false, partitions: null },
+            permissions: { messagePublicPublish: false, ephemeralPublicPublish: false },
+            storage: { enabled: false, provider: null, storageDays: null }
+        };
+
+        // Check message stream
+        let messageStream = null;
+        try {
+            messageStream = await this.client.getStream(messageStreamId);
+            report.messageStream.exists = true;
+            const partitions = await messageStream.getPartitionCount();
+            report.messageStream.partitions = typeof partitions === 'bigint' ? Number(partitions) : partitions;
+
+            // Check metadata
+            try {
+                const desc = await messageStream.getDescription();
+                if (desc) {
+                    const meta = JSON.parse(desc);
+                    report.messageStream.metadataOk = !!(meta.a && meta.t === 'dm-inbox');
+                    report.messageStream.publicKeyPresent = !!meta.pk;
+                }
+            } catch (e) {
+                Logger.debug('Diagnose: Could not parse message stream metadata:', e.message);
+            }
+        } catch (e) {
+            Logger.debug('Diagnose: Message stream not found:', e.message);
+        }
+
+        // Check ephemeral stream
+        let ephemeralStream = null;
+        try {
+            ephemeralStream = await this.client.getStream(ephemeralStreamId);
+            report.ephemeralStream.exists = true;
+            const partitions = await ephemeralStream.getPartitionCount();
+            report.ephemeralStream.partitions = typeof partitions === 'bigint' ? Number(partitions) : partitions;
+        } catch (e) {
+            Logger.debug('Diagnose: Ephemeral stream not found:', e.message);
+        }
+
+        // Check permissions (public publish)
+        const StreamPermission = window.StreamPermission;
+        if (StreamPermission) {
+            if (messageStream) {
+                try {
+                    report.permissions.messagePublicPublish = await messageStream.hasPermission({
+                        permission: StreamPermission.PUBLISH,
+                        public: true
+                    });
+                } catch (e) {
+                    Logger.debug('Diagnose: Could not check message stream permissions:', e.message);
+                }
+            }
+            if (ephemeralStream) {
+                try {
+                    report.permissions.ephemeralPublicPublish = await ephemeralStream.hasPermission({
+                        permission: StreamPermission.PUBLISH,
+                        public: true
+                    });
+                } catch (e) {
+                    Logger.debug('Diagnose: Could not check ephemeral stream permissions:', e.message);
+                }
+            }
+        }
+
+        // Check storage on message stream
+        if (report.messageStream.exists) {
+            try {
+                const storageInfo = await this.getStreamStorageInfo(messageStreamId);
+                report.storage.enabled = storageInfo.enabled;
+                report.storage.storageDays = storageInfo.storageDays;
+                if (storageInfo.enabled && storageInfo.nodes?.length > 0) {
+                    // Determine provider from node address
+                    const nodeAddr = typeof storageInfo.nodes[0] === 'string' 
+                        ? storageInfo.nodes[0].toLowerCase() 
+                        : String(storageInfo.nodes[0]).toLowerCase();
+                    if (nodeAddr === STREAM_CONFIG.LOGSTORE_NODE.toLowerCase()) {
+                        report.storage.provider = 'logstore';
+                    } else {
+                        report.storage.provider = 'streamr';
+                    }
+                }
+            } catch (e) {
+                Logger.debug('Diagnose: Could not check storage:', e.message);
+            }
+        }
+
+        Logger.info('DM inbox diagnosis:', report);
+        return report;
+    }
+
+    /**
+     * Repair a DM inbox based on diagnosis — only executes steps that are missing/broken.
+     * @param {Object} diagnosis - Result from diagnoseInbox()
+     * @param {string} publicKey - Owner's compressed public key (hex)
+     * @param {Object} options - Storage options { storageProvider, storageDays }
+     * @param {Function} onStep - Progress callback: (stepName, status) where status = 'start'|'ok'|'skip'|'fail'
+     * @returns {Promise<Object>} Repair result with per-step status
+     */
+    async repairInbox(diagnosis, publicKey, options = {}, onStep = () => {}) {
+        if (!this.client) {
+            throw new Error('Streamr client not initialized');
+        }
+
+        const messageStreamId = diagnosis.messageStream.id;
+        const ephemeralStreamId = diagnosis.ephemeralStream.id;
+
+        const result = {
+            messageStream: 'skip',
+            ephemeralStream: 'skip',
+            metadata: 'skip',
+            messagePermissions: 'skip',
+            ephemeralPermissions: 'skip',
+            storage: 'skip'
+        };
+
+        const metadata = JSON.stringify({
+            a: CONFIG.app.name,
+            v: CONFIG.app.version,
+            t: 'dm-inbox',
+            pk: publicKey
+        });
+
+        const ephemeralMetadata = JSON.stringify({
+            a: CONFIG.app.name,
+            v: CONFIG.app.version,
+            ln: messageStreamId
+        });
+
+        // Step 1: Create message stream if missing
+        let messageStream = null;
+        if (!diagnosis.messageStream.exists) {
+            onStep('messageStream', 'start');
+            try {
+                messageStream = await executeWithRetryAndVerify(
+                    'repairCreateMessageStream',
+                    async () => this.client.createStream({
+                        id: messageStreamId,
+                        description: metadata,
+                        partitions: STREAM_CONFIG.MESSAGE_STREAM.DM_PARTITIONS
+                    }),
+                    async () => {
+                        const s = await this.client.getStream(messageStreamId);
+                        return s || null;
+                    },
+                    { maxRetries: 7 }
+                );
+                result.messageStream = 'ok';
+                onStep('messageStream', 'ok');
+            } catch (e) {
+                result.messageStream = 'fail';
+                onStep('messageStream', 'fail');
+                Logger.error('Repair: Failed to create message stream:', e.message);
+            }
+        } else {
+            try { messageStream = await this.client.getStream(messageStreamId); } catch (e) { /* noop */ }
+            onStep('messageStream', 'skip');
+        }
+
+        // Step 2: Create ephemeral stream if missing
+        let ephemeralStream = null;
+        if (!diagnosis.ephemeralStream.exists) {
+            onStep('ephemeralStream', 'start');
+            try {
+                ephemeralStream = await executeWithRetryAndVerify(
+                    'repairCreateEphemeralStream',
+                    async () => this.client.createStream({
+                        id: ephemeralStreamId,
+                        description: ephemeralMetadata,
+                        partitions: STREAM_CONFIG.EPHEMERAL_STREAM.PARTITIONS
+                    }),
+                    async () => {
+                        const s = await this.client.getStream(ephemeralStreamId);
+                        return s || null;
+                    },
+                    { maxRetries: 7 }
+                );
+                result.ephemeralStream = 'ok';
+                onStep('ephemeralStream', 'ok');
+            } catch (e) {
+                result.ephemeralStream = 'fail';
+                onStep('ephemeralStream', 'fail');
+                Logger.error('Repair: Failed to create ephemeral stream:', e.message);
+            }
+        } else {
+            try { ephemeralStream = await this.client.getStream(ephemeralStreamId); } catch (e) { /* noop */ }
+            onStep('ephemeralStream', 'skip');
+        }
+
+        // Step 3: Fix metadata (missing public key)
+        if (messageStream && publicKey && !diagnosis.messageStream.publicKeyPresent) {
+            onStep('metadata', 'start');
+            try {
+                const desc = await messageStream.getDescription();
+                const meta = desc ? JSON.parse(desc) : { a: CONFIG.app.name, v: CONFIG.app.version, t: 'dm-inbox' };
+                meta.pk = publicKey;
+                await messageStream.setDescription(JSON.stringify(meta));
+                result.metadata = 'ok';
+                onStep('metadata', 'ok');
+            } catch (e) {
+                result.metadata = 'fail';
+                onStep('metadata', 'fail');
+                Logger.error('Repair: Failed to update metadata:', e.message);
+            }
+        } else {
+            onStep('metadata', 'skip');
+        }
+
+        // Step 4: Fix permissions on message stream
+        if (messageStream && !diagnosis.permissions.messagePublicPublish) {
+            onStep('messagePermissions', 'start');
+            try {
+                await this.grantManyToOnePermissions(messageStream);
+                result.messagePermissions = 'ok';
+                onStep('messagePermissions', 'ok');
+            } catch (e) {
+                result.messagePermissions = 'fail';
+                onStep('messagePermissions', 'fail');
+                Logger.error('Repair: Failed to set message stream permissions:', e.message);
+            }
+        } else {
+            onStep('messagePermissions', 'skip');
+        }
+
+        // Step 5: Fix permissions on ephemeral stream
+        if (ephemeralStream && !diagnosis.permissions.ephemeralPublicPublish) {
+            onStep('ephemeralPermissions', 'start');
+            try {
+                await this.grantManyToOnePermissions(ephemeralStream);
+                result.ephemeralPermissions = 'ok';
+                onStep('ephemeralPermissions', 'ok');
+            } catch (e) {
+                result.ephemeralPermissions = 'fail';
+                onStep('ephemeralPermissions', 'fail');
+                Logger.error('Repair: Failed to set ephemeral stream permissions:', e.message);
+            }
+        } else {
+            onStep('ephemeralPermissions', 'skip');
+        }
+
+        // Step 6: Enable storage if missing
+        if (messageStream && !diagnosis.storage.enabled) {
+            onStep('storage', 'start');
+            try {
+                await this.enableStorage(messageStreamId, {
+                    storageProvider: options.storageProvider,
+                    storageDays: options.storageDays
+                });
+                result.storage = 'ok';
+                onStep('storage', 'ok');
+            } catch (e) {
+                result.storage = 'fail';
+                onStep('storage', 'fail');
+                Logger.error('Repair: Failed to enable storage:', e.message);
+            }
+        } else {
+            onStep('storage', 'skip');
+        }
+
+        Logger.info('DM inbox repair result:', result);
+        return { messageStreamId, ephemeralStreamId, steps: result };
+    }
+
+    /**
      * Grant permissions to specific addresses (for native private channels)
      * Uses client.setPermissions for batch operation (single transaction)
      * @param {string} streamId - Stream ID

@@ -151,6 +151,43 @@ class DMManager {
     }
 
     /**
+     * Diagnose inbox health — read-only, no gas.
+     * @returns {Promise<Object>} Diagnosis report from streamrController.diagnoseInbox()
+     */
+    async diagnoseInbox() {
+        const address = authManager.getAddress();
+        if (!address) throw new Error('No wallet connected');
+        return streamrController.diagnoseInbox(address);
+    }
+
+    /**
+     * Repair inbox based on diagnosis — only runs missing/broken steps.
+     * @param {Object} diagnosis - Result from diagnoseInbox()
+     * @param {Object} options - Storage options { storageProvider, storageDays }
+     * @param {Function} onStep - Progress callback: (stepName, status)
+     * @returns {Promise<Object>} Repair result
+     */
+    async repairInbox(diagnosis, options = {}, onStep = () => {}) {
+        const privateKey = authManager.wallet?.privateKey;
+        const publicKey = privateKey ? dmCrypto.getMyPublicKey(privateKey) : null;
+
+        const result = await streamrController.repairInbox(diagnosis, publicKey, options, onStep);
+
+        this.inboxMessageStreamId = result.messageStreamId;
+        this.inboxEphemeralStreamId = result.ephemeralStreamId;
+        this.inboxReady = true;
+
+        Logger.info('DM: Inbox repaired');
+        this.notifyHandlers('inbox_ready', { streamId: this.inboxMessageStreamId });
+
+        // Re-subscribe to inbox after repair
+        this.inboxSubscription = null; // Force re-subscribe
+        await this.subscribeToInbox();
+
+        return result;
+    }
+
+    /**
      * Subscribe to own inbox (real-time messages from others)
      * Call when user opens the Personal/DM tab or on startup.
      */

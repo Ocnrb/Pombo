@@ -1529,7 +1529,7 @@ body {
         border-radius: 1.5rem;
         font-size: 0.625rem;
         font-weight: 500;
-        color: rgba(255, 255, 255, 0.35);
+        color: rgba(255, 255, 255, 0.8);
         transition: all 0.2s ease;
         cursor: pointer;
         background: none;
@@ -1637,6 +1637,20 @@ body {
         padding-top: 0.5rem;
     }
     
+    /* Channel filter tabs - lighter on mobile */
+    .channel-filter-tab {
+        color: rgba(255, 255, 255, 0.75) !important;
+    }
+
+    .channel-filter-tab:hover {
+        color: rgba(255, 255, 255, 0.9) !important;
+    }
+
+    /* Keep active tab orange (override Tailwind text-[#F6851B]) */
+    .channel-filter-tab.text-\[\#F6851B\] {
+        color: #F6851B !important;
+    }
+
     /* Channel list items taller on mobile */
     #channel-list .channel-item {
         padding-top: 1rem;
@@ -1937,7 +1951,8 @@ body {
 
     #settings-carousel .carousel-tab.adjacent,
     #channel-settings-carousel .carousel-tab.adjacent {
-        color: rgba(255, 255, 255, 0.4);
+        visibility: hidden;
+        pointer-events: none;
     }
     
     #new-channel-modal .w-40 nav button {

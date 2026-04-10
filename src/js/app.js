@@ -68,12 +68,16 @@ class App {
                 onDisconnect: () => this.disconnectWallet(),
                 onSwitchWallet: () => walletFlows.switchWallet(),
                 onChatsTab: () => {
-                    settingsUI.hide();
-                    contactsUI.hide();
+                    settingsUI.hide({ skipHistory: true });
+                    contactsUI.hide({ skipHistory: true });
+                    // Clean orphaned modal history entry
+                    if (window.history.state?.modal) {
+                        window.history.replaceState(null, '');
+                    }
                 },
                 onExploreTab: () => {
-                    settingsUI.hide();
-                    contactsUI.hide();
+                    settingsUI.hide({ skipHistory: true });
+                    contactsUI.hide({ skipHistory: true });
                     uiController.openExploreView();
                 },
                 onJoinWithId: () => {

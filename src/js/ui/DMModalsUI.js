@@ -211,6 +211,8 @@ class DMModalsUI {
         this.updateGasEstimate();
         
         this.modalManager?.show('dm-inbox-setup-modal');
+        // Hide pill nav on mobile while modal is open
+        document.getElementById('mobile-pill-nav')?.classList.add('hidden');
     }
 
     /**
@@ -218,6 +220,8 @@ class DMModalsUI {
      */
     hideCreateInboxModal() {
         this.modalManager?.hide('dm-inbox-setup-modal');
+        // Restore pill nav on mobile
+        document.getElementById('mobile-pill-nav')?.classList.remove('hidden');
     }
 
     /**

@@ -160,22 +160,28 @@ class ChannelListUI {
                 data-stream-id="${escapeAttr(channel.streamId)}"
                 draggable="true"
             >
-                <div class="flex items-center justify-between">
-                    <!-- Drag handle (6 dots) - visible on hover -->
-                    <div class="drag-handle flex-shrink-0 mr-2 cursor-grab opacity-0 group-hover:opacity-100 transition-opacity text-white/20 hover:text-white/40" title="Drag to reorder">
-                        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                            <circle cx="8" cy="6" r="1.5"/>
-                            <circle cx="16" cy="6" r="1.5"/>
-                            <circle cx="8" cy="12" r="1.5"/>
-                            <circle cx="16" cy="12" r="1.5"/>
-                            <circle cx="8" cy="18" r="1.5"/>
-                            <circle cx="16" cy="18" r="1.5"/>
-                        </svg>
+                <div class="flex items-center">
+                    <!-- DM icon slot (fixed width for alignment) -->
+                    <div class="channel-icon-slot w-5 flex-shrink-0 flex items-center justify-center">
+                        ${channel.type === 'dm' ? '<svg class="w-3.5 h-3.5 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>' : ''}
                     </div>
-                    <div class="flex-1 min-w-0 pl-1">
-                        <h3 class="text-[13px] font-medium text-white/90 truncate">${channel.type === 'dm' ? '<svg class="w-3 h-3 inline mr-1 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>' : ''}${escapeHtml(sanitizeText(channel.name))}</h3>
+                    <!-- Channel name -->
+                    <div class="flex-1 min-w-0 ml-1.5">
+                        <h3 class="text-[13px] font-medium text-white/90 truncate">${escapeHtml(sanitizeText(channel.name))}</h3>
                     </div>
-                    <div class="flex items-center gap-1.5 ml-2">
+                    <!-- Right side: drag handle + counter + arrow -->
+                    <div class="flex items-center gap-1.5 ml-2 flex-shrink-0">
+                        <!-- Drag handle (6 dots) - visible on hover -->
+                        <div class="drag-handle cursor-grab opacity-0 group-hover:opacity-100 transition-opacity text-white/20 hover:text-white/40" title="Drag to reorder">
+                            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                                <circle cx="8" cy="6" r="1.5"/>
+                                <circle cx="16" cy="6" r="1.5"/>
+                                <circle cx="8" cy="12" r="1.5"/>
+                                <circle cx="16" cy="12" r="1.5"/>
+                                <circle cx="8" cy="18" r="1.5"/>
+                                <circle cx="16" cy="18" r="1.5"/>
+                            </svg>
+                        </div>
                         ${hasUnread 
                             ? `<span class="channel-msg-count text-[10px] ${countClass} px-1.5 py-0.5 rounded-md" data-channel-count="${escapeAttr(channel.streamId)}">${displayCount}</span>` 
                             : `<span class="channel-msg-count text-[10px] text-white/30 bg-white/[0.04] px-1.5 py-0.5 rounded-md hidden" data-channel-count="${escapeAttr(channel.streamId)}">0</span>`

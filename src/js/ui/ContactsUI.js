@@ -114,12 +114,15 @@ class ContactsUI {
     _cleanupOnHide() {
         // Remove contacts-open class for mobile
         document.body.classList.remove('contacts-open');
-        // Only reset pill nav to chats tab if NOT switching to another tab-modal (settings)
-        // If settings-open is present, it means we're switching to settings, so don't reset
-        if (!document.body.classList.contains('settings-open')) {
-            document.querySelectorAll('.pill-nav-item[data-pill-tab]').forEach(item => {
-                item.classList.toggle('active', item.dataset.pillTab === 'chats');
-            });
+        // Only reset pill nav to chats if still on contacts tab
+        // If pill was already switched (e.g. to explore), don't override
+        const activeTab = document.querySelector('.pill-nav-item[data-pill-tab].active');
+        if (!activeTab || activeTab.dataset.pillTab === 'contacts') {
+            if (!document.body.classList.contains('settings-open')) {
+                document.querySelectorAll('.pill-nav-item[data-pill-tab]').forEach(item => {
+                    item.classList.toggle('active', item.dataset.pillTab === 'chats');
+                });
+            }
         }
         // Clear inputs
         if (this.elements.addContactAddress) this.elements.addContactAddress.value = '';

@@ -1685,11 +1685,8 @@
                 <!-- Mobile: three-dot menu for tab navigation -->
                 <div class="relative md:hidden ml-auto">
                     <button id="settings-menu-btn" class="text-white/40 hover:text-white/80 transition p-1 -mr-1">
-                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                            <circle cx="5" cy="12" r="1.5"/>
-                            <circle cx="12" cy="12" r="1.5"/>
-                            <circle cx="19" cy="12" r="1.5"/>
-                        </svg>
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                            <path stroke-linecap="round" d="M4 9h16M4 15h16"/>
                         </svg>
                     </button>
                     <div id="settings-menu-dropdown" class="hidden absolute top-full right-0 mt-1.5 min-w-[180px] bg-[#16161b] border border-white/[0.1] rounded-xl p-1.5 shadow-2xl z-50" style="transform-origin: top right;">
@@ -1721,6 +1718,10 @@
                         <button class="settings-menu-item w-full text-left px-3 py-2.5 rounded-lg text-sm text-white/70 hover:text-white hover:bg-white/[0.08] transition flex items-center gap-2.5" data-settings-tab="security">
                             <svg class="w-4 h-4 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
                             Security
+                        </button>
+                        <button class="settings-menu-item w-full text-left px-3 py-2.5 rounded-lg text-sm text-white/70 hover:text-white hover:bg-white/[0.08] transition flex items-center gap-2.5" data-settings-tab="repair">
+                            <svg class="w-4 h-4 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11.42 15.17l-5.384-3.07M11.42 15.17l2.496-4.115c.168-.278.523-.4.843-.292l3.346 1.126c.32.107.483.407.315.685l-2.496 4.115M11.42 15.17l-4.655 2.66M16.924 16.69l-5.504-3.14M5.106 18.83L2.04 12.492c-.168-.277-.023-.578.297-.685l3.346-1.126c.32-.108.675.014.843.292l2.496 4.115"/></svg>
+                            Repair
                         </button>
                         <hr class="border-white/[0.06] my-1">
                         <button class="settings-menu-item w-full text-left px-3 py-2.5 rounded-lg text-sm text-white/70 hover:text-white hover:bg-white/[0.08] transition flex items-center gap-2.5" data-settings-tab="about">
@@ -1771,6 +1772,10 @@
                         <button data-settings-tab="security" class="settings-tab w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-all text-white/60 hover:text-white/90 hover:bg-white/5">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
                             <span>Security</span>
+                        </button>
+                        <button data-settings-tab="repair" class="settings-tab w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-all text-white/60 hover:text-white/90 hover:bg-white/5">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11.42 15.17l-5.384-3.07M11.42 15.17l2.496-4.115c.168-.278.523-.4.843-.292l3.346 1.126c.32.107.483.407.315.685l-2.496 4.115M11.42 15.17l-4.655 2.66M16.924 16.69l-5.504-3.14M5.106 18.83L2.04 12.492c-.168-.277-.023-.578.297-.685l3.346-1.126c.32-.108.675.014.843.292l2.496 4.115"/></svg>
+                            <span>Repair</span>
                         </button>
                         <div class="my-2 mx-3 border-t border-white/5 hidden md:block"></div>
                         <div class="flex-1 hidden md:block"></div>
@@ -2128,6 +2133,38 @@
                                 <div id="blocked-peers-list" class="space-y-2">
                                     <p class="text-xs text-white/30 py-4 text-center">No blocked users</p>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Repair Panel -->
+                    <div id="settings-panel-repair" class="settings-panel hidden">
+                        <div class="space-y-5">
+                            <p class="text-xs text-white/40">Check and repair your DM inbox</p>
+
+                            <!-- Unified status card -->
+                            <div id="repair-status-card" class="p-4 rounded-xl bg-white/[0.03] border border-white/5">
+                                <div class="flex items-center gap-3">
+                                    <span id="repair-status-icon" class="w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-full bg-white/5 text-white/20">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/></svg>
+                                    </span>
+                                    <div class="flex-1 min-w-0">
+                                        <p id="repair-status-title" class="text-sm text-white/70">Not checked</p>
+                                        <p id="repair-status-detail" class="text-xs text-white/30 mt-0.5">Run a diagnosis to check inbox health</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Action Buttons -->
+                            <div class="flex gap-2">
+                                <button id="repair-diagnose-btn" class="flex-1 bg-white/5 hover:bg-white/10 text-white/70 border border-white/10 px-3 py-2 rounded-lg text-xs transition flex items-center justify-center gap-1.5">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/></svg>
+                                    <span>Diagnose</span>
+                                </button>
+                                <button id="repair-fix-btn" class="flex-1 bg-[#F6851B]/10 hover:bg-[#F6851B]/20 text-[#F6851B] border border-[#F6851B]/20 px-3 py-2 rounded-lg text-xs transition flex items-center justify-center gap-1.5 hidden">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11.42 15.17l-5.384-3.07M11.42 15.17l2.496-4.115c.168-.278.523-.4.843-.292l3.346 1.126c.32.107.483.407.315.685l-2.496 4.115M11.42 15.17l-4.655 2.66M16.924 16.69l-5.504-3.14M5.106 18.83L2.04 12.492c-.168-.277-.023-.578.297-.685l3.346-1.126c.32-.108.675.014.843.292l2.496 4.115"/></svg>
+                                    <span>Repair</span>
+                                </button>
                             </div>
                         </div>
                     </div>

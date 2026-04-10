@@ -1255,8 +1255,9 @@ class UIController {
             item.classList.remove('bg-white/[0.06]');
         });
         
-        // Push to browser history
-        historyManager.pushState({ view: 'explore' });
+        // Push to browser history (replace if current entry is an orphaned modal state)
+        const isOrphanedModal = window.history.state?.modal;
+        historyManager.pushState({ view: 'explore' }, isOrphanedModal);
     }
 
     /**
