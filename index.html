@@ -2554,13 +2554,87 @@
         </div>
     </template>
 
+    <!-- Install App Modal (opened via pombo.cc landing page → #install) -->
+    <div id="install-app-modal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+        <div class="bg-[#111113] rounded-2xl p-6 pb-7 w-[380px] max-w-full mx-4 border border-white/[0.06]">
+            <div class="flex items-center justify-between mb-6">
+                <div class="flex items-center gap-3">
+                    <img src="favicon/favicon.svg" alt="Pombo" class="w-10 h-10">
+                    <div>
+                        <h3 class="text-base font-semibold text-white">Install Pombo</h3>
+                        <p class="text-xs text-white/40">Works on any device</p>
+                    </div>
+                </div>
+                <button id="install-modal-close" class="text-white/30 hover:text-white/60 transition p-1">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+
+            <!-- Native install prompt (Android/Desktop Chrome) -->
+            <button id="install-native-btn" class="hidden w-full bg-[#F6851B] hover:bg-[#e5780f] text-white text-sm font-semibold px-4 py-3 rounded-xl transition shadow-lg shadow-[#F6851B]/20 mb-3 flex items-center justify-center gap-2">
+                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                Install Now
+            </button>
+
+            <!-- Platform-specific instructions -->
+            <div id="install-instructions" class="space-y-3">
+                <!-- iOS -->
+                <div id="install-ios" class="hidden">
+                    <p class="text-xs text-white/50 uppercase tracking-wider font-semibold mb-3">Safari on iPhone / iPad</p>
+                    <div class="space-y-2.5">
+                        <div class="flex items-center gap-3 text-sm text-white/70">
+                            <span class="flex-shrink-0 w-6 h-6 rounded-full bg-white/[0.06] flex items-center justify-center text-xs font-bold text-white/50">1</span>
+                            Tap the <strong class="text-white/90 mx-1">Share</strong> button
+                            <svg class="flex-shrink-0 w-4 h-4 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/></svg>
+                        </div>
+                        <div class="flex items-center gap-3 text-sm text-white/70">
+                            <span class="flex-shrink-0 w-6 h-6 rounded-full bg-white/[0.06] flex items-center justify-center text-xs font-bold text-white/50">2</span>
+                            Select <strong class="text-white/90 mx-1">Add to Home Screen</strong>
+                        </div>
+                        <div class="flex items-center gap-3 text-sm text-white/70">
+                            <span class="flex-shrink-0 w-6 h-6 rounded-full bg-white/[0.06] flex items-center justify-center text-xs font-bold text-white/50">3</span>
+                            Tap <strong class="text-white/90 mx-1">Add</strong>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Desktop browser fallback -->
+                <div id="install-desktop" class="hidden">
+                    <p class="text-xs text-white/50 uppercase tracking-wider font-semibold mb-3">Desktop Browser</p>
+                    <div class="space-y-2.5">
+                        <div class="flex items-center gap-3 text-sm text-white/70">
+                            <span class="flex-shrink-0 w-6 h-6 rounded-full bg-white/[0.06] flex items-center justify-center text-xs font-bold text-white/50">1</span>
+                            Click the <strong class="text-white/90 mx-1">install icon</strong> in the address bar
+                        </div>
+                        <div class="flex items-center gap-3 text-sm text-white/70">
+                            <span class="flex-shrink-0 w-6 h-6 rounded-full bg-white/[0.06] flex items-center justify-center text-xs font-bold text-white/50">2</span>
+                            Or use browser menu → <strong class="text-white/90 mx-1">Install Pombo</strong>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Already installed -->
+                <div id="install-done" class="hidden text-center py-2">
+                    <svg class="w-10 h-10 text-green-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    <p class="text-sm text-white/70 font-medium">Pombo is already installed!</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Loading Overlay -->
     <div id="loading-overlay" class="loading-overlay">
         <div class="spinner"></div>
         <div id="loading-text" class="loading-text">Loading...</div>
     </div>
 
+    <!-- Capture #install hash BEFORE app router overwrites it -->
+    <script src="./js/install-pre.js"></script>
+
     <!-- App Bundle (built from src/js/) -->
     <script src="./js/app.bundle.js"></script>
+
+    <!-- Install modal logic -->
+    <script src="./js/install-modal.js"></script>
 </body>
 </html>
