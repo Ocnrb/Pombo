@@ -1223,27 +1223,7 @@ body {
     }
 }
 
-/* ----- Network status dot depth effect ----- */
-.network-dot {
-    box-shadow:
-        inset 0 -1px 2px rgba(0, 0, 0, 0.4),
-        inset 0 1px 1px rgba(255, 255, 255, 0.15),
-        0 0 0 0 transparent;
-}
 
-.network-dot.bg-emerald-400 {
-    box-shadow:
-        inset 0 -1px 2px rgba(0, 0, 0, 0.3),
-        inset 0 1px 1px rgba(255, 255, 255, 0.25),
-        0 0 6px 1px rgba(52, 211, 153, 0.4);
-}
-
-.network-dot.bg-amber-400 {
-    box-shadow:
-        inset 0 -1px 2px rgba(0, 0, 0, 0.3),
-        inset 0 1px 1px rgba(255, 255, 255, 0.25),
-        0 0 6px 1px rgba(251, 191, 36, 0.4);
-}
 
 /* ----- Always hide mobile-only pill elements on desktop ----- */
 #mobile-pill-nav,
@@ -1271,7 +1251,9 @@ body {
     }
     
     /* Re-enable mobile pill elements (override desktop hiding) */
-    #mobile-pill-nav:not(.hidden),
+    #mobile-pill-nav:not(.hidden) {
+        display: flex !important;
+    }
     #sidebar-connect-float:not(.hidden) {
         display: block !important;
     }
@@ -1297,12 +1279,6 @@ body {
         backdrop-filter: none;
     }
     
-    /* Explore tabs take available space and align right on mobile */
-    #explore-type-tabs {
-        flex: 1 !important;
-        justify-content: flex-end !important;
-    }
-    
     /* Smaller logo on mobile */
     .header-logo {
         width: 2.25rem;
@@ -1322,6 +1298,11 @@ body {
     #desktop-account-wrapper,
     #wallet-info {
         display: none !important;
+    }
+
+    /* Show Create Account button in header for guest mode on mobile */
+    body.guest-mode #connect-wallet {
+        display: flex !important;
     }
 
     /* Hide desktop-only sidebar controls (moved to pill nav) */
@@ -1421,7 +1402,13 @@ body {
     
     /* ----- HIDE MAIN HEADER WHEN CHAT IS ACTIVE ----- */
     /* Use explicit combinatorial rule so settings-open always wins */
-    body.chat-open:not(.settings-open):not(.contacts-open) header {
+    /* Keep main header visible in explore-open (same header as sidebar/chats) */
+    body.chat-open:not(.settings-open):not(.contacts-open):not(.explore-open) header {
+        display: none !important;
+    }
+
+    /* Hide chat-header in explore view on mobile (main header is shown instead) */
+    body.explore-open #chat-header {
         display: none !important;
     }
     
@@ -1435,6 +1422,16 @@ body {
         display: flex !important;
         margin-right: 0.5rem;
         margin-left: -0.5rem;
+    }
+
+    /* Hide back button in Explore view (pill nav handles navigation) */
+    body.explore-open .mobile-close-btn {
+        display: none !important;
+    }
+
+    /* Show [+] Create Channel button in header for authenticated users in Explore view */
+    body.explore-open:not(.guest-mode) #header-create-channel-btn {
+        display: flex !important;
     }
     
     /* Hide desktop close button on mobile */
@@ -1482,7 +1479,8 @@ body {
     }
 
     /* Hide pill and connect float when chat is open or new channel modal is visible */
-    body.chat-open #mobile-pill-nav,
+    /* Keep pill visible in Explore view (body.explore-open) */
+    body.chat-open:not(.explore-open) #mobile-pill-nav,
     body.chat-open #sidebar-connect-float,
     body.new-channel-open #mobile-pill-nav,
     body.new-channel-open #sidebar-connect-float {
@@ -1506,6 +1504,21 @@ body {
         transform: translateX(-50%);
         z-index: 100;
         padding-bottom: env(safe-area-inset-bottom);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }
+
+    .pill-guest-label {
+        color: #F6851B;
+        font-size: 0.6875rem;
+        font-weight: 500;
+        margin-top: 0.35rem;
+        white-space: nowrap;
+    }
+
+    .pill-guest-label.hidden {
+        display: none;
     }
 
     .pill-nav-inner {
@@ -1556,8 +1569,8 @@ body {
     }
 
     .pill-profile-avatar {
-        width: 2rem;
-        height: 2rem;
+        width: 2.35rem;
+        height: 2.35rem;
         border-radius: 10px;
         background: rgba(255, 255, 255, 0.08);
         border: 1.5px solid rgba(255, 255, 255, 0.12);
@@ -1586,7 +1599,9 @@ body {
         bottom: calc(100% + 0.5rem);
         right: 0;
         min-width: 200px;
-        background: #16161b;
+        background: rgba(22, 22, 27, 0.92);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
         border: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 1rem;
         padding: 0.5rem;
@@ -1630,11 +1645,72 @@ body {
         background: rgba(255, 255, 255, 0.06);
     }
 
+    .pill-dropdown-item.active-tab {
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.9);
+    }
+
+    .pill-dropdown-item.active-tab svg {
+        color: #F6851B;
+    }
+
     .pill-dropdown-disconnect {
         color: #ef4444;
         border-top: 1px solid rgba(255, 255, 255, 0.06);
         margin-top: 0.25rem;
         padding-top: 0.5rem;
+    }
+
+    /* ----- SETTINGS DROPDOWN ----- */
+    .pill-settings-wrapper {
+        position: relative;
+        padding: 0.25rem;
+    }
+
+    .pill-settings-btn {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.125rem;
+        padding: 0.4rem 0.75rem;
+        border-radius: 1.25rem;
+        font-size: 0.625rem;
+        font-weight: 500;
+        color: rgba(255, 255, 255, 0.8);
+        background: none;
+        border: none;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        white-space: nowrap;
+    }
+
+    .pill-settings-wrapper.active .pill-settings-btn {
+        color: inherit;
+    }
+
+    .pill-settings-btn:active {
+        color: rgba(255, 255, 255, 0.95);
+    }
+
+    .pill-settings-dropdown {
+        position: absolute;
+        bottom: calc(100% - 0.15rem);
+        right: -2rem;
+        min-width: 200px;
+        background: rgba(22, 22, 27, 0.92);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 1rem;
+        padding: 0.5rem;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        z-index: 50;
+        transform-origin: bottom right;
+        animation: dropdownOpenUp 0.18s ease-out;
+    }
+
+    .pill-settings-dropdown.hidden {
+        display: none;
     }
     
     /* Channel filter tabs - lighter on mobile */
@@ -2049,4 +2125,10 @@ body {
         font-size: 1.6rem;
         padding: 4px;
     }
+}
+
+/* Explore button active state when explore is open (desktop) */
+body.explore-open #browse-channels-btn {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 1);
 }

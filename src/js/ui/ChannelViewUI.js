@@ -106,8 +106,7 @@ class ChannelViewUI {
         this.elements.messagesArea?.classList.add('p-4');
         this.elements.messagesArea.innerHTML = '';
         
-        // Hide explore tabs, show header controls
-        this.elements.exploreTypeTabs?.classList.add('hidden');
+        // Show header controls
         this.elements.chatHeaderRight?.classList.remove('hidden');
         
         // Handle read-only UI
@@ -233,7 +232,9 @@ class ChannelViewUI {
         
         // Update header
         const isMobile = this.deps.isMobileView();
-        this.elements.currentChannelName.textContent = isMobile ? 'Explore' : 'Explore Channels';
+        if (!isMobile) {
+            this.elements.currentChannelName.textContent = 'Explore Channels';
+        }
         this.elements.currentChannelInfo.textContent = '';
         this.elements.currentChannelInfo.parentElement?.classList.add('hidden');
         
@@ -245,18 +246,15 @@ class ChannelViewUI {
         this.elements.onlineHeader?.classList.add('hidden');
         this.elements.onlineSeparator?.classList.add('hidden');
         
-        // Close button: show only on mobile
+        // Close button: hide on mobile (pill nav handles navigation), show close on desktop
         if (isMobile) {
-            this.elements.closeChannelBtn?.classList.remove('hidden');
+            this.elements.closeChannelBtn?.classList.add('hidden');
             this.elements.chatHeaderRight?.classList.add('hidden');
         } else {
             this.elements.closeChannelBtn?.classList.add('hidden');
             this.elements.chatHeaderRight?.classList.remove('hidden');
         }
         this.elements.closeChannelBtnDesktop?.classList.add('hidden');
-        
-        // Show explore tabs
-        this.elements.exploreTypeTabs?.classList.remove('hidden');
         
         // Render Explore view
         const nsfwEnabled = secureStorage.getNsfwEnabled();

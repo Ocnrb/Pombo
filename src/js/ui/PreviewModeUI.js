@@ -89,6 +89,9 @@ class PreviewModeUI {
         const { channelManager, subscriptionManager, graphAPI, notificationUI, historyManager, headerUI, reactionManager } = this.deps;
         const elements = this.ui.elements;
 
+        // No longer in explore view
+        document.body.classList.remove('explore-open');
+
         try {
             // Exit any existing preview first (only one preview at a time)
             if (this.previewChannel) {

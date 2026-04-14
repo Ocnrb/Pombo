@@ -93,6 +93,10 @@ class ExploreUI {
                             <button type="button" data-category="health" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">Health</button>
                             <button type="button" data-category="education" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">Education</button>
                             <button type="button" data-category="comedy" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">Comedy</button>
+                            <button type="button" id="explore-private-chip" class="explore-private-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80 flex items-center gap-1">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>
+                                Private
+                            </button>
                             ${nsfwChips}
                         </div>
                         <button id="explore-toggle-categories-btn" type="button" class="hidden absolute right-0 top-0 h-[26px] px-2 items-center bg-gradient-to-l from-[#0f0f12] via-[#0f0f12] to-transparent pl-6 text-white/40 hover:text-white/60 transition">
@@ -127,13 +131,13 @@ class ExploreUI {
             this.filterChannels(e.target.value);
         });
         
-        // Type filter tabs (both in header and explore view)
-        document.querySelectorAll('#explore-type-tabs .browse-filter-tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                this.browseTypeFilter = tab.dataset.browseFilter;
-                this.updateFilterTabs();
-                this.filterChannels(searchInput?.value || '');
-            });
+        // Private chip toggle
+        const privateChip = document.getElementById('explore-private-chip');
+        privateChip?.addEventListener('click', () => {
+            const isActive = this.browseTypeFilter === 'password';
+            this.browseTypeFilter = isActive ? 'public' : 'password';
+            this.updatePrivateChip();
+            this.filterChannels(searchInput?.value || '');
         });
         
         // Category chips
@@ -176,7 +180,7 @@ class ExploreUI {
         }
         
         // Sync tab and chip UI to match reset state
-        this.updateFilterTabs();
+        this.updatePrivateChip();
         this.updateCategoryChips();
     }
 
@@ -356,19 +360,19 @@ class ExploreUI {
     }
 
     /**
-     * Update filter tabs UI state
+     * Update Private chip UI state
      */
-    updateFilterTabs() {
-        document.querySelectorAll('#explore-type-tabs .browse-filter-tab').forEach(tab => {
-            const isActive = tab.dataset.browseFilter === this.browseTypeFilter;
-            if (isActive) {
-                tab.classList.add('text-[#F6851B]', 'border-[#F6851B]');
-                tab.classList.remove('text-white/30', 'hover:text-white/50', 'border-transparent');
-            } else {
-                tab.classList.remove('text-[#F6851B]', 'border-[#F6851B]');
-                tab.classList.add('text-white/30', 'hover:text-white/50', 'border-transparent');
-            }
-        });
+    updatePrivateChip() {
+        const chip = document.getElementById('explore-private-chip');
+        if (!chip) return;
+        const isActive = this.browseTypeFilter === 'password';
+        if (isActive) {
+            chip.classList.add('bg-white', 'text-black');
+            chip.classList.remove('bg-white/5', 'text-white/60', 'hover:bg-white/10', 'hover:text-white/80');
+        } else {
+            chip.classList.remove('bg-white', 'text-black');
+            chip.classList.add('bg-white/5', 'text-white/60', 'hover:bg-white/10', 'hover:text-white/80');
+        }
     }
 
     /**

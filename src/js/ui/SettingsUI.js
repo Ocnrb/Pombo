@@ -725,10 +725,8 @@ class SettingsUI {
         // Initialize tabs navigation
         this.initSettingsTabs();
 
-        // Open settings modal
-        if (this.elements.settingsBtn) {
-            this.elements.settingsBtn.addEventListener('click', () => this.show());
-        }
+        // Desktop settings button event
+        document.addEventListener('pombo:open-settings', () => this.show());
 
         // Close settings modal
         if (this.elements.closeSettingsBtn) {
@@ -992,51 +990,42 @@ class SettingsUI {
             });
         }
         this.initSettingsCarousel();
-        this.initSettingsMenu();
+        this.initPillSettingsDropdown();
     }
 
     /**
-     * Initialize settings three-dot menu for mobile
+     * Initialize pill settings dropdown for mobile
      */
-    initSettingsMenu() {
-        const menuBtn = document.getElementById('settings-menu-btn');
-        const dropdown = document.getElementById('settings-menu-dropdown');
-        if (!menuBtn || !dropdown) return;
+    initPillSettingsDropdown() {
+        const settingsBtn = document.getElementById('settings-btn');
+        const dropdown = document.getElementById('pill-settings-dropdown');
+        if (!settingsBtn || !dropdown) return;
 
-        menuBtn.addEventListener('click', (e) => {
+        settingsBtn.addEventListener('click', (e) => {
             e.stopPropagation();
+            // Close profile dropdown if open
+            document.getElementById('pill-profile-dropdown')?.classList.add('hidden');
             dropdown.classList.toggle('hidden');
         });
 
         // Tab items in dropdown
-        dropdown.querySelectorAll('.settings-menu-item').forEach(item => {
+        dropdown.querySelectorAll('.pill-dropdown-item').forEach(item => {
             item.addEventListener('click', () => {
                 const tabName = item.dataset.settingsTab;
                 if (tabName) {
-                    this.selectSettingsTab(tabName);
-                    this._updateSettingsMenuActive(tabName);
+                    dropdown.classList.add('hidden');
+                    this.show().then(() => {
+                        this.selectSettingsTab(tabName);
+                    });
                 }
-                dropdown.classList.add('hidden');
             });
         });
 
         // Close dropdown on outside click
-        document.addEventListener('click', () => {
-            dropdown.classList.add('hidden');
-        });
-    }
-
-    /**
-     * Update active state in settings menu dropdown
-     */
-    _updateSettingsMenuActive(activeTab) {
-        const dropdown = document.getElementById('settings-menu-dropdown');
-        if (!dropdown) return;
-        dropdown.querySelectorAll('.settings-menu-item').forEach(item => {
-            const isActive = item.dataset.settingsTab === activeTab;
-            item.classList.toggle('text-[#F6851B]', isActive);
-            item.classList.toggle('bg-white/[0.04]', isActive);
-            item.classList.toggle('text-white/70', !isActive);
+        document.addEventListener('click', (e) => {
+            if (!settingsBtn.contains(e.target) && !dropdown.contains(e.target)) {
+                dropdown.classList.add('hidden');
+            }
         });
     }
 
@@ -1204,6 +1193,11 @@ class SettingsUI {
      * @param {number} direction - Direction of navigation (-1 = left, 1 = right, 0 = direct click)
      */
     selectSettingsTab(tabName, direction = 0) {
+        // Update settings dropdown active indicator
+        document.querySelectorAll('#pill-settings-dropdown .pill-dropdown-item[data-settings-tab]').forEach(item => {
+            item.classList.toggle('active-tab', item.dataset.settingsTab === tabName);
+        });
+
         // Render blocked peers list when privacy tab is selected
         if (tabName === 'privacy') {
             this.renderBlockedPeersList();
@@ -1213,9 +1207,6 @@ class SettingsUI {
         if (tabName === 'repair') {
             this.runDiagnosis();
         }
-
-        // Sync menu dropdown active state
-        this._updateSettingsMenuActive(tabName);
 
         // Start animation lock
         if (direction !== 0) {

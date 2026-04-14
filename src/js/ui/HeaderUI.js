@@ -114,13 +114,17 @@ class HeaderUI {
                 // Hide contacts button for guest
                 contactsBtn?.classList.add('hidden');
                 
-                // Mobile: show floating connect, hide pill nav
-                pill.connectFloat?.classList.remove('hidden');
-                pill.pillNav?.classList.add('hidden');
-                // Mobile only: guest gets explore button instead of create channel
-                if (window.innerWidth < 768) {
-                    pill.guestExploreBtn?.classList.remove('hidden');
-                    document.getElementById('new-channel-btn')?.classList.add('hidden');
+                // Mobile: show pill nav (same as authenticated), hide floating connect
+                document.body.classList.add('guest-mode');
+                pill.connectFloat?.classList.add('hidden');
+                pill.pillNav?.classList.remove('hidden');
+                pill.guestLabel?.classList.remove('hidden');
+                // Update profile avatar in pill (guest address)
+                if (pill.profileBtn) {
+                    pill.profileBtn.innerHTML = generateAvatar(address, 32, 0.2);
+                }
+                if (pill.profileAddress) {
+                    pill.profileAddress.textContent = `${address.slice(0, 6)}...${address.slice(-4)}`;
                 }
             } else {
                 this._currentAddress = address;
@@ -149,10 +153,11 @@ class HeaderUI {
                 contactsBtn?.classList.remove('hidden');
                 
                 // Mobile: hide floating connect, show pill nav
+                document.body.classList.remove('guest-mode');
                 pill.connectFloat?.classList.add('hidden');
                 pill.pillNav?.classList.remove('hidden');
-                // Mobile only: restore create channel button, hide guest explore
-                pill.guestExploreBtn?.classList.add('hidden');
+                pill.guestLabel?.classList.add('hidden');
+                // Mobile only: restore create channel button
                 document.getElementById('new-channel-btn')?.classList.remove('hidden');
                 // Update profile avatar in pill
                 if (pill.profileBtn) {
@@ -187,10 +192,11 @@ class HeaderUI {
             settingsBtn?.classList.add('hidden');
             
             // Mobile: hide both pill and float
+            document.body.classList.remove('guest-mode');
             pill.connectFloat?.classList.add('hidden');
             pill.pillNav?.classList.add('hidden');
+            pill.guestLabel?.classList.add('hidden');
             // Restore default state
-            pill.guestExploreBtn?.classList.add('hidden');
             document.getElementById('new-channel-btn')?.classList.remove('hidden');
         }
     }
@@ -225,25 +231,9 @@ class HeaderUI {
     }
 
     /**
-     * Update network status indicator
-     * @param {string} status - Status message
-     * @param {boolean} connected - Connection status
+     * Update network status indicator (no-op, status dot removed)
      */
-    updateNetworkStatus(status, connected = false) {
-        const dot = document.getElementById('network-dot');
-        if (!dot) return;
-        
-        if (connected) {
-            dot.classList.remove('bg-white/20', 'bg-amber-400');
-            dot.classList.add('bg-emerald-400');
-        } else if (status.toLowerCase().includes('connecting')) {
-            dot.classList.remove('bg-white/20', 'bg-emerald-400');
-            dot.classList.add('bg-amber-400');
-        } else {
-            dot.classList.remove('bg-emerald-400', 'bg-amber-400');
-            dot.classList.add('bg-white/20');
-        }
-    }
+    updateNetworkStatus() {}
 
     /**
      * Update channel title in header
@@ -349,17 +339,16 @@ class HeaderUI {
             this._pillElements = {
                 connectFloat: document.getElementById('sidebar-connect-float'),
                 sidebarConnectBtn: document.getElementById('sidebar-connect-btn'),
-                guestExploreBtn: document.getElementById('guest-explore-btn'),
                 pillNav: document.getElementById('mobile-pill-nav'),
                 pillChatsBtn: document.getElementById('pill-chats-btn'),
                 pillExploreBtn: document.getElementById('pill-explore-btn'),
                 pillJoinIdBtn: document.getElementById('pill-join-id-btn'),
-                pillCreateChannelBtn: document.getElementById('pill-create-channel-btn'),
                 profileBtn: document.getElementById('pill-profile-btn'),
                 profileDropdown: document.getElementById('pill-profile-dropdown'),
                 profileAddress: document.getElementById('pill-profile-address'),
                 profileAccounts: document.getElementById('pill-profile-accounts'),
-                disconnectBtn: document.getElementById('pill-disconnect-btn')
+                disconnectBtn: document.getElementById('pill-disconnect-btn'),
+                guestLabel: document.getElementById('pill-guest-label')
             };
         }
         return this._pillElements;
@@ -377,20 +366,15 @@ class HeaderUI {
             onConnect?.();
         });
 
-        // Guest explore button (sidebar header, replaces + on mobile)
-        pill.guestExploreBtn?.addEventListener('click', () => {
-            onExploreTab?.();
-        });
-
         // Explore pill tab
         pill.pillExploreBtn?.addEventListener('click', () => {
             this._setActivePillTab('explore');
             onExploreTab?.();
         });
 
-        // Create Channel from profile dropdown
-        pill.pillCreateChannelBtn?.addEventListener('click', () => {
-            this._closeProfileDropdown();
+        // Create Channel from header button (explore view)
+        const headerCreateBtn = document.getElementById('header-create-channel-btn');
+        headerCreateBtn?.addEventListener('click', () => {
             onCreateChannel?.();
         });
 
@@ -432,7 +416,8 @@ class HeaderUI {
         }
         if (settingsBtnDesktop) {
             settingsBtnDesktop.addEventListener('click', () => {
-                document.getElementById('settings-btn')?.click();
+                // Import avoided: fire custom event; SettingsUI listens
+                document.dispatchEvent(new CustomEvent('pombo:open-settings'));
             });
         }
     }
@@ -447,6 +432,8 @@ class HeaderUI {
         if (this._profileDropdownOpen) {
             this._closeProfileDropdown();
         } else {
+            // Close settings dropdown if open
+            document.getElementById('pill-settings-dropdown')?.classList.add('hidden');
             pill.profileDropdown.classList.remove('hidden');
             pill.profileDropdown.classList.add('dropdown-animate-open-up');
             this._profileDropdownOpen = true;

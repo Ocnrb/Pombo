@@ -420,7 +420,9 @@ class GraphAPI {
         const cacheKey = `pombo_public:${first}:${skip}`;
 
         return this.getCached(cacheKey, async () => {
-            // Query streams that have public permissions (userAddress is 0x0...0 for public)
+            // Query streams that have public permissions AND contain "pombo" in metadata
+            // metadata_contains filters at the subgraph level, avoiding client-side loss
+            // when non-Pombo public streams outnumber Pombo ones in the first N results
             const query = `
                 query GetPublicPomboChannels {
                     streams(
@@ -428,7 +430,10 @@ class GraphAPI {
                         skip: ${skip}, 
                         orderBy: updatedAt, 
                         orderDirection: desc,
-                        where: { permissions_: { userAddress: "0x0000000000000000000000000000000000000000" } },
+                        where: { 
+                            permissions_: { userAddress: "0x0000000000000000000000000000000000000000" },
+                            metadata_contains: "pombo"
+                        },
                         subgraphError: allow
                     ) {
                         id

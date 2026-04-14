@@ -70,6 +70,7 @@ class App {
                 onChatsTab: () => {
                     settingsUI.hide({ skipHistory: true });
                     contactsUI.hide({ skipHistory: true });
+                    uiController.closeChatView();
                     // Clean orphaned modal history entry
                     if (window.history.state?.modal) {
                         window.history.replaceState(null, '');

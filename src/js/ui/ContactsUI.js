@@ -172,7 +172,7 @@ class ContactsUI {
         this.elements.contactsList.querySelectorAll('.remove-contact-btn').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 const address = e.currentTarget.dataset.address;
-                this.deps.showRemoveContactModal(address, () => {
+                this.showRemoveModal(address, () => {
                     this.renderList();
                 });
             });

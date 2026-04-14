@@ -145,7 +145,7 @@ class UIController {
             showNotification: (msg, type) => this.showNotification(msg, type),
             updateWalletInfo: (address, isGuest) => headerUI.updateWalletInfo(address, isGuest),
             updateDisplayName: (username) => headerUI.updateDisplayName(username),
-            updateNetworkStatus: (status, connected) => headerUI.updateNetworkStatus(status, connected),
+            updateNetworkStatus: () => {},
             renderChannelList: () => this.renderChannelList(),
             resetToDisconnectedState: () => this.resetToDisconnectedState(),
             isMobileView: () => this.isMobileView(),
@@ -189,7 +189,9 @@ class UIController {
             hideLoading: () => this.hideLoading(),
             renderChannelList: () => this.renderChannelList(),
             selectChannel: (streamId) => this.selectChannel(streamId),
-            showConnectedNoChannelState: () => this.showConnectedNoChannelState()
+            showConnectedNoChannelState: () => this.showConnectedNoChannelState(),
+            showAddContactModal: (address, cb) => modalManager.showAddContactModal(address, cb),
+            showRemoveContactModal: (address, cb) => modalManager.showRemoveContactModal(address, cb)
         });
 
         // ChannelListUI
@@ -1167,6 +1169,7 @@ class UIController {
      * @param {string} streamId - Stream ID
      */
     async selectChannel(streamId) {
+        document.body.classList.remove('explore-open');
         return channelViewUI.selectChannel(streamId, { pushHistory: true });
     }
 
@@ -1381,6 +1384,7 @@ class UIController {
      * @private
      */
     async _selectChannelWithoutHistory(streamId) {
+        document.body.classList.remove('explore-open');
         return channelViewUI.selectChannel(streamId, { pushHistory: false });
     }
 
@@ -1388,6 +1392,7 @@ class UIController {
      * Show Explore view inline in messages area (delegates to ChannelViewUI)
      */
     async showExploreView() {
+        document.body.classList.add('explore-open');
         return channelViewUI.showExploreView();
     }
 
@@ -1825,7 +1830,7 @@ class UIController {
         if (this.isMobileView()) {
             this.elements.sidebar?.classList.remove('chat-active');
             this.elements.chatArea?.classList.remove('active');
-            document.body.classList.remove('chat-open');
+            document.body.classList.remove('chat-open', 'explore-open');
             // Clean up any dangling modal body classes
             document.body.classList.remove('settings-open', 'contacts-open', 'new-channel-open');
             // Reset pill tab to chats
