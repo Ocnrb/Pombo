@@ -321,6 +321,13 @@ body {
     display: block;
 }
 
+.message-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
 .message-avatar.message-avatar-hidden {
     opacity: 0;
     height: 0;
@@ -1579,8 +1586,8 @@ body {
     }
 
     .pill-profile-avatar {
-        width: 2.35rem;
-        height: 2.35rem;
+        width: 2.375rem;
+        height: 2.375rem;
         border-radius: 10px;
         background: rgba(255, 255, 255, 0.08);
         border: 1.5px solid rgba(255, 255, 255, 0.12);
@@ -1600,7 +1607,7 @@ body {
         width: 100%;
         height: 100%;
         object-fit: cover;
-        border-radius: 50%;
+        border-radius: 10px;
     }
 
     /* ----- PROFILE DROPDOWN ----- */

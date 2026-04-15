@@ -5,7 +5,8 @@
  */
 
 import { escapeHtml } from './utils.js';
-import { generateAvatar } from './AvatarGenerator.js';
+import { generateAvatar, getAvatarHtml } from './AvatarGenerator.js';
+import { identityManager } from '../identity.js';
 
 class HeaderUI {
     constructor() {
@@ -139,7 +140,8 @@ class HeaderUI {
                 
                 // Update desktop dropdown button
                 if (desktopAccountAvatar) {
-                    desktopAccountAvatar.innerHTML = generateAvatar(address, 20, 0.2);
+                    const ensAvatar = identityManager.getCachedENSAvatar(address);
+                    desktopAccountAvatar.innerHTML = getAvatarHtml(address, 32, 0.2, ensAvatar);
                 }
                 if (desktopAccountName) {
                     desktopAccountName.textContent = displayText;
@@ -161,7 +163,8 @@ class HeaderUI {
                 document.getElementById('new-channel-btn')?.classList.remove('hidden');
                 // Update profile avatar in pill
                 if (pill.profileBtn) {
-                    pill.profileBtn.innerHTML = generateAvatar(address, 32, 0.2);
+                    const ensAvatar = identityManager.getCachedENSAvatar(address);
+                    pill.profileBtn.innerHTML = getAvatarHtml(address, 38, 0.2, ensAvatar);
                 }
                 // Update profile address in dropdown (always show address)
                 if (pill.profileAddress) {

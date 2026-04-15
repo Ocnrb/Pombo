@@ -9,7 +9,7 @@ import { secureStorage } from './secureStorage.js';
 import { channelManager } from './channels.js';
 import { uiController } from './ui.js';
 import { Logger } from './logger.js';
-import { getAvatar, generateAvatar, setAvatarSeed, generateRandomAvatarSeed } from './ui/AvatarGenerator.js';
+import { getAvatar, getAvatarHtml, generateAvatar, setAvatarSeed, generateRandomAvatarSeed } from './ui/AvatarGenerator.js';
 import { escapeHtml, escapeAttr } from './ui/utils.js';
 import { 
     createModalFromTemplate, 
@@ -163,6 +163,9 @@ class WalletFlows {
             
             // Helper to check if wallet has ENS
             const hasENS = (w) => !!localStorage.getItem(`pombo_ens_${w.address.toLowerCase()}`);
+
+            // Helper to get cached ENS avatar URL from localStorage
+            const getENSAvatarUrl = (w) => localStorage.getItem(`pombo_ens_avatar_${w.address.toLowerCase()}`);
             
             const modal = document.createElement('div');
             modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 animate-fadeIn';
@@ -185,7 +188,7 @@ class WalletFlows {
                     <div class="px-5 pb-4">
                         <div class="bg-white/[0.05] rounded-xl p-3 border border-white/[0.08]">
                             <div class="flex items-center gap-3">
-                                <div class="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0">${getAvatar(wallet.address, 40, 0.2)}</div>
+                                <div class="w-14 h-14 rounded-lg overflow-hidden flex-shrink-0">${getAvatarHtml(wallet.address, 56, 0.2, getENSAvatarUrl(wallet))}</div>
                                 <div class="flex-1 min-w-0">
                                     <div class="text-[13px] font-medium text-white truncate flex items-center gap-1.5">${hasENS(wallet) ? '<svg class="flex-shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#4ade80" stroke-width="2" fill="none"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>' : ''}${escapeAttr(getDisplayName(wallet, 0))}</div>
                                     <div class="text-[11px] text-white/50 font-mono">${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}</div>
@@ -196,11 +199,11 @@ class WalletFlows {
                     ` : `
                     <!-- Multiple Wallets List -->
                     <div class="px-5 pb-4">
-                        <div class="space-y-2 max-h-40 overflow-y-auto scrollbar-thin">
+                        <div class="space-y-2 max-h-52 overflow-y-auto scrollbar-thin">
                             ${wallets.map((w, i) => `
                                 <button class="wallet-item w-full bg-white/[0.05] hover:bg-white/[0.08] rounded-xl p-3 border border-white/[0.08] hover:border-white/[0.12] transition-all text-left ${i === 0 ? 'selected border-white/[0.12]' : ''}" data-address="${escapeAttr(w.address)}" data-name="${escapeAttr(w.name)}">
                                     <div class="flex items-center gap-3">
-                                        <div class="w-9 h-9 rounded-lg overflow-hidden flex-shrink-0">${getAvatar(w.address, 36, 0.2)}</div>
+                                        <div class="w-14 h-14 rounded-lg overflow-hidden flex-shrink-0">${getAvatarHtml(w.address, 56, 0.2, getENSAvatarUrl(w))}</div>
                                         <div class="flex-1 min-w-0">
                                             <div class="text-[13px] font-medium text-white truncate flex items-center gap-1">${hasENS(w) ? '<svg class="flex-shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#4ade80" stroke-width="2" fill="none"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>' : ''}${escapeAttr(getDisplayName(w, i))}</div>
                                             <div class="text-[11px] text-white/50 font-mono">${w.address.slice(0, 6)}...${w.address.slice(-4)}</div>
@@ -1541,6 +1544,8 @@ class WalletFlows {
         };
 
         const hasENS = (w) => !!localStorage.getItem(`pombo_ens_${w.address.toLowerCase()}`);
+
+        const getENSAvatarUrl = (w) => localStorage.getItem(`pombo_ens_avatar_${w.address.toLowerCase()}`);
         
         return new Promise((resolve) => {
             const modal = document.createElement('div');
@@ -1565,7 +1570,7 @@ class WalletFlows {
                             ${wallets.map((w, i) => `
                                 <button class="account-option w-full bg-white/[0.05] hover:bg-white/[0.08] rounded-xl p-3 border border-white/[0.08] hover:border-white/[0.12] transition-all text-left" data-address="${escapeAttr(w.address)}">
                                     <div class="flex items-center gap-3">
-                                        <div class="w-9 h-9 rounded-lg overflow-hidden flex-shrink-0">${getAvatar(w.address, 36, 0.2)}</div>
+                                        <div class="w-14 h-14 rounded-lg overflow-hidden flex-shrink-0">${getAvatarHtml(w.address, 56, 0.2, getENSAvatarUrl(w))}</div>
                                         <div class="flex-1 min-w-0">
                                             <div class="text-[13px] font-medium text-white truncate flex items-center gap-1.5">${hasENS(w) ? '<svg class="flex-shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="#4ade80" stroke-width="2" fill="none"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>' : ''}${escapeAttr(getDisplayName(w, i))}</div>
                                             <div class="text-[11px] text-white/50 font-mono">${w.address.slice(0, 6)}...${w.address.slice(-4)}</div>

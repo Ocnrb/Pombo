@@ -40,10 +40,12 @@ const PROVIDER_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 class IdentityManager {
     constructor() {
         this.ensCache = new Map();
+        this.ensAvatarCache = new Map(); // address -> { url: string|null, timestamp: number }
         this.trustedContacts = new Map();
         this.ensProviders = [];
         this.providerHealth = new Map(); // url -> { failedAt: timestamp }
         this.pendingENSLookups = new Map(); // address -> Promise (in-flight dedup)
+        this.pendingAvatarLookups = new Map(); // address -> Promise (in-flight dedup)
         this.username = null;
         this.MAX_ENS_CACHE_SIZE = CONFIG.identity.maxEnsCacheSize;
     }
@@ -443,6 +445,117 @@ class IdentityManager {
         }
         Logger.warn('ENS resolve failed for', ensName, '(all providers exhausted)');
         return null;
+    }
+
+    // ==================== ENS AVATAR ====================
+
+    /**
+     * Resolve ENS avatar URL for an address
+     * @param {string} address - Ethereum address
+     * @returns {Promise<string|null>} - Avatar URL or null
+     */
+    async resolveENSAvatar(address) {
+        const normalizedAddress = address.toLowerCase();
+
+        // Check memory cache
+        const cached = this.ensAvatarCache.get(normalizedAddress);
+        if (cached) {
+            const cacheDuration = cached.url ? ENS_CACHE_DURATION : ENS_NULL_CACHE_DURATION;
+            if (Date.now() - cached.timestamp < cacheDuration) {
+                return cached.url;
+            }
+        }
+
+        // Check localStorage (available pre-login for unlock/switch modals)
+        const stored = localStorage.getItem(`pombo_ens_avatar_${normalizedAddress}`);
+        if (stored) {
+            this.ensAvatarCache.set(normalizedAddress, { url: stored, timestamp: Date.now() });
+            return stored;
+        }
+
+        // In-flight dedup
+        if (this.pendingAvatarLookups.has(normalizedAddress)) {
+            return this.pendingAvatarLookups.get(normalizedAddress);
+        }
+
+        const lookupPromise = this._doResolveENSAvatar(address, normalizedAddress);
+        this.pendingAvatarLookups.set(normalizedAddress, lookupPromise);
+
+        try {
+            return await lookupPromise;
+        } finally {
+            this.pendingAvatarLookups.delete(normalizedAddress);
+        }
+    }
+
+    /**
+     * Internal ENS avatar lookup with provider fallback
+     * @private
+     */
+    async _doResolveENSAvatar(address, normalizedAddress) {
+        // First resolve ENS name (required for avatar lookup)
+        const ensName = await this.resolveENS(address);
+        if (!ensName) {
+            this.ensAvatarCache.set(normalizedAddress, { url: null, timestamp: Date.now() });
+            return null;
+        }
+
+        const now = Date.now();
+        for (const provider of this.ensProviders) {
+            const url = provider._ensUrl;
+            const health = this.providerHealth.get(url);
+            if (health && now - health.failedAt < PROVIDER_COOLDOWN_MS) {
+                continue;
+            }
+
+            try {
+                // Read the avatar text record directly from the resolver
+                const resolver = await provider.getResolver(ensName);
+                if (!resolver) continue;
+                const avatarRecord = await resolver.getText('avatar');
+                this.providerHealth.delete(url);
+
+                if (!avatarRecord) continue;
+
+                let avatarUrl = avatarRecord;
+
+                // Convert IPFS URIs to HTTPS gateway URLs
+                if (avatarUrl.startsWith('ipfs://')) {
+                    const cid = avatarUrl.slice(7);
+                    avatarUrl = `https://cloudflare-ipfs.com/ipfs/${cid}`;
+                }
+
+                // Validate URL: only allow HTTPS and data URIs
+                if (!avatarUrl.startsWith('https://') && !avatarUrl.startsWith('data:')) {
+                    Logger.debug(`ENS avatar: rejected non-HTTPS URL for ${ensName}: ${avatarUrl.slice(0, 60)}`);
+                    continue;
+                }
+
+                this.ensAvatarCache.set(normalizedAddress, { url: avatarUrl, timestamp: Date.now() });
+                localStorage.setItem(`pombo_ens_avatar_${normalizedAddress}`, avatarUrl);
+                Logger.info(`ENS avatar: ${ensName} → ${avatarUrl.slice(0, 80)}`);
+                return avatarUrl;
+            } catch (error) {
+                this.providerHealth.set(url, { failedAt: Date.now() });
+                Logger.debug('ENS avatar lookup failed with', url, '—', error.message);
+            }
+        }
+
+        // No avatar found
+        this.ensAvatarCache.set(normalizedAddress, { url: null, timestamp: Date.now() });
+        return null;
+    }
+
+    /**
+     * Get cached ENS avatar URL synchronously (for pre-login UI)
+     * @param {string} address - Ethereum address
+     * @returns {string|null}
+     */
+    getCachedENSAvatar(address) {
+        const normalizedAddress = address.toLowerCase();
+        const cached = this.ensAvatarCache.get(normalizedAddress);
+        if (cached?.url) return cached.url;
+        return localStorage.getItem(`pombo_ens_avatar_${normalizedAddress}`);
     }
 
     // ==================== TRUSTED CONTACTS ====================

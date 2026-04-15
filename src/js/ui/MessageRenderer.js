@@ -5,7 +5,7 @@
 
 import { escapeHtml, escapeAttr, formatAddress, addressToColor, linkify, embedYouTubeLinks } from './utils.js';
 import { GroupPosition, shouldShowSenderName } from './MessageGrouper.js';
-import { getAvatar } from './AvatarGenerator.js';
+import { getAvatar, getAvatarHtml } from './AvatarGenerator.js';
 import { sanitizeMessageHtml, sanitizeText } from './sanitizer.js';
 
 class MessageRenderer {
@@ -374,9 +374,10 @@ class MessageRenderer {
      * @param {string} groupClass - CSS class for group position (optional)
      * @param {string} groupPosition - Group position enum value (optional)
      * @param {string} spacingClass - CSS class for spacing (optional)
+     * @param {string|null} ensAvatarUrl - ENS avatar URL (optional)
      * @returns {string} - HTML for message
      */
-    buildMessageHTML(msg, isOwn, time, badge, displayName, groupClass = 'msg-group-single', groupPosition = GroupPosition.SINGLE, spacingClass = '') {
+    buildMessageHTML(msg, isOwn, time, badge, displayName, groupClass = 'msg-group-single', groupPosition = GroupPosition.SINGLE, spacingClass = '', ensAvatarUrl = null) {
         const msgId = msg.id || msg.timestamp;
         const reactionsHtml = this.renderReactions(msgId, isOwn);
         const contentHtml = this.renderMessageContent(msg);
@@ -399,9 +400,9 @@ class MessageRenderer {
         
         // Avatar visible only on last/single messages in group, but placeholder for alignment
         const showAvatar = groupPosition === GroupPosition.LAST || groupPosition === GroupPosition.SINGLE;
-        const avatarSvg = getAvatar(msg.sender, 46, 0.22);
+        const avatarContent = getAvatarHtml(msg.sender, 46, 0.22, ensAvatarUrl);
         const avatarClass = showAvatar ? 'message-avatar' : 'message-avatar message-avatar-hidden';
-        const avatarHtml = `<div class="${avatarClass}">${avatarSvg}</div>`;
+        const avatarHtml = `<div class="${avatarClass}">${avatarContent}</div>`;
 
         return `
             <div class="message-entry ${isOwn ? 'own-message' : 'other-message'} ${groupClass} ${spacingClass}" data-msg-id="${escapeAttr(msgId)}" data-sender="${escapeAttr(msg.sender || '')}" data-type="${escapeAttr(msgType)}"${emojiAttr}>

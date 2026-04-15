@@ -787,6 +787,45 @@ export function getAddressColor(address) {
 }
 
 // ==========================================
+// ENS Avatar Support
+// ==========================================
+
+/**
+ * Get avatar HTML that uses ENS avatar image if available, with SVG fallback.
+ * Returns an <img> if avatarUrl is provided, otherwise the generated SVG.
+ * The <img> has onerror fallback to the generated SVG.
+ * @param {string} address - Ethereum address
+ * @param {number} size - Avatar size in pixels
+ * @param {number} borderRadius - Border radius ratio
+ * @param {string|null} avatarUrl - ENS avatar URL (or null for SVG only)
+ * @returns {string} - HTML string (<img> or <svg>)
+ */
+export function getAvatarHtml(address, size = 32, borderRadius = 0.2, avatarUrl = null) {
+    const svgFallback = getAvatar(address, size, borderRadius);
+    if (!avatarUrl) return svgFallback;
+
+    // Sanitize URL - only allow https: and data: schemes
+    if (!avatarUrl.startsWith('https://') && !avatarUrl.startsWith('data:')) {
+        return svgFallback;
+    }
+    // Store SVG fallback in data attribute; global error listener handles swap
+    return `<img src="${avatarUrl}" alt="" width="${size}" height="${size}" class="ens-avatar" data-fallback="${encodeURIComponent(svgFallback)}" style="width:100%;height:100%;object-fit:cover;display:block;" />`;
+}
+
+// Global delegated error handler for ENS avatar images (CSP-safe)
+if (typeof document !== 'undefined') {
+    document.addEventListener('error', (e) => {
+        const img = e.target;
+        if (img.tagName === 'IMG' && img.classList.contains('ens-avatar') && img.dataset.fallback) {
+            const svgHtml = decodeURIComponent(img.dataset.fallback);
+            const wrapper = document.createElement('span');
+            wrapper.innerHTML = svgHtml;
+            img.replaceWith(wrapper.firstChild);
+        }
+    }, true);
+}
+
+// ==========================================
 // Exports
 // ==========================================
 
@@ -794,6 +833,7 @@ export const avatarGenerator = {
     generate: generateAvatar,
     generateDataUri: generateAvatarDataUri,
     get: getAvatar,
+    getHtml: getAvatarHtml,
     clearCache: clearAvatarCache,
     getColor: getAddressColor,
     setAvatarSeed,

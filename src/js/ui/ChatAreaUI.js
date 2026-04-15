@@ -11,6 +11,7 @@ import { mediaHandler } from './MediaHandler.js';
 import { previewModeUI } from './PreviewModeUI.js';
 import { analyzeMessageGroups, getGroupPositionClass, analyzeSpacing, getSpacingClass } from './MessageGrouper.js';
 import { escapeHtml, formatAddress } from './utils.js';
+import { identityManager } from '../identity.js';
 
 class ChatAreaUI {
     constructor() {
@@ -292,8 +293,10 @@ class ChatAreaUI {
             const groupClass = getGroupPositionClass(groupPositions[index]);
             // Get spacing class for margin
             const spacingClass = getSpacingClass(spacingTypes[index]);
+            // Get ENS avatar URL from cache (sync, no network call)
+            const ensAvatarUrl = identityManager.getCachedENSAvatar(msg.sender);
             
-            return dateSeparator + messageRenderer.buildMessageHTML(msg, isOwn, time, badge, displayName, groupClass, groupPositions[index], spacingClass);
+            return dateSeparator + messageRenderer.buildMessageHTML(msg, isOwn, time, badge, displayName, groupClass, groupPositions[index], spacingClass, ensAvatarUrl);
         }).join('');
 
         this.messagesArea.innerHTML = historyStartIndicator + this.messagesArea.innerHTML;

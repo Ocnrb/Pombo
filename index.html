@@ -2,7 +2,7 @@
 <html lang="pt">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-vvt4KWwuNr51XfE5m+hzeNEGhiOfZzG97ccfqGsPwvE='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; connect-src 'self' wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://eth.drpc.org https://polygon-bor-rpc.publicnode.com https://ethereum-rpc.publicnode.com https://cloudflare-eth.com https://gasstation.polygon.technology https://*.llamarpc.com https://1rpc.io https://*.meowrpc.com https://*.gateway.tenderly.co https://*.thegraph.com https://*.ens.domains https://euc.li https://*.logstore.usher.so https://fcm.googleapis.com https://*.push.services.mozilla.com https://updates.push.services.mozilla.com; base-uri 'self'; form-action 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-vvt4KWwuNr51XfE5m+hzeNEGhiOfZzG97ccfqGsPwvE='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; connect-src 'self' wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://eth.drpc.org https://polygon-bor-rpc.publicnode.com https://ethereum-rpc.publicnode.com https://cloudflare-eth.com https://gasstation.polygon.technology https://*.llamarpc.com https://1rpc.io https://*.meowrpc.com https://*.gateway.tenderly.co https://*.thegraph.com https://*.ens.domains https://euc.li https://*.logstore.usher.so https://fcm.googleapis.com https://*.push.services.mozilla.com https://updates.push.services.mozilla.com; base-uri 'self'; form-action 'self'">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Pombo - P2P Decentralized Chat</title>
 
@@ -82,7 +82,7 @@
             <!-- Desktop: Unified account dropdown (hidden on mobile) -->
             <div id="desktop-account-wrapper" class="hidden md:relative">
                 <button id="desktop-account-btn" class="bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] text-white/70 hover:text-white px-3 py-1.5 rounded-xl text-sm font-medium transition-all duration-200 flex items-center gap-2">
-                    <div id="desktop-account-avatar" class="w-5 h-5 rounded-full overflow-hidden flex-shrink-0"></div>
+                    <div id="desktop-account-avatar" class="w-8 h-8 rounded-lg overflow-hidden flex-shrink-0"></div>
                     <span id="desktop-account-name" class="max-w-[140px] truncate font-mono text-[13px]">Not Connected</span>
                     <svg class="w-3 h-3 text-white/30 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>

@@ -25,5 +25,5 @@ export { channelModalsUI } from './ChannelModalsUI.js';
 export { init as initJoinChannelUI, getInstance as getJoinChannelUI } from './JoinChannelUI.js';
 export { inviteUI } from './InviteUI.js';
 export { channelViewUI } from './ChannelViewUI.js';
-export { avatarGenerator, generateAvatar, getAvatar, getAddressColor } from './AvatarGenerator.js';
+export { avatarGenerator, generateAvatar, getAvatar, getAvatarHtml, getAddressColor } from './AvatarGenerator.js';
 export { sanitizeMessageHtml, sanitizeText, sanitizeUrl, isSanitizerAvailable } from './sanitizer.js';

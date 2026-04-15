@@ -311,6 +311,13 @@ class App {
                         // Store ENS in plain localStorage for unlock modal display
                         localStorage.setItem(`pombo_ens_${address.toLowerCase()}`, ensName);
                     }
+                    // Resolve ENS avatar (needs ENS name first, so chain after name resolution)
+                    identityManager.resolveENSAvatar(address).then(avatarUrl => {
+                        if (avatarUrl) {
+                            // Re-render header avatars with ENS image
+                            headerUI.updateWalletInfo(address);
+                        }
+                    }).catch(() => {});
                 }).catch(() => {});
             } catch (idError) {
                 Logger.warn('Identity manager init failed (non-critical):', idError);
