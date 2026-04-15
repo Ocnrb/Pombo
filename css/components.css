@@ -109,7 +109,7 @@ body {
 }
 
 .message-bubble {
-    padding: 0.2rem 0.7rem;
+    padding: 0.35rem 0.7rem;
     position: relative;
     min-width: 0;
 }

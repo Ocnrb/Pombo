@@ -2176,10 +2176,6 @@ video {
   vertical-align: middle;
 }
 
-.align-text-bottom {
-  vertical-align: text-bottom;
-}
-
 .font-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
@@ -2323,6 +2319,10 @@ video {
 
 .text-amber-400\/60 {
   color: rgb(251 191 36 / 0.6);
+}
+
+.text-amber-400\/70 {
+  color: rgb(251 191 36 / 0.7);
 }
 
 .text-amber-400\/80 {

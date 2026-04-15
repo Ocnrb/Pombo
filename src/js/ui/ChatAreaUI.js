@@ -569,8 +569,8 @@ class ChatAreaUI {
             };
         }
 
-        // Valid signature - show badges based on trust level
-        if (trustLevel === 1) {
+        // Valid signature - ENS badge overrides all other badges
+        if (hasENS) {
             return {
                 html: `<span title="ENS verified">${ensBadgeSvg}</span>`,
                 textColor: 'text-green-400',
