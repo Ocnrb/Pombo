@@ -529,7 +529,7 @@ class ChatAreaUI {
         const hasENS = trustLevel === 1 || (trustLevel >= 1 && msg.verified?.ensName);
 
         // ENS verified badge — green checkmark inside organic circle
-        const ensBadgeSvg = `<svg class="inline-block align-text-bottom" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="#4ade80" stroke-width="2" fill="none"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`;
+        const ensBadgeSvg = `<svg class="inline-block" style="vertical-align: -1px" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="#4ade80" stroke-width="2" fill="none"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`;
 
         // Own messages
         if (isOwn) {
@@ -579,15 +579,17 @@ class ChatAreaUI {
             };
         }
 
+        const trustedStarSvg = `<svg class="inline-block" style="vertical-align: -1px" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2.5l2.9 5.8 6.4.9-4.6 4.5 1.1 6.4L12 17.3l-5.8 3.8 1.1-6.4-4.6-4.5 6.4-.9z" fill="#d4a544" opacity="0.85" stroke="#d4a544" stroke-width="0.5" stroke-linejoin="round"/></svg>`;
+
         const badges = {
             0: { icon: '✓', color: 'text-green-400', label: 'Valid signature' },
-            2: { icon: '★', color: 'text-yellow-400', label: 'Trusted contact' }
+            2: { icon: trustedStarSvg, color: 'text-amber-400/70', label: 'Trusted contact' }
         };
         
         const badge = badges[trustLevel] || badges[0];
 
         return {
-            html: `<span class="${badge.color}" title="${badge.label}">${badge.icon}</span>`,
+            html: trustLevel === 2 ? `<span title="${badge.label}">${badge.icon}</span>` : `<span class="${badge.color}" title="${badge.label}">${badge.icon}</span>`,
             textColor: badge.color,
             bgColor: '',
             border: ''
