@@ -18,17 +18,32 @@ import { CONFIG } from './config.js';
 // ENS cache duration
 const ENS_CACHE_DURATION = CONFIG.identity.ensCacheDurationMs;
 
+// Shorter cache for null results — retry sooner (ENS records may be propagating)
+const ENS_NULL_CACHE_DURATION = 15 * 60 * 1000; // 15 minutes
+
 // Message timestamp tolerance - prevents replay attacks
 const MESSAGE_TIMESTAMP_TOLERANCE = CONFIG.identity.messageTimestampToleranceMs;
 
-// Ethereum mainnet provider for ENS
-const ENS_PROVIDER_URL = 'https://eth.llamarpc.com';
+// Ethereum mainnet providers for ENS (fallback order)
+// Requirements: free, no API key, good CORS, supports eth_call for ENS
+const ENS_PROVIDER_URLS = [
+    'https://ethereum-rpc.publicnode.com',
+    'https://eth.meowrpc.com',
+    'https://eth.llamarpc.com',
+    'https://eth.drpc.org',
+    'https://cloudflare-eth.com'
+];
+
+// How long to skip a provider after it fails
+const PROVIDER_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 
 class IdentityManager {
     constructor() {
         this.ensCache = new Map();
         this.trustedContacts = new Map();
-        this.ensProvider = null;
+        this.ensProviders = [];
+        this.providerHealth = new Map(); // url -> { failedAt: timestamp }
+        this.pendingENSLookups = new Map(); // address -> Promise (in-flight dedup)
         this.username = null;
         this.MAX_ENS_CACHE_SIZE = CONFIG.identity.maxEnsCacheSize;
     }
@@ -41,13 +56,41 @@ class IdentityManager {
         this.loadENSCache();
         this.loadUsername();
         
-        // Initialize ENS provider (Ethereum mainnet)
-        try {
-            this.ensProvider = new ethers.JsonRpcProvider(ENS_PROVIDER_URL);
-            Logger.info('ENS provider initialized');
-        } catch (error) {
-            Logger.warn('Failed to initialize ENS provider:', error);
+        // Clear null cache entries on startup to give providers a fresh chance
+        // (previous session may have cached nulls due to broken providers)
+        let nullsCleared = 0;
+        for (const [key, value] of this.ensCache) {
+            if (!value.name) {
+                this.ensCache.delete(key);
+                nullsCleared++;
+            }
         }
+        if (nullsCleared > 0) {
+            Logger.info(`ENS: Cleared ${nullsCleared} stale null cache entries`);
+        }
+        if (this.ensCache.size > 0) {
+            Logger.info(`ENS: ${this.ensCache.size} cached names loaded`);
+        }
+
+        // Initialize ENS providers (Ethereum mainnet, multiple for fallback)
+        // staticNetwork skips eth_chainId probe; batchMaxCount:1 avoids batch rejections on free tiers
+        this.ensProviders = [];
+        this.providerHealth = new Map();
+        this.pendingENSLookups = new Map();
+        const mainnet = ethers.Network.from('mainnet');
+        for (const url of ENS_PROVIDER_URLS) {
+            try {
+                const provider = new ethers.JsonRpcProvider(url, mainnet, {
+                    staticNetwork: mainnet,
+                    batchMaxCount: 1
+                });
+                provider._ensUrl = url; // tag for health tracking
+                this.ensProviders.push(provider);
+            } catch (error) {
+                Logger.warn('Failed to create ENS provider:', url, error);
+            }
+        }
+        Logger.info(`ENS: ${this.ensProviders.length} providers initialized`);
     }
 
     // ==================== USERNAME ====================
@@ -245,9 +288,9 @@ class IdentityManager {
                 };
             }
 
-            // Get trust level and ENS name (cached, usually fast)
-            const trustLevel = await this.getTrustLevel(verification.recoveredAddress);
+            // Resolve ENS once and derive trust level from result (avoids double lookup)
             const ensName = await this.resolveENS(verification.recoveredAddress);
+            const trustLevel = this._getTrustLevelSync(verification.recoveredAddress, ensName);
 
             return {
                 valid: true,
@@ -275,37 +318,100 @@ class IdentityManager {
     async resolveENS(address) {
         const normalizedAddress = address.toLowerCase();
         
-        // Check cache first
+        // Check cache first (positive results: 24h, null results: 1h)
         const cached = this.ensCache.get(normalizedAddress);
-        if (cached && Date.now() - cached.timestamp < ENS_CACHE_DURATION) {
-            return cached.name;
+        if (cached) {
+            const cacheDuration = cached.name ? ENS_CACHE_DURATION : ENS_NULL_CACHE_DURATION;
+            if (Date.now() - cached.timestamp < cacheDuration) {
+                return cached.name;
+            }
         }
 
+        // In-flight deduplication: if a lookup for this address is already running, reuse it
+        if (this.pendingENSLookups.has(normalizedAddress)) {
+            return this.pendingENSLookups.get(normalizedAddress);
+        }
+
+        const lookupPromise = this._doResolveENS(address, normalizedAddress);
+        this.pendingENSLookups.set(normalizedAddress, lookupPromise);
+
+        try {
+            return await lookupPromise;
+        } finally {
+            this.pendingENSLookups.delete(normalizedAddress);
+        }
+    }
+
+    /**
+     * Internal ENS lookup with provider fallback and health tracking
+     * @private
+     */
+    async _doResolveENS(address, normalizedAddress) {
         // Prune expired entries periodically to prevent unbounded growth
         if (this.ensCache.size > this.MAX_ENS_CACHE_SIZE) {
             this.pruneExpiredENSEntries();
         }
 
-        // No provider available
-        if (!this.ensProvider) {
+        if (this.ensProviders.length === 0) {
             return null;
         }
 
-        try {
-            const name = await this.ensProvider.lookupAddress(address);
-            
-            // Cache result (even if null)
-            this.ensCache.set(normalizedAddress, {
-                name: name,
-                timestamp: Date.now()
-            });
-            await this.saveENSCache();
-            
-            return name;
-        } catch (error) {
-            Logger.warn('ENS lookup failed for', address, error);
-            return null;
+        const now = Date.now();
+        const nullProviders = []; // track which providers returned null
+
+        // Try ALL providers — some have broken ENS resolution (return null even for valid names)
+        // A positive result from ANY provider wins immediately
+        for (const provider of this.ensProviders) {
+            const url = provider._ensUrl;
+            const health = this.providerHealth.get(url);
+            if (health && now - health.failedAt < PROVIDER_COOLDOWN_MS) {
+                continue; // skip provider in cooldown
+            }
+
+            try {
+                const name = await provider.lookupAddress(address);
+                
+                // Provider worked — clear any cooldown
+                this.providerHealth.delete(url);
+
+                if (name) {
+                    // Got a positive result — cache and return immediately
+                    this.ensCache.set(normalizedAddress, {
+                        name: name,
+                        timestamp: Date.now()
+                    });
+
+                    Logger.info(`ENS: ${address.slice(0,8)}... → ${name} via ${url}${nullProviders.length ? ` (${nullProviders.length} other providers returned null)` : ''}`);
+
+                    // Persist cache — fire-and-forget, never kills a successful lookup
+                    this.saveENSCache().catch(e => {
+                        Logger.debug('ENS cache save failed (non-critical):', e.message);
+                    });
+                    
+                    return name;
+                }
+
+                // Provider returned null — don't trust it alone, try ALL others
+                nullProviders.push(url);
+                Logger.debug(`ENS: ${address.slice(0,8)}... → null from ${url}, trying next...`);
+            } catch (error) {
+                // Mark provider as failed for cooldown period
+                this.providerHealth.set(url, { failedAt: Date.now() });
+                Logger.debug('ENS lookup failed with', url, '— trying next...', error.message);
+            }
         }
+
+        // All providers returned null or failed — cache null with short duration
+        this.ensCache.set(normalizedAddress, {
+            name: null,
+            timestamp: Date.now()
+        });
+        if (nullProviders.length > 0) {
+            Logger.info(`ENS: ${address.slice(0,8)}... → (no Primary Name) — ${nullProviders.length} providers confirmed null`);
+        } else {
+            Logger.warn('ENS lookup failed for', address, '(all providers exhausted)');
+        }
+        return null;
     }
 
     /**
@@ -314,16 +420,29 @@ class IdentityManager {
      * @returns {Promise<string|null>} - Address or null
      */
     async resolveAddress(ensName) {
-        if (!this.ensProvider) {
+        if (this.ensProviders.length === 0) {
             return null;
         }
 
-        try {
-            return await this.ensProvider.resolveName(ensName);
-        } catch (error) {
-            Logger.warn('ENS resolve failed for', ensName, error);
-            return null;
+        const now = Date.now();
+        for (const provider of this.ensProviders) {
+            const url = provider._ensUrl;
+            const health = this.providerHealth.get(url);
+            if (health && now - health.failedAt < PROVIDER_COOLDOWN_MS) {
+                continue;
+            }
+
+            try {
+                const result = await provider.resolveName(ensName);
+                this.providerHealth.delete(url);
+                return result;
+            } catch (error) {
+                this.providerHealth.set(url, { failedAt: Date.now() });
+                Logger.debug('ENS resolve failed with', url, '— trying next...', error.message);
+            }
         }
+        Logger.warn('ENS resolve failed for', ensName, '(all providers exhausted)');
+        return null;
     }
 
     // ==================== TRUSTED CONTACTS ====================
@@ -385,6 +504,15 @@ class IdentityManager {
      * @returns {Promise<number>} - Trust level (0-2, -1 for invalid)
      */
     async getTrustLevel(address) {
+        const ensName = await this.resolveENS(address);
+        return this._getTrustLevelSync(address, ensName);
+    }
+
+    /**
+     * Synchronous trust level check (when ENS result is already known)
+     * @private
+     */
+    _getTrustLevelSync(address, ensName) {
         const normalizedAddress = address.toLowerCase();
         
         // Check trusted contacts
@@ -392,8 +520,6 @@ class IdentityManager {
             return 2; // Trusted contact
         }
         
-        // Check ENS
-        const ensName = await this.resolveENS(address);
         if (ensName) {
             return 1; // ENS verified
         }
@@ -447,7 +573,8 @@ class IdentityManager {
     pruneExpiredENSEntries() {
         const now = Date.now();
         for (const [addr, entry] of this.ensCache) {
-            if (now - entry.timestamp > ENS_CACHE_DURATION) {
+            const duration = entry.name ? ENS_CACHE_DURATION : ENS_NULL_CACHE_DURATION;
+            if (now - entry.timestamp > duration) {
                 this.ensCache.delete(addr);
             }
         }

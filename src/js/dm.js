@@ -530,6 +530,13 @@ class DMManager {
         // Tag message as received (not sent by us)
         data._dmReceived = true;
 
+        // Add verification info for display (ENS + trust level)
+        data.verified = {
+            valid: true,
+            trustLevel: await identityManager.getTrustLevel(senderAddress),
+            ensName: await identityManager.resolveENS(senderAddress)
+        };
+
         // Add to channel messages
         channel.messages.push(data);
         channel.messages.sort((a, b) => a.timestamp - b.timestamp);
@@ -715,7 +722,8 @@ class DMManager {
         // Add verification info for local display
         message.verified = {
             valid: true,
-            trustLevel: await identityManager.getTrustLevel(message.sender)
+            trustLevel: await identityManager.getTrustLevel(message.sender),
+            ensName: await identityManager.resolveENS(message.sender)
         };
 
         // Mark as pending
@@ -794,7 +802,7 @@ class DMManager {
      * Merges locally-stored sent messages/reactions with received from inbox.
      * @param {string} peerAddress - Peer's address
      */
-    loadDMTimeline(peerAddress) {
+    async loadDMTimeline(peerAddress) {
         const normalizedPeer = peerAddress.toLowerCase();
         const channelStreamId = this.conversations.get(normalizedPeer);
         if (!channelStreamId) return;
@@ -824,6 +832,29 @@ class DMManager {
 
         channel.messages = Array.from(unique.values())
             .sort((a, b) => a.timestamp - b.timestamp);
+
+        // Resolve ENS for all unique senders in the timeline
+        const senders = new Set(channel.messages.map(m => m.sender?.toLowerCase()).filter(Boolean));
+        const ensCache = {};
+        const trustCache = {};
+        await Promise.all([...senders].map(async (addr) => {
+            ensCache[addr] = await identityManager.resolveENS(addr);
+            trustCache[addr] = await identityManager.getTrustLevel(addr);
+        }));
+        for (const msg of channel.messages) {
+            if (!msg.verified) {
+                const addr = msg.sender?.toLowerCase();
+                msg.verified = {
+                    valid: true,
+                    trustLevel: trustCache[addr] ?? 0,
+                    ensName: ensCache[addr] || null
+                };
+            } else if (!msg.verified.ensName) {
+                const addr = msg.sender?.toLowerCase();
+                msg.verified.ensName = ensCache[addr] || null;
+                msg.verified.trustLevel = trustCache[addr] ?? msg.verified.trustLevel;
+            }
+        }
 
         // Merge locally-stored reactions (we don't receive our own from peer's inbox)
         const sentReactions = secureStorage.getSentReactions(channelStreamId);

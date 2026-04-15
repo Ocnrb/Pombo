@@ -1082,18 +1082,14 @@ class ChannelManager {
             Logger.debug('DM channel - loading merged timeline:', messageStreamId);
             // Gate renders while loading — inbox messages may still arrive via routeInboxMessage()
             channel.initialLoadInProgress = true;
-            dmManager.loadDMTimeline(channel.peerAddress);
+            await dmManager.loadDMTimeline(channel.peerAddress);
             channel.historyLoaded = true;
             channel.hasMoreHistory = false;
             // Subscribe to DM-2 ephemeral on-demand (typing/presence)
             dmManager.subscribeDMEphemeral();
-            // Clear gate after a microtask to let selectChannel()'s renderMessages() run first,
-            // then do a single catch-up render for any inbox messages that arrived during the gate
-            Promise.resolve().then(() => {
-                if (!channel.initialLoadInProgress) return;
-                channel.initialLoadInProgress = false;
-                this.notifyHandlers('initial_history_complete', { streamId: messageStreamId });
-            });
+            // Clear gate and notify UI to re-render with ENS data
+            channel.initialLoadInProgress = false;
+            this.notifyHandlers('initial_history_complete', { streamId: messageStreamId });
             return;
         }
 
@@ -1768,10 +1764,11 @@ class ChannelManager {
             // Create signed message using identity manager
             message = await identityManager.createSignedMessage(text, messageStreamId, replyTo);
 
-            // Add verification info for local display
+            // Add verification info for local display (includes ENS for badge + display name)
             message.verified = {
                 valid: true,
-                trustLevel: await identityManager.getTrustLevel(message.sender)
+                trustLevel: await identityManager.getTrustLevel(message.sender),
+                ensName: await identityManager.resolveENS(message.sender)
             };
             
             // Mark as pending until confirmed sent

@@ -138,7 +138,7 @@ class ContactsUI {
         
         if (contacts.length === 0) {
             this.elements.contactsList.innerHTML = `
-                <div class="text-center text-white/25 py-8 text-[13px]">No trusted contacts yet</div>
+                <div class="text-center text-white/25 py-8 text-[13px]">No contacts yet</div>
             `;
             return;
         }
@@ -256,6 +256,13 @@ class ContactsUI {
             sender: senderAddress
         };
 
+        // Show/hide "Add/Remove Contact" based on whether sender is already a contact
+        const addContactBtn = document.getElementById('context-menu-add-contact-btn');
+        const removeContactBtn = document.getElementById('context-menu-remove-contact-btn');
+        const isContact = !!this.deps.identityManager?.getTrustedContact?.(senderAddress);
+        if (addContactBtn) addContactBtn.classList.toggle('hidden', isContact);
+        if (removeContactBtn) removeContactBtn.classList.toggle('hidden', !isContact);
+
         // Show/hide "Block User" based on whether we're in a DM channel
         const blockBtn = document.getElementById('context-menu-block-btn');
         const blockDivider = document.getElementById('context-menu-block-divider');
@@ -359,6 +366,18 @@ class ContactsUI {
                 this.showAddModal(address);
                 break;
                 
+            case 'copy-text': {
+                const msgContent = target.element?.querySelector('.message-content');
+                const text = msgContent?.innerText || msgContent?.textContent || '';
+                try {
+                    await navigator.clipboard.writeText(text);
+                    showNotification('Text copied!', 'success');
+                } catch {
+                    showNotification('Failed to copy', 'error');
+                }
+                break;
+            }
+
             case 'copy-address':
                 try {
                     await navigator.clipboard.writeText(address);

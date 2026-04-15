@@ -283,7 +283,7 @@ class ChatAreaUI {
             }
             
             const badge = this.getVerificationBadge(msg, isOwn);
-            let displayName = msg.senderName || msg.verified?.ensName;
+            let displayName = msg.verified?.ensName || msg.senderName;
             if (!displayName) {
                 displayName = formatAddress(msg.sender);
             }
@@ -382,7 +382,7 @@ class ChatAreaUI {
         const msg = channel.messages.find(m => (m.id || m.timestamp) === msgId);
         if (!msg) return;
         
-        const displayName = msg.senderName || msg.verified?.ensName || formatAddress(msg.sender);
+        const displayName = msg.verified?.ensName || msg.senderName || formatAddress(msg.sender);
         
         this.replyingTo = {
             id: msgId,
@@ -525,8 +525,22 @@ class ChatAreaUI {
      * @returns {Object} - { html, textColor, bgColor, border }
      */
     getVerificationBadge(msg, isOwn = false) {
-        // Own messages - simple check, no special badge needed
+        const trustLevel = msg.verified?.trustLevel ?? 0;
+        const hasENS = trustLevel === 1 || (trustLevel >= 1 && msg.verified?.ensName);
+
+        // ENS verified badge — green checkmark inside organic circle
+        const ensBadgeSvg = `<svg class="inline-block align-text-bottom" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="#4ade80" stroke-width="2" fill="none"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`;
+
+        // Own messages
         if (isOwn) {
+            if (hasENS) {
+                return {
+                    html: `<span title="ENS verified">${ensBadgeSvg}</span>`,
+                    textColor: 'text-green-400',
+                    bgColor: '',
+                    border: ''
+                };
+            }
             return {
                 html: '<span class="text-green-400" title="Your message">✓</span>',
                 textColor: 'text-green-400',
@@ -556,11 +570,17 @@ class ChatAreaUI {
         }
 
         // Valid signature - show badges based on trust level
-        const trustLevel = msg.verified?.trustLevel ?? 0;
-        
+        if (trustLevel === 1) {
+            return {
+                html: `<span title="ENS verified">${ensBadgeSvg}</span>`,
+                textColor: 'text-green-400',
+                bgColor: '',
+                border: ''
+            };
+        }
+
         const badges = {
             0: { icon: '✓', color: 'text-green-400', label: 'Valid signature' },
-            1: { icon: '✓✓', color: 'text-green-400', label: 'ENS verified' },
             2: { icon: '★', color: 'text-yellow-400', label: 'Trusted contact' }
         };
         

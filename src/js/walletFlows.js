@@ -9,7 +9,7 @@ import { secureStorage } from './secureStorage.js';
 import { channelManager } from './channels.js';
 import { uiController } from './ui.js';
 import { Logger } from './logger.js';
-import { getAvatar } from './ui/AvatarGenerator.js';
+import { getAvatar, generateAvatar, setAvatarSeed, generateRandomAvatarSeed } from './ui/AvatarGenerator.js';
 import { escapeHtml, escapeAttr } from './ui/utils.js';
 import { 
     createModalFromTemplate, 
@@ -148,8 +148,11 @@ class WalletFlows {
             const singleWallet = wallets.length === 1;
             const wallet = singleWallet ? wallets[0] : null;
             
-            // Helper to get display name - prefer username from settings/sync, then wallet name
+            // Helper to get display name - prefer ENS, then username, then wallet name
             const getDisplayName = (w, index) => {
+                // Check for ENS name stored in plain localStorage
+                const ensName = localStorage.getItem(`pombo_ens_${w.address.toLowerCase()}`);
+                if (ensName) return ensName;
                 // Check for username stored in plain localStorage (set via settings or sync)
                 const username = localStorage.getItem(`pombo_username_${w.address.toLowerCase()}`);
                 if (username) return username;
@@ -157,6 +160,9 @@ class WalletFlows {
                 const isDefaultName = !w.name || w.name.startsWith('Wallet ') || w.name.startsWith('Imported ') || w.name.startsWith('Account ');
                 return isDefaultName ? `Account ${index + 1}` : w.name;
             };
+            
+            // Helper to check if wallet has ENS
+            const hasENS = (w) => !!localStorage.getItem(`pombo_ens_${w.address.toLowerCase()}`);
             
             const modal = document.createElement('div');
             modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 animate-fadeIn';
@@ -181,7 +187,7 @@ class WalletFlows {
                             <div class="flex items-center gap-3">
                                 <div class="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0">${getAvatar(wallet.address, 40, 0.2)}</div>
                                 <div class="flex-1 min-w-0">
-                                    <div class="text-[13px] font-medium text-white truncate">${escapeAttr(getDisplayName(wallet, 0))}</div>
+                                    <div class="text-[13px] font-medium text-white truncate flex items-center gap-1.5">${hasENS(wallet) ? '<svg class="flex-shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#4ade80" stroke-width="2" fill="none"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>' : ''}${escapeAttr(getDisplayName(wallet, 0))}</div>
                                     <div class="text-[11px] text-white/50 font-mono">${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}</div>
                                 </div>
                             </div>
@@ -196,7 +202,7 @@ class WalletFlows {
                                     <div class="flex items-center gap-3">
                                         <div class="w-9 h-9 rounded-lg overflow-hidden flex-shrink-0">${getAvatar(w.address, 36, 0.2)}</div>
                                         <div class="flex-1 min-w-0">
-                                            <div class="text-[13px] font-medium text-white truncate">${escapeAttr(getDisplayName(w, i))}</div>
+                                            <div class="text-[13px] font-medium text-white truncate flex items-center gap-1">${hasENS(w) ? '<svg class="flex-shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#4ade80" stroke-width="2" fill="none"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>' : ''}${escapeAttr(getDisplayName(w, i))}</div>
                                             <div class="text-[11px] text-white/50 font-mono">${w.address.slice(0, 6)}...${w.address.slice(-4)}</div>
                                         </div>
                                         <div class="w-4 h-4 rounded-full border border-white/[0.12] group-[.selected]:bg-white flex items-center justify-center">
@@ -702,36 +708,120 @@ class WalletFlows {
     }
 
     /**
-     * Show new account setup modal (Step 1: Password + Display Name, Step 2: Confirm)
+     * Show new account setup modal (Step 1: Choose Avatar, Step 2: Name + Key + Password, Step 3: Confirm Password)
      * @param {string} address - Account address
      * @param {string} privateKey - Private key
-     * @returns {Promise<{password: string, displayName: string}|null>}
+     * @returns {Promise<{password: string, displayName: string}|'cancelled'|null>}
      */
     async showNewAccountSetupModal(address, privateKey) {
         return new Promise((resolve) => {
+            // Generate initial set of avatar seeds
+            const AVATAR_COUNT = 6;
+            let avatarSeeds = [];
+            const regenerateSeeds = () => {
+                avatarSeeds = [];
+                for (let i = 0; i < AVATAR_COUNT; i++) {
+                    avatarSeeds.push(generateRandomAvatarSeed());
+                }
+            };
+            regenerateSeeds();
+
+            let selectedSeedIndex = 0;
+
             const modal = document.createElement('div');
-            modal.className = 'fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4';
+            modal.className = 'fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-3 sm:p-4';
             modal.innerHTML = `
-                <div class="bg-[#111113] rounded-2xl w-[420px] max-w-[95vw] shadow-2xl border border-white/[0.06] overflow-hidden">
-                    <!-- Step 1: Account Created -->
-                    <div id="step-1">
-                        <!-- Header -->
-                        <div class="flex items-center justify-between px-6 py-4 border-b border-white/5">
+                <div class="bg-[#111113] rounded-2xl shadow-2xl border border-white/[0.06] flex flex-col overflow-hidden" style="width:100%;max-width:420px;max-height:calc(100vh - 1.5rem)">
+                    <!-- Step 1: Choose Avatar -->
+                    <div id="step-avatar" class="flex flex-col min-h-0 h-full">
+                        <!-- Header (fixed) -->
+                        <div class="flex items-center border-b border-white/5 flex-shrink-0" style="padding:16px 20px;justify-content:space-between">
                             <div class="flex items-center gap-3">
-                                <div class="w-9 h-9 rounded-xl bg-[#1a2f1a] flex items-center justify-center">
+                                <div class="rounded-xl bg-[#1a2f1a] flex items-center justify-center flex-shrink-0" style="width:36px;height:36px">
                                     <svg class="w-4 h-4 text-[#4ade80]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4.5 12.75l6 6 9-13.5"/>
                                     </svg>
                                 </div>
+                                <h3 class="font-medium text-white/90" style="font-size:1.1rem">Choose Your Avatar</h3>
+                            </div>
+                            <button id="shuffle-avatars" class="text-white/40 hover:text-white/80 transition rounded-lg hover:bg-white/[0.06]" style="padding:8px" title="Show more avatars">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182M20.016 4.66v4.993"/>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <!-- Avatar Grid (scrollable) -->
+                        <div class="flex-1 overflow-y-auto min-h-0" style="padding:20px">
+                            <div id="avatar-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:0.625rem">
+                                ${avatarSeeds.map((seed, i) => `
+                                    <button class="avatar-option group relative flex items-center justify-center rounded-xl border-2 transition-all duration-150 ${i === 0 ? 'border-white/40 bg-white/[0.08]' : 'border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/[0.12]'}" data-index="${i}" style="aspect-ratio:1;padding:12px">
+                                        <div class="rounded-xl overflow-hidden" style="width:56px;height:56px">${generateAvatar(seed, 64, 0.2)}</div>
+                                        <div class="avatar-check absolute w-5 h-5 rounded-full bg-white flex items-center justify-center ${i === 0 ? '' : 'hidden'}" style="top:6px;right:6px">
+                                            <svg class="w-3 h-3 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4.5 12.75l6 6 9-13.5"/>
+                                            </svg>
+                                        </div>
+                                    </button>
+                                `).join('')}
+                            </div>
+                            
+                            <!-- Info text -->
+                            <p class="text-xs text-white/30 text-center" style="margin-top:14px">Your avatar is a unique visual identifier tied to your account.</p>
+                        </div>
+
+                        <!-- Footer (fixed) -->
+                        <div class="border-t border-white/5 flex gap-3 flex-shrink-0" style="padding:14px 20px">
+                            <button id="avatar-cancel-btn" class="flex-1 bg-white/5 hover:bg-white/10 text-white/70 text-sm font-medium py-3 rounded-xl transition border border-white/10">
+                                Cancel
+                            </button>
+                            <button id="avatar-continue-btn" class="flex-1 bg-[#F6851B] hover:bg-[#e5780f] text-white text-sm font-medium py-3 rounded-xl transition">
+                                Continue
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Step 2: Account Details + Password -->
+                    <div id="step-details" class="hidden flex-col min-h-0 h-full">
+                        <!-- Header (fixed) -->
+                        <div class="flex items-center border-b border-white/5 flex-shrink-0" style="padding:16px 20px">
+                            <div class="flex items-center gap-3">
+                                <div id="selected-avatar-preview" class="rounded-xl overflow-hidden flex-shrink-0" style="width:36px;height:36px"></div>
                                 <div>
-                                    <h3 class="text-lg font-medium text-white/90">Account Created</h3>
-                                    <p class="text-xs text-white/40">Set up your account</p>
+                                    <h3 class="font-medium text-white/90" style="font-size:1.1rem">Set Up Account</h3>
+                                    <p class="text-xs text-white/40">Secure your account with a password</p>
                                 </div>
                             </div>
                         </div>
                         
-                        <!-- Content -->
-                        <div class="p-6 space-y-4">
+                        <!-- Content (scrollable) -->
+                        <div class="flex-1 overflow-y-auto min-h-0 space-y-4" style="padding:20px">
+                            <!-- Display Name -->
+                            <div>
+                                <label class="block text-xs font-medium text-white/40 uppercase tracking-wider mb-2">Display Name</label>
+                                <input type="text" id="display-name-input" 
+                                    class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20"
+                                    placeholder="Your name (optional)" maxlength="32" autocomplete="off">
+                            </div>
+                            
+                            <!-- Password -->
+                            <div>
+                                <label class="block text-xs font-medium text-white/40 uppercase tracking-wider mb-2">Password</label>
+                                <div class="relative">
+                                    <input type="password" id="password-input" 
+                                        class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20" style="padding-right:2.75rem"
+                                        placeholder="Min 12 chars, upper, lower, number" autocomplete="new-password">
+                                    <button id="toggle-password" class="absolute top-1/2 -translate-y-1/2 text-white/40 hover:text-white/80 transition" style="right:12px">
+                                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/>
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                                <!-- Password strength indicators -->
+                                ${getPasswordStrengthHtml()}
+                            </div>
+
                             <!-- Address -->
                             <div>
                                 <label class="block text-xs font-medium text-white/40 uppercase tracking-wider mb-2">Address</label>
@@ -744,9 +834,9 @@ class WalletFlows {
                             <div>
                                 <label class="block text-xs font-medium text-white/40 uppercase tracking-wider mb-2">Private Key</label>
                                 <div class="bg-white/5 border border-white/10 rounded-xl px-4 py-3 relative">
-                                    <div id="pk-hidden" class="font-mono text-sm text-white/30 select-none">••••••••••••••••••••••••••••••••••••</div>
-                                    <div id="pk-revealed" class="font-mono text-sm text-white/60 break-all hidden">${escapeHtml(privateKey)}</div>
-                                    <button id="toggle-pk" class="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/80 transition">
+                                    <div id="pk-hidden" class="font-mono text-sm text-white/30 select-none" style="padding-right:2rem">••••••••••••••••••••••••••••••••••••</div>
+                                    <div id="pk-revealed" class="font-mono text-sm text-white/60 break-all hidden" style="padding-right:2rem">${escapeHtml(privateKey)}</div>
+                                    <button id="toggle-pk" class="absolute top-1/2 -translate-y-1/2 text-white/40 hover:text-white/80 transition" style="right:12px">
                                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/>
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
@@ -773,69 +863,43 @@ class WalletFlows {
                                     </div>
                                 </div>
                             </div>
-                            
-                            <!-- Display Name -->
-                            <div>
-                                <label class="block text-xs font-medium text-white/40 uppercase tracking-wider mb-2">Display Name</label>
-                                <input type="text" id="display-name-input" 
-                                    class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20"
-                                    placeholder="Your name (optional)" maxlength="32" autocomplete="off">
-                            </div>
-                            
-                            <!-- Password -->
-                            <div>
-                                <label class="block text-xs font-medium text-white/40 uppercase tracking-wider mb-2">Password</label>
-                                <div class="relative">
-                                    <input type="password" id="password-input" 
-                                        class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20 pr-11"
-                                        placeholder="Min 12 chars, upper, lower, number" autocomplete="new-password">
-                                    <button id="toggle-password" class="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/80 transition">
-                                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/>
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                                        </svg>
-                                    </button>
-                                </div>
-                                <!-- Password strength indicators -->
-                                ${getPasswordStrengthHtml()}
-                            </div>
                         </div>
                         
-                        <!-- Footer -->
-                        <div class="px-6 py-4 border-t border-white/5 flex gap-3">
-                            <button id="cancel-btn" class="flex-1 bg-white/5 hover:bg-white/10 text-white/70 text-sm font-medium py-3 rounded-xl transition border border-white/10">
-                                Cancel
+                        <!-- Footer (fixed) -->
+                        <div class="border-t border-white/5 flex gap-3 flex-shrink-0" style="padding:14px 20px">
+                            <button id="details-back-btn" class="flex-1 bg-white/5 hover:bg-white/10 text-white/70 text-sm font-medium py-3 rounded-xl transition border border-white/10">
+                                Back
                             </button>
-                            <button id="continue-btn" disabled class="flex-1 bg-white/10 text-white/30 text-sm font-medium py-3 rounded-xl transition cursor-not-allowed">
+                            <button id="details-continue-btn" disabled class="flex-1 bg-white/10 text-white/30 text-sm font-medium py-3 rounded-xl transition cursor-not-allowed">
                                 Continue
                             </button>
                         </div>
                     </div>
                     
-                    <!-- Step 2: Confirm Password -->
-                    <div id="step-2" class="hidden">
-                        <!-- Header -->
-                        <div class="flex items-center justify-between px-6 py-4 border-b border-white/5">
+                    <!-- Step 3: Confirm Password -->
+                    <div id="step-confirm" class="hidden flex-col min-h-0 h-full">
+                        <!-- Header (fixed) -->
+                        <div class="flex items-center border-b border-white/5 flex-shrink-0" style="padding:16px 20px">
                             <div>
-                                <h3 class="text-lg font-medium text-white/90">Confirm Password</h3>
+                                <h3 class="font-medium text-white/90" style="font-size:1.1rem">Confirm Password</h3>
                                 <p class="text-xs text-white/40 mt-0.5">Re-enter your password to confirm</p>
                             </div>
                         </div>
                         
                         <!-- Content wrapped in form for browser password save prompt -->
-                        <form id="confirm-password-form">
+                        <form id="confirm-password-form" class="flex flex-col flex-1 min-h-0">
                             <!-- Hidden username field for browser password manager (uses wallet address) -->
                             <input type="text" id="new-account-username" name="username" 
                                 class="hidden" 
                                 autocomplete="username" 
                                 value="${address.toLowerCase()}" 
                                 tabindex="-1" aria-hidden="true">
-                            <div class="p-6">
+                            <div class="flex-1 overflow-y-auto min-h-0" style="padding:20px">
                                 <div class="relative">
                                     <input type="password" id="confirm-password-input" name="password"
-                                        class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20 pr-11"
+                                        class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20" style="padding-right:2.75rem"
                                         placeholder="Re-enter password" autocomplete="new-password">
-                                    <button type="button" id="toggle-confirm-password" class="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/80 transition">
+                                    <button type="button" id="toggle-confirm-password" class="absolute top-1/2 -translate-y-1/2 text-white/40 hover:text-white/80 transition" style="right:12px">
                                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/>
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
@@ -845,13 +909,13 @@ class WalletFlows {
                                 <p id="password-error" class="hidden text-xs text-red-400 mt-2">Passwords don't match</p>
                             </div>
                             
-                            <!-- Footer -->
-                            <div class="px-6 py-4 border-t border-white/5 flex gap-3">
-                                <button type="button" id="back-btn" class="flex-1 bg-white/5 hover:bg-white/10 text-white/70 text-sm font-medium py-3 rounded-xl transition border border-white/10">
+                            <!-- Footer (fixed) -->
+                            <div class="border-t border-white/5 flex gap-3 flex-shrink-0" style="padding:14px 20px">
+                                <button type="button" id="confirm-back-btn" class="flex-1 bg-white/5 hover:bg-white/10 text-white/70 text-sm font-medium py-3 rounded-xl transition border border-white/10">
                                     Back
                                 </button>
-                                <button type="submit" id="confirm-btn" class="flex-1 bg-white hover:bg-white/90 text-black text-sm font-medium py-3 rounded-xl transition">
-                                    Continue
+                                <button type="submit" id="confirm-btn" class="flex-1 bg-[#F6851B] hover:bg-[#e5780f] text-white text-sm font-medium py-3 rounded-xl transition">
+                                    Create Account
                                 </button>
                             </div>
                         </form>
@@ -861,9 +925,16 @@ class WalletFlows {
 
             document.body.appendChild(modal);
 
-            // Elements - Step 1
-            const step1 = modal.querySelector('#step-1');
-            const step2 = modal.querySelector('#step-2');
+            // ===== Step 1 (Avatar) Elements =====
+            const stepAvatar = modal.querySelector('#step-avatar');
+            const avatarGrid = modal.querySelector('#avatar-grid');
+            const shuffleBtn = modal.querySelector('#shuffle-avatars');
+            const avatarCancelBtn = modal.querySelector('#avatar-cancel-btn');
+            const avatarContinueBtn = modal.querySelector('#avatar-continue-btn');
+
+            // ===== Step 2 (Details) Elements =====
+            const stepDetails = modal.querySelector('#step-details');
+            const selectedAvatarPreview = modal.querySelector('#selected-avatar-preview');
             const togglePkBtn = modal.querySelector('#toggle-pk');
             const pkHidden = modal.querySelector('#pk-hidden');
             const pkRevealed = modal.querySelector('#pk-revealed');
@@ -871,28 +942,87 @@ class WalletFlows {
             const displayNameInput = modal.querySelector('#display-name-input');
             const passwordInput = modal.querySelector('#password-input');
             const togglePasswordBtn = modal.querySelector('#toggle-password');
-            const cancelBtn = modal.querySelector('#cancel-btn');
-            const continueBtn = modal.querySelector('#continue-btn');
-            
-            // Elements - Step 2
+            const detailsBackBtn = modal.querySelector('#details-back-btn');
+            const detailsContinueBtn = modal.querySelector('#details-continue-btn');
+
+            // ===== Step 3 (Confirm) Elements =====
+            const stepConfirm = modal.querySelector('#step-confirm');
             const confirmPasswordInput = modal.querySelector('#confirm-password-input');
             const toggleConfirmPasswordBtn = modal.querySelector('#toggle-confirm-password');
-            const backBtn = modal.querySelector('#back-btn');
-            const confirmBtn = modal.querySelector('#confirm-btn');
+            const confirmBackBtn = modal.querySelector('#confirm-back-btn');
             const passwordError = modal.querySelector('#password-error');
 
+            // Helper to show/hide steps with correct flex display
+            const showStep = (step) => { step.classList.remove('hidden'); step.style.display = 'flex'; };
+            const hideStep = (step) => { step.classList.add('hidden'); step.style.display = ''; };
+
+            // ===== Avatar Grid Logic =====
+            const updateAvatarGrid = () => {
+                avatarGrid.innerHTML = avatarSeeds.map((seed, i) => `
+                    <button class="avatar-option group relative flex items-center justify-center rounded-xl border-2 transition-all duration-150 ${i === selectedSeedIndex ? 'border-white/40 bg-white/[0.08]' : 'border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/[0.12]'}" data-index="${i}" style="aspect-ratio:1;padding:12px">
+                        <div class="rounded-xl overflow-hidden" style="width:56px;height:56px">${generateAvatar(seed, 64, 0.2)}</div>
+                        <div class="avatar-check absolute w-5 h-5 rounded-full bg-white flex items-center justify-center ${i === selectedSeedIndex ? '' : 'hidden'}" style="top:6px;right:6px">
+                            <svg class="w-3 h-3 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4.5 12.75l6 6 9-13.5"/>
+                            </svg>
+                        </div>
+                    </button>
+                `).join('');
+                bindAvatarClicks();
+            };
+
+            const bindAvatarClicks = () => {
+                avatarGrid.querySelectorAll('.avatar-option').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        selectedSeedIndex = parseInt(btn.dataset.index);
+                        // Update visual selection
+                        avatarGrid.querySelectorAll('.avatar-option').forEach((b, i) => {
+                            const isSelected = i === selectedSeedIndex;
+                            b.className = `avatar-option group relative flex items-center justify-center rounded-xl border-2 transition-all duration-150 ${isSelected ? 'border-white/40 bg-white/[0.08]' : 'border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/[0.12]'}`;
+                            const check = b.querySelector('.avatar-check');
+                            if (check) check.classList.toggle('hidden', !isSelected);
+                        });
+                    });
+                });
+            };
+            bindAvatarClicks();
+
+            // Shuffle avatars
+            shuffleBtn.addEventListener('click', () => {
+                regenerateSeeds();
+                selectedSeedIndex = 0;
+                updateAvatarGrid();
+            });
+
+            // Cancel from avatar step
+            avatarCancelBtn.addEventListener('click', () => {
+                document.body.removeChild(modal);
+                resolve('cancelled');
+            });
+
+            // Continue from avatar step to details step
+            avatarContinueBtn.addEventListener('click', () => {
+                hideStep(stepAvatar);
+                showStep(stepDetails);
+                // Show selected avatar in header
+                selectedAvatarPreview.innerHTML = generateAvatar(avatarSeeds[selectedSeedIndex], 36, 0.2);
+                displayNameInput.focus();
+            });
+
+            // ===== Step 2 (Details) Logic =====
+            
             // Setup password strength validation with callback to update continue button
             setupPasswordStrengthValidation(passwordInput, modal, (isValid) => {
-                continueBtn.disabled = !isValid;
-                continueBtn.className = isValid 
-                    ? 'flex-1 bg-white hover:bg-white/90 text-black text-sm font-medium py-3 rounded-xl transition'
+                detailsContinueBtn.disabled = !isValid;
+                detailsContinueBtn.className = isValid 
+                    ? 'flex-1 bg-[#F6851B] hover:bg-[#e5780f] text-white text-sm font-medium py-3 rounded-xl transition'
                     : 'flex-1 bg-white/10 text-white/30 text-sm font-medium py-3 rounded-xl transition cursor-not-allowed';
             });
 
-            // Cancel button - return 'cancelled'
-            cancelBtn.addEventListener('click', () => {
-                document.body.removeChild(modal);
-                resolve('cancelled');
+            // Back to avatar step
+            detailsBackBtn.addEventListener('click', () => {
+                hideStep(stepDetails);
+                showStep(stepAvatar);
             });
 
             // Toggle private key visibility
@@ -929,21 +1059,23 @@ class WalletFlows {
             // Toggle password visibility
             setupPasswordToggle(togglePasswordBtn, passwordInput);
 
-            // Continue to step 2
-            continueBtn.addEventListener('click', () => {
-                if (continueBtn.disabled) return;
-                step1.classList.add('hidden');
-                step2.classList.remove('hidden');
+            // Continue to step 3
+            detailsContinueBtn.addEventListener('click', () => {
+                if (detailsContinueBtn.disabled) return;
+                hideStep(stepDetails);
+                showStep(stepConfirm);
                 confirmPasswordInput.focus();
             });
+
+            // ===== Step 3 (Confirm) Logic =====
 
             // Toggle confirm password visibility
             setupPasswordToggle(toggleConfirmPasswordBtn, confirmPasswordInput);
 
-            // Back to step 1
-            backBtn.addEventListener('click', () => {
-                step2.classList.add('hidden');
-                step1.classList.remove('hidden');
+            // Back to step 2
+            confirmBackBtn.addEventListener('click', () => {
+                hideStep(stepConfirm);
+                showStep(stepDetails);
                 confirmPasswordInput.value = '';
                 passwordError.classList.add('hidden');
             });
@@ -957,6 +1089,10 @@ class WalletFlows {
                     confirmPasswordInput.classList.add('border-red-400');
                     return;
                 }
+
+                // Save avatar seed before resolving
+                const chosenSeed = avatarSeeds[selectedSeedIndex];
+                setAvatarSeed(address, chosenSeed);
 
                 const result = {
                     password: passwordInput.value,
@@ -987,7 +1123,7 @@ class WalletFlows {
             });
 
             passwordInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter' && !continueBtn.disabled) continueBtn.click();
+                if (e.key === 'Enter' && !detailsContinueBtn.disabled) detailsContinueBtn.click();
             });
         });
     }
@@ -1116,7 +1252,7 @@ class WalletFlows {
                                 <button type="button" id="back-btn" class="flex-1 bg-white/5 hover:bg-white/10 text-white/70 text-sm font-medium py-3 rounded-xl transition border border-white/10">
                                     Back
                                 </button>
-                                <button type="submit" id="confirm-btn" class="flex-1 bg-white hover:bg-white/90 text-black text-sm font-medium py-3 rounded-xl transition">
+                                <button type="submit" id="confirm-btn" class="flex-1 bg-[#F6851B] hover:bg-[#e5780f] text-white text-sm font-medium py-3 rounded-xl transition">
                                     Save
                                 </button>
                             </div>
@@ -1172,7 +1308,7 @@ class WalletFlows {
                 const allValid = isPkValid && passwordValid;
                 saveBtn.disabled = !allValid;
                 saveBtn.className = allValid 
-                    ? 'flex-1 bg-white hover:bg-white/90 text-black text-sm font-medium py-3 rounded-xl transition'
+                    ? 'flex-1 bg-[#F6851B] hover:bg-[#e5780f] text-white text-sm font-medium py-3 rounded-xl transition'
                     : 'flex-1 bg-white/10 text-white/30 text-sm font-medium py-3 rounded-xl transition cursor-not-allowed';
             };
 

@@ -564,7 +564,7 @@ export function generateAvatar(address, size = 32, borderRadius = 0.2) {
         address = '0x0000000000000000000000000000000000000000';
     }
     
-    const normalizedAddress = address.toLowerCase();
+    const normalizedAddress = getEffectiveAddress(address);
     const seed = hashString(normalizedAddress);
     const rng = createRng(seed);
     
@@ -637,6 +637,70 @@ export function generateAvatarDataUri(address, size = 32, borderRadius = 0.2) {
 }
 
 // ==========================================
+// Avatar Seed Override System
+// ==========================================
+
+const AVATAR_SEEDS_KEY = 'pombo_avatar_seeds';
+
+/**
+ * Get the effective seed address for avatar generation.
+ * If a custom avatar seed is stored for this address, use it instead.
+ */
+function getEffectiveAddress(address) {
+    if (!address) return address;
+    const normalized = address.toLowerCase();
+    try {
+        const seeds = JSON.parse(localStorage.getItem(AVATAR_SEEDS_KEY) || '{}');
+        return seeds[normalized] || normalized;
+    } catch {
+        return normalized;
+    }
+}
+
+/**
+ * Set a custom avatar seed for an address
+ * @param {string} address - The actual wallet address
+ * @param {string} seed - The seed string to use for avatar generation
+ */
+export function setAvatarSeed(address, seed) {
+    if (!address) return;
+    const normalized = address.toLowerCase();
+    try {
+        const seeds = JSON.parse(localStorage.getItem(AVATAR_SEEDS_KEY) || '{}');
+        seeds[normalized] = seed;
+        localStorage.setItem(AVATAR_SEEDS_KEY, JSON.stringify(seeds));
+        // Clear cache so new avatar is generated
+        clearAvatarCache();
+    } catch { /* ignore */ }
+}
+
+/**
+ * Get the custom avatar seed for an address (if any)
+ * @param {string} address - The wallet address
+ * @returns {string|null} The custom seed or null
+ */
+export function getAvatarSeed(address) {
+    if (!address) return null;
+    const normalized = address.toLowerCase();
+    try {
+        const seeds = JSON.parse(localStorage.getItem(AVATAR_SEEDS_KEY) || '{}');
+        return seeds[normalized] || null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Generate a random avatar seed string
+ * @returns {string} A random hex-like string usable as avatar seed
+ */
+export function generateRandomAvatarSeed() {
+    const array = new Uint8Array(20);
+    crypto.getRandomValues(array);
+    return '0x' + Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ==========================================
 // Cache System
 // ==========================================
 
@@ -664,7 +728,8 @@ function makeClipIdUnique(svg) {
  * Each call returns SVG with unique clipPath ID to prevent DOM conflicts
  */
 export function getAvatar(address, size = 32, borderRadius = 0.2) {
-    const key = `${address?.toLowerCase()}-${size}-${borderRadius}`;
+    const effectiveAddr = getEffectiveAddress(address);
+    const key = `${effectiveAddr}-${size}-${borderRadius}`;
     
     let svg;
     if (avatarCache.has(key)) {
@@ -700,7 +765,7 @@ export function getAddressColor(address) {
         return '#6C5DD3'; // Default purple
     }
     
-    const normalizedAddress = address.toLowerCase();
+    const normalizedAddress = getEffectiveAddress(address);
     const seed = hashString(normalizedAddress);
     const rng = createRng(seed);
     
@@ -731,4 +796,7 @@ export const avatarGenerator = {
     get: getAvatar,
     clearCache: clearAvatarCache,
     getColor: getAddressColor,
+    setAvatarSeed,
+    getAvatarSeed,
+    generateRandomAvatarSeed,
 };

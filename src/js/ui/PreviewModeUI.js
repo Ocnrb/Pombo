@@ -480,6 +480,11 @@ class PreviewModeUI {
         // Mark as no longer loading (we got at least one message)
         this.previewChannel.isLoading = false;
 
+        // Track oldest timestamp for pagination (scroll-to-top load-more)
+        if (!this.previewChannel.oldestTimestamp || message.timestamp < this.previewChannel.oldestTimestamp) {
+            this.previewChannel.oldestTimestamp = message.timestamp;
+        }
+
         // Add message to preview channel
         this.previewChannel.messages.push(message);
 
@@ -583,8 +588,13 @@ class PreviewModeUI {
         const channel = this.previewChannel;
         const streamId = channel.streamId;
 
-        // Use oldest message timestamp, or Date.now() if only reactions loaded so far
-        const beforeTimestamp = channel.oldestTimestamp || Date.now();
+        // Use oldest message timestamp, or compute from existing messages, or Date.now()
+        let beforeTimestamp = channel.oldestTimestamp;
+        if (!beforeTimestamp && channel.messages.length > 0) {
+            beforeTimestamp = Math.min(...channel.messages.map(m => m.timestamp || Infinity));
+            channel.oldestTimestamp = beforeTimestamp;
+        }
+        if (!beforeTimestamp) beforeTimestamp = Date.now();
 
         channel.loadingHistory = true;
 

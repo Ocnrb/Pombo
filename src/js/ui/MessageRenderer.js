@@ -394,7 +394,7 @@ class MessageRenderer {
         const senderRowHtml = showSender ? `
                     <div class="message-sender-row flex items-center gap-1 mb-1">
                         ${badge.html}
-                        <span class="text-xs font-medium" style="color: ${senderColor}">${escapeHtml(sanitizeText(truncatedName))}</span>
+                        <span class="text-[13px] font-medium" style="color: ${senderColor}">${escapeHtml(sanitizeText(truncatedName))}</span>
                     </div>` : '';
         
         // Avatar visible only on last/single messages in group, but placeholder for alignment

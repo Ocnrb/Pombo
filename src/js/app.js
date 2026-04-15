@@ -296,7 +296,22 @@ class App {
                 await identityManager.init();
                 Logger.info('Identity manager initialized');
                 const username = identityManager.getUsername();
-                if (username) headerUI.updateDisplayName(username);
+                if (username) {
+                    headerUI.updateDisplayName(username);
+                }
+                // Always resolve own ENS — overrides local username if available
+                identityManager.resolveENS(address).then(ensName => {
+                    if (ensName) {
+                        headerUI.updateDisplayName(ensName);
+                        // ENS takes priority — clear local username so sync propagates deletion
+                        if (identityManager.getUsername()) {
+                            identityManager.setUsername(null);
+                            Logger.info('ENS active — cleared local username');
+                        }
+                        // Store ENS in plain localStorage for unlock modal display
+                        localStorage.setItem(`pombo_ens_${address.toLowerCase()}`, ensName);
+                    }
+                }).catch(() => {});
             } catch (idError) {
                 Logger.warn('Identity manager init failed (non-critical):', idError);
             }
@@ -315,9 +330,22 @@ class App {
                         Logger.info('Sync: Initial pull complete');
                         uiController.renderChannelList();
 
-                        // Update header with synced username
+                        // Update header with synced username or ENS
                         const syncedUsername = identityManager.getUsername();
-                        if (syncedUsername) headerUI.updateDisplayName(syncedUsername);
+                        if (syncedUsername) {
+                            headerUI.updateDisplayName(syncedUsername);
+                        }
+                        // Always resolve own ENS after sync — overrides local username
+                        identityManager.resolveENS(address).then(ensName => {
+                            if (ensName) {
+                                headerUI.updateDisplayName(ensName);
+                                if (identityManager.getUsername()) {
+                                    identityManager.setUsername(null);
+                                    Logger.info('ENS active — cleared local username (post-sync)');
+                                }
+                                localStorage.setItem(`pombo_ens_${address.toLowerCase()}`, ensName);
+                            }
+                        }).catch(() => {});
                         // Pull image blobs (partition 2) after state sync
                         try {
                             await syncManager.pullImageBlobs();

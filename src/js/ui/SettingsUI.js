@@ -775,6 +775,8 @@ class SettingsUI {
         // Username change
         if (this.elements.settingsUsername) {
             this.elements.settingsUsername.addEventListener('change', async (e) => {
+                // Block local name changes when ENS is active
+                if (e.target.disabled) return;
                 const newName = e.target.value;
                 try {
                     await this.identityManager.setUsername(newName);
@@ -858,14 +860,40 @@ class SettingsUI {
      */
     async show() {
         if (this.elements.settingsModal) {
-            // Update username field
-            const username = this.identityManager.getUsername();
+            // Update username field — if user has ENS, show it and disable local name editing
+            const address = this.authManager.getAddress();
+            const ensName = address ? await this.identityManager.resolveENS(address) : null;
             if (this.elements.settingsUsername) {
-                this.elements.settingsUsername.value = username || '';
+                if (ensName) {
+                    this.elements.settingsUsername.value = ensName;
+                    this.elements.settingsUsername.disabled = true;
+                    this.elements.settingsUsername.title = 'Name is set via ENS (Primary Name)';
+                    // Show ENS badge hint below input
+                    let ensHint = document.getElementById('ens-name-hint');
+                    if (!ensHint) {
+                        ensHint = document.createElement('p');
+                        ensHint.id = 'ens-name-hint';
+                        ensHint.className = 'text-xs text-blue-400 mt-2 flex items-center gap-1';
+                        this.elements.settingsUsername.parentNode.appendChild(ensHint);
+                    }
+                    ensHint.innerHTML = '<svg class="inline-block" width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#4ade80" stroke-width="2" fill="none"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg> ENS Verified';
+                    ensHint.classList.remove('hidden');
+                    // Hide the default hint
+                    const defaultHint = this.elements.settingsUsername.parentNode.querySelector('p.text-white\\/30');
+                    if (defaultHint && defaultHint !== ensHint) defaultHint.classList.add('hidden');
+                } else {
+                    const username = this.identityManager.getUsername();
+                    this.elements.settingsUsername.value = username || '';
+                    this.elements.settingsUsername.disabled = false;
+                    this.elements.settingsUsername.title = '';
+                    const ensHint = document.getElementById('ens-name-hint');
+                    if (ensHint) ensHint.classList.add('hidden');
+                    const defaultHint = this.elements.settingsUsername.parentNode.querySelector('p.text-white\\/30:not(#ens-name-hint)');
+                    if (defaultHint) defaultHint.classList.remove('hidden');
+                }
             }
 
             // Update address field
-            const address = this.authManager.getAddress();
             if (this.elements.settingsAddress) {
                 this.elements.settingsAddress.value = address || '';
             }

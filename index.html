@@ -2,7 +2,7 @@
 <html lang="pt">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-vvt4KWwuNr51XfE5m+hzeNEGhiOfZzG97ccfqGsPwvE='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; connect-src 'self' wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://polygon-bor-rpc.publicnode.com https://gasstation.polygon.technology https://*.llamarpc.com https://1rpc.io https://*.meowrpc.com https://*.gateway.tenderly.co https://*.thegraph.com https://*.ens.domains https://euc.li https://*.logstore.usher.so https://fcm.googleapis.com https://*.push.services.mozilla.com https://updates.push.services.mozilla.com; base-uri 'self'; form-action 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-vvt4KWwuNr51XfE5m+hzeNEGhiOfZzG97ccfqGsPwvE='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; connect-src 'self' wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://eth.drpc.org https://polygon-bor-rpc.publicnode.com https://ethereum-rpc.publicnode.com https://cloudflare-eth.com https://gasstation.polygon.technology https://*.llamarpc.com https://1rpc.io https://*.meowrpc.com https://*.gateway.tenderly.co https://*.thegraph.com https://*.ens.domains https://euc.li https://*.logstore.usher.so https://fcm.googleapis.com https://*.push.services.mozilla.com https://updates.push.services.mozilla.com; base-uri 'self'; form-action 'self'">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Pombo - P2P Decentralized Chat</title>
 
@@ -2201,14 +2201,14 @@
         </div>
     </div>
 
-    <!-- Modal: Trusted Contacts -->
+    <!-- Modal: Contacts -->
     <div id="contacts-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50">
         <div class="bg-[#111113] rounded-2xl p-5 w-[380px] max-w-full mx-4 max-h-[80vh] flex flex-col border border-white/[0.06]">
             <div class="flex items-center gap-2 mb-4">
                 <svg class="w-4 h-4 text-white/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/>
                 </svg>
-                <h3 class="text-base font-medium text-white">Trusted Contacts</h3>
+                <h3 class="text-base font-medium text-white">Contacts</h3>
             </div>
             
             <!-- Add new contact -->
@@ -2234,7 +2234,7 @@
 
             <!-- Contacts list -->
             <div id="contacts-list" class="flex-1 overflow-y-auto space-y-2 min-h-[150px]">
-                <div class="text-center text-white/25 py-8 text-sm">No trusted contacts yet</div>
+                <div class="text-center text-white/25 py-8 text-sm">No contacts yet</div>
             </div>
 
             <button id="close-contacts-btn" class="mt-4 w-full bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] text-white/50 text-sm font-medium px-4 py-2.5 rounded-xl transition">
@@ -2299,16 +2299,20 @@
 
     <!-- Context Menu (for messages) -->
     <div id="message-context-menu" class="hidden fixed bg-[#16161b] border border-white/10 rounded-xl shadow-xl py-1 z-50 min-w-[180px]">
+        <button class="context-menu-item w-full text-left px-4 py-2 hover:bg-white/[0.08] text-sm flex items-center gap-2" data-action="copy-text">
+            <svg class="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+            Copy Text
+        </button>
         <button class="context-menu-item w-full text-left px-4 py-2 hover:bg-white/[0.08] text-sm flex items-center gap-2" data-action="copy-address">
             <svg class="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"/></svg>
             Copy Address
         </button>
         <hr class="border-white/[0.06] my-1">
-        <button class="context-menu-item w-full text-left px-4 py-2 hover:bg-white/[0.08] text-sm flex items-center gap-2" data-action="add-contact">
+        <button id="context-menu-add-contact-btn" class="context-menu-item w-full text-left px-4 py-2 hover:bg-white/[0.08] text-sm flex items-center gap-2" data-action="add-contact">
             <svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM4 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 0110.374 21c-2.331 0-4.512-.645-6.374-1.766z"/></svg>
-            Add to Trusted Contacts
+            Add to Contacts
         </button>
-        <button class="context-menu-item w-full text-left px-4 py-2 hover:bg-white/[0.08] text-sm text-red-400 flex items-center gap-2" data-action="remove-contact">
+        <button id="context-menu-remove-contact-btn" class="context-menu-item w-full text-left px-4 py-2 hover:bg-white/[0.08] text-sm text-red-400 flex items-center gap-2" data-action="remove-contact">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M22 10.5h-6m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM4 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 0110.374 21c-2.331 0-4.512-.645-6.374-1.766z"/></svg>
             Remove from Contacts
         </button>
