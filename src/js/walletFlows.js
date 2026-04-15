@@ -167,7 +167,7 @@ class WalletFlows {
             const modal = document.createElement('div');
             modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 animate-fadeIn';
             modal.innerHTML = `
-                <div class="bg-[#111113] rounded-2xl w-[360px] overflow-hidden shadow-2xl border border-white/[0.06] animate-slideUp">
+                <div class="bg-[#111113] rounded-2xl w-[360px] max-w-[calc(100%-2rem)] overflow-hidden shadow-2xl border border-white/[0.06] animate-slideUp">
                     <!-- Header -->
                     <div class="px-5 pt-5 pb-3">
                         <div class="flex items-center justify-between">
@@ -731,6 +731,7 @@ class WalletFlows {
             const modal = document.createElement('div');
             modal.className = 'fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-3 sm:p-4';
             modal.innerHTML = `
+                <style>#avatar-grid .avatar-option svg{width:100%;height:100%;display:block}</style>
                 <div class="bg-[#111113] rounded-2xl shadow-2xl border border-white/[0.06] flex flex-col overflow-hidden" style="width:100%;max-width:420px;max-height:calc(100vh - 1.5rem)">
                     <!-- Step 1: Choose Avatar -->
                     <div id="step-avatar" class="flex flex-col min-h-0 h-full">
@@ -755,8 +756,8 @@ class WalletFlows {
                         <div class="flex-1 overflow-y-auto min-h-0" style="padding:20px">
                             <div id="avatar-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:0.625rem">
                                 ${avatarSeeds.map((seed, i) => `
-                                    <button class="avatar-option group relative flex items-center justify-center rounded-xl border-2 transition-all duration-150 ${i === 0 ? 'border-white/40 bg-white/[0.08]' : 'border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/[0.12]'}" data-index="${i}" style="aspect-ratio:1;padding:12px">
-                                        <div class="rounded-xl overflow-hidden" style="width:56px;height:56px">${generateAvatar(seed, 64, 0.2)}</div>
+                                    <button class="avatar-option group relative rounded-xl border-2 transition-all duration-150 ${i === 0 ? 'border-white/40 bg-white/[0.08]' : 'border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/[0.12]'}" data-index="${i}" style="aspect-ratio:1;padding:10px">
+                                        <div class="rounded-xl overflow-hidden" style="width:100%;height:100%">${generateAvatar(seed, 64, 0.2)}</div>
                                         <div class="avatar-check absolute w-5 h-5 rounded-full bg-white flex items-center justify-center ${i === 0 ? '' : 'hidden'}" style="top:6px;right:6px">
                                             <svg class="w-3 h-3 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4.5 12.75l6 6 9-13.5"/>
@@ -767,7 +768,7 @@ class WalletFlows {
                             </div>
                             
                             <!-- Info text -->
-                            <p class="text-xs text-white/30 text-center" style="margin-top:14px">Your avatar is a unique visual identifier tied to your account.</p>
+                            <p class="text-xs text-white/50 text-center" style="margin-top:14px">Your avatar is a unique visual identifier tied to your account.</p>
                         </div>
 
                         <!-- Footer (fixed) -->
@@ -959,8 +960,8 @@ class WalletFlows {
             // ===== Avatar Grid Logic =====
             const updateAvatarGrid = () => {
                 avatarGrid.innerHTML = avatarSeeds.map((seed, i) => `
-                    <button class="avatar-option group relative flex items-center justify-center rounded-xl border-2 transition-all duration-150 ${i === selectedSeedIndex ? 'border-white/40 bg-white/[0.08]' : 'border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/[0.12]'}" data-index="${i}" style="aspect-ratio:1;padding:12px">
-                        <div class="rounded-xl overflow-hidden" style="width:56px;height:56px">${generateAvatar(seed, 64, 0.2)}</div>
+                    <button class="avatar-option group relative rounded-xl border-2 transition-all duration-150 ${i === selectedSeedIndex ? 'border-white/40 bg-white/[0.08]' : 'border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/[0.12]'}" data-index="${i}" style="aspect-ratio:1;padding:10px">
+                        <div class="rounded-xl overflow-hidden" style="width:100%;height:100%">${generateAvatar(seed, 64, 0.2)}</div>
                         <div class="avatar-check absolute w-5 h-5 rounded-full bg-white flex items-center justify-center ${i === selectedSeedIndex ? '' : 'hidden'}" style="top:6px;right:6px">
                             <svg class="w-3 h-3 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4.5 12.75l6 6 9-13.5"/>
@@ -1529,17 +1530,23 @@ class WalletFlows {
      * Show account selector for multiple saved accounts
      */
     async showWalletSelector(wallets) {
-        // Helper to get display name - use stored name or fallback to "Account N"
+        // Helper to get display name - check ENS, username, then stored name
         const getDisplayName = (w, index) => {
+            const ensName = localStorage.getItem(`pombo_ens_${w.address.toLowerCase()}`);
+            if (ensName) return ensName;
+            const username = localStorage.getItem(`pombo_username_${w.address.toLowerCase()}`);
+            if (username) return username;
             const isDefaultName = !w.name || w.name.startsWith('Wallet ') || w.name.startsWith('Imported ') || w.name.startsWith('Account ');
             return isDefaultName ? `Account ${index + 1}` : w.name;
         };
+
+        const hasENS = (w) => !!localStorage.getItem(`pombo_ens_${w.address.toLowerCase()}`);
         
         return new Promise((resolve) => {
             const modal = document.createElement('div');
             modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 animate-fadeIn';
             modal.innerHTML = `
-                <div class="bg-[#111113] rounded-2xl w-[360px] overflow-hidden shadow-2xl border border-white/[0.06] animate-slideUp">
+                <div class="bg-[#111113] rounded-2xl w-[360px] max-w-[calc(100%-2rem)] overflow-hidden shadow-2xl border border-white/[0.06] animate-slideUp">
                     <!-- Header -->
                     <div class="px-5 pt-5 pb-3">
                         <div class="flex items-center justify-between">
@@ -1560,7 +1567,7 @@ class WalletFlows {
                                     <div class="flex items-center gap-3">
                                         <div class="w-9 h-9 rounded-lg overflow-hidden flex-shrink-0">${getAvatar(w.address, 36, 0.2)}</div>
                                         <div class="flex-1 min-w-0">
-                                            <div class="text-[13px] font-medium text-white truncate">${escapeAttr(getDisplayName(w, i))}</div>
+                                            <div class="text-[13px] font-medium text-white truncate flex items-center gap-1.5">${hasENS(w) ? '<svg class="flex-shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="#4ade80" stroke-width="2" fill="none"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>' : ''}${escapeAttr(getDisplayName(w, i))}</div>
                                             <div class="text-[11px] text-white/50 font-mono">${w.address.slice(0, 6)}...${w.address.slice(-4)}</div>
                                         </div>
                                     </div>

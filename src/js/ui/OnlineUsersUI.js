@@ -6,10 +6,14 @@
 import { escapeHtml, escapeAttr, formatAddress } from './utils.js';
 import { getAvatar } from './AvatarGenerator.js';
 import { sanitizeText } from './sanitizer.js';
+import { identityManager } from '../identity.js';
+
+const ENS_BADGE_SVG = `<svg class="inline-block" style="vertical-align: -1px" width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="#4ade80" stroke-width="2" fill="none"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`;
 
 class OnlineUsersUI {
     constructor() {
         this.deps = {};
+        this.ensCache = new Map();
     }
 
     /**
@@ -26,7 +30,7 @@ class OnlineUsersUI {
      * @param {HTMLElement} listEl - Element containing user list
      * @param {Array} users - Array of online users
      */
-    updateOnlineUsers(countEl, listEl, users) {
+    async updateOnlineUsers(countEl, listEl, users) {
         // Update count
         if (countEl) {
             countEl.textContent = users.length;
@@ -38,22 +42,40 @@ class OnlineUsersUI {
                 listEl.innerHTML = '<div class="text-white/30 text-sm text-center">No one online</div>';
             } else {
                 const myAddress = this.deps.getCurrentAddress?.()?.toLowerCase();
+
+                // Resolve ENS for all unique addresses in parallel
+                const addresses = users.map(u => u.address || u.id).filter(Boolean);
+                const uniqueAddresses = [...new Set(addresses.map(a => a.toLowerCase()))];
+                const ensResults = await Promise.all(
+                    uniqueAddresses.map(addr => identityManager.resolveENS(addr).catch(() => null))
+                );
+                const ensMap = new Map();
+                uniqueAddresses.forEach((addr, i) => {
+                    if (ensResults[i]) ensMap.set(addr, ensResults[i]);
+                });
                 
                 listEl.innerHTML = users.map(user => {
                     const address = user.address || user.id;
                     const isMe = address?.toLowerCase() === myAddress;
                     const nickname = user.nickname;
                     const shortAddress = formatAddress(address);
+                    const ensName = ensMap.get(address?.toLowerCase());
                     
-                    // Display: nickname or address as main name
-                    // Defense-in-depth: sanitize + escape user-provided nickname
-                    const displayName = nickname 
-                        ? escapeHtml(sanitizeText(nickname)) 
-                        : escapeHtml(shortAddress);
+                    // Display priority: ENS name > nickname > address
+                    let displayName;
+                    let ensBadge = '';
+                    if (ensName) {
+                        displayName = escapeHtml(sanitizeText(ensName));
+                        ensBadge = `<span title="ENS verified">${ENS_BADGE_SVG}</span>`;
+                    } else if (nickname) {
+                        displayName = escapeHtml(sanitizeText(nickname));
+                    } else {
+                        displayName = escapeHtml(shortAddress);
+                    }
                     
-                    // Subtitle: address if has nickname, or "(you)" if it's me
+                    // Subtitle: address if has ENS/nickname, or "(you)" if it's me
                     let subtitle = '';
-                    if (nickname) {
+                    if (ensName || nickname) {
                         subtitle = isMe ? `${escapeHtml(shortAddress)} (you)` : escapeHtml(shortAddress);
                     } else if (isMe) {
                         subtitle = '(you)';
@@ -66,7 +88,7 @@ class OnlineUsersUI {
                             <div class="user-item cursor-pointer hover:bg-white/[0.06] rounded-lg px-2 py-1.5 -mx-2">
                                 <div class="user-avatar-small flex-shrink-0" style="width:28px;height:28px;border-radius:6px;overflow:hidden;">${avatarSvg}</div>
                                 <div class="flex flex-col min-w-0 flex-1">
-                                    <span class="text-white/70 truncate text-sm ${isMe ? 'font-semibold' : ''}">${displayName}</span>
+                                    <span class="text-white/70 truncate text-sm ${isMe ? 'font-semibold' : ''}">${ensBadge} ${displayName}</span>
                                     ${subtitle ? `<span class="text-white/40 text-xs truncate">${subtitle}</span>` : ''}
                                 </div>
                                 <button class="user-menu-btn ml-auto text-white/30 hover:text-white/60 p-1" title="Options">
