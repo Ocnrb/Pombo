@@ -392,7 +392,7 @@ class MessageRenderer {
         // Defense-in-depth: sanitize network-provided displayName
         const truncatedName = displayName.length > 18 ? displayName.substring(0, 18) + '...' : displayName;
         const senderRowHtml = showSender ? `
-                    <div class="message-sender-row flex items-center gap-1 mb-1" style="line-height: 1">
+                    <div class="message-sender-row flex items-center gap-1 mb-1">
                         ${badge.html}
                         <span class="text-[13px] font-medium" style="color: ${senderColor}">${escapeHtml(sanitizeText(truncatedName))}</span>
                     </div>` : '';
