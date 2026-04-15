@@ -957,6 +957,10 @@ class SettingsUI {
     _cleanupOnHide() {
         // Remove settings-open class for mobile
         document.body.classList.remove('settings-open');
+        // Clear active tab highlight from settings dropdown
+        document.querySelectorAll('#pill-settings-dropdown .pill-dropdown-item[data-settings-tab]').forEach(item => {
+            item.classList.remove('active-tab');
+        });
         // Only reset pill nav to chats if still on settings tab
         // If pill was already switched (e.g. to explore), don't override
         const activeTab = document.querySelector('.pill-nav-item[data-pill-tab].active');
