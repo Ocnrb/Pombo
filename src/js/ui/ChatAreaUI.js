@@ -73,6 +73,9 @@ class ChatAreaUI {
         const channel = channelManager?.getCurrentChannel();
         const previewChannel = previewModeUI.getPreviewChannel();
         
+        // Don't trigger loadMore during initial history load — let it complete first
+        if (channel?.initialLoadInProgress) return;
+        
         // Must have either a regular channel or a preview channel with more history
         if (channel && channel.hasMoreHistory) {
             await this._loadMoreChannelHistory(channel, channelManager);

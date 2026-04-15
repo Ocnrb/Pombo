@@ -485,13 +485,10 @@ class App {
                 if (data.streamId === currentStreamId) {
                     const channel = channelManager.getCurrentChannel();
                     if (channel) {
-                        // Skip render during initial history load — will render once when complete
-                        if (!channel.initialLoadInProgress) {
-                            chatAreaUI.renderMessages(channel.messages, () => {
-                                uiController.attachReactionListeners();
-                                mediaHandler.attachLightboxListeners();
-                            });
-                        }
+                        chatAreaUI.renderMessages(channel.messages, () => {
+                            uiController.attachReactionListeners();
+                            mediaHandler.attachLightboxListeners();
+                        });
                         Logger.debug(`History batch loaded: ${data.loaded}/${data.total} messages`);
                     }
                 }

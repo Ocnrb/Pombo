@@ -2702,7 +2702,7 @@ class StreamrController {
         } finally {
             // Signal that initial history fetch is complete (success or failure)
             if (onHistoryComplete) {
-                try { onHistoryComplete(); } catch (e) { Logger.warn('onHistoryComplete error:', e); }
+                try { await onHistoryComplete(); } catch (e) { Logger.warn('onHistoryComplete error:', e); }
             }
         }
     }
@@ -2757,6 +2757,11 @@ class StreamrController {
                 
                 this.subscriptions.set(messageStreamId, msgSubs);
                 Logger.info('Subscribed to message stream:', messageStreamId);
+            } else if (onHistoryComplete) {
+                // Already subscribed (e.g. from channel creation) — history already fetched.
+                // Signal completion immediately so initialLoadInProgress gets cleared.
+                Logger.debug('Already subscribed to message stream, signaling history complete:', messageStreamId);
+                try { await onHistoryComplete(); } catch (e) { Logger.warn('onHistoryComplete error (already subscribed):', e); }
             }
 
             // 2. Subscribe to EPHEMERAL STREAM (no storage)

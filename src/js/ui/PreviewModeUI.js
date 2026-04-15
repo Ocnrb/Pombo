@@ -384,6 +384,13 @@ class PreviewModeUI {
             // Clear preview state
             this.previewChannel = null;
 
+            // Reset any stuck loading indicator from preview history loading
+            const { chatAreaUI } = this.deps;
+            if (chatAreaUI) {
+                chatAreaUI.isLoadingMore = false;
+                chatAreaUI.hideLoadingMoreIndicator();
+            }
+
             // Clear stale reactions from the previewed channel
             reactionManager.loadFromChannelState({});
 

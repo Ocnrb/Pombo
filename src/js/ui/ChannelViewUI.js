@@ -64,9 +64,11 @@ class ChannelViewUI {
         // Stop heartbeat for previous channel
         this.deps.stopAccessHeartbeat();
         
-        // Clear typing indicator and reply state
+        // Clear typing indicator, reply state, and any stuck loading indicator
         chatAreaUI.hideTypingIndicator();
         chatAreaUI.cancelReply();
+        chatAreaUI.isLoadingMore = false;
+        chatAreaUI.hideLoadingMoreIndicator();
         this.deps.setReplyingTo(null);
         
         // Exit preview mode if active
@@ -176,6 +178,8 @@ class ChannelViewUI {
         // Clear UI state
         chatAreaUI.hideTypingIndicator();
         chatAreaUI.cancelReply();
+        chatAreaUI.isLoadingMore = false;
+        chatAreaUI.hideLoadingMoreIndicator();
         this.deps.setReplyingTo(null);
         
         // Stop presence tracking
