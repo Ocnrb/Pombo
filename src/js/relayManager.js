@@ -345,8 +345,10 @@ class RelayManager {
      */
     loadSubscribedChannels() {
         try {
+            const suffix = this.walletAddress ? `_${this.walletAddress}` : '';
+            
             // Load public/password channels
-            const stored = localStorage.getItem(CONFIG.storageKey + '_channels');
+            const stored = localStorage.getItem(CONFIG.storageKey + '_channels' + suffix);
             if (stored) {
                 const channels = JSON.parse(stored);
                 this.subscribedChannels = new Set(channels);
@@ -354,7 +356,7 @@ class RelayManager {
             }
             
             // Load native channels
-            const storedNative = localStorage.getItem(CONFIG.storageKey + '_native_channels');
+            const storedNative = localStorage.getItem(CONFIG.storageKey + '_native_channels' + suffix);
             if (storedNative) {
                 const nativeChannels = JSON.parse(storedNative);
                 this.subscribedNativeChannels = new Set(nativeChannels);
@@ -373,13 +375,15 @@ class RelayManager {
      */
     saveSubscribedChannels() {
         try {
+            const suffix = this.walletAddress ? `_${this.walletAddress}` : '';
+            
             // Save public/password channels
             const channels = Array.from(this.subscribedChannels);
-            localStorage.setItem(CONFIG.storageKey + '_channels', JSON.stringify(channels));
+            localStorage.setItem(CONFIG.storageKey + '_channels' + suffix, JSON.stringify(channels));
             
             // Save native channels
             const nativeChannels = Array.from(this.subscribedNativeChannels);
-            localStorage.setItem(CONFIG.storageKey + '_native_channels', JSON.stringify(nativeChannels));
+            localStorage.setItem(CONFIG.storageKey + '_native_channels' + suffix, JSON.stringify(nativeChannels));
             
             // Sync to Service Worker for push verification
             this.syncWithServiceWorker();

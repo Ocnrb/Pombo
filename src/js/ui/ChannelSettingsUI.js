@@ -14,12 +14,9 @@ class ChannelSettingsUI {
     constructor() {
         this.deps = null;
         this.elements = null;
-        // Carousel tab order for mobile swipe navigation
-        this.channelTabOrder = ['info', 'members', 'notifications', 'storage', 'danger'];
-        this.currentChannelTabIndex = 0;
         this.showDangerTab = false;
         this.showMembersTab = true; // Only for native channels
-        this.isAnimating = false; // Prevent rapid swipes
+        this._mobileSubPanelOpen = null; // Track which sub-panel is open on mobile
     }
 
     /**
@@ -173,15 +170,12 @@ class ChannelSettingsUI {
         dangerTabDivider?.classList.toggle('hidden', !canDelete);
         dangerTabBtn?.classList.toggle('hidden', !canDelete);
 
-        // Initialize carousel for mobile (must be after danger tab visibility is set)
-        this.initCarousel();
-
-        // Select appropriate starting tab (always info for non-native since members tab is hidden)
-        this.selectTab('info');
-
-        // Add body class for mobile slide-in container
+        // Select appropriate starting tab (desktop) or show unified view (mobile)
         if (this.isMobileView()) {
+            this.showMobileUnifiedView(currentChannel, isPreviewMode);
             document.body.classList.add('channel-details-open');
+        } else {
+            this.selectTab('info');
         }
 
         // Show modal
@@ -312,16 +306,10 @@ class ChannelSettingsUI {
     }
 
     /**
-     * Select a channel settings tab
+     * Select a channel settings tab (desktop only)
      * @param {string} tabName - Tab to select
-     * @param {number} direction - Direction of navigation (-1 = left, 1 = right, 0 = direct click)
      */
-    selectTab(tabName, direction = 0) {
-        // Start animation lock
-        if (direction !== 0) {
-            this.isAnimating = true;
-        }
-
+    selectTab(tabName) {
         // Update tab buttons
         document.querySelectorAll('.channel-settings-tab').forEach(tab => {
             const isActive = tab.dataset.channelTab === tabName;
@@ -330,67 +318,11 @@ class ChannelSettingsUI {
             tab.classList.toggle('text-white/60', !isActive && tab.dataset.channelTab !== 'danger');
         });
 
-        // Update carousel for mobile
-        if (this.isMobileView()) {
-            this.updateCarousel(tabName, direction);
-        }
-
-        // Animate panel transition on mobile
-        const isMobile = this.isMobileView();
-        
-        if (isMobile && direction !== 0) {
-            // Find current and target panels
-            let currentPanel = null;
-            let targetPanel = null;
-            
-            document.querySelectorAll('.channel-settings-panel').forEach(panel => {
-                const panelName = panel.id.replace('channel-panel-', '');
-                if (panelName === tabName) {
-                    targetPanel = panel;
-                } else if (!panel.classList.contains('hidden')) {
-                    currentPanel = panel;
-                }
-            });
-
-            if (currentPanel && targetPanel) {
-                // Cross-fade for panels
-                currentPanel.style.transition = 'opacity 0.2s ease';
-                currentPanel.style.opacity = '0';
-                
-                setTimeout(() => {
-                    currentPanel.classList.add('hidden');
-                    currentPanel.style.transition = '';
-                    currentPanel.style.opacity = '';
-                    
-                    targetPanel.classList.remove('hidden');
-                    targetPanel.style.opacity = '0';
-                    targetPanel.style.transition = 'opacity 0.2s ease';
-                    
-                    // Force reflow
-                    targetPanel.offsetHeight;
-                    
-                    targetPanel.style.opacity = '1';
-                    
-                    setTimeout(() => {
-                        targetPanel.style.transition = '';
-                        targetPanel.style.opacity = '';
-                        this.isAnimating = false;
-                    }, 200);
-                }, 200);
-            } else if (targetPanel) {
-                targetPanel.classList.remove('hidden');
-                this.isAnimating = false;
-            } else {
-                this.isAnimating = false;
-            }
-        } else {
-            // Instant switch (desktop or direct click)
-            document.querySelectorAll('.channel-settings-panel').forEach(panel => {
-                const panelName = panel.id.replace('channel-panel-', '');
-                panel.classList.toggle('hidden', panelName !== tabName);
-            });
-            this.isAnimating = false;
-        }
+        // Instant switch panels
+        document.querySelectorAll('.channel-settings-panel').forEach(panel => {
+            const panelName = panel.id.replace('channel-panel-', '');
+            panel.classList.toggle('hidden', panelName !== tabName);
+        });
     }
 
     /**
@@ -400,198 +332,202 @@ class ChannelSettingsUI {
         return window.innerWidth < 768;
     }
 
-    /**
-     * Get the available tabs based on channel type and permissions
-     */
-    getAvailableTabs() {
-        const tabs = ['info'];
-        if (this.showMembersTab) tabs.push('members');
-        tabs.push('notifications');
-        tabs.push('storage');
-        if (this.showDangerTab) tabs.push('danger');
-        return tabs;
-    }
+
 
     /**
-     * Initialize carousel for mobile swipe navigation
+     * Show mobile unified view — info + storage inline, nav list for Members/Delete
      */
-    initCarousel() {
-        const carousel = document.getElementById('channel-settings-carousel');
-        const modal = document.getElementById('channel-settings-modal');
-        if (!carousel || !modal) return;
+    showMobileUnifiedView(channel, isPreviewMode) {
+        const unified = document.getElementById('channel-mobile-unified');
+        if (!unified) return;
 
-        const tabElements = carousel.querySelectorAll('.carousel-tab');
+        // Hide all tab panels
+        document.querySelectorAll('.channel-settings-panel').forEach(p => p.classList.add('hidden'));
 
-        // Click on adjacent tabs to navigate
-        tabElements.forEach((tab, index) => {
-            // Remove old listeners by cloning
-            const newTab = tab.cloneNode(true);
-            tab.parentNode.replaceChild(newTab, tab);
-            
-            newTab.addEventListener('click', () => {
-                if (index === 0) {
-                    // Clicked on left (prev) tab
-                    this.navigateCarousel(-1);
-                } else if (index === 2) {
-                    // Clicked on right (next) tab
-                    this.navigateCarousel(1);
-                }
-                // Middle tab (index 1) is already active, no action needed
+        // Show info panel + storage panel inline (stacked vertically)
+        const infoPanel = document.getElementById('channel-panel-info');
+        const storagePanel = document.getElementById('channel-panel-storage');
+        if (infoPanel) infoPanel.classList.remove('hidden');
+        if (storagePanel) storagePanel.classList.remove('hidden');
+
+        // Show unified nav
+        unified.classList.remove('hidden');
+
+        // Toggle nav item visibility based on permissions/type
+        const membersNav = unified.querySelector('[data-mobile-nav="members"]');
+        const dangerNav = unified.querySelector('[data-mobile-nav="danger"]');
+
+        membersNav?.classList.toggle('hidden', !this.showMembersTab);
+        dangerNav?.classList.toggle('hidden', !this.showDangerTab);
+
+        // Attach click handlers (clone to remove old listeners)
+        unified.querySelectorAll('.channel-mobile-nav-item').forEach(btn => {
+            const newBtn = btn.cloneNode(true);
+            btn.parentNode.replaceChild(newBtn, btn);
+            newBtn.addEventListener('click', () => {
+                const panel = newBtn.dataset.mobileNav;
+                if (panel) this.openMobileSubPanel(panel);
             });
         });
 
-        // Add swipe support on entire modal
-        let touchStartX = 0;
-        let touchStartY = 0;
-        let isSwiping = false;
-        
-        const modalContainer = modal.querySelector('.bg-\\[\\#111113\\]');
-        if (!modalContainer) return;
+        // Initialize notification chip for mobile (visible to all users)
+        this.initMobileNotifChip(channel.streamId);
 
-        // Remove existing listeners by using a bound function reference
-        if (this._touchStartHandler) {
-            modalContainer.removeEventListener('touchstart', this._touchStartHandler);
-            modalContainer.removeEventListener('touchend', this._touchEndHandler);
-        }
+        this._mobileSubPanelOpen = null;
+    }
 
-        this._touchStartHandler = (e) => {
-            // Don't interfere with scrollable elements
-            const target = e.target;
-            if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
-                isSwiping = false;
+    /**
+     * Initialize the mobile notification bell chip
+     */
+    initMobileNotifChip(streamId) {
+        const chip = document.getElementById('mobile-notif-chip');
+        const chipLabel = document.getElementById('mobile-notif-chip-label');
+        if (!chip) return;
+
+        const { channelManager } = this.deps;
+        const channel = channelManager.channels.get(streamId);
+        const isNative = channel?.type === 'native';
+        const pushEnabled = relayManager.enabled;
+
+        const isSubscribed = isNative
+            ? relayManager.isNativeChannelSubscribed(streamId)
+            : relayManager.isChannelSubscribed(streamId);
+
+        // Update chip visual state
+        this.updateNotifChipState(chip, chipLabel, isSubscribed, pushEnabled);
+
+        // Show chip on mobile
+        chip.classList.remove('hidden');
+        chip.classList.add('inline-flex');
+
+        // Attach click handler (clone to remove old)
+        const newChip = chip.cloneNode(true);
+        chip.parentNode.replaceChild(newChip, chip);
+        newChip.addEventListener('click', async () => {
+            if (!pushEnabled) {
+                this.deps.showNotification('Enable Push Notifications in Settings first', 'warning');
                 return;
             }
-            touchStartX = e.touches[0].clientX;
-            touchStartY = e.touches[0].clientY;
-            isSwiping = true;
-        };
-
-        this._touchEndHandler = (e) => {
-            if (!isSwiping || !this.isMobileView()) return;
-            
-            const touchEndX = e.changedTouches[0].clientX;
-            const touchEndY = e.changedTouches[0].clientY;
-            const diffX = touchStartX - touchEndX;
-            const diffY = touchStartY - touchEndY;
-            
-            // Only trigger if horizontal swipe is dominant (not scrolling vertically)
-            if (Math.abs(diffX) > 50 && Math.abs(diffX) > Math.abs(diffY) * 1.5) {
-                this.navigateCarousel(diffX > 0 ? 1 : -1);
+            const nowSubscribed = isNative
+                ? relayManager.isNativeChannelSubscribed(streamId)
+                : relayManager.isChannelSubscribed(streamId);
+            const enable = !nowSubscribed;
+            try {
+                if (isNative) {
+                    if (enable) await relayManager.subscribeToNativeChannel(streamId);
+                    else await relayManager.unsubscribeFromNativeChannel(streamId);
+                } else {
+                    if (enable) await relayManager.subscribeToChannel(streamId);
+                    else await relayManager.unsubscribeFromChannel(streamId);
+                }
+                const newLabel = document.getElementById('mobile-notif-chip-label');
+                this.updateNotifChipState(newChip, newLabel, enable, pushEnabled);
+                // Also sync the desktop toggle if it exists
+                const desktopToggle = document.getElementById('channel-notifications-enabled');
+                if (desktopToggle) desktopToggle.checked = enable;
+            } catch (err) {
+                this.deps.showNotification('Failed to update notifications', 'error');
             }
-            isSwiping = false;
-        };
-
-        modalContainer.addEventListener('touchstart', this._touchStartHandler, { passive: true });
-        modalContainer.addEventListener('touchend', this._touchEndHandler, { passive: true });
+        });
     }
 
     /**
-     * Navigate carousel by offset (-1 for prev, +1 for next)
+     * Update notification chip visual state
      */
-    navigateCarousel(offset) {
-        // Prevent rapid swipes
-        if (this.isAnimating) return;
-        
-        const availableTabs = this.getAvailableTabs();
-        const total = availableTabs.length;
-        this.currentChannelTabIndex = (this.currentChannelTabIndex + offset + total) % total;
-        const tabName = availableTabs[this.currentChannelTabIndex];
-        this.selectTab(tabName, offset);
-    }
-
-    /**
-     * Update carousel display with current, prev, and next tabs
-     * @param {string} tabName - Tab to display
-     * @param {number} direction - Direction of navigation (-1 = left, 1 = right, 0 = direct)
-     */
-    updateCarousel(tabName, direction = 0) {
-        const carousel = document.getElementById('channel-settings-carousel');
-        if (!carousel) return;
-
-        const tabs = carousel.querySelectorAll('.carousel-tab');
-        if (tabs.length !== 3) return;
-
-        const tabsContainer = carousel.querySelector('.carousel-tabs');
-        if (!tabsContainer) return;
-
-        const availableTabs = this.getAvailableTabs();
-        const total = availableTabs.length;
-        const currentIndex = availableTabs.indexOf(tabName);
-        if (currentIndex === -1) return;
-
-        this.currentChannelTabIndex = currentIndex;
-
-        const prevIndex = (currentIndex - 1 + total) % total;
-        const nextIndex = (currentIndex + 1) % total;
-
-        const tabLabels = {
-            'info': 'Info',
-            'members': 'Members',
-            'notifications': 'Notifications',
-            'storage': 'Storage',
-            'danger': 'Delete'
-        };
-
-        const newLabels = [
-            tabLabels[availableTabs[prevIndex]],
-            tabLabels[availableTabs[currentIndex]],
-            tabLabels[availableTabs[nextIndex]]
-        ];
-
-        // Cross-fade animation for tabs
-        if (direction !== 0) {
-            // Fade out
-            tabsContainer.style.transition = 'opacity 0.15s ease';
-            tabsContainer.style.opacity = '0';
-            
-            setTimeout(() => {
-                // Update labels while hidden
-                tabs[0].textContent = newLabels[0];
-                tabs[0].dataset.tab = availableTabs[prevIndex];
-                tabs[0].classList.remove('active');
-                tabs[0].classList.add('adjacent');
-
-                tabs[1].textContent = newLabels[1];
-                tabs[1].dataset.tab = availableTabs[currentIndex];
-                tabs[1].classList.add('active');
-                tabs[1].classList.remove('adjacent');
-
-                tabs[2].textContent = newLabels[2];
-                tabs[2].dataset.tab = availableTabs[nextIndex];
-                tabs[2].classList.remove('active');
-                tabs[2].classList.add('adjacent');
-
-                // Fade in
-                tabsContainer.style.opacity = '1';
-                
-                setTimeout(() => {
-                    tabsContainer.style.transition = '';
-                    tabsContainer.style.opacity = '';
-                }, 150);
-            }, 150);
+    updateNotifChipState(chip, label, isSubscribed, pushEnabled) {
+        if (!chip) return;
+        if (isSubscribed) {
+            chip.className = 'inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition border border-[#F6851B]/30 bg-[#F6851B]/10 text-[#F6851B]';
+            if (label) label.textContent = 'Notifications On';
         } else {
-            // Instant update (no animation)
-            tabs[0].textContent = newLabels[0];
-            tabs[0].dataset.tab = availableTabs[prevIndex];
-            tabs[0].classList.remove('active');
-            tabs[0].classList.add('adjacent');
-
-            tabs[1].textContent = newLabels[1];
-            tabs[1].dataset.tab = availableTabs[currentIndex];
-            tabs[1].classList.add('active');
-            tabs[1].classList.remove('adjacent');
-
-            tabs[2].textContent = newLabels[2];
-            tabs[2].dataset.tab = availableTabs[nextIndex];
-            tabs[2].classList.remove('active');
-            tabs[2].classList.add('adjacent');
+            chip.className = 'inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition border border-white/10 bg-white/5 text-white/40';
+            if (label) label.textContent = 'Notifications Off';
         }
+        if (!pushEnabled) {
+            chip.classList.add('opacity-50');
+        }
+    }
+
+    /**
+     * Open a sub-panel on mobile with slide-in animation
+     */
+    openMobileSubPanel(panelName) {
+        const panel = document.getElementById(`channel-panel-${panelName}`);
+        const unified = document.getElementById('channel-mobile-unified');
+        const infoPanel = document.getElementById('channel-panel-info');
+        const storagePanel = document.getElementById('channel-panel-storage');
+        const header = document.querySelector('#channel-settings-modal .flex.border-b h3');
+        if (!panel) return;
+
+        // Store which sub-panel is open
+        this._mobileSubPanelOpen = panelName;
+
+        // Update header title
+        const titles = {
+            'members': 'Members',
+            'danger': 'Delete Channel'
+        };
+        if (header) header.textContent = titles[panelName] || 'Channel Details';
+
+        // Hide unified view + info + storage
+        if (unified) unified.classList.add('hidden');
+        if (infoPanel) infoPanel.classList.add('hidden');
+        if (storagePanel) storagePanel.classList.add('hidden');
+
+        // Show the target panel with slide animation
+        panel.classList.remove('hidden');
+        panel.style.transform = 'translateX(100%)';
+        panel.style.transition = 'transform 0.25s ease';
+        // Force reflow
+        panel.offsetHeight;
+        panel.style.transform = 'translateX(0)';
+
+        setTimeout(() => {
+            panel.style.transition = '';
+            panel.style.transform = '';
+        }, 250);
+    }
+
+    /**
+     * Close current mobile sub-panel and return to unified view
+     */
+    closeMobileSubPanel() {
+        if (!this._mobileSubPanelOpen) return false;
+
+        const panel = document.getElementById(`channel-panel-${this._mobileSubPanelOpen}`);
+        const unified = document.getElementById('channel-mobile-unified');
+        const infoPanel = document.getElementById('channel-panel-info');
+        const storagePanel = document.getElementById('channel-panel-storage');
+        const header = document.querySelector('#channel-settings-modal .flex.border-b h3');
+
+        // Restore header
+        if (header) header.textContent = 'Channel Details';
+
+        // Slide out sub-panel
+        if (panel) {
+            panel.style.transition = 'transform 0.2s ease';
+            panel.style.transform = 'translateX(100%)';
+            setTimeout(() => {
+                panel.classList.add('hidden');
+                panel.style.transition = '';
+                panel.style.transform = '';
+            }, 200);
+        }
+
+        // Show unified view + info + storage
+        if (unified) unified.classList.remove('hidden');
+        if (infoPanel) infoPanel.classList.remove('hidden');
+        if (storagePanel) storagePanel.classList.remove('hidden');
+
+        this._mobileSubPanelOpen = null;
+        return true;
     }
 
     /**
      * Hide channel settings modal
      */
     hide() {
+        this._mobileSubPanelOpen = null;
         document.body.classList.remove('channel-details-open');
         modalManager.hide('channel-settings-modal');
         this.elements.addMemberInput.value = '';

@@ -963,6 +963,10 @@ class UIController {
         // Close channel settings modal
         if (this.elements.closeChannelSettingsBtn) {
             this.elements.closeChannelSettingsBtn.addEventListener('click', () => {
+                // On mobile, if a sub-panel is open, go back to unified view first
+                if (this.isMobileView() && channelSettingsUI.closeMobileSubPanel()) {
+                    return;
+                }
                 this.hideChannelSettingsModal();
             });
         }

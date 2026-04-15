@@ -256,6 +256,16 @@ body {
     .modal-close-btn .icon-close {
         display: block !important;
     }
+
+    /* Hide mobile-only notification chip on desktop */
+    #mobile-notif-chip {
+        display: none !important;
+    }
+
+    /* Hide mobile unified nav on desktop (sidebar is used instead) */
+    #channel-mobile-unified {
+        display: none !important;
+    }
 }
 
 /* Tighter spacing within groups - using margin-top system instead */
@@ -1914,8 +1924,7 @@ body {
     
     /* Modal sidebars become horizontal tabs on mobile */
     #new-channel-modal .flex.flex-1.min-h-0,
-    #settings-modal .flex.min-h-\[420px\],
-    #channel-settings-modal .flex.min-h-\[420px\] {
+    #settings-modal .flex.min-h-\[420px\] {
         flex-direction: column;
         flex: 1;
         min-height: 0;
@@ -1931,8 +1940,7 @@ body {
     
     /* Modal sidebars horizontal on mobile */
     #new-channel-modal .w-40,
-    #settings-modal .w-44,
-    #channel-settings-modal .w-44 {
+    #settings-modal .w-44 {
         width: 100% !important;
         border-right: none !important;
         border-bottom: 1px solid rgba(255, 255, 255, 0.06);
@@ -1961,15 +1969,59 @@ body {
         padding-right: 0.5rem;
     }
 
-    /* Settings & Channel Settings modal carousel - hide nav on mobile */
+    /* Settings & Channel Settings modal - hide nav on mobile */
     #settings-modal .w-44 nav,
     #channel-settings-modal .w-44 nav {
         display: none !important;
     }
 
+    /* Channel settings: hide entire sidebar on mobile (unified view replaces it) */
+    #channel-settings-modal .w-44 {
+        display: none !important;
+    }
+
+    /* Channel settings: content panel is full-width scrollable on mobile */
+    #channel-settings-modal .flex.min-h-\[420px\] {
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    #channel-settings-modal .flex-1.p-6.overflow-y-auto {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 1.25rem !important;
+    }
+
+    /* Mobile unified view */
+    #channel-mobile-unified:not(.hidden) {
+        display: block !important;
+    }
+
+    /* Mobile notification chip (shown via JS, but ensure display works) */
+    #mobile-notif-chip {
+        display: inline-flex !important;
+    }
+    #mobile-notif-chip.hidden {
+        display: none !important;
+    }
+
+    /* Storage panel flows inline on mobile unified view with separator */
+    #channel-panel-info:not(.hidden) ~ #channel-panel-storage:not(.hidden) {
+        margin-top: 1.5rem;
+        padding-top: 1.5rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    /* Sub-panel slide animation */
+    .channel-settings-panel {
+        will-change: transform;
+    }
+
     /* Settings carousel - replaces nav on mobile */
-    #settings-carousel,
-    #channel-settings-carousel {
+    #settings-carousel {
         display: flex !important;
         align-items: center;
         justify-content: center;
@@ -1986,14 +2038,11 @@ body {
 
     /* Remove the orange glow effects */
     #settings-carousel::before,
-    #settings-carousel::after,
-    #channel-settings-carousel::before,
-    #channel-settings-carousel::after {
+    #settings-carousel::after {
         display: none;
     }
 
-    #settings-carousel .carousel-tabs,
-    #channel-settings-carousel .carousel-tabs {
+    #settings-carousel .carousel-tabs {
         display: grid;
         grid-template-columns: 1fr 1fr 1fr;
         width: 100%;
@@ -2001,8 +2050,7 @@ body {
         padding: 0;
     }
 
-    #settings-carousel .carousel-tab,
-    #channel-settings-carousel .carousel-tab {
+    #settings-carousel .carousel-tab {
         padding: 0.875rem 0 0.75rem 0;
         margin: 0;
         font-size: 14px;
@@ -2017,16 +2065,14 @@ body {
         box-sizing: border-box;
     }
 
-    #settings-carousel .carousel-tab.active,
-    #channel-settings-carousel .carousel-tab.active {
+    #settings-carousel .carousel-tab.active {
         color: white;
         font-weight: 500;
         cursor: default;
         border-bottom-color: #F6851B;
     }
 
-    #settings-carousel .carousel-tab.adjacent,
-    #channel-settings-carousel .carousel-tab.adjacent {
+    #settings-carousel .carousel-tab.adjacent {
         visibility: hidden;
         pointer-events: none;
     }
