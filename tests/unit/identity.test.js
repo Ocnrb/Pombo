@@ -43,6 +43,9 @@ vi.mock('../../src/js/workers/cryptoWorkerPool.js', () => ({
 const mockEthers = {
     keccak256: vi.fn((data) => '0xMockHash'),
     toUtf8Bytes: vi.fn((str) => new Uint8Array([...str].map(c => c.charCodeAt(0)))),
+    Network: {
+        from: vi.fn(() => ({ name: 'mainnet', chainId: 1n }))
+    },
     JsonRpcProvider: vi.fn().mockImplementation(() => ({
         lookupAddress: vi.fn(() => Promise.resolve(null)),
         resolveName: vi.fn(() => Promise.resolve(null))

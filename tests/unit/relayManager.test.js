@@ -618,7 +618,7 @@ describe('RelayManager', () => {
     describe('loadSubscribedChannels()', () => {
         it('should load public channels from localStorage', () => {
             const channels = ['stream-1', 'stream-2'];
-            localStorage.setItem('pombo_push_registration_channels', JSON.stringify(channels));
+            localStorage.setItem('pombo_push_registration_channels_0xmyaddress1234', JSON.stringify(channels));
 
             relayManager.loadSubscribedChannels();
 
@@ -628,7 +628,7 @@ describe('RelayManager', () => {
 
         it('should load native channels from localStorage', () => {
             const nativeChannels = ['native-1'];
-            localStorage.setItem('pombo_push_registration_native_channels', JSON.stringify(nativeChannels));
+            localStorage.setItem('pombo_push_registration_native_channels_0xmyaddress1234', JSON.stringify(nativeChannels));
 
             relayManager.loadSubscribedChannels();
 
@@ -657,7 +657,7 @@ describe('RelayManager', () => {
 
             relayManager.saveSubscribedChannels();
 
-            const stored = JSON.parse(localStorage.getItem('pombo_push_registration_channels'));
+            const stored = JSON.parse(localStorage.getItem('pombo_push_registration_channels_0xmyaddress1234'));
             expect(stored).toContain('stream-1');
             expect(stored).toContain('stream-2');
         });
@@ -667,7 +667,7 @@ describe('RelayManager', () => {
 
             relayManager.saveSubscribedChannels();
 
-            const stored = JSON.parse(localStorage.getItem('pombo_push_registration_native_channels'));
+            const stored = JSON.parse(localStorage.getItem('pombo_push_registration_native_channels_0xmyaddress1234'));
             expect(stored).toContain('native-1');
         });
     });

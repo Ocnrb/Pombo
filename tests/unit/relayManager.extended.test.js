@@ -662,8 +662,8 @@ describe('RelayManager Extended', () => {
         it('should load stored channels on address change', async () => {
             relayManager.initialized = true;
             relayManager.walletAddress = '0xoldaddress';
-            localStorage.setItem('pombo_push_registration_channels', JSON.stringify(['stored-ch']));
-            localStorage.setItem('pombo_push_registration_native_channels', JSON.stringify(['stored-nat']));
+            localStorage.setItem('pombo_push_registration_channels_0xnewaddress', JSON.stringify(['stored-ch']));
+            localStorage.setItem('pombo_push_registration_native_channels_0xnewaddress', JSON.stringify(['stored-nat']));
 
             await relayManager.init('0xNewAddress');
 

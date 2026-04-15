@@ -60,7 +60,10 @@ vi.mock('../../src/js/ui.js', () => ({
 }));
 
 vi.mock('../../src/js/ui/AvatarGenerator.js', () => ({
-    getAvatar: vi.fn(() => '<svg></svg>')
+    getAvatar: vi.fn(() => '<svg></svg>'),
+    generateAvatar: vi.fn(() => '<svg></svg>'),
+    setAvatarSeed: vi.fn(),
+    generateRandomAvatarSeed: vi.fn(() => '0x' + 'a'.repeat(40))
 }));
 
 vi.mock('../../src/js/ui/utils.js', () => ({
@@ -621,29 +624,66 @@ describe('WalletFlows Modal Methods', () => {
         const address = '0xNewAddress123';
         const privateKey = '0x' + 'ab'.repeat(32);
 
-        it('renders step 1 with address and private key', async () => {
+        // Helper: advance past avatar step to details step
+        const goToDetailsStep = () => {
+            document.querySelector('#avatar-continue-btn').click();
+        };
+
+        it('renders avatar selection step initially', async () => {
             const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
 
-            expect(document.querySelector('#step-1')).not.toBeNull();
-            expect(document.querySelector('#step-2').classList.contains('hidden')).toBe(true);
-            expect(document.body.textContent).toContain(address);
+            expect(document.querySelector('#step-avatar')).not.toBeNull();
+            expect(document.querySelector('#step-details').classList.contains('hidden')).toBe(true);
+            expect(document.querySelector('#step-confirm').classList.contains('hidden')).toBe(true);
+            expect(document.querySelector('#avatar-grid')).not.toBeNull();
 
-            // Cancel to resolve
-            document.querySelector('#cancel-btn').click();
+            document.querySelector('#avatar-cancel-btn').click();
             await promise;
         });
 
         it('resolves with cancelled on cancel button', async () => {
             const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
 
-            document.querySelector('#cancel-btn').click();
+            document.querySelector('#avatar-cancel-btn').click();
 
             const result = await promise;
             expect(result).toBe('cancelled');
         });
 
+        it('transitions from avatar step to details step', async () => {
+            const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+
+            goToDetailsStep();
+
+            expect(document.querySelector('#step-avatar').classList.contains('hidden')).toBe(true);
+            expect(document.querySelector('#step-details').classList.contains('hidden')).toBe(false);
+            expect(document.body.textContent).toContain(address);
+
+            // Go back to avatar step
+            document.querySelector('#details-back-btn').click();
+            expect(document.querySelector('#step-avatar').classList.contains('hidden')).toBe(false);
+
+            document.querySelector('#avatar-cancel-btn').click();
+            await promise;
+        });
+
+        it('shuffles avatars when shuffle button is clicked', async () => {
+            const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+
+            const gridBefore = document.querySelector('#avatar-grid').innerHTML;
+            document.querySelector('#shuffle-avatars').click();
+            const gridAfter = document.querySelector('#avatar-grid').innerHTML;
+
+            // Grid should have been re-rendered (seeds regenerated)
+            expect(gridAfter).not.toBe(gridBefore);
+
+            document.querySelector('#avatar-cancel-btn').click();
+            await promise;
+        });
+
         it('toggles private key visibility', async () => {
             const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            goToDetailsStep();
 
             const pkHidden = document.querySelector('#pk-hidden');
             const pkRevealed = document.querySelector('#pk-revealed');
@@ -657,7 +697,8 @@ describe('WalletFlows Modal Methods', () => {
             document.querySelector('#toggle-pk').click();
             expect(pkRevealed.classList.contains('hidden')).toBe(true);
 
-            document.querySelector('#cancel-btn').click();
+            document.querySelector('#details-back-btn').click();
+            document.querySelector('#avatar-cancel-btn').click();
             await promise;
         });
 
@@ -665,12 +706,14 @@ describe('WalletFlows Modal Methods', () => {
             const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
 
             const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            goToDetailsStep();
 
             await document.querySelector('#copy-pk').click();
 
             expect(writeTextSpy).toHaveBeenCalledWith(privateKey);
 
-            document.querySelector('#cancel-btn').click();
+            document.querySelector('#details-back-btn').click();
+            document.querySelector('#avatar-cancel-btn').click();
             await promise;
         });
 
@@ -679,6 +722,7 @@ describe('WalletFlows Modal Methods', () => {
             document.execCommand = vi.fn().mockReturnValue(true);
 
             const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            goToDetailsStep();
 
             await document.querySelector('#copy-pk').click();
             // Wait for the async catch to execute
@@ -686,14 +730,16 @@ describe('WalletFlows Modal Methods', () => {
 
             expect(document.execCommand).toHaveBeenCalledWith('copy');
 
-            document.querySelector('#cancel-btn').click();
+            document.querySelector('#details-back-btn').click();
+            document.querySelector('#avatar-cancel-btn').click();
             await promise;
         });
 
         it('continue button is disabled until password strength callback fires true', async () => {
             const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            goToDetailsStep();
 
-            const continueBtn = document.querySelector('#continue-btn');
+            const continueBtn = document.querySelector('#details-continue-btn');
             expect(continueBtn.disabled).toBe(true);
 
             // Simulate password strength validation callback
@@ -705,38 +751,42 @@ describe('WalletFlows Modal Methods', () => {
             setupPasswordStrengthCb(false);
             expect(continueBtn.disabled).toBe(true);
 
-            document.querySelector('#cancel-btn').click();
+            document.querySelector('#details-back-btn').click();
+            document.querySelector('#avatar-cancel-btn').click();
             await promise;
         });
 
-        it('transitions to step 2 on continue', async () => {
+        it('transitions to confirm step on continue', async () => {
             const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            goToDetailsStep();
 
             // Enable continue
             setupPasswordStrengthCb(true);
-            const continueBtn = document.querySelector('#continue-btn');
+            const continueBtn = document.querySelector('#details-continue-btn');
             continueBtn.click();
 
-            expect(document.querySelector('#step-1').classList.contains('hidden')).toBe(true);
-            expect(document.querySelector('#step-2').classList.contains('hidden')).toBe(false);
+            expect(document.querySelector('#step-details').classList.contains('hidden')).toBe(true);
+            expect(document.querySelector('#step-confirm').classList.contains('hidden')).toBe(false);
 
-            // Go back and cancel
-            document.querySelector('#back-btn').click();
-            expect(document.querySelector('#step-1').classList.contains('hidden')).toBe(false);
+            // Go back to details
+            document.querySelector('#confirm-back-btn').click();
+            expect(document.querySelector('#step-details').classList.contains('hidden')).toBe(false);
 
-            document.querySelector('#cancel-btn').click();
+            document.querySelector('#details-back-btn').click();
+            document.querySelector('#avatar-cancel-btn').click();
             await promise;
         });
 
         it('shows error when passwords do not match on confirm', async () => {
             const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            goToDetailsStep();
 
             const passwordInput = document.querySelector('#password-input');
             passwordInput.value = 'StrongPass123!';
 
-            // Go to step 2
+            // Go to confirm step
             setupPasswordStrengthCb(true);
-            document.querySelector('#continue-btn').click();
+            document.querySelector('#details-continue-btn').click();
 
             // Enter wrong confirmation
             const confirmInput = document.querySelector('#confirm-password-input');
@@ -748,8 +798,9 @@ describe('WalletFlows Modal Methods', () => {
             expect(confirmInput.classList.contains('border-red-400')).toBe(true);
 
             // Cancel
-            document.querySelector('#back-btn').click();
-            document.querySelector('#cancel-btn').click();
+            document.querySelector('#confirm-back-btn').click();
+            document.querySelector('#details-back-btn').click();
+            document.querySelector('#avatar-cancel-btn').click();
             await promise;
         });
 
@@ -758,15 +809,16 @@ describe('WalletFlows Modal Methods', () => {
             window.PasswordCredential = undefined;
 
             const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            goToDetailsStep();
 
             const passwordInput = document.querySelector('#password-input');
             const displayNameInput = document.querySelector('#display-name-input');
             passwordInput.value = 'StrongPass123!';
             displayNameInput.value = 'Alice';
 
-            // Go to step 2
+            // Go to confirm step
             setupPasswordStrengthCb(true);
-            document.querySelector('#continue-btn').click();
+            document.querySelector('#details-continue-btn').click();
 
             // Enter matching confirmation
             const confirmInput = document.querySelector('#confirm-password-input');
@@ -784,12 +836,13 @@ describe('WalletFlows Modal Methods', () => {
             window.PasswordCredential = undefined;
 
             const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            goToDetailsStep();
 
             document.querySelector('#password-input').value = 'Pass123!';
             document.querySelector('#display-name-input').value = '';
 
             setupPasswordStrengthCb(true);
-            document.querySelector('#continue-btn').click();
+            document.querySelector('#details-continue-btn').click();
 
             document.querySelector('#confirm-password-input').value = 'Pass123!';
             document.querySelector('#confirm-password-form').dispatchEvent(new Event('submit', { cancelable: true }));
@@ -800,10 +853,11 @@ describe('WalletFlows Modal Methods', () => {
 
         it('clears confirm error on new input', async () => {
             const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            goToDetailsStep();
 
             document.querySelector('#password-input').value = 'Pass123!';
             setupPasswordStrengthCb(true);
-            document.querySelector('#continue-btn').click();
+            document.querySelector('#details-continue-btn').click();
 
             const confirmInput = document.querySelector('#confirm-password-input');
             confirmInput.value = 'wrong';
@@ -817,13 +871,15 @@ describe('WalletFlows Modal Methods', () => {
             expect(document.querySelector('#password-error').classList.contains('hidden')).toBe(true);
             expect(confirmInput.classList.contains('border-red-400')).toBe(false);
 
-            document.querySelector('#back-btn').click();
-            document.querySelector('#cancel-btn').click();
+            document.querySelector('#confirm-back-btn').click();
+            document.querySelector('#details-back-btn').click();
+            document.querySelector('#avatar-cancel-btn').click();
             await promise;
         });
 
         it('Enter key on password triggers continue when enabled', async () => {
             const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            goToDetailsStep();
 
             const passwordInput = document.querySelector('#password-input');
             passwordInput.value = 'Pass123!';
@@ -831,11 +887,12 @@ describe('WalletFlows Modal Methods', () => {
             setupPasswordStrengthCb(true);
             passwordInput.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', bubbles: true }));
 
-            // Should have moved to step 2
-            expect(document.querySelector('#step-1').classList.contains('hidden')).toBe(true);
+            // Should have moved to confirm step
+            expect(document.querySelector('#step-details').classList.contains('hidden')).toBe(true);
 
-            document.querySelector('#back-btn').click();
-            document.querySelector('#cancel-btn').click();
+            document.querySelector('#confirm-back-btn').click();
+            document.querySelector('#details-back-btn').click();
+            document.querySelector('#avatar-cancel-btn').click();
             await promise;
         });
 
@@ -843,16 +900,17 @@ describe('WalletFlows Modal Methods', () => {
             window.PasswordCredential = undefined;
 
             const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            goToDetailsStep();
 
             document.querySelector('#password-input').value = 'Pass1!';
             setupPasswordStrengthCb(true);
-            document.querySelector('#continue-btn').click();
+            document.querySelector('#details-continue-btn').click();
             document.querySelector('#confirm-password-input').value = 'Pass1!';
             document.querySelector('#confirm-password-form').dispatchEvent(new Event('submit', { cancelable: true }));
 
             await promise;
             // Modal should be removed
-            expect(document.querySelector('#step-1')).toBeNull();
+            expect(document.querySelector('#step-avatar')).toBeNull();
         });
     });
 
@@ -1205,9 +1263,10 @@ describe('WalletFlows Modal Methods', () => {
 
             const promise = walletFlows.showNewAccountSetupModal('0xTestAddr', '0x' + 'ff'.repeat(32));
 
+            document.querySelector('#avatar-continue-btn').click();
             document.querySelector('#password-input').value = 'MyPass123!';
             setupPasswordStrengthCb(true);
-            document.querySelector('#continue-btn').click();
+            document.querySelector('#details-continue-btn').click();
 
             document.querySelector('#confirm-password-input').value = 'MyPass123!';
             document.querySelector('#confirm-password-form').dispatchEvent(new Event('submit', { cancelable: true }));
@@ -1221,9 +1280,10 @@ describe('WalletFlows Modal Methods', () => {
 
             const promise = walletFlows.showNewAccountSetupModal('0xAddr', '0x' + 'ff'.repeat(32));
 
+            document.querySelector('#avatar-continue-btn').click();
             document.querySelector('#password-input').value = 'Pass1!';
             setupPasswordStrengthCb(true);
-            document.querySelector('#continue-btn').click();
+            document.querySelector('#details-continue-btn').click();
             document.querySelector('#confirm-password-input').value = 'Pass1!';
             document.querySelector('#confirm-password-form').dispatchEvent(new Event('submit', { cancelable: true }));
 

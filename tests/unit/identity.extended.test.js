@@ -40,6 +40,9 @@ const mockResolveName = vi.fn(() => Promise.resolve(null));
 const mockEthers = {
     keccak256: vi.fn((data) => '0xMockHash'),
     toUtf8Bytes: vi.fn((str) => new Uint8Array([...str].map(c => c.charCodeAt(0)))),
+    Network: {
+        from: vi.fn(() => ({ name: 'mainnet', chainId: 1n }))
+    },
     JsonRpcProvider: vi.fn().mockImplementation(() => ({
         lookupAddress: mockLookupAddress,
         resolveName: mockResolveName
@@ -58,6 +61,8 @@ describe('IdentityManager Extended', () => {
         vi.clearAllMocks();
         identityManager.trustedContacts = new Map();
         identityManager.ensCache = new Map();
+        identityManager.pendingENSLookups = new Map();
+        identityManager.providerHealth = new Map();
         identityManager.username = null;
         secureStorage.isStorageUnlocked.mockReturnValue(true);
         secureStorage.getTrustedContacts.mockReturnValue({});
@@ -277,7 +282,7 @@ describe('IdentityManager Extended', () => {
     // ==================== resolveAddress ====================
     describe('resolveAddress()', () => {
         it('should return null when no ENS provider', async () => {
-            identityManager.ensProvider = null;
+            identityManager.ensProviders = [];
 
             const result = await identityManager.resolveAddress('vitalik.eth');
 
@@ -286,20 +291,25 @@ describe('IdentityManager Extended', () => {
 
         it('should resolve ENS name to address', async () => {
             // Ensure provider is initialized
-            identityManager.ensProvider = {
+            const mockProvider = {
+                _ensUrl: 'https://mock-rpc.test',
                 resolveName: vi.fn().mockResolvedValue('0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045')
             };
+            identityManager.ensProviders = [mockProvider];
+            identityManager.providerHealth = new Map();
 
             const result = await identityManager.resolveAddress('vitalik.eth');
 
             expect(result).toBe('0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045');
-            expect(identityManager.ensProvider.resolveName).toHaveBeenCalledWith('vitalik.eth');
+            expect(mockProvider.resolveName).toHaveBeenCalledWith('vitalik.eth');
         });
 
         it('should return null on resolution error', async () => {
-            identityManager.ensProvider = {
+            identityManager.ensProviders = [{
+                _ensUrl: 'https://mock-rpc.test',
                 resolveName: vi.fn().mockRejectedValue(new Error('Network error'))
-            };
+            }];
+            identityManager.providerHealth = new Map();
 
             const result = await identityManager.resolveAddress('bad.eth');
 
@@ -307,14 +317,16 @@ describe('IdentityManager Extended', () => {
             expect(Logger.warn).toHaveBeenCalledWith(
                 expect.stringContaining('ENS resolve failed'),
                 'bad.eth',
-                expect.any(Error)
+                expect.stringContaining('all providers exhausted')
             );
         });
 
         it('should return null when name does not resolve', async () => {
-            identityManager.ensProvider = {
+            identityManager.ensProviders = [{
+                _ensUrl: 'https://mock-rpc.test',
                 resolveName: vi.fn().mockResolvedValue(null)
-            };
+            }];
+            identityManager.providerHealth = new Map();
 
             const result = await identityManager.resolveAddress('nonexistent.eth');
 

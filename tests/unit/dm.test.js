@@ -1005,7 +1005,7 @@ describe('DMManager', () => {
 
     // ==================== loadDMTimeline() ====================
     describe('loadDMTimeline()', () => {
-        it('should merge sent and received messages', () => {
+        it('should merge sent and received messages', async () => {
             const peerAddress = '0xpeerbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
             const streamId = `${peerAddress}/Pombo-DM-1`;
             const channel = {
@@ -1025,7 +1025,7 @@ describe('DMManager', () => {
                 { id: 'sent-2', text: 'From me 2', timestamp: 3 }
             ]);
 
-            dmManager.loadDMTimeline(peerAddress);
+            await dmManager.loadDMTimeline(peerAddress);
 
             expect(channel.messages).toHaveLength(4);
             // Should be sorted by timestamp
@@ -1037,7 +1037,7 @@ describe('DMManager', () => {
             secureStorage.getSentMessages.mockReturnValue([]);
         });
 
-        it('should deduplicate by id', () => {
+        it('should deduplicate by id', async () => {
             const peerAddress = '0xpeercccccccccccccccccccccccccccccccccc';
             const streamId = `${peerAddress}/Pombo-DM-1`;
             const channel = {
@@ -1055,7 +1055,7 @@ describe('DMManager', () => {
                 { id: 'dup-1', text: 'Sent copy', timestamp: 1 }
             ]);
 
-            dmManager.loadDMTimeline(peerAddress);
+            await dmManager.loadDMTimeline(peerAddress);
 
             // Should only have 1 message (deduplicated)
             expect(channel.messages).toHaveLength(1);
@@ -1063,12 +1063,12 @@ describe('DMManager', () => {
             secureStorage.getSentMessages.mockReturnValue([]);
         });
 
-        it('should do nothing for unknown conversation', () => {
-            dmManager.loadDMTimeline('0xunknownpeer');
+        it('should do nothing for unknown conversation', async () => {
+            await dmManager.loadDMTimeline('0xunknownpeer');
             // No crash
         });
 
-        it('should merge sent reactions from local storage', () => {
+        it('should merge sent reactions from local storage', async () => {
             const peerAddress = '0xpeerdddddddddddddddddddddddddddddddddd';
             const streamId = `${peerAddress}/Pombo-DM-1`;
             const channel = {
@@ -1086,7 +1086,7 @@ describe('DMManager', () => {
                 'msg-1': { '👍': ['0xmyaddress1234567890abcdef12345678'], '❤️': ['0xmyaddress1234567890abcdef12345678'] }
             });
 
-            dmManager.loadDMTimeline(peerAddress);
+            await dmManager.loadDMTimeline(peerAddress);
 
             // Should merge without duplicates
             expect(channel.reactions['msg-1']['👍']).toContain('0xotherpeer');

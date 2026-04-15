@@ -55,7 +55,10 @@ vi.mock('../../src/js/ui.js', () => ({
 }));
 
 vi.mock('../../src/js/ui/AvatarGenerator.js', () => ({
-    getAvatar: vi.fn(() => '<svg></svg>')
+    getAvatar: vi.fn(() => '<svg></svg>'),
+    generateAvatar: vi.fn(() => '<svg></svg>'),
+    setAvatarSeed: vi.fn(),
+    generateRandomAvatarSeed: vi.fn(() => '0x' + 'a'.repeat(40))
 }));
 
 vi.mock('../../src/js/ui/utils.js', () => ({
