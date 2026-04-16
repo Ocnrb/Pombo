@@ -1199,6 +1199,9 @@ describe('DMManager', () => {
         it('should create conversation and switch channel', async () => {
             const peerAddress = '0xdddddddddddddddddddddddddddddddddddddddd';
 
+            // Peer's inbox must exist for startDM to proceed
+            streamrController.client.getStream.mockResolvedValueOnce({ id: `${peerAddress.toLowerCase()}/Pombo-DM-1` });
+
             const result = await dmManager.startDM(peerAddress);
 
             expect(result).toBeDefined();

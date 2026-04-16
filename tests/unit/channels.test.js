@@ -109,6 +109,7 @@ vi.mock('../../src/js/dm.js', () => ({
         loadDMTimeline: vi.fn(),
         getPeerPublicKey: vi.fn().mockResolvedValue(null),
         isDMChannel: vi.fn().mockReturnValue(false),
+        fetchOlderDMMessages: vi.fn().mockResolvedValue({ loaded: 0, hasMore: false, noResultsInWindow: false }),
         conversations: new Map()
     }
 }));
@@ -1995,10 +1996,15 @@ describe('ChannelManager', () => {
             expect(result).toEqual({ loaded: 0, hasMore: false });
         });
 
-        it('should return zero for DM channels', async () => {
+        it('should delegate to dmManager for DM channels', async () => {
             channel.type = 'dm';
+            channel.peerAddress = '0xabc';
+            channel.hasMoreHistory = true;
+            const { dmManager } = await import('../../src/js/dm.js');
+            dmManager.fetchOlderDMMessages.mockResolvedValue({ loaded: 0, hasMore: false, noResultsInWindow: false });
             const result = await channelManager.loadMoreHistory(streamId);
-            expect(result).toEqual({ loaded: 0, hasMore: false });
+            expect(dmManager.fetchOlderDMMessages).toHaveBeenCalledWith('0xabc', expect.any(AbortSignal));
+            expect(result).toEqual({ loaded: 0, hasMore: false, noResultsInWindow: false });
         });
 
         it('should prevent concurrent loads', async () => {
