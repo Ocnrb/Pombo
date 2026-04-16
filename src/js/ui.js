@@ -1782,9 +1782,13 @@ class UIController {
 
     /**
      * Check if we're on mobile viewport
+     * Also treats landscape with very short height as mobile (phones rotated, small tablets)
      */
     isMobileView() {
-        return window.innerWidth < 768;
+        if (window.innerWidth < 768) return true;
+        // Landscape mobile: wide enough for desktop but too short vertically
+        if (window.innerHeight <= 500 && window.matchMedia('(orientation: landscape)').matches) return true;
+        return false;
     }
 
     /**

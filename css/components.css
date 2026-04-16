@@ -1029,7 +1029,7 @@ body {
 }
 
 /* ----- Toast Mobile Swipe Support ----- */
-@media (max-width: 767px) {
+@media (max-width: 767px), ((max-height: 500px) and (orientation: landscape)) {
     .toast {
         touch-action: pan-x;
         cursor: grab;
@@ -1249,10 +1249,12 @@ body {
 }
 
 /* ===========================================
-   MOBILE (< 768px)
+   MOBILE (< 768px) + LANDSCAPE SHORT SCREENS
    Sidebar = initial view, Chat = push navigation
+   Also applies to landscape devices with ≤500px height
+   (phones rotated, small tablets landscape, narrow TV UIs)
    =========================================== */
-@media (max-width: 767px) {
+@media (max-width: 767px), ((max-height: 500px) and (orientation: landscape)) {
     /* Force true black on mobile for Samsung/Android nav bar */
     html {
         background-color: #000000 !important;
@@ -2081,6 +2083,80 @@ body {
         white-space: nowrap;
         flex-shrink: 0;
         width: auto !important;
+    }
+
+    /* ----- Tailwind md: overrides for landscape mode ----- */
+    /* Tailwind md: breakpoint (min-width:768px) activates on landscape phones
+       because their width exceeds 768px. Override those desktop-only elements. */
+    #desktop-account-wrapper {
+        display: none !important;
+    }
+
+    #cancel-channel-btn-footer,
+    #cancel-dm-inbox-btn-footer {
+        display: none !important;
+    }
+
+    /* Settings modal sidebar elements hidden on mobile */
+    #settings-modal .hidden.md\:block {
+        display: none !important;
+    }
+
+    /* Sidebar explore/create row hidden on mobile (pill nav used) */
+    .sidebar .hidden.md\:flex {
+        display: none !important;
+    }
+
+    /* Restore large bottom padding on DM buttons (Tailwind md:pb-3 overrides pb-32) */
+    #dm-inbox-setup,
+    #dm-new-btn-wrap {
+        padding-bottom: 8rem !important;
+    }
+
+    /* Restore mobile order on modal headers (Tailwind md:order-* flips them) */
+    .modal-close-btn {
+        order: 0 !important;
+    }
+
+    .modal-close-btn ~ h3 {
+        order: 0 !important;
+    }
+}
+
+/* ----- Landscape short screens: tighter spacing to save vertical room ----- */
+@media (max-height: 500px) and (orientation: landscape) {
+    /* Move pill nav closer to bottom edge */
+    #mobile-pill-nav {
+        bottom: 0.5rem !important;
+    }
+
+    #sidebar-connect-float {
+        bottom: 3.5rem !important;
+    }
+
+    /* DM buttons: fixed inline with pill, centered between pill right edge and screen edge.
+       Pill is ~320px wide centered, so right edge ≈ calc(50% + 160px).
+       Center of remaining gap = calc(75% + 80px). Vertically centered with pill. */
+    #dm-inbox-setup,
+    #dm-new-btn-wrap {
+        position: fixed !important;
+        /* Vertically center with pill */
+        bottom: calc(0.5rem + 20px) !important;
+        /* Center in the gap between pill right edge and viewport right edge */
+        left: auto !important;
+        right: calc((100vw - 50% - 160px) / 2 - 60px) !important;
+        top: auto !important;
+        width: auto !important;
+        padding: 0 !important;
+        z-index: 101;
+        justify-content: center !important;
+    }
+
+    /* Compact the buttons themselves in landscape */
+    #dm-inbox-setup button,
+    #dm-new-btn-wrap button {
+        padding: 0.5rem 1rem !important;
+        font-size: 0.8125rem !important;
     }
 }
 
