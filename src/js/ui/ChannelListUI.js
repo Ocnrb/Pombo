@@ -167,7 +167,7 @@ class ChannelListUI {
                     </div>
                     <!-- Channel name -->
                     <div class="flex-1 min-w-0 ml-1.5">
-                        <h3 class="text-[13px] font-medium text-white/90 truncate">${escapeHtml(sanitizeText(channel.name))}</h3>
+                        <h3 class="text-sm font-medium text-white/90 truncate">${escapeHtml(sanitizeText(channel.name))}</h3>
                     </div>
                     <!-- Right side: drag handle + counter + arrow -->
                     <div class="flex items-center gap-1.5 ml-2 flex-shrink-0">

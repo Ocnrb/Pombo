@@ -1439,7 +1439,7 @@ body {
     }
 
     /* Show [+] Create Channel button in header for authenticated users in Explore view */
-    body.explore-open:not(.guest-mode) #header-create-channel-btn {
+    body.explore-open.chat-open:not(.guest-mode) #header-create-channel-btn {
         display: flex !important;
     }
     
@@ -1733,14 +1733,15 @@ body {
 
     /* Keep active tab orange (override Tailwind text-[#F6851B]) */
     .channel-filter-tab.text-\[\#F6851B\] {
-        color: #F6851B !important;
+        color: #f6851b !important;
     }
 
     /* Channel list items taller on mobile */
     #channel-list .channel-item {
-        padding-top: 1rem;
-        padding-bottom: 1rem;
-        border-color: rgba(255, 255, 255, 0.05);
+        padding-top: 0.8rem;
+        padding-bottom: 0.8rem;
+        background-color: rgba(255, 255, 255, 0.04);
+        border-color: rgba(255, 255, 255, 0.085);
     }
 
     /* Bottom padding so list doesn't hide behind pill */
@@ -2125,7 +2126,8 @@ body {
     
     /* Channel list items compact */
     #channel-list .channel-item {
-        padding: 0.625rem 0.75rem;
+        padding-left: 0.75rem;
+        padding-right: 0.75rem;
     }
 }
 
