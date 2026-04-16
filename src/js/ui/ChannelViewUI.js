@@ -106,6 +106,7 @@ class ChannelViewUI {
         
         // Restore padding and clear content
         this.elements.messagesArea?.classList.add('p-4');
+        chatAreaUI._channelSwitching = true;
         this.elements.messagesArea.innerHTML = '';
         
         // Show header controls
@@ -144,6 +145,7 @@ class ChannelViewUI {
         const reactions = channelManager.getChannelReactions(streamId);
         reactionManager.loadFromChannelState(reactions);
         
+        chatAreaUI._channelSwitching = false;
         chatAreaUI.renderMessages(channel.messages, () => {
             this.deps.attachReactionListeners();
             mediaHandler.attachLightboxListeners();

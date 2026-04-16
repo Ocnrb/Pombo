@@ -27,6 +27,7 @@ class ChatAreaUI {
         // Scroll/loading state
         this.isLoadingMore = false;
         this.scrollThreshold = 100; // pixels from top to trigger load
+        this._channelSwitching = false; // guard against scroll events during channel transition
         
         // Reply state
         this.replyingTo = null;
@@ -60,6 +61,9 @@ class ChatAreaUI {
      */
     async handleMessagesScroll() {
         if (!this.messagesArea) return;
+        
+        // Suppress scroll events during channel transitions (innerHTML='' triggers scroll)
+        if (this._channelSwitching) return;
         
         // Check if scrolled near the top
         if (this.messagesArea.scrollTop > this.scrollThreshold) {
