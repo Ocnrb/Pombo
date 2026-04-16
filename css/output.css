@@ -672,10 +672,6 @@ video {
   left: 0.375rem;
 }
 
-.left-2\.5 {
-  left: 0.625rem;
-}
-
 .left-3 {
   left: 0.75rem;
 }
@@ -1029,12 +1025,12 @@ video {
   height: 100vh;
 }
 
-.max-h-40 {
-  max-height: 10rem;
-}
-
 .max-h-48 {
   max-height: 12rem;
+}
+
+.max-h-52 {
+  max-height: 13rem;
 }
 
 .max-h-56 {
@@ -1181,6 +1177,10 @@ video {
   width: 18px;
 }
 
+.w-\[28\%\] {
+  width: 28%;
+}
+
 .w-\[300px\] {
   width: 300px;
 }
@@ -1203,10 +1203,6 @@ video {
 
 .w-\[400px\] {
   width: 400px;
-}
-
-.w-\[42\%\] {
-  width: 42%;
 }
 
 .w-\[420px\] {
@@ -1247,6 +1243,10 @@ video {
 
 .max-w-\[140px\] {
   max-width: 140px;
+}
+
+.max-w-\[180px\] {
+  max-width: 180px;
 }
 
 .max-w-\[90vw\] {
@@ -1416,6 +1416,10 @@ video {
 
 .gap-3 {
   gap: 0.75rem;
+}
+
+.gap-5 {
+  gap: 1.25rem;
 }
 
 .space-x-2 > :not([hidden]) ~ :not([hidden]) {
@@ -2403,6 +2407,11 @@ video {
   color: rgb(239 68 68 / var(--tw-text-opacity, 1));
 }
 
+.text-sky-400 {
+  --tw-text-opacity: 1;
+  color: rgb(56 189 248 / var(--tw-text-opacity, 1));
+}
+
 .text-white {
   --tw-text-opacity: 1;
   color: rgb(255 255 255 / var(--tw-text-opacity, 1));
@@ -2851,13 +2860,12 @@ select option {
   background-color: rgb(255 255 255 / 0.08);
 }
 
-.hover\:bg-white\/\[0\.1\]:hover {
-  background-color: rgb(255 255 255 / 0.1);
+.hover\:bg-white\/\[0\.12\]:hover {
+  background-color: rgb(255 255 255 / 0.12);
 }
 
-.hover\:text-\[\#ff9933\]:hover {
-  --tw-text-opacity: 1;
-  color: rgb(255 153 51 / var(--tw-text-opacity, 1));
+.hover\:bg-white\/\[0\.1\]:hover {
+  background-color: rgb(255 255 255 / 0.1);
 }
 
 .hover\:text-blue-300:hover {
@@ -2998,13 +3006,12 @@ select option {
   transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
 }
 
-.group:hover .group-hover\:text-white {
-  --tw-text-opacity: 1;
-  color: rgb(255 255 255 / var(--tw-text-opacity, 1));
-}
-
 .group:hover .group-hover\:text-white\/30 {
   color: rgb(255 255 255 / 0.3);
+}
+
+.group:hover .group-hover\:text-white\/60 {
+  color: rgb(255 255 255 / 0.6);
 }
 
 .group:hover .group-hover\:opacity-100 {
@@ -3080,6 +3087,10 @@ select option {
 
   .md\:block {
     display: block;
+  }
+
+  .md\:flex {
+    display: flex;
   }
 
   .md\:h-4 {

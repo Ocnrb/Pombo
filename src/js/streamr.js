@@ -2451,6 +2451,89 @@ class StreamrController {
     }
 
     /**
+     * Fetch older history using a bounded time window instead of scanning from epoch.
+     * Used for DM inbox pagination where scanning from epoch is too expensive.
+     * 
+     * @param {string} streamId - Stream ID
+     * @param {number} partition - Partition number
+     * @param {number} beforeTimestamp - Fetch messages before this timestamp (ms)
+     * @param {number} windowMs - Time window size in ms (e.g. 7 days)
+     * @param {AbortSignal} [signal] - Optional abort signal
+     * @returns {Promise<{messages: Array, hasMore: boolean, windowStart: number}>}
+     */
+    async fetchOlderHistoryWindowed(streamId, partition, beforeTimestamp, windowMs, signal = null) {
+        if (!this.client) {
+            throw new Error('Client not initialized');
+        }
+
+        const windowStart = Math.max(0, beforeTimestamp - windowMs);
+        const windowEnd = beforeTimestamp - 1;
+        const messages = [];
+
+        try {
+            Logger.debug(`fetchOlderHistoryWindowed: ${new Date(windowStart).toISOString()} → ${new Date(windowEnd).toISOString()}`);
+
+            const resend = await this.client.resend(
+                streamId,
+                {
+                    partition,
+                    from: { timestamp: windowStart },
+                    to: { timestamp: windowEnd }
+                }
+            );
+
+            const iterator = resend[Symbol.asyncIterator]();
+            let iteratorDone = false;
+
+            while (!iteratorDone) {
+                if (signal?.aborted) {
+                    Logger.debug('fetchOlderHistoryWindowed aborted');
+                    break;
+                }
+
+                let message;
+                try {
+                    const result = await iterator.next();
+                    iteratorDone = result.done;
+                    if (iteratorDone) break;
+                    message = result.value;
+                } catch (iterError) {
+                    if (iterError.code === 'DECRYPT_ERROR' || iterError.message?.includes('encryption key')) {
+                        continue;
+                    }
+                    Logger.warn('fetchOlderHistoryWindowed iteration error:', iterError.message);
+                    continue;
+                }
+
+                try {
+                    const content = message.content || message;
+                    const publisherId = typeof message.getPublisherId === 'function'
+                        ? message.getPublisherId()
+                        : message.publisherId;
+
+                    messages.push({
+                        content,
+                        publisherId,
+                        timestamp: message.timestamp
+                    });
+                } catch (e) {
+                    Logger.warn('fetchOlderHistoryWindowed: error processing message:', e.message);
+                }
+            }
+
+            // hasMore = true if windowStart > 0 (there could be older messages)
+            const hasMore = windowStart > 0;
+
+            Logger.info(`fetchOlderHistoryWindowed: ${messages.length} messages in window, hasMore: ${hasMore}`);
+
+            return { messages, hasMore, windowStart };
+        } catch (error) {
+            Logger.warn('fetchOlderHistoryWindowed error:', error.message);
+            return { messages: [], hasMore: windowStart > 0, windowStart };
+        }
+    }
+
+    /**
      * Subscribe to stream with historical resend
      * First subscribes for real-time, then attempts to fetch history separately
      * Falls back gracefully if history fetch fails (e.g., CORS issues on localhost)

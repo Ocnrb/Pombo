@@ -97,6 +97,9 @@ class ChatAreaUI {
         const showIndicator = channel.messages.length > 0;
         if (showIndicator) this.showLoadingMoreIndicator();
         
+        // Remove any existing "search older" banner before loading
+        this._removeSearchOlderBanner();
+        
         const previousScrollHeight = this.messagesArea.scrollHeight;
         const previousScrollTop = this.messagesArea.scrollTop;
         
@@ -113,6 +116,14 @@ class ChatAreaUI {
                 const newScrollHeight = this.messagesArea.scrollHeight;
                 const heightDiff = newScrollHeight - previousScrollHeight;
                 this.messagesArea.scrollTop = previousScrollTop + heightDiff;
+            } else if (result.noResultsInWindow && result.hasMore) {
+                // DM pagination: no messages from this peer in the current time window
+                this._showSearchOlderBanner(channel, channelManager);
+            } else if (!result.hasMore && result.loaded === 0) {
+                // Reached the beginning — show end-of-history marker for DMs
+                if (channel.type === 'dm') {
+                    this._showBeginningOfConversation();
+                }
             } else if (channel.messages.length === 0) {
                 // No messages loaded and channel is empty - re-render to update spinner to "no messages"
                 this.renderMessages(channel.messages);
@@ -123,6 +134,60 @@ class ChatAreaUI {
             if (showIndicator) this.hideLoadingMoreIndicator();
             this.isLoadingMore = false;
         }
+    }
+
+    /**
+     * Show "No messages found — Search older" banner at top of messages area (DM pagination)
+     * @private
+     */
+    _showSearchOlderBanner(channel, channelManager) {
+        this._removeSearchOlderBanner();
+        
+        const banner = document.createElement('div');
+        banner.id = 'dm-search-older-banner';
+        banner.className = 'flex justify-center py-3 cursor-pointer group';
+        banner.innerHTML = `
+            <div class="flex items-center gap-2 text-white/30 text-sm group-hover:text-white/60 transition-colors">
+                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <span>No messages found in this time range — Search older</span>
+            </div>
+        `;
+        banner.addEventListener('click', async () => {
+            banner.remove();
+            await this._loadMoreChannelHistory(channel, channelManager);
+        });
+        this.messagesArea?.prepend(banner);
+    }
+
+    /**
+     * Show "Beginning of conversation" marker at top (DM pagination exhausted)
+     * @private
+     */
+    _showBeginningOfConversation() {
+        this._removeSearchOlderBanner();
+        
+        const marker = document.createElement('div');
+        marker.id = 'dm-search-older-banner';
+        marker.className = 'flex justify-center py-3';
+        marker.innerHTML = `
+            <div class="flex items-center gap-2 text-white/20 text-sm">
+                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 11l7-7 7 7M5 19l7-7 7 7" />
+                </svg>
+                <span>Beginning of conversation</span>
+            </div>
+        `;
+        this.messagesArea?.prepend(marker);
+    }
+
+    /**
+     * Remove the "search older" or "beginning" banner
+     * @private
+     */
+    _removeSearchOlderBanner() {
+        document.getElementById('dm-search-older-banner')?.remove();
     }
 
     /**
@@ -452,7 +517,11 @@ class ChatAreaUI {
             return;
         }
         
-        const names = users.map(u => u.nickname || formatAddress(u.address || u)).join(', ');
+        const names = users.map(u => {
+            const addr = u.address || u;
+            const ensName = addr ? localStorage.getItem(`pombo_ens_${addr.toLowerCase()}`) : null;
+            return ensName || u.nickname || formatAddress(addr);
+        }).join(', ');
         usersSpan.textContent = names + (users.length === 1 ? ' is' : ' are');
         indicator.classList.remove('hidden');
     }

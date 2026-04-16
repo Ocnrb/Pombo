@@ -453,14 +453,6 @@ class ChannelModalsUI {
             
             this.deps.renderChannelList?.();
             this.showNotification('Joined channel successfully!', 'success');
-            
-            // Clear the quick join input if present
-            const quickJoinInput = document.getElementById('quick-join-input');
-            if (quickJoinInput) {
-                quickJoinInput.value = '';
-                this.deps.updateQuickJoinHash?.();
-                this.deps.updateBrowseJoinButton?.();
-            }
         } catch (error) {
             this.showNotification('Failed to join: ' + error.message, 'error');
         } finally {

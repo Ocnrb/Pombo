@@ -326,7 +326,7 @@ class PreviewModeUI {
         try {
             const { streamId, channelInfo, name, type, readOnly, messages } = this.previewChannel;
 
-            notificationUI.showLoadingToast('Adding channel...', 'Saving to your list');
+            notificationUI.showLoadingToast('Joining channel...', 'Saving channel...');
 
             // Use fast path - channel already subscribed via preview
             await channelManager.persistChannelFromPreview(streamId, {
@@ -356,7 +356,7 @@ class PreviewModeUI {
             // Select the now-joined channel
             await this.ui.selectChannel(previewStreamId);
 
-            this.ui.showNotification('Channel added to your list!', 'success');
+            this.ui.showNotification('Joined channel successfully!', 'success');
             Logger.info('Preview channel added to list:', previewStreamId);
         } catch (error) {
             Logger.error('Failed to add preview to list:', error);

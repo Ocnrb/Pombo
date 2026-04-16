@@ -1,4 +1,5 @@
 import { escapeHtml as _escapeHtml, escapeAttr as _escapeAttr } from './utils.js';
+import { getAvatarHtml } from './AvatarGenerator.js';
 import { GasEstimator } from './GasEstimator.js';
 import { CONFIG, getNetworkParams } from '../config.js';
 
@@ -863,6 +864,14 @@ class SettingsUI {
             // Update username field — if user has ENS, show it and disable local name editing
             const address = this.authManager.getAddress();
             const ensName = address ? await this.identityManager.resolveENS(address) : null;
+
+            // Update avatar in settings profile
+            const avatarContainer = document.getElementById('settings-avatar-container');
+            if (avatarContainer && address) {
+                const ensAvatar = this.identityManager.getCachedENSAvatar(address);
+                avatarContainer.innerHTML = `<div class="w-14 h-14 rounded-lg overflow-hidden border border-white/[0.08]">${getAvatarHtml(address, 56, 0.2, ensAvatar)}</div>`;
+            }
+
             if (this.elements.settingsUsername) {
                 if (ensName) {
                     this.elements.settingsUsername.value = ensName;

@@ -113,6 +113,10 @@ export const CONFIG = {
         maxSentMessages: 200,
         // Inbox history to load on login
         inboxHistoryCount: 100,
+        // Number of inbox messages to fetch per pagination request
+        loadMoreCount: 100,
+        // Time window (ms) per pagination search (7 days)
+        searchWindowMs: 7 * 24 * 3600 * 1000,
         // Pre-agreed encryption key for Streamr native layer (all Pombo DMs use this)
         // Real E2E security comes from ECDH app-layer encryption, not this key
         // This allows history/resend without key-exchange (publisher offline)

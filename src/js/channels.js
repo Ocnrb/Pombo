@@ -1084,7 +1084,14 @@ class ChannelManager {
             channel.initialLoadInProgress = true;
             await dmManager.loadDMTimeline(channel.peerAddress);
             channel.historyLoaded = true;
-            channel.hasMoreHistory = false;
+            // Enable scroll-up pagination for DMs — set oldestTimestamp from loaded messages
+            if (channel.messages.length > 0) {
+                const oldest = channel.messages.reduce((min, m) => m.timestamp < min ? m.timestamp : min, channel.messages[0].timestamp);
+                channel.oldestTimestamp = oldest;
+                channel.hasMoreHistory = true;
+            } else {
+                channel.hasMoreHistory = false;
+            }
             // Subscribe to DM-2 ephemeral on-demand (typing/presence)
             dmManager.subscribeDMEphemeral();
             // Clear gate and notify UI to re-render with ENS data
@@ -1891,9 +1898,31 @@ class ChannelManager {
             return { loaded: 0, hasMore: false };
         }
 
-        // DM channels: history is managed locally (sent + inbox)
+        // DM channels: paginate from inbox stream via dmManager
         if (channel.type === 'dm') {
-            return { loaded: 0, hasMore: false };
+            if (channel.loadingHistory) {
+                return { loaded: 0, hasMore: channel.hasMoreHistory };
+            }
+            if (!channel.hasMoreHistory) {
+                return { loaded: 0, hasMore: false };
+            }
+            channel.loadingHistory = true;
+            this.historyAbortController = new AbortController();
+            const signal = this.historyAbortController.signal;
+            const generationAtStart = this.switchGeneration;
+            try {
+                const result = await dmManager.fetchOlderDMMessages(channel.peerAddress, signal);
+                if (this.switchGeneration !== generationAtStart) {
+                    channel.loadingHistory = false;
+                    return { loaded: 0, hasMore: channel.hasMoreHistory };
+                }
+                channel.loadingHistory = false;
+                return result;
+            } catch (error) {
+                Logger.error('DM: loadMoreHistory failed:', error);
+                channel.loadingHistory = false;
+                return { loaded: 0, hasMore: channel.hasMoreHistory };
+            }
         }
         
         // Prevent concurrent loads

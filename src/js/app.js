@@ -116,6 +116,7 @@ class App {
         const connectBtn = document.getElementById('connect-wallet');
         const disconnectBtn = document.getElementById('disconnect-wallet');
         const switchBtn = document.getElementById('switch-wallet');
+        const desktopJoinIdBtn = document.getElementById('desktop-join-id-btn');
         const syncBtn = document.getElementById('sync-devices-btn');
         const pillSyncBtn = document.getElementById('pill-sync-devices-btn');
 
@@ -129,6 +130,11 @@ class App {
         switchBtn?.addEventListener('click', async () => {
             headerUI._closeDesktopDropdown();
             await walletFlows.switchWallet();
+        });
+
+        desktopJoinIdBtn?.addEventListener('click', () => {
+            headerUI._closeDesktopDropdown();
+            uiController.showQuickJoinModal();
         });
 
         // Sync buttons (desktop + mobile)

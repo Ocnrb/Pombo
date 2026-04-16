@@ -258,6 +258,16 @@ class ContactsUI {
             sender: senderAddress
         };
 
+        // Show/hide "Send DM" — hide if sender is yourself or you're already in a DM with them
+        const sendDMBtn = document.getElementById('context-menu-send-dm-btn');
+        if (sendDMBtn) {
+            const isSelf = senderAddress.toLowerCase() === this.deps.identityManager?.getAddress?.()?.toLowerCase();
+            const { channelManager } = this.deps;
+            const currentChannel = channelManager?.getCurrentChannel?.();
+            const alreadyInDM = currentChannel?.type === 'dm' && currentChannel.peerAddress?.toLowerCase() === senderAddress.toLowerCase();
+            sendDMBtn.classList.toggle('hidden', isSelf || alreadyInDM);
+        }
+
         // Show/hide "Add/Remove Contact" based on whether sender is already a contact
         const addContactBtn = document.getElementById('context-menu-add-contact-btn');
         const removeContactBtn = document.getElementById('context-menu-remove-contact-btn');
@@ -364,6 +374,10 @@ class ContactsUI {
         this.hideContextMenu();
 
         switch (action) {
+            case 'send-dm':
+                this.handleSendDM(address);
+                break;
+
             case 'add-contact':
                 this.showAddModal(address);
                 break;
@@ -400,9 +414,27 @@ class ContactsUI {
     }
 
     /**
+     * Start a DM conversation from the context menu
+     * @param {string} address - Address of the user to DM
+     */
+    async handleSendDM(address) {
+        const { dmManager, showNotification } = this.deps;
+        if (!dmManager) {
+            showNotification('DM system not available', 'error');
+            return;
+        }
+        try {
+            await dmManager.startDM(address);
+        } catch (e) {
+            showNotification(e.message || 'Failed to start DM', 'error');
+        }
+    }
+
+    /**
      * Block a user from the context menu — finds the DM channel and leaves with block
      * @param {string} address - Address of the user to block
      */
+
     async handleBlockUser(address) {
         const { channelManager, showNotification, renderChannelList, selectChannel, showConnectedNoChannelState } = this.deps;
         if (!channelManager) return;

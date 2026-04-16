@@ -44,63 +44,12 @@ class JoinChannelUI {
     }
 
     /**
-     * Update browse/join button state based on input content
-     * Shows "Join" when there's input, "Explore" when empty
-     */
-    updateBrowseJoinButton() {
-        const hasInput = this.elements.quickJoinInput?.value.trim();
-        const btn = this.elements.browseChannelsBtn;
-        const icon = this.elements.browseBtnIcon;
-        const text = this.elements.browseBtnText;
-        
-        if (!btn || !icon || !text) return;
-        
-        if (hasInput) {
-            // Show "Join" mode with orange styling
-            btn.classList.remove('text-white/50', 'hover:text-white');
-            btn.classList.add('text-[#F6851B]', 'hover:text-[#ff9933]', 'border-[#F6851B]/30');
-            text.textContent = 'Join';
-            // Change icon to chat bubble (message balloon)
-            icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>';
-        } else {
-            // Show "Explore" mode with default styling
-            btn.classList.remove('text-[#F6851B]', 'hover:text-[#ff9933]', 'border-[#F6851B]/30');
-            btn.classList.add('text-white/50', 'hover:text-white');
-            text.textContent = 'Explore';
-            // Restore globe icon
-            icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"/>';
-        }
-    }
-
-    /**
-     * Update quick join hash visibility based on input content
-     * Shows # prefix when there's input, hidden when empty to save space for placeholder
-     */
-    updateQuickJoinHash() {
-        const hasInput = this.elements.quickJoinInput?.value.trim();
-        const hash = this.elements.quickJoinHash;
-        const input = this.elements.quickJoinInput;
-        
-        if (!hash || !input) return;
-        
-        if (hasInput) {
-            hash.classList.remove('hidden');
-            input.classList.add('pl-6');
-            input.classList.remove('px-3');
-        } else {
-            hash.classList.add('hidden');
-            input.classList.remove('pl-6');
-            input.classList.add('px-3');
-        }
-    }
-
-    /**
-     * Handle quick join from sidebar input
+     * Handle quick join
      * @param {Function} showNotification - Notification callback
      * @param {Function} renderChannelList - Channel list render callback
+     * @param {string} streamId - Channel stream ID to join
      */
-    async handleQuickJoin(showNotification, renderChannelList) {
-        const streamId = this.elements.quickJoinInput?.value.trim();
+    async handleQuickJoin(showNotification, renderChannelList, streamId) {
         
         if (!streamId) {
             showNotification('Please enter a channel ID', 'error');
@@ -138,9 +87,6 @@ class JoinChannelUI {
                     name: channelInfo.name,
                     type: 'password'
                 });
-                
-                // Clear the input
-                this._clearQuickJoinInput();
                 
                 renderChannelList();
                 showNotification('Joined channel successfully!', 'success');
@@ -181,27 +127,12 @@ class JoinChannelUI {
                 createdBy: channelInfo.createdBy
             });
             
-            // Clear the input
-            this._clearQuickJoinInput();
-            
             renderChannelList();
             showNotification('Joined channel successfully!', 'success');
         } catch (error) {
             showNotification('Failed to join: ' + error.message, 'error');
         } finally {
             notificationUI.hideLoadingToast();
-        }
-    }
-
-    /**
-     * Clear quick join input and update UI
-     * @private
-     */
-    _clearQuickJoinInput() {
-        if (this.elements.quickJoinInput) {
-            this.elements.quickJoinInput.value = '';
-            this.updateBrowseJoinButton();
-            this.updateQuickJoinHash();
         }
     }
 

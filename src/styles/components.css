@@ -1321,14 +1321,6 @@ body {
     body.guest-mode #connect-wallet {
         display: flex !important;
     }
-
-    /* Hide desktop-only sidebar controls (moved to pill nav) */
-    #quick-join-row {
-        display: none !important;
-    }
-    #new-channel-btn {
-        display: none !important;
-    }
     
     /* ----- SIDEBAR: Full screen initial view ----- */
     .sidebar {
@@ -2180,8 +2172,9 @@ body {
     }
 }
 
-/* Explore button active state when explore is open (desktop) */
+/* Explore button active state when explore is open (desktop) - subdued since already there */
 body.explore-open #browse-channels-btn {
-    background: rgba(255, 255, 255, 0.08);
-    color: rgba(255, 255, 255, 1);
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.5);
+    pointer-events: none;
 }

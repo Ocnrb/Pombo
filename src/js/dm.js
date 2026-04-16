@@ -690,6 +690,18 @@ class DMManager {
             throw new Error('Cannot send a DM to yourself');
         }
 
+        // Check if the peer has a DM inbox before creating the conversation
+        // Skip check if we already have a conversation with this peer (they had an inbox before)
+        const normalizedPeer = resolvedAddress.toLowerCase();
+        if (!this.conversations.has(normalizedPeer)) {
+            const peerInboxId = streamrController.getDMInboxId(normalizedPeer);
+            try {
+                await streamrController.client.getStream(peerInboxId);
+            } catch {
+                throw new Error('This user has not enabled DMs yet. They need to open Pombo and create their inbox first.');
+            }
+        }
+
         const channel = await this.getOrCreateConversation(resolvedAddress, localName);
 
         // Switch to the DM channel
@@ -875,6 +887,121 @@ class DMManager {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Fetch older DM messages from the inbox stream for a specific peer.
+     * Uses a time-windowed query to avoid scanning the entire stream from epoch.
+     * Messages from all peers arrive on the same inbox; we filter for the target peer.
+     * 
+     * @param {string} peerAddress - Peer's address
+     * @param {AbortSignal} [signal] - Optional abort signal
+     * @returns {Promise<{loaded: number, hasMore: boolean, noResultsInWindow: boolean}>}
+     */
+    async fetchOlderDMMessages(peerAddress, signal) {
+        const normalizedPeer = peerAddress.toLowerCase();
+        const channelStreamId = this.conversations.get(normalizedPeer);
+        if (!channelStreamId) return { loaded: 0, hasMore: false, noResultsInWindow: false };
+
+        const channel = channelManager.channels.get(channelStreamId);
+        if (!channel) return { loaded: 0, hasMore: false, noResultsInWindow: false };
+
+        if (!this.inboxMessageStreamId) return { loaded: 0, hasMore: false, noResultsInWindow: false };
+
+        // Determine the timestamp to search before
+        const beforeTimestamp = channel.oldestTimestamp || Date.now();
+        const windowMs = CONFIG.dm.searchWindowMs;
+
+        try {
+            Logger.info('DM: Fetching older messages for', normalizedPeer, 'before', new Date(beforeTimestamp).toISOString());
+
+            // Fetch from OUR inbox (not the peer's) using a time window
+            const result = await streamrController.fetchOlderHistoryWindowed(
+                this.inboxMessageStreamId,
+                0, // partition 0 = messages
+                beforeTimestamp,
+                windowMs,
+                signal
+            );
+
+            if (signal?.aborted) return { loaded: 0, hasMore: channel.hasMoreHistory, noResultsInWindow: false };
+
+            let addedCount = 0;
+            const privateKey = authManager.wallet?.privateKey;
+
+            for (const rawMsg of result.messages) {
+                if (signal?.aborted) break;
+
+                const publisherId = rawMsg.publisherId?.toLowerCase();
+                if (!publisherId) continue;
+
+                // Skip our own echoed messages
+                const myAddress = authManager.getAddress()?.toLowerCase();
+                if (publisherId === myAddress) continue;
+
+                // Only keep messages from the target peer
+                if (publisherId !== normalizedPeer) continue;
+
+                // Decrypt E2E envelope
+                let data;
+                try {
+                    let content = rawMsg.content;
+                    if (content && typeof content === 'object') {
+                        content.senderId = publisherId;
+                    }
+                    data = await this.decryptDMEnvelope(content, normalizedPeer);
+                } catch {
+                    continue; // Decryption failed
+                }
+                if (!data) continue;
+
+                // Skip reactions (they're handled separately)
+                if (data.type === 'reaction') {
+                    if (data.messageId && data.emoji) {
+                        channelManager.storeReaction(channel, data.messageId, data.emoji, publisherId, data.action || 'add');
+                    }
+                    continue;
+                }
+
+                // Skip non-content messages
+                if (!data.id || !data.timestamp) continue;
+
+                // Deduplicate
+                if (channel.messages.some(m => m.id === data.id)) continue;
+
+                // Tag as received and add verification
+                data._dmReceived = true;
+                data.verified = {
+                    valid: true,
+                    trustLevel: await identityManager.getTrustLevel(normalizedPeer),
+                    ensName: await identityManager.resolveENS(normalizedPeer)
+                };
+
+                channel.messages.push(data);
+                addedCount++;
+
+                // Track oldest timestamp
+                if (!channel.oldestTimestamp || data.timestamp < channel.oldestTimestamp) {
+                    channel.oldestTimestamp = data.timestamp;
+                }
+            }
+
+            if (addedCount > 0) {
+                channel.messages.sort((a, b) => a.timestamp - b.timestamp);
+            }
+
+            // Update hasMore based on whether the stream has older data
+            channel.hasMoreHistory = result.hasMore;
+
+            const noResultsInWindow = addedCount === 0 && result.hasMore;
+
+            Logger.info(`DM: Fetched ${addedCount} older messages for ${normalizedPeer} (noResultsInWindow: ${noResultsInWindow}, hasMore: ${result.hasMore})`);
+
+            return { loaded: addedCount, hasMore: result.hasMore, noResultsInWindow };
+        } catch (error) {
+            Logger.error('DM: fetchOlderDMMessages failed:', error.message);
+            return { loaded: 0, hasMore: channel.hasMoreHistory, noResultsInWindow: false };
         }
     }
 

@@ -184,6 +184,7 @@ class UIController {
             settingsUI,
             channelManager,
             secureStorage,
+            dmManager,
             showNotification: (msg, type) => this.showNotification(msg, type),
             showLoading: (msg) => this.showLoading(msg),
             hideLoading: () => this.hideLoading(),
@@ -209,9 +210,7 @@ class UIController {
             Logger,
             showNotification: (msg, type) => this.showNotification(msg, type),
             renderChannelList: () => this.renderChannelList(),
-            selectChannel: (streamId) => this.selectChannel(streamId),
-            updateQuickJoinHash: () => this.updateQuickJoinHash(),
-            updateBrowseJoinButton: () => this.updateBrowseJoinButton()
+            selectChannel: (streamId) => this.selectChannel(streamId)
         });
 
         // DMModalsUI
@@ -348,8 +347,6 @@ class UIController {
             confirmDeleteBtn: document.getElementById('confirm-delete-btn'),
 
             // Join/Browse channels
-            quickJoinInput: document.getElementById('quick-join-input'),
-            quickJoinHash: document.getElementById('quick-join-hash'),
             browseChannelsBtn: document.getElementById('browse-channels-btn'),
             browseBtnIcon: document.getElementById('browse-btn-icon'),
             browseBtnText: document.getElementById('browse-btn-text'),
@@ -729,28 +726,9 @@ class UIController {
             modalManager.hide('storage-info-modal');
         });
 
-        // Quick join input (sidebar) - Enter to join
-        this.elements.quickJoinInput?.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                this.handleQuickJoin();
-            }
-        });
-
-        // Quick join input - Toggle button state and hash visibility on input change
-        this.elements.quickJoinInput?.addEventListener('input', (e) => {
-            this.updateBrowseJoinButton();
-            this.updateQuickJoinHash();
-        });
-
-        // Browse/Join channels button (sidebar) - Dynamic behavior
+        // Explore channels button (sidebar)
         this.elements.browseChannelsBtn?.addEventListener('click', () => {
-            const hasInput = this.elements.quickJoinInput?.value.trim();
-            if (hasInput) {
-                this.handleQuickJoin();
-            } else {
-                // No input: show Explore (unified for mobile/desktop)
-                this.openExploreView();
-            }
+            this.openExploreView();
         });
 
         // Quick Join modal (mobile pill) - Enter to join
@@ -1193,13 +1171,6 @@ class UIController {
         
         // Reset sending state
         inputUI.setIsSending(false);
-        
-        // Clear quick join input and reset button
-        if (this.elements.quickJoinInput) {
-            this.elements.quickJoinInput.value = '';
-        }
-        this.updateBrowseJoinButton();
-        this.updateQuickJoinHash();
         
         // Close any open modals first (using ModalManager)
         modalManager.hide('channel-settings-modal');
@@ -2095,18 +2066,11 @@ class UIController {
         this.joinChannelUI.hideJoinChannelModal();
     }
 
-    updateBrowseJoinButton() {
-        this.joinChannelUI.updateBrowseJoinButton();
-    }
-
-    updateQuickJoinHash() {
-        this.joinChannelUI.updateQuickJoinHash();
-    }
-
-    async handleQuickJoin() {
+    async handleQuickJoin(streamId) {
         return this.joinChannelUI.handleQuickJoin(
             (msg, type) => this.showNotification(msg, type),
-            () => this.renderChannelList()
+            () => this.renderChannelList(),
+            streamId
         );
     }
 
@@ -2136,17 +2100,12 @@ class UIController {
             return;
         }
 
-        // Set the value in the sidebar input so handleQuickJoin can use it
-        if (this.elements.quickJoinInput) {
-            this.elements.quickJoinInput.value = streamId;
-        }
-
         // Hide modal
         modal?.classList.add('hidden');
         if (input) input.value = '';
 
-        // Delegate to existing quick join logic
-        await this.handleQuickJoin();
+        // Delegate to existing quick join logic with the streamId directly
+        await this.handleQuickJoin(streamId);
     }
 
     async handleJoinChannel() {
