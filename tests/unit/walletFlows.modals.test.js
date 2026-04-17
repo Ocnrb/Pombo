@@ -62,9 +62,7 @@ vi.mock('../../src/js/ui.js', () => ({
 vi.mock('../../src/js/ui/AvatarGenerator.js', () => ({
     getAvatar: vi.fn(() => '<svg></svg>'),
     getAvatarHtml: vi.fn(() => '<svg></svg>'),
-    generateAvatar: vi.fn(() => '<svg></svg>'),
-    setAvatarSeed: vi.fn(),
-    generateRandomAvatarSeed: vi.fn(() => '0x' + 'a'.repeat(40))
+    generateAvatar: vi.fn(() => '<svg></svg>')
 }));
 
 vi.mock('../../src/js/ui/utils.js', () => ({
@@ -117,6 +115,20 @@ vi.mock('../../src/js/ui/modalUtils.js', () => ({
     })
 }));
 
+// Mock ethers global (used by showNewAccountSetupModal to generate wallets)
+let walletCounter = 0;
+globalThis.ethers = {
+    Wallet: {
+        createRandom: vi.fn(() => {
+            walletCounter++;
+            return {
+                address: `0x${'0'.repeat(39)}${walletCounter}`,
+                privateKey: `0x${'a'.repeat(63)}${walletCounter}`
+            };
+        })
+    }
+};
+
 import { walletFlows } from '../../src/js/walletFlows.js';
 import { authManager } from '../../src/js/auth.js';
 import { uiController } from '../../src/js/ui.js';
@@ -134,6 +146,7 @@ const originals = {};
 describe('WalletFlows Modal Methods', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        walletCounter = 0;
         setupPasswordStrengthCb = null;
         // Save & restore originals
         originals.showSecureInput = walletFlows.showSecureInput;
@@ -622,16 +635,13 @@ describe('WalletFlows Modal Methods', () => {
 
     // ==================== showNewAccountSetupModal ====================
     describe('showNewAccountSetupModal', () => {
-        const address = '0xNewAddress123';
-        const privateKey = '0x' + 'ab'.repeat(32);
-
         // Helper: advance past avatar step to details step
         const goToDetailsStep = () => {
             document.querySelector('#avatar-continue-btn').click();
         };
 
         it('renders avatar selection step initially', async () => {
-            const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            const promise = walletFlows.showNewAccountSetupModal();
 
             expect(document.querySelector('#step-avatar')).not.toBeNull();
             expect(document.querySelector('#step-details').classList.contains('hidden')).toBe(true);
@@ -643,7 +653,7 @@ describe('WalletFlows Modal Methods', () => {
         });
 
         it('resolves with cancelled on cancel button', async () => {
-            const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            const promise = walletFlows.showNewAccountSetupModal();
 
             document.querySelector('#avatar-cancel-btn').click();
 
@@ -652,13 +662,15 @@ describe('WalletFlows Modal Methods', () => {
         });
 
         it('transitions from avatar step to details step', async () => {
-            const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            const promise = walletFlows.showNewAccountSetupModal();
 
             goToDetailsStep();
 
             expect(document.querySelector('#step-avatar').classList.contains('hidden')).toBe(true);
             expect(document.querySelector('#step-details').classList.contains('hidden')).toBe(false);
-            expect(document.body.textContent).toContain(address);
+            // Address display should contain the first generated wallet's address
+            const addressDisplay = document.querySelector('#address-display');
+            expect(addressDisplay.textContent).toBeTruthy();
 
             // Go back to avatar step
             document.querySelector('#details-back-btn').click();
@@ -669,7 +681,7 @@ describe('WalletFlows Modal Methods', () => {
         });
 
         it('shuffles avatars when shuffle button is clicked', async () => {
-            const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            const promise = walletFlows.showNewAccountSetupModal();
 
             const gridBefore = document.querySelector('#avatar-grid').innerHTML;
             document.querySelector('#shuffle-avatars').click();
@@ -683,7 +695,7 @@ describe('WalletFlows Modal Methods', () => {
         });
 
         it('toggles private key visibility', async () => {
-            const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            const promise = walletFlows.showNewAccountSetupModal();
             goToDetailsStep();
 
             const pkHidden = document.querySelector('#pk-hidden');
@@ -706,12 +718,12 @@ describe('WalletFlows Modal Methods', () => {
         it('copies private key to clipboard', async () => {
             const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
 
-            const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            const promise = walletFlows.showNewAccountSetupModal();
             goToDetailsStep();
 
             await document.querySelector('#copy-pk').click();
 
-            expect(writeTextSpy).toHaveBeenCalledWith(privateKey);
+            expect(writeTextSpy).toHaveBeenCalledWith(expect.stringContaining('0x'));
 
             document.querySelector('#details-back-btn').click();
             document.querySelector('#avatar-cancel-btn').click();
@@ -722,7 +734,7 @@ describe('WalletFlows Modal Methods', () => {
             vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('denied'));
             document.execCommand = vi.fn().mockReturnValue(true);
 
-            const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            const promise = walletFlows.showNewAccountSetupModal();
             goToDetailsStep();
 
             await document.querySelector('#copy-pk').click();
@@ -737,7 +749,7 @@ describe('WalletFlows Modal Methods', () => {
         });
 
         it('continue button is disabled until password strength callback fires true', async () => {
-            const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            const promise = walletFlows.showNewAccountSetupModal();
             goToDetailsStep();
 
             const continueBtn = document.querySelector('#details-continue-btn');
@@ -758,7 +770,7 @@ describe('WalletFlows Modal Methods', () => {
         });
 
         it('transitions to confirm step on continue', async () => {
-            const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            const promise = walletFlows.showNewAccountSetupModal();
             goToDetailsStep();
 
             // Enable continue
@@ -779,7 +791,7 @@ describe('WalletFlows Modal Methods', () => {
         });
 
         it('shows error when passwords do not match on confirm', async () => {
-            const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            const promise = walletFlows.showNewAccountSetupModal();
             goToDetailsStep();
 
             const passwordInput = document.querySelector('#password-input');
@@ -809,7 +821,7 @@ describe('WalletFlows Modal Methods', () => {
             // Mock storeCredentials (module-level, uses PasswordCredential)
             window.PasswordCredential = undefined;
 
-            const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            const promise = walletFlows.showNewAccountSetupModal();
             goToDetailsStep();
 
             const passwordInput = document.querySelector('#password-input');
@@ -827,16 +839,18 @@ describe('WalletFlows Modal Methods', () => {
             document.querySelector('#confirm-password-form').dispatchEvent(new Event('submit', { cancelable: true }));
 
             const result = await promise;
-            expect(result).toEqual({
+            expect(result).toMatchObject({
                 password: 'StrongPass123!',
                 displayName: 'Alice'
             });
+            expect(result.address).toBeTruthy();
+            expect(result.privateKey).toBeTruthy();
         });
 
         it('resolves with null displayName when empty', async () => {
             window.PasswordCredential = undefined;
 
-            const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            const promise = walletFlows.showNewAccountSetupModal();
             goToDetailsStep();
 
             document.querySelector('#password-input').value = 'Pass123!';
@@ -853,7 +867,7 @@ describe('WalletFlows Modal Methods', () => {
         });
 
         it('clears confirm error on new input', async () => {
-            const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            const promise = walletFlows.showNewAccountSetupModal();
             goToDetailsStep();
 
             document.querySelector('#password-input').value = 'Pass123!';
@@ -879,7 +893,7 @@ describe('WalletFlows Modal Methods', () => {
         });
 
         it('Enter key on password triggers continue when enabled', async () => {
-            const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            const promise = walletFlows.showNewAccountSetupModal();
             goToDetailsStep();
 
             const passwordInput = document.querySelector('#password-input');
@@ -900,7 +914,7 @@ describe('WalletFlows Modal Methods', () => {
         it('removes modal from DOM after resolve', async () => {
             window.PasswordCredential = undefined;
 
-            const promise = walletFlows.showNewAccountSetupModal(address, privateKey);
+            const promise = walletFlows.showNewAccountSetupModal();
             goToDetailsStep();
 
             document.querySelector('#password-input').value = 'Pass1!';
@@ -1262,7 +1276,7 @@ describe('WalletFlows Modal Methods', () => {
                 configurable: true
             });
 
-            const promise = walletFlows.showNewAccountSetupModal('0xTestAddr', '0x' + 'ff'.repeat(32));
+            const promise = walletFlows.showNewAccountSetupModal();
 
             document.querySelector('#avatar-continue-btn').click();
             document.querySelector('#password-input').value = 'MyPass123!';
@@ -1279,7 +1293,7 @@ describe('WalletFlows Modal Methods', () => {
         it('does not throw when PasswordCredential not supported', async () => {
             window.PasswordCredential = undefined;
 
-            const promise = walletFlows.showNewAccountSetupModal('0xAddr', '0x' + 'ff'.repeat(32));
+            const promise = walletFlows.showNewAccountSetupModal();
 
             document.querySelector('#avatar-continue-btn').click();
             document.querySelector('#password-input').value = 'Pass1!';

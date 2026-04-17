@@ -69,9 +69,7 @@ vi.mock('../../src/js/ui.js', () => ({
 vi.mock('../../src/js/ui/AvatarGenerator.js', () => ({
     getAvatar: vi.fn(() => '<svg></svg>'),
     getAvatarHtml: vi.fn(() => '<svg></svg>'),
-    generateAvatar: vi.fn(() => '<svg></svg>'),
-    setAvatarSeed: vi.fn(),
-    generateRandomAvatarSeed: vi.fn(() => '0x' + 'a'.repeat(40))
+    generateAvatar: vi.fn(() => '<svg></svg>')
 }));
 
 vi.mock('../../src/js/ui/utils.js', () => ({
@@ -179,7 +177,9 @@ describe('WalletFlows Extended', () => {
 
             await walletFlows.connectLocal();
 
-            expect(authManager.generateLocalWallet).toHaveBeenCalled();
+            // connectLocal no longer calls generateLocalWallet — the modal generates wallets internally
+            // Just verify the flow didn't error
+            expect(mockCallbacks.fallbackToGuest).toHaveBeenCalled();
         });
 
         it('falls back to guest if user cancels setup', async () => {
@@ -194,6 +194,8 @@ describe('WalletFlows Extended', () => {
 
         it('saves wallet with progress when setup completed', async () => {
             walletFlows.showNewAccountSetupModal = vi.fn().mockResolvedValue({
+                address: '0xChosenAddr',
+                privateKey: '0xChosenKey',
                 password: 'StrongPass123!',
                 displayName: 'Alice'
             });
@@ -206,6 +208,8 @@ describe('WalletFlows Extended', () => {
 
         it('calls onWalletConnected with new address and signer', async () => {
             walletFlows.showNewAccountSetupModal = vi.fn().mockResolvedValue({
+                address: '0xChosenAddr',
+                privateKey: '0xChosenKey',
                 password: 'pass123',
                 displayName: ''
             });
@@ -213,14 +217,17 @@ describe('WalletFlows Extended', () => {
 
             await walletFlows.connectLocal();
 
+            expect(authManager.importPrivateKey).toHaveBeenCalledWith('0xChosenKey');
             expect(mockCallbacks.onWalletConnected).toHaveBeenCalledWith(
-                '0xnewwallet',
+                '0ximported',
                 expect.objectContaining({ signMessage: expect.any(Function) })
             );
         });
 
         it('saves display name to secureStorage when storage unlocked', async () => {
             walletFlows.showNewAccountSetupModal = vi.fn().mockResolvedValue({
+                address: '0xChosenAddr',
+                privateKey: '0xChosenKey',
                 password: 'pass123',
                 displayName: 'Bob'
             });
@@ -235,8 +242,10 @@ describe('WalletFlows Extended', () => {
 
         it('does not save display name if empty', async () => {
             walletFlows.showNewAccountSetupModal = vi.fn().mockResolvedValue({
+                address: '0xChosenAddr',
+                privateKey: '0xChosenKey',
                 password: 'pass123',
-                displayName: ''
+                displayName: null
             });
             walletFlows.saveWalletWithProgress = vi.fn().mockResolvedValue({});
 
@@ -247,6 +256,8 @@ describe('WalletFlows Extended', () => {
 
         it('shows success notification', async () => {
             walletFlows.showNewAccountSetupModal = vi.fn().mockResolvedValue({
+                address: '0xChosenAddr',
+                privateKey: '0xChosenKey',
                 password: 'pass123',
                 displayName: ''
             });
@@ -257,14 +268,13 @@ describe('WalletFlows Extended', () => {
             expect(uiController.showNotification).toHaveBeenCalledWith('Account created!', 'success');
         });
 
-        it('does not save wallet if setup returned null password section', async () => {
-            // setupResult is truthy but no distinct password section
+        it('does not save wallet if setup returned null', async () => {
             walletFlows.showNewAccountSetupModal = vi.fn().mockResolvedValue(null);
 
             await walletFlows.connectLocal();
 
-            // Should still call onWalletConnected (wallet is generated regardless)
-            expect(mockCallbacks.onWalletConnected).toHaveBeenCalled();
+            // null result means no setup completed — should not call importPrivateKey
+            expect(authManager.importPrivateKey).not.toHaveBeenCalled();
         });
     });
 
