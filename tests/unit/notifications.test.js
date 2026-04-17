@@ -1,7 +1,7 @@
 /**
  * Tests for notifications.js - NotificationManager
  * 
- * Covers: enable/disable, subscribe, init, sendChannelInvite,
+ * Covers: init, sendChannelInvite (E2E encrypted via DM inbox P3),
  * handleNotification, invite management, localStorage persistence,
  * formatAddress, generateInviteId, playNotificationSound, UI interactions
  */
@@ -12,17 +12,24 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('../../src/js/streamr.js', () => ({
     streamrController: {
         client: {
-            createStream: vi.fn()
+            getStream: vi.fn().mockResolvedValue({ id: 'mock-stream' })
         },
-        subscribeSimple: vi.fn().mockResolvedValue(undefined),
-        unsubscribe: vi.fn().mockResolvedValue(undefined),
-        publish: vi.fn().mockResolvedValue(undefined)
+        getDMInboxId: vi.fn((addr) => `${addr.toLowerCase()}/Pombo-DM-1`),
+        getDMPublicKey: vi.fn().mockResolvedValue('0x02peerpubkey'),
+        setDMPublishKey: vi.fn().mockResolvedValue(undefined),
+        publishNotification: vi.fn().mockResolvedValue(undefined)
+    },
+    STREAM_CONFIG: {
+        MESSAGE_STREAM: {
+            NOTIFICATIONS: 3
+        }
     }
 }));
 
 vi.mock('../../src/js/auth.js', () => ({
     authManager: {
-        getAddress: vi.fn().mockReturnValue('0xAbC1230000000000000000000000000000004567')
+        getAddress: vi.fn().mockReturnValue('0xAbC1230000000000000000000000000000004567'),
+        wallet: { privateKey: '0xfakeprivatekey1234567890abcdef' }
     }
 }));
 
@@ -59,9 +66,10 @@ vi.mock('../../src/js/config.js', () => ({
     }
 }));
 
-vi.mock('../../src/js/media.js', () => ({
-    mediaController: {
-        handleMediaMessage: vi.fn()
+vi.mock('../../src/js/dmCrypto.js', () => ({
+    dmCrypto: {
+        getSharedKey: vi.fn().mockResolvedValue('mock-aes-key'),
+        encrypt: vi.fn().mockImplementation(async (msg) => ({ ct: 'enc', iv: 'iv', e: 'aes-256-gcm', _original: msg }))
     }
 }));
 
@@ -70,225 +78,30 @@ import { streamrController } from '../../src/js/streamr.js';
 import { authManager } from '../../src/js/auth.js';
 import { channelManager } from '../../src/js/channels.js';
 import { uiController } from '../../src/js/ui.js';
+import { dmCrypto } from '../../src/js/dmCrypto.js';
 
 describe('NotificationManager', () => {
     beforeEach(() => {
         // Reset state
-        notificationManager.notificationStream = null;
         notificationManager.pendingInvites = new Map();
         notificationManager.initialized = false;
+        notificationManager.muted = false;
 
         // Clear localStorage
         localStorage.clear();
 
         vi.clearAllMocks();
         authManager.getAddress.mockReturnValue('0xAbC1230000000000000000000000000000004567');
+        streamrController.client.getStream.mockResolvedValue({ id: 'mock-stream' });
+        streamrController.getDMPublicKey.mockResolvedValue('0x02peerpubkey');
     });
 
     // ==================== constructor ====================
     describe('constructor', () => {
         it('should initialize with default state', () => {
-            expect(notificationManager.notificationStream).toBeNull();
             expect(notificationManager.pendingInvites).toBeInstanceOf(Map);
             expect(notificationManager.initialized).toBe(false);
-        });
-    });
-
-    // ==================== getStorageKey() ====================
-    describe('getStorageKey()', () => {
-        it('should return key with lowercased address', () => {
-            const key = notificationManager.getStorageKey();
-            expect(key).toBe('pombo_notifications_0xabc1230000000000000000000000000000004567');
-        });
-
-        it('should return default key when no address', () => {
-            authManager.getAddress.mockReturnValue(null);
-            const key = notificationManager.getStorageKey();
-            expect(key).toBe('pombo_notifications_default');
-        });
-    });
-
-    // ==================== getStreamId() ====================
-    describe('getStreamId()', () => {
-        it('should return lowercased address based stream ID', () => {
-            const id = notificationManager.getStreamId('0xABC123');
-            expect(id).toBe('0xabc123/pombo_notifications');
-        });
-    });
-
-    // ==================== isEnabled() ====================
-    describe('isEnabled()', () => {
-        it('should return false when no settings stored', () => {
-            expect(notificationManager.isEnabled()).toBe(false);
-        });
-
-        it('should return true when enabled in settings', () => {
-            const key = notificationManager.getStorageKey();
-            localStorage.setItem(key, JSON.stringify({ enabled: true }));
-            expect(notificationManager.isEnabled()).toBe(true);
-        });
-
-        it('should return false when disabled in settings', () => {
-            const key = notificationManager.getStorageKey();
-            localStorage.setItem(key, JSON.stringify({ enabled: false }));
-            expect(notificationManager.isEnabled()).toBe(false);
-        });
-
-        it('should return false on invalid JSON', () => {
-            const key = notificationManager.getStorageKey();
-            localStorage.setItem(key, 'not-json');
-            expect(notificationManager.isEnabled()).toBe(false);
-        });
-    });
-
-    // ==================== getSettings() ====================
-    describe('getSettings()', () => {
-        it('should return default settings when nothing stored', () => {
-            const settings = notificationManager.getSettings();
-            expect(settings).toEqual({ enabled: false, streamId: null });
-        });
-
-        it('should return stored settings', () => {
-            const key = notificationManager.getStorageKey();
-            const stored = { enabled: true, streamId: 'test/stream' };
-            localStorage.setItem(key, JSON.stringify(stored));
-
-            const settings = notificationManager.getSettings();
-            expect(settings).toEqual(stored);
-        });
-
-        it('should return default on parse error', () => {
-            const key = notificationManager.getStorageKey();
-            localStorage.setItem(key, '{bad json');
-
-            const settings = notificationManager.getSettings();
-            expect(settings).toEqual({ enabled: false, streamId: null });
-        });
-    });
-
-    // ==================== saveSettings() ====================
-    describe('saveSettings()', () => {
-        it('should save settings to localStorage', () => {
-            const settings = { enabled: true, streamId: 'my/stream' };
-            notificationManager.saveSettings(settings);
-
-            const key = notificationManager.getStorageKey();
-            const stored = JSON.parse(localStorage.getItem(key));
-            expect(stored).toEqual(settings);
-        });
-    });
-
-    // ==================== enable() ====================
-    describe('enable()', () => {
-        it('should throw when not authenticated', async () => {
-            authManager.getAddress.mockReturnValue(null);
-            await expect(notificationManager.enable()).rejects.toThrow('Not authenticated');
-        });
-
-        it('should create stream and save settings on success', async () => {
-            const mockStream = {
-                grantPermissions: vi.fn().mockResolvedValue(undefined)
-            };
-            streamrController.client.createStream.mockResolvedValue(mockStream);
-
-            const result = await notificationManager.enable();
-
-            expect(result).toBe(true);
-            expect(streamrController.client.createStream).toHaveBeenCalledWith({
-                id: expect.stringContaining('/pombo_notifications'),
-                partitions: 1,
-                description: 'Pombo notification channel'
-            });
-            expect(mockStream.grantPermissions).toHaveBeenCalled();
-
-            // Check settings were saved
-            const settings = notificationManager.getSettings();
-            expect(settings.enabled).toBe(true);
-            expect(settings.streamId).toContain('/pombo_notifications');
-        });
-
-        it('should subscribe after creating stream', async () => {
-            const mockStream = { grantPermissions: vi.fn().mockResolvedValue(undefined) };
-            streamrController.client.createStream.mockResolvedValue(mockStream);
-
-            await notificationManager.enable();
-
-            expect(streamrController.subscribeSimple).toHaveBeenCalled();
-        });
-
-        it('should throw on stream creation failure', async () => {
-            streamrController.client.createStream.mockRejectedValue(new Error('Gas error'));
-
-            await expect(notificationManager.enable()).rejects.toThrow('Gas error');
-        });
-    });
-
-    // ==================== disable() ====================
-    describe('disable()', () => {
-        it('should set enabled to false in settings', () => {
-            // First enable
-            const key = notificationManager.getStorageKey();
-            localStorage.setItem(key, JSON.stringify({ enabled: true, streamId: 'test/stream' }));
-            notificationManager.notificationStream = 'test/stream';
-
-            notificationManager.disable();
-
-            const settings = notificationManager.getSettings();
-            expect(settings.enabled).toBe(false);
-        });
-
-        it('should unsubscribe from stream', () => {
-            notificationManager.notificationStream = 'test/stream';
-            notificationManager.disable();
-
-            expect(streamrController.unsubscribe).toHaveBeenCalledWith('test/stream');
-        });
-
-        it('should set initialized to false', () => {
-            notificationManager.initialized = true;
-            notificationManager.disable();
-            expect(notificationManager.initialized).toBe(false);
-        });
-
-        it('should clear notificationStream', () => {
-            notificationManager.notificationStream = 'test/stream';
-            notificationManager.disable();
-            expect(notificationManager.notificationStream).toBeNull();
-        });
-
-        it('should not call unsubscribe if no stream set', () => {
-            notificationManager.notificationStream = null;
-            notificationManager.disable();
-            expect(streamrController.unsubscribe).not.toHaveBeenCalled();
-        });
-    });
-
-    // ==================== subscribe() ====================
-    describe('subscribe()', () => {
-        it('should throw when no streamId configured', async () => {
-            await expect(notificationManager.subscribe()).rejects.toThrow('No notification stream configured');
-        });
-
-        it('should subscribe to configured stream', async () => {
-            const key = notificationManager.getStorageKey();
-            localStorage.setItem(key, JSON.stringify({ enabled: true, streamId: 'my/stream' }));
-
-            await notificationManager.subscribe();
-
-            expect(streamrController.subscribeSimple).toHaveBeenCalledWith(
-                'my/stream',
-                expect.any(Function),
-                null
-            );
-            expect(notificationManager.notificationStream).toBe('my/stream');
-        });
-
-        it('should throw on subscription failure', async () => {
-            const key = notificationManager.getStorageKey();
-            localStorage.setItem(key, JSON.stringify({ enabled: true, streamId: 'my/stream' }));
-            streamrController.subscribeSimple.mockRejectedValueOnce(new Error('Network error'));
-
-            await expect(notificationManager.subscribe()).rejects.toThrow('Network error');
+            expect(notificationManager.muted).toBe(false);
         });
     });
 
@@ -300,7 +113,7 @@ describe('NotificationManager', () => {
             expect(notificationManager.initialized).toBe(false);
         });
 
-        it('should load pending invites', async () => {
+        it('should load pending invites and set initialized', async () => {
             const address = '0xabc1230000000000000000000000000000004567';
             const inviteKey = `pombo_invites_${address}`;
             const invites = [{ inviteId: 'inv_1', from: '0xpeer', channel: { name: 'Test' } }];
@@ -310,37 +123,65 @@ describe('NotificationManager', () => {
 
             expect(notificationManager.pendingInvites.size).toBe(1);
             expect(notificationManager.pendingInvites.get('inv_1')).toBeDefined();
-        });
-
-        it('should not subscribe if not enabled', async () => {
-            await notificationManager.init();
-            expect(streamrController.subscribeSimple).not.toHaveBeenCalled();
-            expect(notificationManager.initialized).toBe(false);
-        });
-
-        it('should subscribe and set initialized when enabled', async () => {
-            const key = notificationManager.getStorageKey();
-            localStorage.setItem(key, JSON.stringify({ enabled: true, streamId: 'addr/pombo_notifications' }));
-
-            await notificationManager.init();
-
-            expect(streamrController.subscribeSimple).toHaveBeenCalled();
             expect(notificationManager.initialized).toBe(true);
         });
 
-        it('should handle subscribe failure gracefully', async () => {
-            const key = notificationManager.getStorageKey();
-            localStorage.setItem(key, JSON.stringify({ enabled: true, streamId: 'addr/pombo_notifications' }));
-            streamrController.subscribeSimple.mockRejectedValueOnce(new Error('fail'));
+        it('should set initialized even with no pending invites', async () => {
+            await notificationManager.init();
+            expect(notificationManager.initialized).toBe(true);
+        });
 
-            await notificationManager.init(); // Should not throw
-            expect(notificationManager.initialized).toBe(false);
+        it('should restore muted state from localStorage', async () => {
+            const address = '0xabc1230000000000000000000000000000004567';
+            localStorage.setItem(`pombo_invites_muted_${address}`, '1');
+
+            await notificationManager.init();
+            expect(notificationManager.muted).toBe(true);
+        });
+
+        it('should default to unmuted when no localStorage entry', async () => {
+            await notificationManager.init();
+            expect(notificationManager.muted).toBe(false);
         });
     });
 
     // ==================== sendChannelInvite() ====================
     describe('sendChannelInvite()', () => {
-        it('should publish invite to recipient notification stream', async () => {
+        it('should throw when not authenticated', async () => {
+            authManager.getAddress.mockReturnValue(null);
+            await expect(
+                notificationManager.sendChannelInvite('0xRecipient', { streamId: 's', name: 'n', type: 'public' })
+            ).rejects.toThrow('Not authenticated');
+        });
+
+        it('should throw when recipient has no DM inbox', async () => {
+            streamrController.client.getStream.mockRejectedValueOnce(new Error('not found'));
+
+            await expect(
+                notificationManager.sendChannelInvite('0xRecipient', { streamId: 's', name: 'n', type: 'public' })
+            ).rejects.toThrow('not enabled DMs');
+        });
+
+        it('should throw when peer public key not available', async () => {
+            streamrController.getDMPublicKey.mockResolvedValueOnce(null);
+
+            await expect(
+                notificationManager.sendChannelInvite('0xRecipient', { streamId: 's', name: 'n', type: 'public' })
+            ).rejects.toThrow('peer public key not available');
+        });
+
+        it('should throw when wallet private key not available', async () => {
+            const origWallet = authManager.wallet;
+            authManager.wallet = null;
+
+            await expect(
+                notificationManager.sendChannelInvite('0xRecipient', { streamId: 's', name: 'n', type: 'public' })
+            ).rejects.toThrow('wallet private key not available');
+
+            authManager.wallet = origWallet;
+        });
+
+        it('should encrypt and publish invite to recipient DM inbox P3', async () => {
             const channelInfo = {
                 streamId: 'owner/channel-1',
                 name: 'General',
@@ -351,25 +192,44 @@ describe('NotificationManager', () => {
             const inviteId = await notificationManager.sendChannelInvite('0xRecipient', channelInfo);
 
             expect(inviteId).toMatch(/^invite_/);
-            expect(streamrController.publish).toHaveBeenCalledWith(
-                '0xrecipient/pombo_notifications',
-                0,
+
+            // Should check recipient inbox exists
+            expect(streamrController.client.getStream).toHaveBeenCalledWith('0xrecipient/Pombo-DM-1');
+
+            // Should get peer public key
+            expect(streamrController.getDMPublicKey).toHaveBeenCalledWith('0xRecipient');
+
+            // Should derive ECDH shared key
+            expect(dmCrypto.getSharedKey).toHaveBeenCalledWith(
+                '0xfakeprivatekey1234567890abcdef',
+                '0xRecipient',
+                '0x02peerpubkey'
+            );
+
+            // Should encrypt the invite
+            expect(dmCrypto.encrypt).toHaveBeenCalledWith(
                 expect.objectContaining({
                     type: 'CHANNEL_INVITE',
-                    inviteId: expect.any(String),
                     from: '0xAbC1230000000000000000000000000000004567',
-                    to: '0xRecipient',
                     channel: expect.objectContaining({
                         streamId: 'owner/channel-1',
                         name: 'General'
                     })
                 }),
+                'mock-aes-key'
+            );
+
+            // Should set DM publish key and publish to P3
+            expect(streamrController.setDMPublishKey).toHaveBeenCalledWith('0xrecipient/Pombo-DM-1');
+            expect(streamrController.publishNotification).toHaveBeenCalledWith(
+                '0xrecipient/Pombo-DM-1',
+                expect.objectContaining({ ct: 'enc', iv: 'iv', e: 'aes-256-gcm' }),
                 null
             );
         });
 
         it('should throw on publish failure', async () => {
-            streamrController.publish.mockRejectedValueOnce(new Error('Publish failed'));
+            streamrController.publishNotification.mockRejectedValueOnce(new Error('Publish failed'));
 
             await expect(
                 notificationManager.sendChannelInvite('0xRecipient', { streamId: 's', name: 'n', type: 'public' })
@@ -542,6 +402,50 @@ describe('NotificationManager', () => {
 
             // No key written
             expect(localStorage.length).toBe(0);
+        });
+    });
+
+    // ==================== isMuted() / setMuted() ====================
+    describe('isMuted() / setMuted()', () => {
+        it('should return false by default', () => {
+            expect(notificationManager.isMuted()).toBe(false);
+        });
+
+        it('should return true after setMuted(true)', () => {
+            notificationManager.setMuted(true);
+            expect(notificationManager.isMuted()).toBe(true);
+        });
+
+        it('should return false after setMuted(false)', () => {
+            notificationManager.setMuted(true);
+            notificationManager.setMuted(false);
+            expect(notificationManager.isMuted()).toBe(false);
+        });
+
+        it('should persist muted state to localStorage', () => {
+            notificationManager.setMuted(true);
+            const address = '0xabc1230000000000000000000000000000004567';
+            expect(localStorage.getItem(`pombo_invites_muted_${address}`)).toBe('1');
+        });
+
+        it('should persist unmuted state to localStorage', () => {
+            notificationManager.setMuted(false);
+            const address = '0xabc1230000000000000000000000000000004567';
+            expect(localStorage.getItem(`pombo_invites_muted_${address}`)).toBe('0');
+        });
+
+        it('should coerce truthy/falsy values', () => {
+            notificationManager.setMuted(1);
+            expect(notificationManager.isMuted()).toBe(true);
+            notificationManager.setMuted(0);
+            expect(notificationManager.isMuted()).toBe(false);
+        });
+
+        it('should skip localStorage when no address', () => {
+            authManager.getAddress.mockReturnValue(null);
+            notificationManager.setMuted(true);
+            expect(notificationManager.isMuted()).toBe(true);
+            // No localStorage entry created (no address to key on)
         });
     });
 

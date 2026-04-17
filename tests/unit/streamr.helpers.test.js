@@ -176,8 +176,8 @@ describe('STREAM_CONFIG', () => {
         expect(STREAM_CONFIG.MESSAGE_STREAM.PARTITIONS).toBe(1);
     });
 
-    it('should have 3 partitions for DM inbox message stream', () => {
-        expect(STREAM_CONFIG.MESSAGE_STREAM.DM_PARTITIONS).toBe(3);
+    it('should have 4 partitions for DM inbox message stream', () => {
+        expect(STREAM_CONFIG.MESSAGE_STREAM.DM_PARTITIONS).toBe(4);
     });
 
     it('should have 3 partitions for ephemeral stream', () => {

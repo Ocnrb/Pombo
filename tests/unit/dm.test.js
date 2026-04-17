@@ -93,6 +93,9 @@ vi.mock('../../src/js/streamr.js', () => ({
         }
     },
     STREAM_CONFIG: {
+        MESSAGE_STREAM: {
+            NOTIFICATIONS: 3
+        },
         EPHEMERAL_STREAM: {
             CONTROL: 0,
             MEDIA_SIGNALS: 1,
@@ -133,6 +136,13 @@ vi.mock('../../src/js/media.js', () => ({
     }
 }));
 
+vi.mock('../../src/js/notifications.js', () => ({
+    notificationManager: {
+        handleNotification: vi.fn(),
+        isMuted: vi.fn().mockReturnValue(false)
+    }
+}));
+
 import { dmManager } from '../../src/js/dm.js';
 import { authManager } from '../../src/js/auth.js';
 import { streamrController } from '../../src/js/streamr.js';
@@ -141,6 +151,7 @@ import { secureStorage } from '../../src/js/secureStorage.js';
 import { dmCrypto } from '../../src/js/dmCrypto.js';
 import { relayManager } from '../../src/js/relayManager.js';
 import { mediaController } from '../../src/js/media.js';
+import { notificationManager } from '../../src/js/notifications.js';
 
 describe('DMManager', () => {
     beforeEach(() => {
@@ -149,6 +160,7 @@ describe('DMManager', () => {
         dmManager.inboxEphemeralStreamId = null;
         dmManager.inboxSubscription = null;
         dmManager.inboxEphemeralSubscription = null;
+        dmManager.inboxNotificationSub = null;
         dmManager.conversations.clear();
         dmManager.inboxReady = false;
         dmManager.handlers = [];
@@ -753,14 +765,23 @@ describe('DMManager', () => {
             expect(streamrController.subscribeWithHistory).not.toHaveBeenCalled();
         });
 
-        it('should subscribe to message stream only (ephemeral is on-demand)', async () => {
+        it('should subscribe to message stream and notification partition', async () => {
             dmManager.inboxMessageStreamId = 'test/Pombo-DM-1';
             dmManager.inboxEphemeralStreamId = 'test/Pombo-DM-2';
 
             await dmManager.subscribeToInbox();
 
+            // P0 messages via subscribeWithHistory
             expect(streamrController.subscribeWithHistory).toHaveBeenCalledTimes(1);
             expect(dmManager.inboxSubscription).toBeDefined();
+            // P3 notifications via subscribeToPartition
+            expect(streamrController.subscribeToPartition).toHaveBeenCalledWith(
+                'test/Pombo-DM-1',
+                3, // NOTIFICATIONS partition
+                expect.any(Function),
+                null
+            );
+            expect(dmManager.inboxNotificationSub).toBeDefined();
             expect(dmManager.inboxEphemeralSubscription).toBeNull();
         });
 
@@ -770,10 +791,47 @@ describe('DMManager', () => {
 
             await dmManager.subscribeToInbox();
 
-            // Only DM-1 subscribe, DM-2 is on-demand
+            // DM-1 P0 + P3, DM-2 is on-demand
             expect(streamrController.subscribeWithHistory).toHaveBeenCalledTimes(1);
             expect(dmManager.inboxSubscription).toEqual({ id: 'mock-sub' });
             expect(dmManager.inboxEphemeralSubscription).toBeNull();
+        });
+    });
+
+    // ==================== routeNotification() ====================
+    describe('routeNotification()', () => {
+        it('should ignore messages without senderId', async () => {
+            await dmManager.routeNotification({});
+            expect(notificationManager.handleNotification).not.toHaveBeenCalled();
+        });
+
+        it('should ignore own messages', async () => {
+            await dmManager.routeNotification({
+                senderId: '0xmyaddress1234567890abcdef12345678'
+            });
+            expect(notificationManager.handleNotification).not.toHaveBeenCalled();
+        });
+
+        it('should ignore blocked peers', async () => {
+            secureStorage.isBlocked.mockReturnValueOnce(true);
+            await dmManager.routeNotification({
+                senderId: '0xblockedpeer00000000000000000000000000000'
+            });
+            expect(notificationManager.handleNotification).not.toHaveBeenCalled();
+        });
+
+        it('should decrypt and delegate to notificationManager', async () => {
+            const data = {
+                senderId: '0xpeer111111111111111111111111111111111111',
+                type: 'CHANNEL_INVITE',
+                inviteId: 'inv_1'
+            };
+
+            await dmManager.routeNotification(data);
+
+            expect(notificationManager.handleNotification).toHaveBeenCalledWith(
+                expect.objectContaining({ type: 'CHANNEL_INVITE', inviteId: 'inv_1' })
+            );
         });
     });
 
