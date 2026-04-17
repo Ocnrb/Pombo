@@ -9,7 +9,7 @@ import { secureStorage } from './secureStorage.js';
 import { channelManager } from './channels.js';
 import { uiController } from './ui.js';
 import { Logger } from './logger.js';
-import { getAvatar, getAvatarHtml, generateAvatar, setAvatarSeed, generateRandomAvatarSeed } from './ui/AvatarGenerator.js';
+import { getAvatar, getAvatarHtml, generateAvatar } from './ui/AvatarGenerator.js';
 import { escapeHtml, escapeAttr } from './ui/utils.js';
 import { 
     createModalFromTemplate, 
@@ -680,10 +680,8 @@ class WalletFlows {
                 await this._disconnectWallet();
             }
 
-            const result = authManager.generateLocalWallet();
-
-            // Show new account setup modal (password + display name + confirm)
-            const setupResult = await this.showNewAccountSetupModal(result.address, result.privateKey);
+            // Show modal where user picks an avatar (= picks a wallet)
+            const setupResult = await this.showNewAccountSetupModal();
             
             // User cancelled - connect as guest instead
             if (setupResult === 'cancelled') {
@@ -692,19 +690,22 @@ class WalletFlows {
             }
             
             if (setupResult) {
+                // Set the chosen wallet in authManager
+                const importResult = authManager.importPrivateKey(setupResult.privateKey);
+
                 // Save wallet with password
                 await this.saveWalletWithProgress(setupResult.password, setupResult.displayName);
+
+                await this._onWalletConnected(importResult.address, importResult.signer);
+
+                // Save display name to secureStorage (after it's initialized)
+                if (setupResult.displayName && secureStorage.isStorageUnlocked()) {
+                    secureStorage.cache.username = setupResult.displayName;
+                    await secureStorage.saveToStorage();
+                }
+
+                uiController.showNotification('Account created!', 'success');
             }
-
-            await this._onWalletConnected(result.address, result.signer);
-
-            // Save display name to secureStorage (after it's initialized)
-            if (setupResult?.displayName && secureStorage.isStorageUnlocked()) {
-                secureStorage.cache.username = setupResult.displayName;
-                await secureStorage.saveToStorage();
-            }
-
-            uiController.showNotification('Account created!', 'success');
         } catch (error) {
             throw error;
         }
@@ -712,24 +713,24 @@ class WalletFlows {
 
     /**
      * Show new account setup modal (Step 1: Choose Avatar, Step 2: Name + Key + Password, Step 3: Confirm Password)
-     * @param {string} address - Account address
-     * @param {string} privateKey - Private key
-     * @returns {Promise<{password: string, displayName: string}|'cancelled'|null>}
+     * @returns {Promise<{address: string, privateKey: string, password: string, displayName: string}|'cancelled'>}
      */
-    async showNewAccountSetupModal(address, privateKey) {
+    async showNewAccountSetupModal() {
         return new Promise((resolve) => {
-            // Generate initial set of avatar seeds
+            // Generate initial set of wallets (each avatar = a real address)
             const AVATAR_COUNT = 6;
-            let avatarSeeds = [];
-            const regenerateSeeds = () => {
-                avatarSeeds = [];
+            let wallets = [];
+            const regenerateWallets = () => {
+                wallets = [];
                 for (let i = 0; i < AVATAR_COUNT; i++) {
-                    avatarSeeds.push(generateRandomAvatarSeed());
+                    const w = ethers.Wallet.createRandom();
+                    wallets.push({ address: w.address, privateKey: w.privateKey });
                 }
             };
-            regenerateSeeds();
+            regenerateWallets();
 
-            let selectedSeedIndex = 0;
+            let selectedIndex = 0;
+            const getSelectedWallet = () => wallets[selectedIndex];
 
             const modal = document.createElement('div');
             modal.className = 'fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-3 sm:p-4';
@@ -758,9 +759,9 @@ class WalletFlows {
                         <!-- Avatar Grid (scrollable) -->
                         <div class="flex-1 overflow-y-auto min-h-0" style="padding:20px">
                             <div id="avatar-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:0.625rem">
-                                ${avatarSeeds.map((seed, i) => `
+                                ${wallets.map((w, i) => `
                                     <button class="avatar-option group relative rounded-xl border-2 transition-all duration-150 ${i === 0 ? 'border-white/40 bg-white/[0.08]' : 'border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/[0.12]'}" data-index="${i}" style="aspect-ratio:1;padding:10px">
-                                        <div class="rounded-xl overflow-hidden" style="width:100%;height:100%">${generateAvatar(seed, 64, 0.2)}</div>
+                                        <div class="rounded-xl overflow-hidden" style="width:100%;height:100%">${generateAvatar(w.address, 64, 0.2)}</div>
                                         <div class="avatar-check absolute w-5 h-5 rounded-full bg-white flex items-center justify-center ${i === 0 ? '' : 'hidden'}" style="top:6px;right:6px">
                                             <svg class="w-3 h-3 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4.5 12.75l6 6 9-13.5"/>
@@ -829,8 +830,7 @@ class WalletFlows {
                             <!-- Address -->
                             <div>
                                 <label class="block text-xs font-medium text-white/40 uppercase tracking-wider mb-2">Address</label>
-                                <div class="bg-white/5 border border-white/10 rounded-xl px-4 py-3 font-mono text-sm text-white/60 break-all">
-                                    ${escapeHtml(address)}
+                                <div id="address-display" class="bg-white/5 border border-white/10 rounded-xl px-4 py-3 font-mono text-sm text-white/60 break-all">
                                 </div>
                             </div>
                             
@@ -839,7 +839,7 @@ class WalletFlows {
                                 <label class="block text-xs font-medium text-white/40 uppercase tracking-wider mb-2">Private Key</label>
                                 <div class="bg-white/5 border border-white/10 rounded-xl px-4 py-3 relative">
                                     <div id="pk-hidden" class="font-mono text-sm text-white/30 select-none" style="padding-right:2rem">••••••••••••••••••••••••••••••••••••</div>
-                                    <div id="pk-revealed" class="font-mono text-sm text-white/60 break-all hidden" style="padding-right:2rem">${escapeHtml(privateKey)}</div>
+                                    <div id="pk-revealed" class="font-mono text-sm text-white/60 break-all hidden" style="padding-right:2rem"></div>
                                     <button id="toggle-pk" class="absolute top-1/2 -translate-y-1/2 text-white/40 hover:text-white/80 transition" style="right:12px">
                                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/>
@@ -896,7 +896,7 @@ class WalletFlows {
                             <input type="text" id="new-account-username" name="username" 
                                 class="hidden" 
                                 autocomplete="username" 
-                                value="${address.toLowerCase()}" 
+                                value="" 
                                 tabindex="-1" aria-hidden="true">
                             <div class="flex-1 overflow-y-auto min-h-0" style="padding:20px">
                                 <div class="relative">
@@ -939,15 +939,17 @@ class WalletFlows {
             // ===== Step 2 (Details) Elements =====
             const stepDetails = modal.querySelector('#step-details');
             const selectedAvatarPreview = modal.querySelector('#selected-avatar-preview');
+            const addressDisplay = modal.querySelector('#address-display');
+            const pkRevealed = modal.querySelector('#pk-revealed');
             const togglePkBtn = modal.querySelector('#toggle-pk');
             const pkHidden = modal.querySelector('#pk-hidden');
-            const pkRevealed = modal.querySelector('#pk-revealed');
             const copyPkBtn = modal.querySelector('#copy-pk');
             const displayNameInput = modal.querySelector('#display-name-input');
             const passwordInput = modal.querySelector('#password-input');
             const togglePasswordBtn = modal.querySelector('#toggle-password');
             const detailsBackBtn = modal.querySelector('#details-back-btn');
             const detailsContinueBtn = modal.querySelector('#details-continue-btn');
+            const newAccountUsername = modal.querySelector('#new-account-username');
 
             // ===== Step 3 (Confirm) Elements =====
             const stepConfirm = modal.querySelector('#step-confirm');
@@ -962,10 +964,10 @@ class WalletFlows {
 
             // ===== Avatar Grid Logic =====
             const updateAvatarGrid = () => {
-                avatarGrid.innerHTML = avatarSeeds.map((seed, i) => `
-                    <button class="avatar-option group relative rounded-xl border-2 transition-all duration-150 ${i === selectedSeedIndex ? 'border-white/40 bg-white/[0.08]' : 'border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/[0.12]'}" data-index="${i}" style="aspect-ratio:1;padding:10px">
-                        <div class="rounded-xl overflow-hidden" style="width:100%;height:100%">${generateAvatar(seed, 64, 0.2)}</div>
-                        <div class="avatar-check absolute w-5 h-5 rounded-full bg-white flex items-center justify-center ${i === selectedSeedIndex ? '' : 'hidden'}" style="top:6px;right:6px">
+                avatarGrid.innerHTML = wallets.map((w, i) => `
+                    <button class="avatar-option group relative rounded-xl border-2 transition-all duration-150 ${i === selectedIndex ? 'border-white/40 bg-white/[0.08]' : 'border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/[0.12]'}" data-index="${i}" style="aspect-ratio:1;padding:10px">
+                        <div class="rounded-xl overflow-hidden" style="width:100%;height:100%">${generateAvatar(w.address, 64, 0.2)}</div>
+                        <div class="avatar-check absolute w-5 h-5 rounded-full bg-white flex items-center justify-center ${i === selectedIndex ? '' : 'hidden'}" style="top:6px;right:6px">
                             <svg class="w-3 h-3 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4.5 12.75l6 6 9-13.5"/>
                             </svg>
@@ -978,10 +980,10 @@ class WalletFlows {
             const bindAvatarClicks = () => {
                 avatarGrid.querySelectorAll('.avatar-option').forEach(btn => {
                     btn.addEventListener('click', () => {
-                        selectedSeedIndex = parseInt(btn.dataset.index);
+                        selectedIndex = parseInt(btn.dataset.index);
                         // Update visual selection
                         avatarGrid.querySelectorAll('.avatar-option').forEach((b, i) => {
-                            const isSelected = i === selectedSeedIndex;
+                            const isSelected = i === selectedIndex;
                             b.className = `avatar-option group relative flex items-center justify-center rounded-xl border-2 transition-all duration-150 ${isSelected ? 'border-white/40 bg-white/[0.08]' : 'border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/[0.12]'}`;
                             const check = b.querySelector('.avatar-check');
                             if (check) check.classList.toggle('hidden', !isSelected);
@@ -993,8 +995,8 @@ class WalletFlows {
 
             // Shuffle avatars
             shuffleBtn.addEventListener('click', () => {
-                regenerateSeeds();
-                selectedSeedIndex = 0;
+                regenerateWallets();
+                selectedIndex = 0;
                 updateAvatarGrid();
             });
 
@@ -1006,10 +1008,19 @@ class WalletFlows {
 
             // Continue from avatar step to details step
             avatarContinueBtn.addEventListener('click', () => {
+                const chosen = getSelectedWallet();
                 hideStep(stepAvatar);
                 showStep(stepDetails);
                 // Show selected avatar in header
-                selectedAvatarPreview.innerHTML = generateAvatar(avatarSeeds[selectedSeedIndex], 36, 0.2);
+                selectedAvatarPreview.innerHTML = generateAvatar(chosen.address, 36, 0.2);
+                // Populate address and private key
+                addressDisplay.textContent = chosen.address;
+                pkRevealed.textContent = chosen.privateKey;
+                newAccountUsername.value = chosen.address.toLowerCase();
+                // Reset pk visibility
+                isPkRevealed = false;
+                pkHidden.classList.remove('hidden');
+                pkRevealed.classList.add('hidden');
                 displayNameInput.focus();
             });
 
@@ -1040,7 +1051,7 @@ class WalletFlows {
             // Copy private key
             copyPkBtn.addEventListener('click', async () => {
                 try {
-                    await navigator.clipboard.writeText(privateKey);
+                    await navigator.clipboard.writeText(getSelectedWallet().privateKey);
                     copyPkBtn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg> Copied!`;
                     copyPkBtn.classList.add('text-emerald-400');
                     setTimeout(() => {
@@ -1050,7 +1061,7 @@ class WalletFlows {
                 } catch (err) {
                     // Fallback
                     const textarea = document.createElement('textarea');
-                    textarea.value = privateKey;
+                    textarea.value = getSelectedWallet().privateKey;
                     textarea.style.position = 'fixed';
                     textarea.style.opacity = '0';
                     document.body.appendChild(textarea);
@@ -1094,17 +1105,17 @@ class WalletFlows {
                     return;
                 }
 
-                // Save avatar seed before resolving
-                const chosenSeed = avatarSeeds[selectedSeedIndex];
-                setAvatarSeed(address, chosenSeed);
+                const chosen = getSelectedWallet();
 
                 const result = {
+                    address: chosen.address,
+                    privateKey: chosen.privateKey,
                     password: passwordInput.value,
                     displayName: displayNameInput.value.trim() || null
                 };
 
                 // Store credentials in browser's password manager (triggers save prompt)
-                await storeCredentials(address, passwordInput.value);
+                await storeCredentials(chosen.address, passwordInput.value);
 
                 // Clear sensitive data
                 passwordInput.value = '';

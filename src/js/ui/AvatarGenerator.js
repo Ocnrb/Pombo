@@ -637,67 +637,15 @@ export function generateAvatarDataUri(address, size = 32, borderRadius = 0.2) {
 }
 
 // ==========================================
-// Avatar Seed Override System
+// Address Normalization
 // ==========================================
-
-const AVATAR_SEEDS_KEY = 'pombo_avatar_seeds';
 
 /**
  * Get the effective seed address for avatar generation.
- * If a custom avatar seed is stored for this address, use it instead.
  */
 function getEffectiveAddress(address) {
     if (!address) return address;
-    const normalized = address.toLowerCase();
-    try {
-        const seeds = JSON.parse(localStorage.getItem(AVATAR_SEEDS_KEY) || '{}');
-        return seeds[normalized] || normalized;
-    } catch {
-        return normalized;
-    }
-}
-
-/**
- * Set a custom avatar seed for an address
- * @param {string} address - The actual wallet address
- * @param {string} seed - The seed string to use for avatar generation
- */
-export function setAvatarSeed(address, seed) {
-    if (!address) return;
-    const normalized = address.toLowerCase();
-    try {
-        const seeds = JSON.parse(localStorage.getItem(AVATAR_SEEDS_KEY) || '{}');
-        seeds[normalized] = seed;
-        localStorage.setItem(AVATAR_SEEDS_KEY, JSON.stringify(seeds));
-        // Clear cache so new avatar is generated
-        clearAvatarCache();
-    } catch { /* ignore */ }
-}
-
-/**
- * Get the custom avatar seed for an address (if any)
- * @param {string} address - The wallet address
- * @returns {string|null} The custom seed or null
- */
-export function getAvatarSeed(address) {
-    if (!address) return null;
-    const normalized = address.toLowerCase();
-    try {
-        const seeds = JSON.parse(localStorage.getItem(AVATAR_SEEDS_KEY) || '{}');
-        return seeds[normalized] || null;
-    } catch {
-        return null;
-    }
-}
-
-/**
- * Generate a random avatar seed string
- * @returns {string} A random hex-like string usable as avatar seed
- */
-export function generateRandomAvatarSeed() {
-    const array = new Uint8Array(20);
-    crypto.getRandomValues(array);
-    return '0x' + Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
+    return address.toLowerCase();
 }
 
 // ==========================================
@@ -836,7 +784,4 @@ export const avatarGenerator = {
     getHtml: getAvatarHtml,
     clearCache: clearAvatarCache,
     getColor: getAddressColor,
-    setAvatarSeed,
-    getAvatarSeed,
-    generateRandomAvatarSeed,
 };

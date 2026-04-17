@@ -1,7 +1,7 @@
 {
-  "name": "Pombo - P2P Decentralized Chat",
+  "name": "Pombo - Own Your Communications",
   "short_name": "Pombo",
-  "description": "Private, decentralized messaging on Streamr Network",
+  "description": "Pombo is your gateway to decentralized communications",
   "start_url": "/",
   "display": "standalone",
   "scope": "/",

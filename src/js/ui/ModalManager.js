@@ -254,9 +254,19 @@ class ModalManager {
     showJoinChannelModal(modal, streamIdInput, passwordInput, passwordField) {
         modal?.classList.remove('hidden');
         if (streamIdInput) streamIdInput.value = '';
-        if (passwordInput) passwordInput.value = '';
+        if (passwordInput) {
+            passwordInput.value = '';
+            passwordInput.type = 'password';
+            passwordInput.style.webkitTextSecurity = 'disc';
+        }
         passwordField?.classList.add('hidden');
         
+        // Reset join password eye icons
+        const joinEyeOpen = document.getElementById('join-pw-eye-open');
+        const joinEyeOff = document.getElementById('join-pw-eye-off');
+        if (joinEyeOpen) joinEyeOpen.classList.remove('hidden');
+        if (joinEyeOff) joinEyeOff.classList.add('hidden');
+
         const checkbox = document.getElementById('join-has-password');
         if (checkbox) checkbox.checked = false;
     }

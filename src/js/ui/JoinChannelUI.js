@@ -242,10 +242,21 @@ class JoinChannelUI {
                 <div class="bg-[#111113] rounded-2xl p-5 w-[340px] max-w-full mx-4 border border-white/[0.06]">
                     <h3 class="text-[15px] font-medium mb-2 text-white">${safeTitle}</h3>
                     <p class="text-[12px] text-white/50 mb-4">${safeMessage}</p>
-                    <input type="text" id="browse-password-input" placeholder="Encryption key" 
-                        class="w-full bg-white/[0.05] border border-white/[0.08] text-white px-3 py-2.5 rounded-xl text-[13px] focus:outline-none focus:border-white/[0.15] transition mb-4"
-                        autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other" spellcheck="false"
-                        style="-webkit-text-security: disc; text-security: disc;">
+                    <div class="relative mb-4">
+                        <input type="password" id="browse-password-input" placeholder="Enter password..." 
+                            class="w-full bg-white/[0.05] border border-white/[0.08] text-white px-3 py-2.5 pr-10 rounded-xl text-[13px] focus:outline-none focus:border-white/[0.15] transition"
+                            autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other" spellcheck="false"
+                            style="-webkit-text-security: disc; text-security: disc;">
+                        <button type="button" id="browse-pw-toggle" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/25 hover:text-white transition">
+                            <svg class="w-4 h-4" id="browse-pw-eye-open" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                            </svg>
+                            <svg class="w-4 h-4 hidden" id="browse-pw-eye-off" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88"/>
+                            </svg>
+                        </button>
+                    </div>
                     <div class="flex gap-2">
                         <button id="cancel-pw-btn" class="flex-1 bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] text-white/50 text-[13px] font-medium py-2.5 rounded-xl transition">
                             Cancel
@@ -263,6 +274,21 @@ class JoinChannelUI {
             const cancelBtn = modal.querySelector('#cancel-pw-btn');
             const confirmBtn = modal.querySelector('#confirm-pw-btn');
             
+            // Eye toggle for password visibility
+            const toggleBtn = modal.querySelector('#browse-pw-toggle');
+            if (toggleBtn) {
+                toggleBtn.addEventListener('click', () => {
+                    const eyeOpen = modal.querySelector('#browse-pw-eye-open');
+                    const eyeOff = modal.querySelector('#browse-pw-eye-off');
+                    const isPassword = input.type === 'password';
+                    input.type = isPassword ? 'text' : 'password';
+                    input.style.webkitTextSecurity = isPassword ? 'none' : 'disc';
+                    input.style.textSecurity = isPassword ? 'none' : 'disc';
+                    eyeOpen?.classList.toggle('hidden', isPassword);
+                    eyeOff?.classList.toggle('hidden', !isPassword);
+                });
+            }
+
             setTimeout(() => input.focus(), 100);
             
             const cleanup = (value) => {

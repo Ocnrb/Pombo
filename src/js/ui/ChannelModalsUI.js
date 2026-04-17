@@ -50,7 +50,16 @@ class ChannelModalsUI {
         document.body.classList.add('new-channel-open');
         this.deps.modalManager?.show('new-channel-modal');
         if (this.elements.channelNameInput) this.elements.channelNameInput.value = '';
-        if (this.elements.channelPasswordInput) this.elements.channelPasswordInput.value = '';
+        if (this.elements.channelPasswordInput) {
+            this.elements.channelPasswordInput.value = '';
+            this.elements.channelPasswordInput.type = 'password';
+            this.elements.channelPasswordInput.style.webkitTextSecurity = 'disc';
+        }
+        // Reset password eye icons
+        const eyeOpen = document.getElementById('channel-pw-eye-open');
+        const eyeOff = document.getElementById('channel-pw-eye-off');
+        if (eyeOpen) eyeOpen.classList.remove('hidden');
+        if (eyeOff) eyeOff.classList.add('hidden');
         if (this.elements.channelMembersInput) this.elements.channelMembersInput.value = '';
         
         // Reset exposure fields

@@ -628,6 +628,19 @@ class UIController {
             channelModalsUI.toggleVisibility();
         });
 
+        // Channel password visibility toggle (eye icon)
+        document.getElementById('channel-password-toggle')?.addEventListener('click', () => {
+            const input = document.getElementById('channel-password-input');
+            const eyeOpen = document.getElementById('channel-pw-eye-open');
+            const eyeOff = document.getElementById('channel-pw-eye-off');
+            if (!input) return;
+            const isPassword = input.type === 'password';
+            input.type = isPassword ? 'text' : 'password';
+            input.style.webkitTextSecurity = isPassword ? 'none' : 'disc';
+            eyeOpen?.classList.toggle('hidden', isPassword);
+            eyeOff?.classList.toggle('hidden', !isPassword);
+        });
+
         // Classification tabs (for Closed channels) - switch between personal/community
         document.querySelectorAll('.classification-tab').forEach(tab => {
             tab.addEventListener('click', () => {
@@ -779,6 +792,19 @@ class UIController {
         const joinHasPassword = document.getElementById('join-has-password');
         joinHasPassword?.addEventListener('change', (e) => {
             this.elements.joinPasswordField?.classList.toggle('hidden', !e.target.checked);
+        });
+
+        // Join password visibility toggle (eye icon)
+        document.getElementById('join-password-toggle')?.addEventListener('click', () => {
+            const input = document.getElementById('join-password-input');
+            const eyeOpen = document.getElementById('join-pw-eye-open');
+            const eyeOff = document.getElementById('join-pw-eye-off');
+            if (!input) return;
+            const isPassword = input.type === 'password';
+            input.type = isPassword ? 'text' : 'password';
+            input.style.webkitTextSecurity = isPassword ? 'none' : 'disc';
+            eyeOpen?.classList.toggle('hidden', isPassword);
+            eyeOff?.classList.toggle('hidden', !isPassword);
         });
 
         // Send message
