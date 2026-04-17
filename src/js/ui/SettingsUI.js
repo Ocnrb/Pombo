@@ -910,15 +910,15 @@ class SettingsUI {
             // Update balance field
             this.updateBalanceDisplay(address);
 
-            // Update checkbox state (on-chain invites)
-            const enabled = this.notificationManager?.isEnabled();
+            // Channel invites mute toggle
+            const isMuted = this.notificationManager?.isMuted();
             if (this.elements.notificationsEnabled) {
-                this.elements.notificationsEnabled.checked = enabled || false;
+                this.elements.notificationsEnabled.checked = !isMuted;
             }
             if (this.elements.notificationsStatus) {
-                this.elements.notificationsStatus.textContent = enabled ? 'Enabled' : 'Disabled';
-                this.elements.notificationsStatus.className = enabled 
-                    ? 'text-xs text-green-500' 
+                this.elements.notificationsStatus.textContent = isMuted ? 'Muted' : '';
+                this.elements.notificationsStatus.className = isMuted 
+                    ? 'text-xs text-white/40' 
                     : 'text-xs text-white/40';
             }
 
@@ -1600,44 +1600,23 @@ class SettingsUI {
      * Handle notifications toggle
      */
     async handleNotificationsToggle(e) {
-        const enable = e.target.checked;
-        
-        if (enable) {
-            const confirmed = confirm(
-                'Enabling notifications will create a Streamr stream.\n\n' +
-                'This requires a blockchain transaction and will cost gas fees.\n\n' +
-                'Do you want to continue?'
-            );
-            
-            if (!confirmed) {
-                e.target.checked = false;
-                return;
-            }
+        const muted = !e.target.checked;
+        this.notificationManager?.setMuted(muted);
 
-            try {
-                this.notificationUI?.showLoading('Creating notification stream (on-chain transaction)...');
-                await this.notificationManager.enable();
-                this.showNotification('Notifications enabled!', 'success');
-                
-                if (this.elements.notificationsStatus) {
-                    this.elements.notificationsStatus.textContent = 'Enabled';
-                    this.elements.notificationsStatus.className = 'text-xs text-green-500';
-                }
-            } catch (error) {
-                e.target.checked = false;
-                this.showNotification('Failed to enable notifications: ' + error.message, 'error');
-            } finally {
-                this.notificationUI?.hideLoading();
-            }
+        if (muted) {
+            await this.dmManager?.unsubscribeNotifications();
         } else {
-            this.notificationManager.disable();
-            this.showNotification('Notifications disabled', 'info');
-            
-            if (this.elements.notificationsStatus) {
-                this.elements.notificationsStatus.textContent = 'Disabled';
-                this.elements.notificationsStatus.className = 'text-xs text-white/40';
-            }
+            await this.dmManager?.subscribeNotifications();
         }
+
+        if (this.elements.notificationsStatus) {
+            this.elements.notificationsStatus.textContent = muted ? 'Muted' : '';
+        }
+
+        this.showNotification(
+            muted ? 'Channel invites muted' : 'Channel invites enabled',
+            'info'
+        );
     }
 
     /**
@@ -2169,6 +2148,7 @@ class SettingsUI {
             const issues = [];
             if (!diagnosis.messageStream.exists) issues.push('message stream');
             if (!diagnosis.ephemeralStream.exists) issues.push('ephemeral stream');
+            if (diagnosis.messageStream.exists && !diagnosis.messageStream.partitionsCorrect) issues.push('partition count');
             if (diagnosis.messageStream.exists && !diagnosis.messageStream.publicKeyPresent) issues.push('public key');
             if (!diagnosis.permissions.messagePublicPublish) issues.push('message permissions');
             if (!diagnosis.permissions.ephemeralPublicPublish) issues.push('ephemeral permissions');
@@ -2209,6 +2189,7 @@ class SettingsUI {
 
         const stepLabels = {
             messageStream: 'Creating message stream',
+            partitions: 'Updating partition count',
             ephemeralStream: 'Creating ephemeral stream',
             metadata: 'Updating metadata',
             messagePermissions: 'Setting message permissions',

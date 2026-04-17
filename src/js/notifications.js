@@ -1,180 +1,49 @@
 /**
  * Notification System
- * Handles channel invites and notifications via Streamr messages
- * NOTE: Creating a notification stream costs gas - user must opt-in
+ * Handles channel invites and notifications via DM inbox partition 3.
+ * Uses the same E2E encryption (ECDH + AES-256-GCM) as DM messages.
+ * Requires both sender and recipient to have a DM inbox created.
  */
 
-import { streamrController } from './streamr.js';
+import { streamrController, STREAM_CONFIG } from './streamr.js';
 import { authManager } from './auth.js';
-import { channelManager } from './channels.js';
-import { uiController } from './ui.js';
 import { Logger } from './logger.js';
 import { escapeHtml } from './ui/utils.js';
 import { CONFIG } from './config.js';
+import { dmCrypto } from './dmCrypto.js';
 
 class NotificationManager {
     constructor() {
-        this.notificationStream = null;
         this.pendingInvites = new Map(); // inviteId -> invite data
         this.initialized = false;
+        this.muted = false;
     }
 
     /**
-     * Get localStorage key for notification preference (per wallet)
-     * @returns {string}
-     */
-    getStorageKey() {
-        const address = authManager.getAddress();
-        if (!address) return 'pombo_notifications_default';
-        return `pombo_notifications_${address.toLowerCase()}`;
-    }
-
-    /**
-     * Get the notification stream ID for an address
-     * Format: {address}/pombo_notifications
-     * @param {string} address - Ethereum address
-     * @returns {string} - Stream ID
-     */
-    getStreamId(address) {
-        return `${address.toLowerCase()}/pombo_notifications`;
-    }
-
-    /**
-     * Check if notifications are enabled for current wallet
+     * Whether invite notifications are muted (silent).
+     * Invites are still received and stored, but no toast/sound is shown.
      * @returns {boolean}
      */
-    isEnabled() {
-        try {
-            const data = localStorage.getItem(this.getStorageKey());
-            if (data) {
-                const parsed = JSON.parse(data);
-                return parsed.enabled === true;
-            }
-        } catch (e) {
-            Logger.warn('Failed to check notification status:', e);
-        }
-        return false;
+    isMuted() {
+        return this.muted;
     }
 
     /**
-     * Get notification settings
-     * @returns {Object}
+     * Set muted state and persist to localStorage.
+     * @param {boolean} muted
      */
-    getSettings() {
-        try {
-            const data = localStorage.getItem(this.getStorageKey());
-            if (data) {
-                return JSON.parse(data);
-            }
-        } catch (e) {}
-        return { enabled: false, streamId: null };
-    }
-
-    /**
-     * Save notification settings
-     * @param {Object} settings 
-     */
-    saveSettings(settings) {
-        localStorage.setItem(this.getStorageKey(), JSON.stringify(settings));
-    }
-
-    /**
-     * Enable notifications - creates the notification stream (costs gas!)
-     * @returns {Promise<boolean>}
-     */
-    async enable() {
-        const address = authManager.getAddress();
-        if (!address) {
-            throw new Error('Not authenticated');
-        }
-
-        const streamId = this.getStreamId(address);
-
-        try {
-            Logger.info('Creating notification stream (costs gas):', streamId);
-            
-            // Create a public stream for receiving notifications
-            const stream = await streamrController.client.createStream({
-                id: streamId,
-                partitions: 1,
-                description: 'Pombo notification channel'
-            });
-
-            // Make it publicly writable (anyone can send invites)
-            const StreamPermission = window.StreamPermission || {
-                SUBSCRIBE: 'subscribe',
-                PUBLISH: 'publish'
-            };
-
-            await stream.grantPermissions({
-                public: true,
-                permissions: [StreamPermission.PUBLISH]
-            });
-
-            Logger.info('Notification stream created:', streamId);
-
-            // Save settings
-            this.saveSettings({
-                enabled: true,
-                streamId: streamId,
-                createdAt: Date.now()
-            });
-
-            // Now subscribe
-            await this.subscribe();
-
-            return true;
-        } catch (error) {
-            Logger.error('Failed to enable notifications:', error);
-            throw error;
+    setMuted(muted) {
+        this.muted = !!muted;
+        const address = authManager.getAddress()?.toLowerCase();
+        if (address) {
+            localStorage.setItem(`pombo_invites_muted_${address}`, this.muted ? '1' : '0');
         }
     }
 
     /**
-     * Disable notifications (doesn't delete the stream, just stops subscribing)
-     */
-    disable() {
-        const settings = this.getSettings();
-        settings.enabled = false;
-        this.saveSettings(settings);
-        
-        if (this.notificationStream) {
-            streamrController.unsubscribe(this.notificationStream).catch(e => Logger.warn('Unsubscribe error:', e));
-            this.notificationStream = null;
-        }
-        
-        this.initialized = false;
-        Logger.info('Notifications disabled');
-    }
-
-    /**
-     * Subscribe to notification stream
-     */
-    async subscribe() {
-        const settings = this.getSettings();
-        if (!settings.streamId) {
-            throw new Error('No notification stream configured');
-        }
-
-        try {
-            this.notificationStream = settings.streamId;
-
-            await streamrController.subscribeSimple(
-                settings.streamId,
-                (data) => this.handleNotification(data),
-                null
-            );
-
-            Logger.info('Subscribed to notifications:', settings.streamId);
-        } catch (error) {
-            Logger.error('Failed to subscribe to notifications:', error);
-            throw error;
-        }
-    }
-
-    /**
-     * Initialize notification system for current user
-     * Only subscribes if already enabled (stream created previously)
+     * Initialize notification system for current user.
+     * Loads pending invites from localStorage.
+     * Subscription to P3 is managed by DM Manager.
      */
     async init() {
         const address = authManager.getAddress();
@@ -183,63 +52,76 @@ class NotificationManager {
             return;
         }
 
-        // Load pending invites from localStorage
         this.loadPendingInvites();
 
-        // Only subscribe if enabled
-        if (!this.isEnabled()) {
-            Logger.info('Notifications not enabled for this wallet');
-            return;
-        }
+        // Restore muted preference
+        const addr = address.toLowerCase();
+        this.muted = localStorage.getItem(`pombo_invites_muted_${addr}`) === '1';
 
-        try {
-            await this.subscribe();
-            this.initialized = true;
-            Logger.info('Notification system initialized');
-        } catch (error) {
-            Logger.warn('Failed to init notifications:', error);
-        }
+        this.initialized = true;
+        Logger.info('Notification system initialized');
     }
 
     /**
-     * Send channel invite to a user
+     * Send channel invite to a user via their DM inbox partition 3.
+     * Requires recipient to have a DM inbox (same check as starting a DM).
      * @param {string} recipientAddress - Recipient's Ethereum address
      * @param {Object} channelInfo - Channel information
+     * @returns {Promise<string>} - Invite ID
      */
     async sendChannelInvite(recipientAddress, channelInfo) {
-        try {
-            const senderAddress = authManager.getAddress();
-            const inviteStreamId = this.getStreamId(recipientAddress);
-
-            const inviteMessage = {
-                type: 'CHANNEL_INVITE',
-                inviteId: this.generateInviteId(),
-                timestamp: Date.now(),
-                from: senderAddress,
-                to: recipientAddress,
-                channel: {
-                    streamId: channelInfo.streamId,
-                    name: channelInfo.name,
-                    type: channelInfo.type,
-                    // Note: password should be encrypted in production
-                    password: channelInfo.password
-                }
-            };
-
-            // Publish to recipient's notification stream
-            await streamrController.publish(
-                inviteStreamId,
-                0, // Partition 0
-                inviteMessage,
-                null
-            );
-
-            Logger.info('Channel invite sent to:', recipientAddress);
-            return inviteMessage.inviteId;
-        } catch (error) {
-            Logger.error('Failed to send invite:', error);
-            throw error;
+        const senderAddress = authManager.getAddress();
+        if (!senderAddress) {
+            throw new Error('Not authenticated');
         }
+
+        // 1. Check if recipient has DM inbox
+        const peerInboxId = streamrController.getDMInboxId(recipientAddress);
+        try {
+            await streamrController.client.getStream(peerInboxId);
+        } catch {
+            throw new Error(
+                'This user has not enabled DMs yet. ' +
+                'They need to open Pombo and create their inbox first.'
+            );
+        }
+
+        // 2. Get peer's public key for ECDH encryption
+        const peerPubKey = await streamrController.getDMPublicKey(recipientAddress);
+        if (!peerPubKey) {
+            throw new Error('Cannot send invite: peer public key not available.');
+        }
+
+        // 3. Build invite message
+        const inviteMessage = {
+            type: 'CHANNEL_INVITE',
+            inviteId: this.generateInviteId(),
+            timestamp: Date.now(),
+            from: senderAddress,
+            channel: {
+                streamId: channelInfo.streamId,
+                name: channelInfo.name,
+                type: channelInfo.type,
+                password: channelInfo.password
+            }
+        };
+
+        // 4. E2E encrypt with ECDH shared key (same as DMs)
+        const privateKey = authManager.wallet?.privateKey;
+        if (!privateKey) {
+            throw new Error('Cannot send invite: wallet private key not available');
+        }
+        const aesKey = await dmCrypto.getSharedKey(privateKey, recipientAddress, peerPubKey);
+        const encrypted = await dmCrypto.encrypt(inviteMessage, aesKey);
+
+        // 5. Set Pombo key for publishing
+        await streamrController.setDMPublishKey(peerInboxId);
+
+        // 6. Publish to recipient's DM inbox partition 3 (notifications)
+        await streamrController.publishNotification(peerInboxId, encrypted, null);
+
+        Logger.info('Channel invite sent to:', recipientAddress);
+        return inviteMessage.inviteId;
     }
 
     /**
@@ -259,11 +141,9 @@ class NotificationManager {
      * @param {Object} invite - Invite data
      */
     handleChannelInvite(invite) {
-        // Add to pending invites
+        // P3 is only subscribed when not muted, so receiving means invites are active
         this.pendingInvites.set(invite.inviteId, invite);
         this.savePendingInvites();
-
-        // Show notification to user
         this.showInviteNotification(invite);
     }
 
@@ -352,6 +232,9 @@ class NotificationManager {
         }
 
         try {
+            // Lazy imports to avoid circular dependency (notifications ↔ channels ↔ dm, notifications ↔ ui)
+            const { channelManager } = await import('./channels.js');
+
             // Join the channel
             await channelManager.joinChannel(
                 invite.channel.streamId,
@@ -369,10 +252,14 @@ class NotificationManager {
             Logger.info('Invite accepted:', inviteId);
             
             // Show toast
+            const { uiController } = await import('./ui.js');
             uiController.showNotification(`Joined channel: ${invite.channel.name}!`, 'success');
         } catch (error) {
             Logger.error('Failed to accept invite:', error);
-            uiController.showNotification('Failed to join channel: ' + error.message, 'error');
+            try {
+                const { uiController } = await import('./ui.js');
+                uiController.showNotification('Failed to join channel: ' + error.message, 'error');
+            } catch { /* ui not available */ }
         }
     }
 

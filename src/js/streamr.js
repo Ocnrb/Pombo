@@ -68,10 +68,11 @@ const STREAM_CONFIG = {
     MESSAGE_STREAM: {
         SUFFIX: '-1',
         PARTITIONS: 1,        // Regular channels: messages only
-        DM_PARTITIONS: 3,     // DM inboxes: messages + sync + sync_blobs
+        DM_PARTITIONS: 4,     // DM inboxes: messages + sync + sync_blobs + notifications
         MESSAGES: 0,          // Text, reactions, images, video announcements
         SYNC: 1,              // Cross-device sync payloads (self → self, DM inbox only)
-        SYNC_BLOBS: 2         // Image blobs sync (DM inbox only)
+        SYNC_BLOBS: 2,        // Image blobs sync (DM inbox only)
+        NOTIFICATIONS: 3      // Channel invites / notifications (DM inbox only)
     },
     
     // Ephemeral Stream (no storage): 3 partitions
@@ -1008,7 +1009,7 @@ class StreamrController {
         const ephemeralStreamId = this.getDMEphemeralId(address);
 
         const report = {
-            messageStream: { id: messageStreamId, exists: false, partitions: null, metadataOk: false, publicKeyPresent: false },
+            messageStream: { id: messageStreamId, exists: false, partitions: null, partitionsCorrect: false, metadataOk: false, publicKeyPresent: false },
             ephemeralStream: { id: ephemeralStreamId, exists: false, partitions: null },
             permissions: { messagePublicPublish: false, ephemeralPublicPublish: false },
             storage: { enabled: false, provider: null, storageDays: null }
@@ -1021,6 +1022,7 @@ class StreamrController {
             report.messageStream.exists = true;
             const partitions = await messageStream.getPartitionCount();
             report.messageStream.partitions = typeof partitions === 'bigint' ? Number(partitions) : partitions;
+            report.messageStream.partitionsCorrect = report.messageStream.partitions >= STREAM_CONFIG.MESSAGE_STREAM.DM_PARTITIONS;
 
             // Check metadata
             try {
@@ -1118,6 +1120,7 @@ class StreamrController {
         const result = {
             messageStream: 'skip',
             ephemeralStream: 'skip',
+            partitions: 'skip',
             metadata: 'skip',
             messagePermissions: 'skip',
             ephemeralPermissions: 'skip',
@@ -1165,6 +1168,23 @@ class StreamrController {
         } else {
             try { messageStream = await this.client.getStream(messageStreamId); } catch (e) { /* noop */ }
             onStep('messageStream', 'skip');
+        }
+
+        // Step 1b: Fix partition count if too low (e.g. 3 → 4 for notifications)
+        if (messageStream && diagnosis.messageStream.exists && !diagnosis.messageStream.partitionsCorrect) {
+            onStep('partitions', 'start');
+            try {
+                const currentMeta = await messageStream.getMetadata();
+                await messageStream.setMetadata({ ...currentMeta, partitions: STREAM_CONFIG.MESSAGE_STREAM.DM_PARTITIONS });
+                result.partitions = 'ok';
+                onStep('partitions', 'ok');
+            } catch (e) {
+                result.partitions = 'fail';
+                onStep('partitions', 'fail');
+                Logger.error('Repair: Failed to update partition count:', e.message);
+            }
+        } else {
+            onStep('partitions', 'skip');
         }
 
         // Step 2: Create ephemeral stream if missing
@@ -1846,6 +1866,17 @@ class StreamrController {
      */
     async publishMediaData(ephemeralStreamId, data, password = null) {
         return await this.publish(ephemeralStreamId, STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_DATA, data, password);
+    }
+
+    /**
+     * Publish notification to MESSAGE STREAM (partition 3 - notifications/invites)
+     * For: channel invites and other notifications (E2E encrypted at app layer)
+     * @param {string} messageStreamId - Message Stream ID (ends with -1)
+     * @param {Object} data - Encrypted notification payload
+     * @param {string} password - Password (null for DMs — encryption is E2E app-layer)
+     */
+    async publishNotification(messageStreamId, data, password = null) {
+        return await this.publish(messageStreamId, STREAM_CONFIG.MESSAGE_STREAM.NOTIFICATIONS, data, password);
     }
 
     /**

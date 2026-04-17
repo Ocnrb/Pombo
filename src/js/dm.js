@@ -33,6 +33,7 @@ class DMManager {
         // Active inbox subscriptions (when app is open)
         this.inboxSubscription = null;
         this.inboxEphemeralSubscription = null;
+        this.inboxNotificationSub = null;
 
         // Conversations: peerAddress (lowercase) → messageStreamId in channelManager
         this.conversations = new Map();
@@ -222,6 +223,26 @@ class DMManager {
 
             Logger.info('DM: Inbox message subscription active');
 
+            // Subscribe to notification partition (DM-1 partition 3) for channel invites
+            // Skip if user has muted invites
+            const { notificationManager } = await import('./notifications.js');
+            if (!notificationManager.isMuted()) {
+                try {
+                    this.inboxNotificationSub = await streamrController.subscribeToPartition(
+                        this.inboxMessageStreamId,
+                        STREAM_CONFIG.MESSAGE_STREAM.NOTIFICATIONS,
+                        (data) => this.routeNotification(data),
+                        null
+                    );
+                    Logger.info('DM: Notification subscription active (P3)');
+                } catch (e) {
+                    Logger.warn('DM: Failed to subscribe to notification partition:', e.message);
+                    this.inboxNotificationSub = null;
+                }
+            } else {
+                Logger.info('DM: Notification invites muted — skipping P3 subscription');
+            }
+
             // DM-2 ephemeral (typing/presence) is on-demand only:
             // subscribed when user opens a DM conversation, unsubscribed when they leave.
         } catch (error) {
@@ -243,8 +264,47 @@ class DMManager {
             Logger.warn('DM: Error unsubscribing:', error.message);
         }
         this.inboxSubscription = null;
+        this.inboxNotificationSub = null;
         // Also tear down ephemeral if active
         await this.unsubscribeDMEphemeral();
+    }
+
+    /**
+     * Subscribe to notification partition (P3) on demand.
+     * Called when user unmutes channel invites.
+     */
+    async subscribeNotifications() {
+        if (!this.inboxMessageStreamId || this.inboxNotificationSub) return;
+        try {
+            this.inboxNotificationSub = await streamrController.subscribeToPartition(
+                this.inboxMessageStreamId,
+                STREAM_CONFIG.MESSAGE_STREAM.NOTIFICATIONS,
+                (data) => this.routeNotification(data),
+                null
+            );
+            Logger.info('DM: Notification subscription active (P3)');
+        } catch (e) {
+            Logger.warn('DM: Failed to subscribe to notification partition:', e.message);
+            this.inboxNotificationSub = null;
+        }
+    }
+
+    /**
+     * Unsubscribe from notification partition (P3).
+     * Called when user mutes channel invites.
+     */
+    async unsubscribeNotifications() {
+        if (!this.inboxNotificationSub) return;
+        try {
+            await streamrController.unsubscribeFromPartition(
+                this.inboxMessageStreamId,
+                STREAM_CONFIG.MESSAGE_STREAM.NOTIFICATIONS
+            );
+            Logger.info('DM: Unsubscribed from notification partition (P3)');
+        } catch (e) {
+            Logger.warn('DM: Error unsubscribing from P3:', e.message);
+        }
+        this.inboxNotificationSub = null;
     }
 
     /**
@@ -552,6 +612,35 @@ class DMManager {
             streamId: channel.messageStreamId,
             message: data
         });
+    }
+
+    /**
+     * Route an incoming notification from DM-1 partition 3.
+     * Decrypts the E2E envelope and delegates to NotificationManager.
+     * @param {Object} data - Encrypted notification with senderId from Streamr publisherId
+     */
+    async routeNotification(data) {
+        if (!data || !data.senderId) {
+            Logger.warn('DM: Notification without senderId, ignoring');
+            return;
+        }
+
+        const senderAddress = data.senderId.toLowerCase();
+        const myAddress = authManager.getAddress()?.toLowerCase();
+        if (senderAddress === myAddress) return;
+        if (secureStorage.isBlocked(senderAddress)) return;
+
+        // E2E decrypt (same flow as DM messages)
+        try {
+            data = await this.decryptDMEnvelope(data, senderAddress);
+        } catch {
+            return; // Decryption failed — already logged inside decryptDMEnvelope
+        }
+        if (!data) return;
+
+        // Delegate to NotificationManager (lazy import to avoid circular dep)
+        const { notificationManager } = await import('./notifications.js');
+        notificationManager.handleNotification(data);
     }
 
     /**
