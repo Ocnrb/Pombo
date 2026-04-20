@@ -20,15 +20,27 @@ import { isValidMediaUrl } from '../../src/js/ui/utils.js';
 import { Logger } from '../../src/js/logger.js';
 
 describe('MediaHandler', () => {
+    let pushStateSpy, backSpy, addEventSpy, removeEventSpy;
+
     beforeEach(() => {
         vi.clearAllMocks();
         mediaHandler.clearCache();
         mediaHandler.deps = {};
+        mediaHandler._lightboxOpen = false;
         isValidMediaUrl.mockReturnValue(true);
         document.body.innerHTML = '';
+        document.body.style.touchAction = '';
+
+        // Mock history and event listener APIs
+        pushStateSpy = vi.spyOn(window.history, 'pushState').mockImplementation(() => {});
+        backSpy = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+        addEventSpy = vi.spyOn(window, 'addEventListener');
+        removeEventSpy = vi.spyOn(window, 'removeEventListener');
     });
 
     afterEach(() => {
+        // Ensure popstate listener is cleaned up between tests
+        window.removeEventListener('popstate', mediaHandler._popstateHandler, true);
         vi.restoreAllMocks();
     });
 
@@ -172,18 +184,54 @@ describe('MediaHandler', () => {
             mediaHandler.openLightbox('https://x.com/img.png');
             expect(document.getElementById('lightbox-image').classList.contains('hidden')).toBe(false);
         });
+
+        it('should set _lightboxOpen to true', () => {
+            setupLightboxDOM();
+            mediaHandler.openLightbox('https://x.com/img.png', 'image');
+            expect(mediaHandler._lightboxOpen).toBe(true);
+        });
+
+        it('should push history state with lightbox flag', () => {
+            setupLightboxDOM();
+            mediaHandler.openLightbox('https://x.com/img.png', 'image');
+            expect(pushStateSpy).toHaveBeenCalledWith({ lightbox: true }, '');
+        });
+
+        it('should register popstate listener in capture phase', () => {
+            setupLightboxDOM();
+            mediaHandler.openLightbox('https://x.com/img.png', 'image');
+            expect(addEventSpy).toHaveBeenCalledWith('popstate', mediaHandler._popstateHandler, true);
+        });
+
+        it('should unlock touch-action on body', () => {
+            setupLightboxDOM();
+            document.body.style.touchAction = 'pan-y';
+            mediaHandler.openLightbox('https://x.com/img.png', 'image');
+            expect(document.body.style.touchAction).toBe('manipulation');
+        });
+
+        it('should not double-push history if already open', () => {
+            setupLightboxDOM();
+            mediaHandler.openLightbox('https://x.com/a.png', 'image');
+            mediaHandler.openLightbox('https://x.com/b.png', 'image');
+            expect(pushStateSpy).toHaveBeenCalledTimes(1);
+        });
     });
 
     // ==================== closeLightbox ====================
     describe('closeLightbox()', () => {
-        it('should hide modal and pause video', () => {
+        function setupCloseLightboxDOM() {
             document.body.innerHTML = `
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <div id="media-lightbox-modal">
                     <video id="lightbox-video" src="v.mp4"></video>
                 </div>
             `;
             document.getElementById('lightbox-video').pause = vi.fn();
+        }
 
+        it('should hide modal and pause video', () => {
+            setupCloseLightboxDOM();
             mediaHandler.closeLightbox();
 
             expect(document.getElementById('lightbox-video').pause).toHaveBeenCalled();
@@ -193,6 +241,87 @@ describe('MediaHandler', () => {
         it('should handle missing elements gracefully', () => {
             mediaHandler.closeLightbox();
             // No error
+        });
+
+        it('should restore body touch-action', () => {
+            setupCloseLightboxDOM();
+            document.body.style.touchAction = 'manipulation';
+            mediaHandler.closeLightbox();
+            expect(document.body.style.touchAction).toBe('');
+        });
+
+        it('should set _lightboxOpen to false', () => {
+            setupCloseLightboxDOM();
+            mediaHandler._lightboxOpen = true;
+            mediaHandler.closeLightbox();
+            expect(mediaHandler._lightboxOpen).toBe(false);
+        });
+
+        it('should call history.back when lightbox was open', () => {
+            setupCloseLightboxDOM();
+            mediaHandler._lightboxOpen = true;
+            mediaHandler.closeLightbox();
+            expect(backSpy).toHaveBeenCalledTimes(1);
+        });
+
+        it('should NOT call history.back with skipHistory option', () => {
+            setupCloseLightboxDOM();
+            mediaHandler._lightboxOpen = true;
+            mediaHandler.closeLightbox({ skipHistory: true });
+            expect(backSpy).not.toHaveBeenCalled();
+        });
+
+        it('should NOT call history.back if lightbox was not open', () => {
+            setupCloseLightboxDOM();
+            mediaHandler._lightboxOpen = false;
+            mediaHandler.closeLightbox();
+            expect(backSpy).not.toHaveBeenCalled();
+        });
+
+        it('should remove popstate listener on close', () => {
+            setupCloseLightboxDOM();
+            mediaHandler._lightboxOpen = true;
+            mediaHandler.closeLightbox();
+            expect(removeEventSpy).toHaveBeenCalledWith('popstate', mediaHandler._popstateHandler, true);
+        });
+
+        it('should reset viewport zoom on close', () => {
+            setupCloseLightboxDOM();
+            const vp = document.querySelector('meta[name="viewport"]');
+            const original = vp.getAttribute('content');
+
+            mediaHandler.closeLightbox();
+
+            // After requestAnimationFrame, viewport should be restored
+            // Synchronously, it should have maximum-scale=1 appended
+            expect(vp.getAttribute('content')).toContain('maximum-scale=1');
+        });
+    });
+
+    // ==================== _onPopState (back button) ====================
+    describe('_onPopState()', () => {
+        it('should close lightbox with skipHistory on popstate', () => {
+            const closeSpy = vi.spyOn(mediaHandler, 'closeLightbox');
+            mediaHandler._lightboxOpen = true;
+
+            const event = new Event('popstate');
+            event.stopImmediatePropagation = vi.fn();
+            mediaHandler._onPopState(event);
+
+            expect(closeSpy).toHaveBeenCalledWith({ skipHistory: true });
+            expect(event.stopImmediatePropagation).toHaveBeenCalled();
+        });
+
+        it('should do nothing if lightbox is not open', () => {
+            const closeSpy = vi.spyOn(mediaHandler, 'closeLightbox');
+            mediaHandler._lightboxOpen = false;
+
+            const event = new Event('popstate');
+            event.stopImmediatePropagation = vi.fn();
+            mediaHandler._onPopState(event);
+
+            expect(closeSpy).not.toHaveBeenCalled();
+            expect(event.stopImmediatePropagation).not.toHaveBeenCalled();
         });
     });
 
@@ -341,6 +470,40 @@ describe('MediaHandler', () => {
         it('should handle missing elements gracefully', () => {
             mediaHandler.initLightboxModal();
             // No error
+        });
+
+        it('should close lightbox on Escape key when open', () => {
+            document.body.innerHTML = `
+                <div id="media-lightbox-modal">
+                    <img id="lightbox-image">
+                    <video id="lightbox-video"></video>
+                </div>
+            `;
+            document.getElementById('lightbox-video').pause = vi.fn();
+            const closeSpy = vi.spyOn(mediaHandler, 'closeLightbox');
+
+            mediaHandler.initLightboxModal();
+            mediaHandler._lightboxOpen = true;
+
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+            expect(closeSpy).toHaveBeenCalled();
+        });
+
+        it('should NOT close on Escape key when lightbox is not open', () => {
+            document.body.innerHTML = `
+                <div id="media-lightbox-modal">
+                    <img id="lightbox-image">
+                    <video id="lightbox-video"></video>
+                </div>
+            `;
+            document.getElementById('lightbox-video').pause = vi.fn();
+            const closeSpy = vi.spyOn(mediaHandler, 'closeLightbox');
+
+            mediaHandler.initLightboxModal();
+            mediaHandler._lightboxOpen = false;
+
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+            expect(closeSpy).not.toHaveBeenCalled();
         });
     });
 
