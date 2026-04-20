@@ -404,6 +404,8 @@ class MessageRenderer {
         const avatarClass = showAvatar ? 'message-avatar' : 'message-avatar message-avatar-hidden';
         const avatarHtml = `<div class="${avatarClass}">${avatarContent}</div>`;
 
+
+
         return `
             <div class="message-entry ${isOwn ? 'own-message' : 'other-message'} ${groupClass} ${spacingClass}" data-msg-id="${escapeAttr(msgId)}" data-sender="${escapeAttr(msg.sender || '')}" data-type="${escapeAttr(msgType)}"${emojiAttr}>
                 ${!isOwn ? avatarHtml : ''}
@@ -413,6 +415,7 @@ class MessageRenderer {
                     <div class="message-content">${contentHtml}</div>
                     <div class="message-footer">
                         ${reactionsHtml}
+                        ${msg._edited ? '<span class="message-edited text-xs text-white/25">(edited)</span>' : ''}
                         <span class="message-time text-xs text-white/40">${time}</span>
                     </div>
                     ${msg.verified && !msg.verified.valid && msg.signature ? '<div class="text-xs text-red-400 mt-1">⚠️ Invalid signature</div>' : ''}

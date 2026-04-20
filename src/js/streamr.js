@@ -2383,6 +2383,8 @@ class StreamrController {
             if (msg?.type === 'reaction') return true;
             if (msg?.type === 'image' && msg?.imageId) return true;
             if (msg?.type === 'video_announce' && msg?.metadata) return true;
+            if (msg?.type === 'edit' && msg?.targetId) return true;
+            if (msg?.type === 'delete' && msg?.targetId) return true;
             return false;
         };
         
@@ -2439,6 +2441,16 @@ class StreamrController {
                             content = await cryptoManager.decryptJSON(content, password);
                         } catch (decryptError) {
                             continue; // Skip messages we can't decrypt
+                        }
+                    }
+
+                    // Inject senderId from StreamMessage metadata
+                    if (typeof content === 'object') {
+                        const publisherId = typeof message.getPublisherId === 'function'
+                            ? message.getPublisherId()
+                            : message.publisherId;
+                        if (publisherId) {
+                            content.senderId = publisherId;
                         }
                     }
                     
@@ -2712,7 +2724,8 @@ class StreamrController {
             
             // Valid message types for partition 0 (stored messages)
             const isValidStoredMessage = (msg) => {
-                return isTextMessage(msg) || isReaction(msg) || isImageMessage(msg) || isVideoMessage(msg) || isEncryptedEnvelope(msg);
+                return isTextMessage(msg) || isReaction(msg) || isImageMessage(msg) || isVideoMessage(msg) || isEncryptedEnvelope(msg)
+                    || (msg?.type === 'edit' && msg?.targetId) || (msg?.type === 'delete' && msg?.targetId);
             };
             
             // Use manual iteration to catch decryption errors per-message

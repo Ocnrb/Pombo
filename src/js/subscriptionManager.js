@@ -143,8 +143,9 @@ class SubscriptionManager {
      * Set a preview channel - temporary subscription without persistence
      * Used for browsing/exploring channels before committing to join
      * @param {string} messageStreamId - Message Stream ID to preview
+     * @param {Function} [onHistoryComplete] - Callback when initial history is fully loaded
      */
-    async setPreviewChannel(messageStreamId) {
+    async setPreviewChannel(messageStreamId, onHistoryComplete = null) {
         if (!messageStreamId) {
             Logger.warn('setPreviewChannel called with null streamId');
             return;
@@ -184,7 +185,8 @@ class SubscriptionManager {
                     onMedia: (mediaMsg, senderId) => this._handlePreviewMedia(messageStreamId, mediaMsg, senderId)
                 },
                 null, // password
-                STREAM_CONFIG.INITIAL_MESSAGES // historyCount - load recent messages
+                STREAM_CONFIG.INITIAL_MESSAGES, // historyCount - load recent messages
+                onHistoryComplete // callback when history is fully loaded
             );
             Logger.info('Preview subscription active:', messageStreamId);
             

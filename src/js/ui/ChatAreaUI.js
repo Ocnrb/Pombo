@@ -31,6 +31,9 @@ class ChatAreaUI {
         
         // Reply state
         this.replyingTo = null;
+        
+        // Edit state
+        this.editingMessage = null;
     }
 
     /**
@@ -504,6 +507,73 @@ class ChatAreaUI {
      */
     clearReply() {
         this.cancelReply();
+    }
+
+    // ==================== Edit Mode ====================
+
+    /**
+     * Enter edit mode for a message
+     * @param {string} msgId - Message ID to edit
+     */
+    startEdit(msgId) {
+        const { getActiveChannel } = this.deps;
+        const channel = getActiveChannel ? getActiveChannel() : null;
+        if (!channel) return;
+
+        const msg = channel.messages.find(m => (m.id || m.timestamp) === msgId);
+        if (!msg || !msg.text) return;
+
+        // Cancel reply if active
+        this.cancelReply();
+
+        this.editingMessage = {
+            id: msgId,
+            originalText: msg.text,
+            streamId: channel.streamId
+        };
+
+        // Show edit bar
+        const editBar = document.getElementById('edit-bar');
+        const editBarText = document.getElementById('edit-bar-text');
+        if (editBarText) {
+            editBarText.textContent = msg.text.substring(0, 100) + (msg.text.length > 100 ? '...' : '');
+        }
+        if (editBar) {
+            editBar.classList.add('active');
+        }
+
+        // Pre-fill input with current text
+        if (this.messageInput) {
+            this.messageInput.value = msg.text;
+            this.messageInput.dispatchEvent(new Event('input')); // trigger resize
+            this.messageInput.focus();
+            // Move cursor to end
+            this.messageInput.setSelectionRange(msg.text.length, msg.text.length);
+        }
+    }
+
+    /**
+     * Cancel edit mode
+     */
+    cancelEdit() {
+        this.editingMessage = null;
+        const editBar = document.getElementById('edit-bar');
+        if (editBar) {
+            editBar.classList.remove('active');
+        }
+        // Clear input
+        if (this.messageInput) {
+            this.messageInput.value = '';
+            this.messageInput.dispatchEvent(new Event('input'));
+        }
+    }
+
+    /**
+     * Get current edit state
+     * @returns {Object|null} - { id, originalText, streamId } or null
+     */
+    getEditingMessage() {
+        return this.editingMessage || null;
     }
 
     /**

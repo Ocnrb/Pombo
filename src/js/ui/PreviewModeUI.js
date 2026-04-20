@@ -123,11 +123,24 @@ class PreviewModeUI {
                 type: channelInfo?.type || 'public',
                 readOnly: channelInfo?.readOnly || false,
                 password: null, // Preview mode doesn't have password (public channels only)
-                messages: []
+                messages: [],
+                _pendingOverrides: new Map(),
+                initialLoadInProgress: true
             };
 
             // Subscribe to channel stream temporarily (without persisting)
-            await subscriptionManager.setPreviewChannel(streamId);
+            await subscriptionManager.setPreviewChannel(streamId, () => {
+                // onHistoryComplete: apply pending overrides, filter deleted, render
+                if (!this.previewChannel) return;
+                this._applyPreviewOverrides();
+                this.previewChannel.messages = this.previewChannel.messages.filter(m => !m._deleted);
+                this.previewChannel.initialLoadInProgress = false;
+                const { chatAreaUI, mediaHandler } = this.deps;
+                chatAreaUI.renderMessages(this.previewChannel.messages, () => {
+                    this.ui.attachReactionListeners();
+                    mediaHandler.attachLightboxListeners();
+                });
+            });
 
             // Update UI for preview mode
             this._showPreviewUI();
@@ -436,6 +449,40 @@ class PreviewModeUI {
             return;
         }
 
+        // Handle edit/delete overrides in preview mode
+        if (message?.type === 'edit' || message?.type === 'delete') {
+            if (!message.senderId || !message.targetId) return;
+            const original = this.previewChannel.messages.find(m => m.id === message.targetId);
+            if (!original) {
+                // Target not loaded yet — store as pending
+                const pending = this.previewChannel._pendingOverrides;
+                if (pending) {
+                    const existing = pending.get(message.targetId);
+                    if (!existing || message.timestamp > existing.timestamp) {
+                        pending.set(message.targetId, message);
+                    }
+                }
+                return;
+            }
+            if (original.sender?.toLowerCase() !== message.senderId.toLowerCase()) return;
+            
+            if (message.type === 'edit' && message.text) {
+                original.text = message.text;
+                original._edited = true;
+            } else if (message.type === 'delete') {
+                const idx = this.previewChannel.messages.indexOf(original);
+                if (idx >= 0) this.previewChannel.messages.splice(idx, 1);
+            }
+            // Re-render only if not during initial load
+            if (!this.previewChannel.initialLoadInProgress) {
+                chatAreaUI.renderMessages(this.previewChannel.messages, () => {
+                    this.ui.attachReactionListeners();
+                    mediaHandler.attachLightboxListeners();
+                });
+            }
+            return;
+        }
+
         // Validate message has required properties
         const isTextMessage = message?.text;
         const isImageMessage = message?.type === 'image' && message?.imageId;
@@ -498,6 +545,9 @@ class PreviewModeUI {
         // Sort by timestamp to ensure correct order
         this.previewChannel.messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
+        // Skip per-message render during initial history load (onHistoryComplete will render)
+        if (this.previewChannel.initialLoadInProgress) return;
+
         // Re-render messages
         chatAreaUI.renderMessages(this.previewChannel.messages, () => {
             this.ui.attachReactionListeners();
@@ -508,6 +558,26 @@ class PreviewModeUI {
         if (this.ui.elements.messagesArea) {
             this.ui.elements.messagesArea.scrollTop = this.ui.elements.messagesArea.scrollHeight;
         }
+    }
+
+    /**
+     * Apply pending edit/delete overrides to preview channel messages
+     * @private
+     */
+    _applyPreviewOverrides() {
+        if (!this.previewChannel?._pendingOverrides?.size) return;
+        for (const [targetId, override] of this.previewChannel._pendingOverrides) {
+            const msg = this.previewChannel.messages.find(m => m.id === targetId);
+            if (!msg) continue;
+            if (msg.sender?.toLowerCase() !== override.senderId?.toLowerCase()) continue;
+            if (override.type === 'edit' && override.text) {
+                msg.text = override.text;
+                msg._edited = true;
+            } else if (override.type === 'delete') {
+                msg._deleted = true;
+            }
+        }
+        this.previewChannel._pendingOverrides.clear();
     }
 
     /**

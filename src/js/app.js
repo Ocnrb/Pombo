@@ -471,6 +471,16 @@ class App {
                 if (data.streamId === currentStreamId) {
                     reactionManager.handleIncomingReaction(data.messageId, data.emoji, data.user, data.action || 'add');
                 }
+            } else if (event === 'message_edited' || event === 'message_deleted') {
+                if (data.streamId === currentStreamId) {
+                    const channel = channelManager.getCurrentChannel();
+                    if (channel) {
+                        chatAreaUI.renderMessages(channel.messages, () => {
+                            uiController.attachReactionListeners();
+                            mediaHandler.attachLightboxListeners();
+                        });
+                    }
+                }
             } else if (event === 'media') {
                 mediaController.handleMediaMessage(data.streamId, data.media);
             } else if (event === 'channelJoined') {
@@ -490,7 +500,8 @@ class App {
             } else if (event === 'history_batch_loaded') {
                 if (data.streamId === currentStreamId) {
                     const channel = channelManager.getCurrentChannel();
-                    if (channel) {
+                    // Skip render during initial load — will render once at initial_history_complete
+                    if (channel && !channel.initialLoadInProgress) {
                         chatAreaUI.renderMessages(channel.messages, () => {
                             uiController.attachReactionListeners();
                             mediaHandler.attachLightboxListeners();

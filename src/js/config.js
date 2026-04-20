@@ -83,10 +83,10 @@ export const CONFIG = {
 
     // Stream Configuration
     stream: {
-        // Number of messages to load on join
-        initialMessages: 30,
+        // Number of messages to load on join (includes edits/deletes/reactions)
+        initialMessages: 50,
         // Number of messages to load on scroll
-        loadMoreCount: 30,
+        loadMoreCount: 50,
         // Message stream partitions
         messagePartitions: 1,
         // Ephemeral stream partitions (control + media)

@@ -1255,6 +1255,13 @@ body {
    (phones rotated, small tablets landscape, narrow TV UIs)
    =========================================== */
 @media (max-width: 767px), ((max-height: 500px) and (orientation: landscape)) {
+    /* Allow pinch-zoom on lightbox image */
+    #media-lightbox-modal {
+        touch-action: manipulation;
+    }
+    #lightbox-image {
+        touch-action: pinch-zoom pan-x pan-y;
+    }
     /* Force true black on mobile for Samsung/Android nav bar */
     html {
         background-color: #000000 !important;

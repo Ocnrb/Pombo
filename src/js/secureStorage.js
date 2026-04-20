@@ -707,6 +707,38 @@ class SecureStorage {
     }
 
     /**
+     * Update a sent message in local storage (for edits)
+     * @param {string} streamId - Stream ID
+     * @param {string} messageId - Message ID to update
+     * @param {Object} fields - Fields to merge into the stored message
+     */
+    async updateSentMessage(streamId, messageId, fields) {
+        if (!this.isUnlocked) return;
+        const messages = this.cache.sentMessages?.[streamId];
+        if (!messages) return;
+        const msg = messages.find(m => m.id === messageId);
+        if (!msg) return;
+        Object.assign(msg, fields);
+        await this.saveToStorage();
+    }
+
+    /**
+     * Remove a sent message from local storage (for deletes)
+     * @param {string} streamId - Stream ID
+     * @param {string} messageId - Message ID to remove
+     */
+    async removeSentMessage(streamId, messageId) {
+        if (!this.isUnlocked) return;
+        const messages = this.cache.sentMessages?.[streamId];
+        if (!messages) return;
+        const idx = messages.findIndex(m => m.id === messageId);
+        if (idx >= 0) {
+            messages.splice(idx, 1);
+            await this.saveToStorage();
+        }
+    }
+
+    /**
      * Clear sent reactions for a channel
      * @param {string} streamId - Stream ID
      */

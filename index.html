@@ -414,6 +414,16 @@
                 </span>
             </div>
 
+            <!-- Edit Bar -->
+            <div id="edit-bar" class="reply-bar">
+                <div class="reply-bar-info">
+                    <span class="reply-bar-label">Editing message</span>
+                </div>
+                <span id="edit-bar-close" class="reply-bar-close" title="Cancel edit">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </span>
+            </div>
+
             <!-- Message Input -->
             <div id="message-input-container" class="bg-[#0b0b0e] border-t border-white/[0.04] p-3 pb-4 hidden">
                 <div class="relative flex items-center gap-2">
@@ -2326,6 +2336,15 @@
         <button id="context-menu-remove-contact-btn" class="context-menu-item w-full text-left px-4 py-2 hover:bg-white/[0.08] text-sm text-red-400 flex items-center gap-2" data-action="remove-contact">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M22 10.5h-6m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM4 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 0110.374 21c-2.331 0-4.512-.645-6.374-1.766z"/></svg>
             Remove from Contacts
+        </button>
+        <hr class="border-white/[0.06] my-1 hidden" id="context-menu-edit-divider">
+        <button id="context-menu-edit-btn" class="context-menu-item w-full text-left px-4 py-2 hover:bg-white/[0.08] text-sm flex items-center gap-2 hidden" data-action="edit-message">
+            <svg class="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            Edit Message
+        </button>
+        <button id="context-menu-delete-btn" class="context-menu-item w-full text-left px-4 py-2 hover:bg-red-500/10 text-sm text-red-400 flex items-center gap-2 hidden" data-action="delete-message">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><polyline stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" points="3 6 5 6 21 6"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+            Delete Message
         </button>
         <hr class="border-white/[0.06] my-1 hidden" id="context-menu-block-divider">
         <button class="context-menu-item w-full text-left px-4 py-2 hover:bg-red-500/10 text-sm text-red-400 flex items-center gap-2 hidden" data-action="block-user" id="context-menu-block-btn">

@@ -255,13 +255,16 @@ class ContactsUI {
         // Store for context menu actions
         this.contextMenuTarget = {
             element: messageDiv,
-            sender: senderAddress
+            sender: senderAddress,
+            msgId: messageDiv.dataset.msgId,
+            msgType: messageDiv.dataset.type
         };
+
+        const isSelf = messageDiv.classList.contains('own-message');
 
         // Show/hide "Send DM" — hide if sender is yourself or you're already in a DM with them
         const sendDMBtn = document.getElementById('context-menu-send-dm-btn');
         if (sendDMBtn) {
-            const isSelf = senderAddress.toLowerCase() === this.deps.identityManager?.getAddress?.()?.toLowerCase();
             const { channelManager } = this.deps;
             const currentChannel = channelManager?.getCurrentChannel?.();
             const alreadyInDM = currentChannel?.type === 'dm' && currentChannel.peerAddress?.toLowerCase() === senderAddress.toLowerCase();
@@ -278,11 +281,21 @@ class ContactsUI {
         // Show/hide "Block User" based on whether we're in a DM channel
         const blockBtn = document.getElementById('context-menu-block-btn');
         const blockDivider = document.getElementById('context-menu-block-divider');
-        const { channelManager } = this.deps;
-        const currentChannel = channelManager?.getCurrentChannel?.();
+        const currentChannel = this.deps.channelManager?.getCurrentChannel?.();
         const isDM = currentChannel?.type === 'dm' && senderAddress.toLowerCase() !== this.deps.identityManager?.getAddress?.()?.toLowerCase();
         if (blockBtn) blockBtn.classList.toggle('hidden', !isDM);
         if (blockDivider) blockDivider.classList.toggle('hidden', !isDM);
+
+        // Show/hide "Edit / Delete" — only for own messages
+        const editBtn = document.getElementById('context-menu-edit-btn');
+        const deleteBtn = document.getElementById('context-menu-delete-btn');
+        const editDivider = document.getElementById('context-menu-edit-divider');
+        const msgType = messageDiv.dataset.type;
+        const showEdit = isSelf && msgType === 'text';
+        const showDelete = isSelf;
+        if (editBtn) editBtn.classList.toggle('hidden', !showEdit);
+        if (deleteBtn) deleteBtn.classList.toggle('hidden', !showDelete);
+        if (editDivider) editDivider.classList.toggle('hidden', !showEdit && !showDelete);
 
         // Position and show context menu
         this.showContextMenu(e.clientX, e.clientY);
@@ -409,6 +422,22 @@ class ContactsUI {
                 
             case 'block-user':
                 this.handleBlockUser(address);
+                break;
+                
+            case 'edit-message':
+                if (target.msgId && this.deps.chatAreaUI) {
+                    this.deps.chatAreaUI.startEdit(target.msgId);
+                }
+                break;
+                
+            case 'delete-message':
+                if (target.msgId && confirm('Delete this message?')) {
+                    const { channelManager } = this.deps;
+                    const ch = channelManager?.getCurrentChannel?.();
+                    if (ch) {
+                        channelManager.sendDelete(ch.streamId, target.msgId);
+                    }
+                }
                 break;
         }
     }

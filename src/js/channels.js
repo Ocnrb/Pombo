@@ -58,11 +58,15 @@ class ChannelManager {
         // OPTIMIZATION: Batch message verification for history loading
         // Messages arriving within BATCH_WINDOW_MS are batched and verified in parallel
         this.pendingVerifications = new Map(); // streamId -> { messages: [], timer: null }
+        this.pendingFlushPromises = new Map(); // streamId -> Set<Promise>
         this.BATCH_WINDOW_MS = CONFIG.channels.batchWindowMs;
         this.BATCH_MAX_SIZE = CONFIG.channels.batchMaxSize;
         
         // AbortController for in-flight history fetches - aborted on channel switch
         this.historyAbortController = null;
+        
+        // Deduplication: track edit/delete operations currently being sent
+        this.pendingOverrides = new Set(); // streamId:targetId:type
     }
 
     /**
@@ -1112,8 +1116,15 @@ class ChannelManager {
         const onHistoryComplete = async () => {
             if (!channel || !channel.initialLoadInProgress) return;
             
-            // Flush any remaining batch verifications before signaling completion
+            // Flush any remaining batch verifications
             await this.flushBatchVerification(messageStreamId);
+            
+            // Await ALL in-flight flush promises (may have been fired before onHistoryComplete)
+            await this.awaitAllFlushes(messageStreamId);
+            
+            // Apply pending overrides and remove deleted messages before first render
+            this.applyPendingOverrides(channel);
+            channel.messages = channel.messages.filter(m => !m._deleted);
             
             channel.initialLoadInProgress = false;
             Logger.debug('Initial history load complete for', messageStreamId.slice(-20));
@@ -1187,6 +1198,195 @@ class ChannelManager {
     getChannelReactions(streamId) {
         const channel = this.channels.get(streamId);
         return channel?.reactions || {};
+    }
+
+    // ==================== Message Edit/Delete (Append-Only Overrides) ====================
+
+    /**
+     * Handle an edit or delete override message (real-time or from history)
+     * Validates senderId matches original message sender, then applies the override.
+     * @param {string} streamId - Stream ID
+     * @param {Object} data - Override message { type: 'edit'|'delete', targetId, text?, senderId, timestamp }
+     * @param {boolean} [fromHistory=false] - Whether this is from history replay (skip notification)
+     */
+    handleOverrideMessage(streamId, data, fromHistory = false) {
+        const channel = this.channels.get(streamId);
+        if (!channel) return;
+
+        const senderId = data.senderId;
+        if (!senderId || !data.targetId) return;
+
+        // Find the original message
+        const original = channel.messages.find(m => m.id === data.targetId);
+
+        if (!original) {
+            // Message not loaded yet — store as pending override to apply later
+            if (!(channel._pendingOverrides instanceof Map)) channel._pendingOverrides = new Map();
+            const existing = channel._pendingOverrides.get(data.targetId);
+            // Keep only the latest override per targetId
+            if (!existing || data.timestamp > existing.timestamp) {
+                channel._pendingOverrides.set(data.targetId, data);
+            }
+            return;
+        }
+
+        // SECURITY: Only the original sender can edit/delete their message
+        if (original.sender?.toLowerCase() !== senderId.toLowerCase()) {
+            Logger.warn('Override rejected: sender mismatch', { 
+                originalSender: original.sender, overrideSender: senderId 
+            });
+            return;
+        }
+
+        // Apply the override
+        if (data.type === 'edit') {
+            if (!data.text) return;
+            original.text = data.text;
+            original._edited = true;
+            original._editedAt = data.timestamp;
+        } else if (data.type === 'delete') {
+            // Remove from messages array
+            const idx = channel.messages.indexOf(original);
+            if (idx >= 0) channel.messages.splice(idx, 1);
+        }
+
+        if (!fromHistory) {
+            this.notifyHandlers(data.type === 'edit' ? 'message_edited' : 'message_deleted', {
+                streamId,
+                targetId: data.targetId
+            });
+        }
+    }
+
+    /**
+     * Apply any pending overrides to messages that just arrived (e.g. from history)
+     * Called after messages are added to channel.messages
+     * @param {Object} channel - Channel object
+     */
+    applyPendingOverrides(channel) {
+        if (!(channel._pendingOverrides instanceof Map) || channel._pendingOverrides.size === 0) return;
+        
+        const applied = [];
+        for (const [targetId, override] of channel._pendingOverrides) {
+            const msg = channel.messages.find(m => m.id === targetId);
+            if (!msg) continue;
+            
+            // Verify sender match
+            if (msg.sender?.toLowerCase() !== override.senderId?.toLowerCase()) continue;
+            
+            if (override.type === 'edit' && override.text) {
+                msg.text = override.text;
+                msg._edited = true;
+                msg._editedAt = override.timestamp;
+            } else if (override.type === 'delete') {
+                msg._deleted = true;
+                msg._deletedAt = override.timestamp;
+            }
+            applied.push(targetId);
+        }
+        
+        for (const id of applied) {
+            channel._pendingOverrides.delete(id);
+        }
+    }
+
+    /**
+     * Send an edit for a previously sent message
+     * @param {string} streamId - Message Stream ID (channel key)
+     * @param {string} targetId - ID of the message to edit
+     * @param {string} newText - New text content
+     */
+    async sendEdit(streamId, targetId, newText) {
+        if (!newText?.trim()) throw new Error('Edit text cannot be empty');
+        
+        const channel = this.channels.get(streamId);
+        if (!channel) throw new Error('Channel not found');
+
+        // DM channels: route through DMManager
+        if (channel.type === 'dm') {
+            return await dmManager.sendEdit(streamId, targetId, newText);
+        }
+
+        const overrideKey = `${streamId}:${targetId}:edit`;
+        if (this.pendingOverrides.has(overrideKey)) return;
+        this.pendingOverrides.add(overrideKey);
+
+        try {
+            const original = channel.messages.find(m => m.id === targetId);
+            if (!original) throw new Error('Message not found');
+            
+            const myAddress = authManager.getAddress();
+            if (original.sender?.toLowerCase() !== myAddress?.toLowerCase()) {
+                throw new Error('Can only edit your own messages');
+            }
+
+            const override = {
+                type: 'edit',
+                targetId,
+                text: newText.trim(),
+                timestamp: Date.now()
+            };
+
+            // Apply locally first (optimistic)
+            original.text = override.text;
+            original._edited = true;
+            original._editedAt = override.timestamp;
+
+            this.notifyHandlers('message_edited', { streamId, targetId });
+
+            // Publish to message stream (stored alongside messages)
+            await streamrController.publishMessage(streamId, override, channel.password);
+            Logger.debug('Edit published for message:', targetId);
+        } finally {
+            setTimeout(() => this.pendingOverrides.delete(overrideKey), 2000);
+        }
+    }
+
+    /**
+     * Send a delete for a previously sent message
+     * @param {string} streamId - Message Stream ID (channel key)
+     * @param {string} targetId - ID of the message to delete
+     */
+    async sendDelete(streamId, targetId) {
+        const channel = this.channels.get(streamId);
+        if (!channel) throw new Error('Channel not found');
+
+        // DM channels: route through DMManager
+        if (channel.type === 'dm') {
+            return await dmManager.sendDelete(streamId, targetId);
+        }
+
+        const overrideKey = `${streamId}:${targetId}:delete`;
+        if (this.pendingOverrides.has(overrideKey)) return;
+        this.pendingOverrides.add(overrideKey);
+
+        try {
+            const original = channel.messages.find(m => m.id === targetId);
+            if (!original) throw new Error('Message not found');
+            
+            const myAddress = authManager.getAddress();
+            if (original.sender?.toLowerCase() !== myAddress?.toLowerCase()) {
+                throw new Error('Can only delete your own messages');
+            }
+
+            const override = {
+                type: 'delete',
+                targetId,
+                timestamp: Date.now()
+            };
+
+            // Apply locally first (optimistic) — remove from messages array
+            const idx = channel.messages.indexOf(original);
+            if (idx >= 0) channel.messages.splice(idx, 1);
+
+            this.notifyHandlers('message_deleted', { streamId, targetId });
+
+            // Publish to message stream (stored alongside messages)
+            await streamrController.publishMessage(streamId, override, channel.password);
+            Logger.debug('Delete published for message:', targetId);
+        } finally {
+            setTimeout(() => this.pendingOverrides.delete(overrideKey), 2000);
+        }
     }
 
     // ==================== Presence Tracking ====================
@@ -1435,6 +1635,12 @@ class ChannelManager {
             return;
         }
         
+        // Edit/Delete overrides: route to override handler
+        if (data?.type === 'edit' || data?.type === 'delete') {
+            this.handleOverrideMessage(streamId, data);
+            return;
+        }
+        
         // Validate that this looks like a message (has required properties)
         // Text messages need: id, text, sender, timestamp
         // Image messages need: id, imageId, sender, timestamp
@@ -1567,7 +1773,7 @@ class ChannelManager {
                 clearTimeout(batch.timer);
                 batch.timer = null;
             }
-            this.flushBatchVerification(streamId);
+            this._trackFlush(streamId, this.flushBatchVerification(streamId));
             return;
         }
         
@@ -1576,7 +1782,7 @@ class ChannelManager {
             clearTimeout(batch.timer);
         }
         batch.timer = setTimeout(() => {
-            this.flushBatchVerification(streamId);
+            this._trackFlush(streamId, this.flushBatchVerification(streamId));
         }, this.BATCH_WINDOW_MS);
     }
     
@@ -1645,6 +1851,9 @@ class ChannelManager {
             const channel = this.channels.get(streamId);
             if (channel) {
                 this.sortMessagesByTimestamp(channel);
+                
+                // Apply any pending overrides whose targets were just added
+                this.applyPendingOverrides(channel);
             }
             
             // Notify handlers with batch completion event
@@ -1655,6 +1864,30 @@ class ChannelManager {
             });
             
             Logger.debug(`Batch verification complete: ${addedCount}/${messagesToProcess.length} messages added`);
+        }
+    }
+
+    /**
+     * Track a flush promise for later awaiting
+     * @private
+     */
+    _trackFlush(streamId, promise) {
+        if (!this.pendingFlushPromises.has(streamId)) {
+            this.pendingFlushPromises.set(streamId, new Set());
+        }
+        const set = this.pendingFlushPromises.get(streamId);
+        set.add(promise);
+        promise.finally(() => set.delete(promise));
+    }
+
+    /**
+     * Await all in-flight flush promises for a stream
+     * @private
+     */
+    async awaitAllFlushes(streamId) {
+        const set = this.pendingFlushPromises.get(streamId);
+        if (set && set.size > 0) {
+            await Promise.all([...set]);
         }
     }
 
@@ -1969,11 +2202,12 @@ class ChannelManager {
                 return { loaded: 0, hasMore: channel.hasMoreHistory };
             }
             
-            // Separate reactions from content messages
+            // Separate reactions and overrides from content messages
             let addedCount = 0;
             
             if (result.messages.length > 0) {
                 const contentMessages = [];
+                const overrides = [];
                 
                 for (const msg of result.messages) {
                     // Route reactions to storeReaction (NOT channel.messages)
@@ -1986,6 +2220,15 @@ class ChannelManager {
                         if (msg.timestamp && (!channel.oldestTimestamp || msg.timestamp < channel.oldestTimestamp)) {
                             channel.oldestTimestamp = msg.timestamp;
                         }
+                        continue;
+                    }
+                    
+                    // Collect edit/delete overrides to apply after content messages
+                    if (msg?.type === 'edit' || msg?.type === 'delete') {
+                        if (msg.timestamp && (!channel.oldestTimestamp || msg.timestamp < channel.oldestTimestamp)) {
+                            channel.oldestTimestamp = msg.timestamp;
+                        }
+                        overrides.push(msg);
                         continue;
                     }
                     
@@ -2040,6 +2283,15 @@ class ChannelManager {
                     // Sort messages
                     this.sortMessagesByTimestamp(channel);
                 }
+                
+                // Apply edit/delete overrides after content messages are added
+                for (const override of overrides) {
+                    this.handleOverrideMessage(messageStreamId, override, true);
+                }
+                // Apply any previously pending overrides that now have matching messages
+                this.applyPendingOverrides(channel);
+                // Remove deleted messages from array
+                channel.messages = channel.messages.filter(m => !m._deleted);
             }
             
             channel.hasMoreHistory = result.hasMore;

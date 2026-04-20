@@ -582,6 +582,13 @@ class DMManager {
             return;
         }
 
+        // Route edit/delete overrides
+        if (data.type === 'edit' || data.type === 'delete') {
+            data.senderId = senderAddress;
+            channelManager.handleOverrideMessage(channel.messageStreamId, data);
+            return;
+        }
+
         // Deduplicate: check if message already exists
         if (data.id && channel.messages.some(m => m.id === data.id)) {
             return;
@@ -896,6 +903,96 @@ class DMManager {
         }
 
         return message;
+    }
+
+    /**
+     * Send an edit override for a DM message
+     * @param {string} peerInboxStreamId - Peer's inbox stream ID
+     * @param {string} targetId - ID of the message to edit
+     * @param {string} newText - New text content
+     */
+    async sendEdit(peerInboxStreamId, targetId, newText) {
+        const channel = channelManager.channels.get(peerInboxStreamId);
+        if (!channel || channel.type !== 'dm') throw new Error('DM channel not found');
+
+        const original = channel.messages.find(m => m.id === targetId);
+        if (!original) throw new Error('Message not found');
+
+        const myAddress = authManager.getAddress();
+        if (original.sender?.toLowerCase() !== myAddress?.toLowerCase()) {
+            throw new Error('Can only edit your own messages');
+        }
+
+        const override = { type: 'edit', targetId, text: newText.trim(), timestamp: Date.now() };
+
+        // Apply locally first
+        original.text = override.text;
+        original._edited = true;
+        original._editedAt = override.timestamp;
+
+        // Update local persisted copy
+        secureStorage.updateSentMessage(peerInboxStreamId, targetId, { text: override.text, _edited: true, _editedAt: override.timestamp });
+
+        channelManager.notifyHandlers('message_edited', { streamId: peerInboxStreamId, targetId });
+
+        // E2E encrypt and publish to peer's inbox
+        const privateKey = authManager.wallet?.privateKey;
+        const peerAddress = channel.peerAddress;
+        if (!privateKey || !peerAddress) throw new Error('Cannot send DM edit: missing credentials');
+
+        const peerPubKey = await this.getPeerPublicKey(peerAddress);
+        if (!peerPubKey) throw new Error('Cannot send DM edit: peer public key not available');
+
+        const aesKey = await dmCrypto.getSharedKey(privateKey, peerAddress, peerPubKey);
+        const payload = await dmCrypto.encrypt(override, aesKey);
+        await streamrController.setDMPublishKey(peerInboxStreamId);
+        await streamrController.publishMessage(peerInboxStreamId, payload, null);
+
+        Logger.debug('DM: Edit sent for message:', targetId);
+    }
+
+    /**
+     * Send a delete override for a DM message
+     * @param {string} peerInboxStreamId - Peer's inbox stream ID
+     * @param {string} targetId - ID of the message to delete
+     */
+    async sendDelete(peerInboxStreamId, targetId) {
+        const channel = channelManager.channels.get(peerInboxStreamId);
+        if (!channel || channel.type !== 'dm') throw new Error('DM channel not found');
+
+        const original = channel.messages.find(m => m.id === targetId);
+        if (!original) throw new Error('Message not found');
+
+        const myAddress = authManager.getAddress();
+        if (original.sender?.toLowerCase() !== myAddress?.toLowerCase()) {
+            throw new Error('Can only delete your own messages');
+        }
+
+        const override = { type: 'delete', targetId, timestamp: Date.now() };
+
+        // Apply locally — remove from messages array
+        const idx = channel.messages.indexOf(original);
+        if (idx >= 0) channel.messages.splice(idx, 1);
+
+        // Remove from local persisted copy
+        secureStorage.removeSentMessage(peerInboxStreamId, targetId);
+
+        channelManager.notifyHandlers('message_deleted', { streamId: peerInboxStreamId, targetId });
+
+        // E2E encrypt and publish to peer's inbox
+        const privateKey = authManager.wallet?.privateKey;
+        const peerAddress = channel.peerAddress;
+        if (!privateKey || !peerAddress) throw new Error('Cannot send DM delete: missing credentials');
+
+        const peerPubKey = await this.getPeerPublicKey(peerAddress);
+        if (!peerPubKey) throw new Error('Cannot send DM delete: peer public key not available');
+
+        const aesKey = await dmCrypto.getSharedKey(privateKey, peerAddress, peerPubKey);
+        const payload = await dmCrypto.encrypt(override, aesKey);
+        await streamrController.setDMPublishKey(peerInboxStreamId);
+        await streamrController.publishMessage(peerInboxStreamId, payload, null);
+
+        Logger.debug('DM: Delete sent for message:', targetId);
     }
 
     /**

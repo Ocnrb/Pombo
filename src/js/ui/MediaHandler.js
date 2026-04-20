@@ -13,6 +13,8 @@ class MediaHandler {
         this.mediaCache = new Map();
         this.mediaIdCounter = 0;
         this.deps = {};
+        this._lightboxOpen = false;
+        this._popstateHandler = this._onPopState.bind(this);
     }
 
     /**
@@ -90,12 +92,23 @@ class MediaHandler {
         }
         
         modal.classList.remove('hidden');
+
+        // Unlock native pinch-zoom while lightbox is open
+        document.body.style.touchAction = 'manipulation';
+
+        // Push history state so back button closes lightbox instead of navigating
+        if (!this._lightboxOpen) {
+            this._lightboxOpen = true;
+            window.history.pushState({ lightbox: true }, '');
+            window.addEventListener('popstate', this._popstateHandler, true);
+        }
     }
 
     /**
      * Close media lightbox
+     * @param {Object} options - { skipHistory: boolean } skip history.back if popstate already fired
      */
-    closeLightbox() {
+    closeLightbox(options = {}) {
         const modal = document.getElementById('media-lightbox-modal');
         const videoEl = document.getElementById('lightbox-video');
         
@@ -105,6 +118,36 @@ class MediaHandler {
         
         if (modal) {
             modal.classList.add('hidden');
+        }
+
+        // Restore zoom lock and reset any active pinch-zoom to default
+        document.body.style.touchAction = '';
+        const vp = document.querySelector('meta[name="viewport"]');
+        if (vp) {
+            const original = vp.getAttribute('content');
+            vp.setAttribute('content', original + ', maximum-scale=1');
+            requestAnimationFrame(() => vp.setAttribute('content', original));
+        }
+
+        // Pop the history entry we pushed (unless triggered by popstate)
+        if (this._lightboxOpen) {
+            window.removeEventListener('popstate', this._popstateHandler, true);
+            if (!options.skipHistory) {
+                window.history.back();
+            }
+            this._lightboxOpen = false;
+        }
+    }
+
+    /**
+     * Handle popstate (back button) while lightbox is open
+     * @private
+     */
+    _onPopState(event) {
+        if (this._lightboxOpen) {
+            // Close without calling history.back() (popstate already consumed it)
+            this.closeLightbox({ skipHistory: true });
+            event.stopImmediatePropagation();
         }
     }
 
@@ -150,6 +193,13 @@ class MediaHandler {
                 this.closeLightbox();
             });
         }
+
+        // Close on Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && this._lightboxOpen) {
+                this.closeLightbox();
+            }
+        });
 
         // Prevent close when clicking on image/video
         if (imageEl) {

@@ -185,6 +185,7 @@ class UIController {
             channelManager,
             secureStorage,
             dmManager,
+            chatAreaUI,
             showNotification: (msg, type) => this.showNotification(msg, type),
             showLoading: (msg) => this.showLoading(msg),
             hideLoading: () => this.hideLoading(),
@@ -818,10 +819,14 @@ class UIController {
                 e.preventDefault();
                 this.handleSendMessage();
             }
-            // Escape to cancel reply
-            if (e.key === 'Escape' && this.replyingTo) {
-                chatAreaUI.cancelReply();
-                this.replyingTo = null;
+            // Escape to cancel reply or edit
+            if (e.key === 'Escape') {
+                if (chatAreaUI.getEditingMessage()) {
+                    chatAreaUI.cancelEdit();
+                } else if (this.replyingTo) {
+                    chatAreaUI.cancelReply();
+                    this.replyingTo = null;
+                }
             }
         });
         
@@ -829,6 +834,11 @@ class UIController {
         this.elements.replyBarClose?.addEventListener('click', () => {
             chatAreaUI.cancelReply();
             this.replyingTo = null;
+        });
+
+        // Edit bar close button
+        document.getElementById('edit-bar-close')?.addEventListener('click', () => {
+            chatAreaUI.cancelEdit();
         });
 
         // Lazy loading - scroll to top loads more history
@@ -1768,6 +1778,23 @@ class UIController {
         
         const text = inputUI.getValue();
         if (!text) return;
+
+        // Check if in edit mode
+        const editState = chatAreaUI.getEditingMessage();
+        if (editState) {
+            // Edit mode: send edit override instead of new message
+            inputUI.setIsSending(true);
+            try {
+                inputUI.clear();
+                chatAreaUI.cancelEdit();
+                await channelManager.sendEdit(editState.streamId, editState.id, text);
+            } catch (error) {
+                this.showNotification('Failed to edit message: ' + error.message, 'error');
+            } finally {
+                inputUI.setIsSending(false);
+            }
+            return;
+        }
 
         // Check if in preview mode or normal channel mode
         const currentChannel = channelManager.getCurrentChannel();
