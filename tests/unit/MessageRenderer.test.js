@@ -623,6 +623,37 @@ describe('MessageRenderer', () => {
             
             expect(result).toContain('data-msg-id="12345"');
         });
+
+        it('should show (edited) badge when message._edited is true', () => {
+            const msg = {
+                id: 'msg-edited',
+                sender: '0x1',
+                text: 'Updated text',
+                _edited: true
+            };
+
+            const result = messageRenderer.buildMessageHTML(
+                msg, true, '22:00', { html: '' }, 'User'
+            );
+
+            expect(result).toContain('(edited)');
+            expect(result).toContain('message-edited');
+        });
+
+        it('should NOT show (edited) badge when _edited is false/absent', () => {
+            const msg = {
+                id: 'msg-normal',
+                sender: '0x1',
+                text: 'Normal text'
+            };
+
+            const result = messageRenderer.buildMessageHTML(
+                msg, true, '22:00', { html: '' }, 'User'
+            );
+
+            expect(result).not.toContain('(edited)');
+            expect(result).not.toContain('message-edited');
+        });
     });
 
     describe('renderVideoContent()', () => {

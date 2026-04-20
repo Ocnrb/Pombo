@@ -1019,7 +1019,7 @@ describe('ChannelManager Extended', () => {
         });
 
         it('flushes immediately when batch is full', () => {
-            const flushSpy = vi.spyOn(channelManager, 'flushBatchVerification').mockImplementation(() => {});
+            const flushSpy = vi.spyOn(channelManager, 'flushBatchVerification').mockResolvedValue(undefined);
             const channel = { messages: [] };
 
             // Fill batch to max

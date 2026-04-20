@@ -140,6 +140,7 @@ describe('ChannelManager', () => {
         channelManager.processingMessages.clear();
         channelManager.sendingMessages.clear();
         channelManager.pendingReactions.clear();
+        channelManager.pendingOverrides.clear();
         channelManager.onlineUsers.clear();
         channelManager.onlineUsersHandlers = [];
         
@@ -2145,6 +2146,185 @@ describe('ChannelManager', () => {
             await channelManager.retryPendingMessage('stream-1', 'msg1');
 
             expect(handler).not.toHaveBeenCalled();
+        });
+    });
+
+    // ==================== sendEdit ====================
+    describe('sendEdit()', () => {
+        let channel, streamId;
+
+        beforeEach(() => {
+            streamId = 'stream-edit';
+            channel = {
+                streamId,
+                name: 'Edit Channel',
+                type: 'public',
+                messages: [
+                    { id: 'msg-1', text: 'Original text', sender: '0xmyaddress', timestamp: 1000 },
+                    { id: 'msg-2', text: 'Other message', sender: '0xother', timestamp: 2000 }
+                ],
+                password: null
+            };
+            channelManager.channels.set(streamId, channel);
+        });
+
+        it('should update message text optimistically', async () => {
+            await channelManager.sendEdit(streamId, 'msg-1', 'Edited text');
+
+            expect(channel.messages[0].text).toBe('Edited text');
+            expect(channel.messages[0]._edited).toBe(true);
+        });
+
+        it('should publish edit override to network', async () => {
+            await channelManager.sendEdit(streamId, 'msg-1', 'Edited text');
+
+            expect(streamrController.publishMessage).toHaveBeenCalledWith(
+                streamId,
+                expect.objectContaining({ type: 'edit', targetId: 'msg-1', text: 'Edited text' }),
+                null
+            );
+        });
+
+        it('should notify message_edited handler', async () => {
+            const handler = vi.fn();
+            channelManager.onMessage(handler);
+
+            await channelManager.sendEdit(streamId, 'msg-1', 'Edited text');
+
+            expect(handler).toHaveBeenCalledWith('message_edited', { streamId, targetId: 'msg-1' });
+        });
+
+        it('should throw if edit text is empty', async () => {
+            await expect(channelManager.sendEdit(streamId, 'msg-1', '')).rejects.toThrow('Edit text cannot be empty');
+        });
+
+        it('should throw if edit text is whitespace only', async () => {
+            await expect(channelManager.sendEdit(streamId, 'msg-1', '   ')).rejects.toThrow('Edit text cannot be empty');
+        });
+
+        it('should throw if channel not found', async () => {
+            await expect(channelManager.sendEdit('nonexistent', 'msg-1', 'text')).rejects.toThrow('Channel not found');
+        });
+
+        it('should throw if message not found', async () => {
+            await expect(channelManager.sendEdit(streamId, 'msg-nonexistent', 'text')).rejects.toThrow('Message not found');
+        });
+
+        it('should throw if editing another user\'s message', async () => {
+            await expect(channelManager.sendEdit(streamId, 'msg-2', 'hack')).rejects.toThrow('Can only edit your own messages');
+        });
+
+        it('should trim edit text', async () => {
+            await channelManager.sendEdit(streamId, 'msg-1', '  trimmed  ');
+
+            expect(channel.messages[0].text).toBe('trimmed');
+        });
+
+        it('should set _editedAt timestamp', async () => {
+            const before = Date.now();
+            await channelManager.sendEdit(streamId, 'msg-1', 'new');
+
+            expect(channel.messages[0]._editedAt).toBeGreaterThanOrEqual(before);
+        });
+
+        it('should skip if pending override already exists', async () => {
+            channelManager.pendingOverrides.add(`${streamId}:msg-1:edit`);
+
+            await channelManager.sendEdit(streamId, 'msg-1', 'duplicate');
+
+            // Message should NOT be changed
+            expect(channel.messages[0].text).toBe('Original text');
+            expect(streamrController.publishMessage).not.toHaveBeenCalled();
+        });
+
+        it('should route DM channels through dmManager', async () => {
+            const { dmManager } = await import('../../src/js/dm.js');
+            channel.type = 'dm';
+            dmManager.sendEdit = vi.fn().mockResolvedValue(undefined);
+
+            await channelManager.sendEdit(streamId, 'msg-1', 'dm edit');
+
+            expect(dmManager.sendEdit).toHaveBeenCalledWith(streamId, 'msg-1', 'dm edit');
+            expect(streamrController.publishMessage).not.toHaveBeenCalled();
+        });
+    });
+
+    // ==================== sendDelete ====================
+    describe('sendDelete()', () => {
+        let channel, streamId;
+
+        beforeEach(() => {
+            streamId = 'stream-del';
+            channel = {
+                streamId,
+                name: 'Delete Channel',
+                type: 'public',
+                messages: [
+                    { id: 'msg-1', text: 'Delete me', sender: '0xmyaddress', timestamp: 1000 },
+                    { id: 'msg-2', text: 'Keep me', sender: '0xother', timestamp: 2000 }
+                ],
+                password: null
+            };
+            channelManager.channels.set(streamId, channel);
+        });
+
+        it('should remove message from array optimistically', async () => {
+            await channelManager.sendDelete(streamId, 'msg-1');
+
+            expect(channel.messages).toHaveLength(1);
+            expect(channel.messages[0].id).toBe('msg-2');
+        });
+
+        it('should publish delete override to network', async () => {
+            await channelManager.sendDelete(streamId, 'msg-1');
+
+            expect(streamrController.publishMessage).toHaveBeenCalledWith(
+                streamId,
+                expect.objectContaining({ type: 'delete', targetId: 'msg-1' }),
+                null
+            );
+        });
+
+        it('should notify message_deleted handler', async () => {
+            const handler = vi.fn();
+            channelManager.onMessage(handler);
+
+            await channelManager.sendDelete(streamId, 'msg-1');
+
+            expect(handler).toHaveBeenCalledWith('message_deleted', { streamId, targetId: 'msg-1' });
+        });
+
+        it('should throw if channel not found', async () => {
+            await expect(channelManager.sendDelete('nonexistent', 'msg-1')).rejects.toThrow('Channel not found');
+        });
+
+        it('should throw if message not found', async () => {
+            await expect(channelManager.sendDelete(streamId, 'msg-nonexistent')).rejects.toThrow('Message not found');
+        });
+
+        it('should throw if deleting another user\'s message', async () => {
+            await expect(channelManager.sendDelete(streamId, 'msg-2')).rejects.toThrow('Can only delete your own messages');
+        });
+
+        it('should skip if pending override already exists', async () => {
+            channelManager.pendingOverrides.add(`${streamId}:msg-1:delete`);
+
+            await channelManager.sendDelete(streamId, 'msg-1');
+
+            // Message should NOT be removed
+            expect(channel.messages).toHaveLength(2);
+            expect(streamrController.publishMessage).not.toHaveBeenCalled();
+        });
+
+        it('should route DM channels through dmManager', async () => {
+            const { dmManager } = await import('../../src/js/dm.js');
+            channel.type = 'dm';
+            dmManager.sendDelete = vi.fn().mockResolvedValue(undefined);
+
+            await channelManager.sendDelete(streamId, 'msg-1');
+
+            expect(dmManager.sendDelete).toHaveBeenCalledWith(streamId, 'msg-1');
+            expect(streamrController.publishMessage).not.toHaveBeenCalled();
         });
     });
 });
