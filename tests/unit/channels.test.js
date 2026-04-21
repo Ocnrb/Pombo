@@ -525,10 +525,10 @@ describe('ChannelManager', () => {
     describe('generateInviteLink()', () => {
         beforeEach(() => {
             // Mock window.location
-            global.window = { location: { origin: 'https://pombo.app' } };
+            global.window = { location: { origin: 'https://pombo.app', pathname: '/' } };
         });
         
-        it('should generate invite link with encoded data', () => {
+        it('should generate invite link with v2 hash format', async () => {
             const channel = { 
                 streamId: 'stream1', 
                 name: 'Test Channel', 
@@ -536,12 +536,12 @@ describe('ChannelManager', () => {
             };
             channelManager.channels.set('stream1', channel);
             
-            const link = channelManager.generateInviteLink('stream1');
+            const link = await channelManager.generateInviteLink('stream1');
             
-            expect(link).toContain('https://pombo.app?invite=');
+            expect(link).toContain('https://pombo.app/#/invite/v2/');
         });
         
-        it('should include channel name and type in encoded data', () => {
+        it('should round-trip channel name and type via encrypted token', async () => {
             const channel = { 
                 streamId: 'stream1', 
                 name: 'My Channel', 
@@ -549,16 +549,16 @@ describe('ChannelManager', () => {
             };
             channelManager.channels.set('stream1', channel);
             
-            const link = channelManager.generateInviteLink('stream1');
-            const encoded = link.split('invite=')[1];
-            const decoded = JSON.parse(atob(encoded));
+            const link = await channelManager.generateInviteLink('stream1');
+            const token = link.split('#/invite/v2/')[1];
+            const decoded = await channelManager.parseInviteLink(token);
             
-            expect(decoded.s).toBe('stream1');
-            expect(decoded.n).toBe('My Channel');
-            expect(decoded.t).toBe('private');
+            expect(decoded.streamId).toBe('stream1');
+            expect(decoded.name).toBe('My Channel');
+            expect(decoded.type).toBe('private');
         });
         
-        it('should include password if channel has one', () => {
+        it('should include password when channel has one', async () => {
             const channel = { 
                 streamId: 'stream1', 
                 name: 'Secure', 
@@ -567,25 +567,27 @@ describe('ChannelManager', () => {
             };
             channelManager.channels.set('stream1', channel);
             
-            const link = channelManager.generateInviteLink('stream1');
-            const encoded = link.split('invite=')[1];
-            const decoded = JSON.parse(atob(encoded));
+            const link = await channelManager.generateInviteLink('stream1');
+            const token = link.split('#/invite/v2/')[1];
+            const decoded = await channelManager.parseInviteLink(token);
             
-            expect(decoded.p).toBe('secret123');
+            expect(decoded.password).toBe('secret123');
         });
         
-        it('should throw for non-existent channel', () => {
-            expect(() => channelManager.generateInviteLink('non-existent'))
-                .toThrow('Channel not found');
+        it('should throw for non-existent channel', async () => {
+            await expect(channelManager.generateInviteLink('non-existent'))
+                .rejects.toThrow('Channel not found');
         });
     });
 
     describe('parseInviteLink()', () => {
-        it('should parse valid invite code', () => {
-            const data = { s: 'stream1', n: 'Test Channel', t: 'public' };
-            const encoded = btoa(JSON.stringify(data));
+        it('should parse valid invite code', async () => {
+            const channel = { streamId: 'stream1', name: 'Test Channel', type: 'public' };
+            channelManager.channels.set('stream1', channel);
+            const link = await channelManager.generateInviteLink('stream1');
+            const token = link.split('#/invite/v2/')[1];
             
-            const result = channelManager.parseInviteLink(encoded);
+            const result = await channelManager.parseInviteLink(token);
             
             expect(result).toEqual({
                 streamId: 'stream1',
@@ -595,23 +597,24 @@ describe('ChannelManager', () => {
             });
         });
         
-        it('should include password if present', () => {
-            const data = { s: 'stream1', n: 'Secure', t: 'private', p: 'secret' };
-            const encoded = btoa(JSON.stringify(data));
+        it('should include password if present', async () => {
+            const channel = { streamId: 'stream1', name: 'Secure', type: 'private', password: 'secret' };
+            channelManager.channels.set('stream1', channel);
+            const link = await channelManager.generateInviteLink('stream1');
+            const token = link.split('#/invite/v2/')[1];
             
-            const result = channelManager.parseInviteLink(encoded);
+            const result = await channelManager.parseInviteLink(token);
             
             expect(result.password).toBe('secret');
         });
         
-        it('should return null for invalid encoded data', () => {
-            const result = channelManager.parseInviteLink('invalid-base64!!!');
+        it('should return null for invalid encoded data', async () => {
+            const result = await channelManager.parseInviteLink('invalid-base64!!!');
             expect(result).toBeNull();
         });
         
-        it('should return null for valid base64 but invalid JSON', () => {
-            const encoded = btoa('not-json');
-            const result = channelManager.parseInviteLink(encoded);
+        it('should return null for token with invalid shape', async () => {
+            const result = await channelManager.parseInviteLink('a.b');
             expect(result).toBeNull();
         });
     });

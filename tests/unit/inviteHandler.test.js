@@ -126,41 +126,41 @@ describe('inviteHandler.checkInviteLink', () => {
         window.location = originalLocation;
     });
 
-    it('should do nothing when no invite param in URL', () => {
-        window.location.search = '';
-        inviteHandler.checkInviteLink();
+    it('should do nothing when no invite token in hash', async () => {
+        window.location.hash = '';
+        await inviteHandler.checkInviteLink();
         expect(channelManager.parseInviteLink).not.toHaveBeenCalled();
         expect(inviteHandler.pendingInvite).toBeNull();
     });
 
-    it('should do nothing when invite code is invalid', () => {
-        window.location.search = '?invite=bad-code';
-        channelManager.parseInviteLink.mockReturnValue(null);
+    it('should do nothing when invite code is invalid', async () => {
+        window.location.hash = '#/invite/v2/bad-code';
+        channelManager.parseInviteLink.mockResolvedValue(null);
 
-        inviteHandler.checkInviteLink();
+        await inviteHandler.checkInviteLink();
         expect(channelManager.parseInviteLink).toHaveBeenCalledWith('bad-code');
         expect(inviteHandler.pendingInvite).toBeNull();
     });
 
-    it('should store pending invite when not connected', () => {
+    it('should store pending invite when not connected', async () => {
         const inviteData = { name: 'Test', type: 'public', streamId: '0xabc/test-1' };
-        window.location.search = '?invite=valid-code';
-        channelManager.parseInviteLink.mockReturnValue(inviteData);
+        window.location.hash = '#/invite/v2/valid-code';
+        channelManager.parseInviteLink.mockResolvedValue(inviteData);
         authManager.isConnected.mockReturnValue(false);
 
-        inviteHandler.checkInviteLink();
+        await inviteHandler.checkInviteLink();
 
         expect(inviteHandler.pendingInvite).toEqual(inviteData);
         expect(window.history.replaceState).toHaveBeenCalled();
     });
 
-    it('should clear URL after processing invite', () => {
+    it('should clear URL after processing invite', async () => {
         const inviteData = { name: 'Test', type: 'public', streamId: '0xabc/test-1' };
-        window.location.search = '?invite=valid-code';
-        channelManager.parseInviteLink.mockReturnValue(inviteData);
+        window.location.hash = '#/invite/v2/valid-code';
+        channelManager.parseInviteLink.mockResolvedValue(inviteData);
         authManager.isConnected.mockReturnValue(false);
 
-        inviteHandler.checkInviteLink();
+        await inviteHandler.checkInviteLink();
 
         expect(window.history.replaceState).toHaveBeenCalledWith(
             {}, document.title, '/test'

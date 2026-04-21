@@ -206,9 +206,9 @@ describe('inviteHandler extended', () => {
             originalLocation = window.location;
             delete window.location;
             window.location = {
-                search: '?invite=valid-code',
+                search: '',
                 pathname: '/test',
-                hash: ''
+                hash: '#/invite/v2/valid-code'
             };
             window.history.replaceState = vi.fn();
         });
@@ -217,13 +217,13 @@ describe('inviteHandler extended', () => {
             window.location = originalLocation;
         });
 
-        it('should call showInviteDialog when wallet is connected', () => {
+        it('should call showInviteDialog when wallet is connected', async () => {
             const inviteData = { name: 'Test', type: 'public', streamId: '0xabc/test-1' };
-            channelManager.parseInviteLink.mockReturnValue(inviteData);
+            channelManager.parseInviteLink.mockResolvedValue(inviteData);
             authManager.isConnected.mockReturnValue(true);
             const showSpy = vi.spyOn(inviteHandler, 'showInviteDialog').mockImplementation(() => {});
 
-            inviteHandler.checkInviteLink();
+            await inviteHandler.checkInviteLink();
 
             expect(showSpy).toHaveBeenCalledWith(inviteData);
             expect(inviteHandler.pendingInvite).toBeNull();
