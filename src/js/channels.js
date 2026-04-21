@@ -2699,11 +2699,45 @@ class ChannelManager {
     }
 
     /**
+     * Convert bytes to URL-safe base64 without padding
+     * @param {Uint8Array} bytes
+     * @returns {string}
+     */
+    bytesToBase64Url(bytes) {
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return btoa(binary)
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .replace(/=+$/g, '');
+    }
+
+    /**
+     * Convert URL-safe base64 to bytes
+     * @param {string} value
+     * @returns {Uint8Array}
+     */
+    base64UrlToBytes(value) {
+        const normalized = value
+            .replace(/-/g, '+')
+            .replace(/_/g, '/');
+        const padding = '='.repeat((4 - (normalized.length % 4)) % 4);
+        const binary = atob(normalized + padding);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+        return bytes;
+    }
+
+    /**
      * Generate invite link for a channel
      * @param {string} streamId - Stream ID
      * @returns {string} - Invite link
      */
-    generateInviteLink(streamId) {
+    async generateInviteLink(streamId) {
         const channel = this.channels.get(streamId);
         if (!channel) {
             throw new Error('Channel not found');
@@ -2720,18 +2754,67 @@ class ChannelManager {
             inviteData.p = channel.password;  // password
         }
 
-        const encoded = btoa(JSON.stringify(inviteData));
-        return `${window.location.origin}?invite=${encoded}`;
+        const keyBytes = crypto.getRandomValues(new Uint8Array(32));
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const key = await crypto.subtle.importKey(
+            'raw',
+            keyBytes,
+            { name: 'AES-GCM' },
+            false,
+            ['encrypt']
+        );
+
+        const payloadBytes = new TextEncoder().encode(JSON.stringify(inviteData));
+        const ciphertext = await crypto.subtle.encrypt(
+            { name: 'AES-GCM', iv },
+            key,
+            payloadBytes
+        );
+
+        const token = [
+            this.bytesToBase64Url(iv),
+            this.bytesToBase64Url(new Uint8Array(ciphertext)),
+            this.bytesToBase64Url(keyBytes)
+        ].join('.');
+
+        return `${window.location.origin}${window.location.pathname}#/invite/v2/${token}`;
     }
 
     /**
      * Parse invite link
-     * @param {string} inviteCode - Encoded invite code
+     * @param {string} inviteCode - Encrypted invite token (iv.cipher.key)
      * @returns {Object} - Invite data
      */
-    parseInviteLink(inviteCode) {
+    async parseInviteLink(inviteCode) {
         try {
-            const decoded = atob(inviteCode);
+            const parts = inviteCode.split('.');
+            if (parts.length !== 3) {
+                throw new Error('Invalid invite token format');
+            }
+
+            const iv = this.base64UrlToBytes(parts[0]);
+            const ciphertext = this.base64UrlToBytes(parts[1]);
+            const keyBytes = this.base64UrlToBytes(parts[2]);
+
+            if (iv.length !== 12 || keyBytes.length !== 32) {
+                throw new Error('Invalid invite token length');
+            }
+
+            const key = await crypto.subtle.importKey(
+                'raw',
+                keyBytes,
+                { name: 'AES-GCM' },
+                false,
+                ['decrypt']
+            );
+
+            const decrypted = await crypto.subtle.decrypt(
+                { name: 'AES-GCM', iv },
+                key,
+                ciphertext
+            );
+
+            const decoded = new TextDecoder().decode(decrypted);
             const data = JSON.parse(decoded);
             
             // Compact format: s=streamId, n=name, t=type, p=password

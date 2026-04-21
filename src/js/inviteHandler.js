@@ -27,12 +27,13 @@ class InviteHandler {
     /**
      * Check for invite link in URL
      */
-    checkInviteLink() {
-        const params = new URLSearchParams(window.location.search);
-        const inviteCode = params.get('invite');
+    async checkInviteLink() {
+        const hash = window.location.hash || '';
+        const match = hash.match(/^#\/invite\/v2\/([^?#]+)/);
+        const inviteCode = match?.[1] || null;
 
         if (inviteCode) {
-            const inviteData = channelManager.parseInviteLink(inviteCode);
+            const inviteData = await channelManager.parseInviteLink(inviteCode);
 
             if (inviteData) {
                 Logger.info('Invite detected:', inviteData);

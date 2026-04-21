@@ -39,17 +39,23 @@ class InviteUI {
     /**
      * Show invite modal
      */
-    show() {
+    async show() {
         const currentChannel = channelManager.getCurrentChannel();
         if (!currentChannel) {
             this.deps.showNotification('Please select a channel first', 'warning');
             return;
         }
 
-        // Generate invite link
-        const inviteLink = channelManager.generateInviteLink(currentChannel.streamId);
-        if (this.elements.inviteLinkDisplay) {
-            this.elements.inviteLinkDisplay.value = inviteLink;
+        try {
+            // Generate encrypted invite link
+            const inviteLink = await channelManager.generateInviteLink(currentChannel.streamId);
+            if (this.elements.inviteLinkDisplay) {
+                this.elements.inviteLinkDisplay.value = inviteLink;
+            }
+        } catch (error) {
+            Logger.error('Failed to generate invite link:', error);
+            this.deps.showNotification('Failed to generate invite link', 'error');
+            return;
         }
 
         // Clear address input

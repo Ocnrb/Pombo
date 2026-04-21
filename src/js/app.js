@@ -90,7 +90,7 @@ class App {
             });
 
             // Check for invite link in URL
-            inviteHandler.checkInviteLink();
+            await inviteHandler.checkInviteLink();
 
             headerUI.updateNetworkStatus('Ready to connect', false);
 
