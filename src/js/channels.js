@@ -1636,8 +1636,13 @@ class ChannelManager {
         }
         
         // Edit/Delete overrides: route to override handler
+        // Pass fromHistory=true when initial load is in progress so no premature render events
+        // are fired mid-batch. Real-time edits during loading are also handled correctly:
+        // either the target is pending (stored for applyPendingOverrides) or already in
+        // channel.messages (applied silently; onHistoryComplete will render the final state).
         if (data?.type === 'edit' || data?.type === 'delete') {
-            this.handleOverrideMessage(streamId, data);
+            const channel = this.channels.get(streamId);
+            this.handleOverrideMessage(streamId, data, channel?.initialLoadInProgress ?? false);
             return;
         }
         

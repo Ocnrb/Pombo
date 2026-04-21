@@ -137,7 +137,12 @@ class ChannelListUI {
     _renderChannelItem(channel, currentStreamId) {
         // Calculate unread count based on timestamps
         const lastAccess = this.secureStorage.getChannelLastAccess(channel.streamId) || 0;
-        const unreadMessages = channel.messages.filter(m => m.timestamp > lastAccess);
+        // Exclude deleted messages and control messages (reactions, edits, deletes)
+        const unreadMessages = channel.messages.filter(m => 
+            m.timestamp > lastAccess && 
+            !m._deleted && 
+            !['reaction', 'edit', 'delete'].includes(m.type)
+        );
         const unreadCount = unreadMessages.length;
         const hasUnread = unreadCount > 0;
         

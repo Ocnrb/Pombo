@@ -653,7 +653,12 @@ class ChatAreaUI {
         }
         
         // Calculate unread count (messages newer than last access)
-        const unreadCount = channel.messages.filter(m => m.timestamp > lastAccess).length;
+        // Exclude deleted messages and control messages (reactions, edits, deletes)
+        const unreadCount = channel.messages.filter(m => 
+            m.timestamp > lastAccess && 
+            !m._deleted && 
+            !['reaction', 'edit', 'delete'].includes(m.type)
+        ).length;
         const hasUnread = unreadCount > 0;
         
         if (hasUnread) {
