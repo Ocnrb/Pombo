@@ -2625,6 +2625,12 @@
                 Install Now
             </button>
 
+            <!-- Installed but running in a browser tab → offer to launch PWA -->
+            <button id="install-open-btn" class="hidden w-full bg-[#F6851B] hover:bg-[#e5780f] text-white text-sm font-semibold px-4 py-3 rounded-xl transition shadow-lg shadow-[#F6851B]/20 mb-3 flex items-center justify-center gap-2">
+                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+                Open Pombo
+            </button>
+
             <!-- Platform-specific instructions -->
             <div id="install-instructions" class="space-y-3">
                 <!-- Waiting for Chromium beforeinstallprompt -->
@@ -2670,7 +2676,12 @@
                 <!-- Already installed -->
                 <div id="install-done" class="hidden text-center py-2">
                     <svg class="w-10 h-10 text-green-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    <p class="text-sm text-white/70 font-medium">Pombo is already installed!</p>
+                    <p class="text-sm text-white/70 font-medium">You're using the installed app</p>
+                </div>
+
+                <!-- Installed elsewhere (browser tab) — shown together with #install-open-btn -->
+                <div id="install-already" class="hidden text-center py-1">
+                    <p class="text-xs text-white/50">Pombo is already installed on this device</p>
                 </div>
             </div>
         </div>

@@ -27,10 +27,12 @@
         return {
             modal: document.getElementById('install-app-modal'),
             nativeBtn: document.getElementById('install-native-btn'),
+            openBtn: document.getElementById('install-open-btn'),
             waiting: document.getElementById('install-waiting'),
             ios: document.getElementById('install-ios'),
             desktop: document.getElementById('install-desktop'),
             done: document.getElementById('install-done'),
+            already: document.getElementById('install-already'),
         };
     }
 
@@ -40,15 +42,26 @@
 
         // Reset all
         s.nativeBtn && s.nativeBtn.classList.add('hidden');
+        s.openBtn && s.openBtn.classList.add('hidden');
         s.waiting && s.waiting.classList.add('hidden');
         s.ios && s.ios.classList.add('hidden');
         s.desktop && s.desktop.classList.add('hidden');
         s.done && s.done.classList.add('hidden');
+        s.already && s.already.classList.add('hidden');
 
         var st = getState();
 
-        if (isStandalone() || st.installed) {
+        // Running inside the installed PWA already.
+        if (isStandalone()) {
             s.done && s.done.classList.remove('hidden');
+            clearWait();
+            return;
+        }
+
+        // Installed on this device but we're in a browser tab → offer Open.
+        if (st.installed) {
+            s.openBtn && s.openBtn.classList.remove('hidden');
+            s.already && s.already.classList.remove('hidden');
             clearWait();
             return;
         }
@@ -86,7 +99,8 @@
 
     function startWaitIfNeeded() {
         var st = getState();
-        // Only wait if Chromium-like, no prompt yet, not standalone, not iOS.
+        // Only wait if Chromium-like, no prompt yet, not standalone, not iOS,
+        // and not already installed.
         if (st.supportsPrompt && !st.deferredPrompt && !st.installed && !isStandalone() && !isIOS()) {
             clearWait();
             waitTimer = setTimeout(function () {
@@ -140,6 +154,13 @@
         } else {
             render();
         }
+    });
+
+    // Open installed PWA. Browsers that support "capture links" / URL handlers
+    // (Chromium) will intercept this navigation and launch the installed app.
+    // Elsewhere it simply reloads the start_url in the current tab — harmless.
+    document.getElementById('install-open-btn')?.addEventListener('click', function () {
+        try { window.location.href = '/'; } catch (_) { /* noop */ }
     });
 
     // Also support arriving at #install via hashchange (e.g. user navigates directly)

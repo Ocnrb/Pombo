@@ -27,5 +27,12 @@
     }
   ],
   "theme_color": "#000000",
-  "background_color": "#000000"
+  "background_color": "#000000",
+  "related_applications": [
+    {
+      "platform": "webapp",
+      "url": "https://app.pombo.cc/favicon/site.webmanifest"
+    }
+  ],
+  "prefer_related_applications": false
 }
