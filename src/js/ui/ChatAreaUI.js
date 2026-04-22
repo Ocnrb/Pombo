@@ -281,9 +281,18 @@ class ChatAreaUI {
         const { channelManager, authManager, getActiveChannel } = this.deps;
         
         const channel = getActiveChannel ? getActiveChannel() : channelManager?.getCurrentChannel();
-        const hasMoreHistory = channel?.hasMoreHistory !== false;
+        const previewChannel = previewModeUI.getPreviewChannel?.();
+        const effectiveChannel = previewChannel || channel;
+        const hasMoreHistory = effectiveChannel?.hasMoreHistory !== false;
         
         if (!this.messagesArea) return;
+
+        // Hard gate: never render in-between conversation states while initial history
+        // reconciliation is in progress. Show loading state until final render.
+        const sourceMessages = Array.isArray(messages) ? messages : [];
+        const messagesForRender = effectiveChannel?.initialLoadInProgress
+            ? []
+            : sourceMessages.filter((m) => m && !m._deleted && !['edit', 'delete'].includes(m.type));
         
         // Clear any existing loading timeout
         if (this._loadingTimeoutId) {
@@ -291,7 +300,7 @@ class ChatAreaUI {
             this._loadingTimeoutId = null;
         }
         
-        if (messages.length === 0) {
+        if (messagesForRender.length === 0) {
             // If there might be more history to load, show loading spinner instead of "no messages"
             if (hasMoreHistory) {
                 this.messagesArea.innerHTML = `
@@ -342,11 +351,11 @@ class ChatAreaUI {
         }
 
         // Analyze message groups for Stack Effect
-        const groupPositions = analyzeMessageGroups(messages);
+        const groupPositions = analyzeMessageGroups(messagesForRender);
         // Analyze spacing for 3-level margin system
-        const spacingTypes = analyzeSpacing(messages, currentAddress);
+        const spacingTypes = analyzeSpacing(messagesForRender, currentAddress);
 
-        this.messagesArea.innerHTML = messages.map((msg, index) => {
+        this.messagesArea.innerHTML = messagesForRender.map((msg, index) => {
             const isOwn = msg.sender?.toLowerCase() === currentAddress?.toLowerCase();
             const msgDate = new Date(msg.timestamp);
             const time = msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });

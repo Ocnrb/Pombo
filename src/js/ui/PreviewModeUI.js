@@ -4,6 +4,7 @@
  */
 
 import { Logger } from '../logger.js';
+import { STREAM_CONFIG } from '../streamr.js';
 
 class PreviewModeUI {
     constructor() {
@@ -451,28 +452,7 @@ class PreviewModeUI {
 
         // Handle edit/delete overrides in preview mode
         if (message?.type === 'edit' || message?.type === 'delete') {
-            if (!message.senderId || !message.targetId) return;
-            const original = this.previewChannel.messages.find(m => m.id === message.targetId);
-            if (!original) {
-                // Target not loaded yet — store as pending
-                const pending = this.previewChannel._pendingOverrides;
-                if (pending) {
-                    const existing = pending.get(message.targetId);
-                    if (!existing || message.timestamp > existing.timestamp) {
-                        pending.set(message.targetId, message);
-                    }
-                }
-                return;
-            }
-            if (original.sender?.toLowerCase() !== message.senderId.toLowerCase()) return;
-            
-            if (message.type === 'edit' && message.text) {
-                original.text = message.text;
-                original._edited = true;
-            } else if (message.type === 'delete') {
-                const idx = this.previewChannel.messages.indexOf(original);
-                if (idx >= 0) this.previewChannel.messages.splice(idx, 1);
-            }
+            this._applyOrQueuePreviewOverride(message);
             // Re-render only if not during initial load
             if (!this.previewChannel.initialLoadInProgress) {
                 chatAreaUI.renderMessages(this.previewChannel.messages, () => {
@@ -581,6 +561,36 @@ class PreviewModeUI {
     }
 
     /**
+     * Apply a preview override immediately when possible, otherwise queue it.
+     * @param {Object} override - Override message
+     * @private
+     */
+    _applyOrQueuePreviewOverride(override) {
+        if (!this.previewChannel || !override?.senderId || !override?.targetId) return;
+
+        const original = this.previewChannel.messages.find(m => m.id === override.targetId);
+        if (!original) {
+            const pending = this.previewChannel._pendingOverrides;
+            if (pending) {
+                const existing = pending.get(override.targetId);
+                if (!existing || override.timestamp > existing.timestamp) {
+                    pending.set(override.targetId, override);
+                }
+            }
+            return;
+        }
+
+        if (original.sender?.toLowerCase() !== override.senderId.toLowerCase()) return;
+
+        if (override.type === 'edit' && override.text) {
+            original.text = override.text;
+            original._edited = true;
+        } else if (override.type === 'delete') {
+            original._deleted = true;
+        }
+    }
+
+    /**
      * Send a message in preview mode (directly to stream without channelManager)
      * @param {string} text - Message text
      * @param {Object} replyTo - Reply to message (optional)
@@ -676,13 +686,22 @@ class PreviewModeUI {
         channel.loadingHistory = true;
 
         try {
-            const result = await streamrController.fetchOlderHistory(
-                streamId,
-                0, // partition 0 (messages)
-                beforeTimestamp,
-                30,
-                channel.password
-            );
+            const [contentResult, overrideResult] = await Promise.all([
+                streamrController.fetchOlderHistory(
+                    streamId,
+                    STREAM_CONFIG.MESSAGE_STREAM.MESSAGES,
+                    beforeTimestamp,
+                    30,
+                    channel.password
+                ),
+                streamrController.fetchOlderHistory(
+                    streamId,
+                    STREAM_CONFIG.MESSAGE_STREAM.CONTROL,
+                    beforeTimestamp,
+                    30,
+                    channel.password
+                )
+            ]);
 
             if (!this.previewChannel) return { loaded: 0, hasMore: false };
 
@@ -690,7 +709,7 @@ class PreviewModeUI {
             let addedCount = 0;
             const { reactionManager } = this.deps;
 
-            for (const msg of result.messages) {
+            for (const msg of contentResult.messages || []) {
                 if (msg?.type === 'reaction') {
                     const reactionUser = msg.user || msg.senderId;
                     if (reactionUser) {
@@ -724,14 +743,24 @@ class PreviewModeUI {
                 }
             }
 
+            for (const override of overrideResult.messages || []) {
+                if (override?.timestamp && (!channel.oldestTimestamp || override.timestamp < channel.oldestTimestamp)) {
+                    channel.oldestTimestamp = override.timestamp;
+                }
+                this._applyOrQueuePreviewOverride(override);
+            }
+
+            this._applyPreviewOverrides();
+            channel.messages = channel.messages.filter(m => !m._deleted);
+
             if (addedCount > 0) {
                 channel.messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
             }
 
-            channel.hasMoreHistory = result.hasMore;
-            Logger.debug(`Preview: Loaded ${addedCount} older messages, hasMore: ${result.hasMore}`);
+            channel.hasMoreHistory = !!(contentResult.hasMore || overrideResult.hasMore);
+            Logger.debug(`Preview: Loaded ${addedCount} older messages, hasMore: ${channel.hasMoreHistory}`);
 
-            return { loaded: addedCount, hasMore: result.hasMore };
+            return { loaded: addedCount, hasMore: channel.hasMoreHistory };
         } catch (error) {
             Logger.error('Preview: Failed to load more history:', error);
             return { loaded: 0, hasMore: true };

@@ -474,7 +474,7 @@ class App {
             } else if (event === 'message_edited' || event === 'message_deleted') {
                 if (data.streamId === currentStreamId) {
                     const channel = channelManager.getCurrentChannel();
-                    if (channel) {
+                    if (channel && !channel.initialLoadInProgress) {
                         chatAreaUI.renderMessages(channel.messages, () => {
                             uiController.attachReactionListeners();
                             mediaHandler.attachLightboxListeners();

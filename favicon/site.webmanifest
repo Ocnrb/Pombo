@@ -1,19 +1,17 @@
 {
   "name": "Pombo - Own Your Communications",
   "short_name": "Pombo",
-  "description": "Pombo is your gateway to decentralized communications. Own your channels, messages, and identity with zero central servers and no compromise.",
+  "description": "Pombo is your gateway to decentralized communications",
   "lang": "en",
   "start_url": "/",
   "display": "standalone",
   "scope": "/",
-  "orientation": "portrait-primary",
   "categories": ["communication", "productivity", "social"],
   "icons": [
     {
       "src": "/favicon/favicon-96x96.png",
       "sizes": "96x96",
-      "type": "image/png",
-      "purpose": "any"
+      "type": "image/png"
     },
     {
       "src": "/favicon/web-app-manifest-192x192.png",
@@ -26,65 +24,8 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
-    },
-    {
-      "src": "/favicon/web-app-manifest-192x192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "maskable"
-    },
-    {
-      "src": "/favicon/web-app-manifest-512x512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
     }
   ],
   "theme_color": "#000000",
-  "background_color": "#000000",
-  "screenshots": [
-    {
-      "src": "/favicon/screenshot-540x720.png",
-      "type": "image/png",
-      "sizes": "540x720",
-      "form_factor": "narrow",
-      "label": "Pombo Communications App"
-    },
-    {
-      "src": "/favicon/screenshot-1280x720.png",
-      "type": "image/png",
-      "sizes": "1280x720",
-      "form_factor": "wide",
-      "label": "Pombo Communications App"
-    }
-  ],
-  "shortcuts": [
-    {
-      "name": "New Channel",
-      "short_name": "New Channel",
-      "description": "Create a new decentralized channel",
-      "url": "/?action=new-channel",
-      "icons": [
-        {
-          "src": "/favicon/favicon-96x96.png",
-          "sizes": "96x96",
-          "type": "image/png"
-        }
-      ]
-    },
-    {
-      "name": "Direct Message",
-      "short_name": "Direct Message",
-      "description": "Send a private encrypted message",
-      "url": "/?action=new-dm",
-      "icons": [
-        {
-          "src": "/favicon/favicon-96x96.png",
-          "sizes": "96x96",
-          "type": "image/png"
-        }
-      ]
-    }
-  ],
-  "prefer_related_applications": false
+  "background_color": "#000000"
 }

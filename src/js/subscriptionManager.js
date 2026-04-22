@@ -181,6 +181,7 @@ class SubscriptionManager {
                 ephemeralStreamId,
                 {
                     onMessage: (msg) => this._handlePreviewMessage(msg),
+                    onOverride: (msg) => this._handlePreviewMessage(msg),
                     onControl: (ephMsg) => this._handlePreviewEphemeral(ephMsg),
                     onMedia: (mediaMsg, senderId) => this._handlePreviewMedia(messageStreamId, mediaMsg, senderId)
                 },
@@ -513,11 +514,11 @@ class SubscriptionManager {
 
     /**
      * Check activity for a single channel without full subscription
-     * In dual-stream architecture, only queries MESSAGE stream (the one with storage)
+     * In multiple-stream architecture, only queries MESSAGE stream (the one with storage)
      * @param {Object} channel - Channel object
      */
     async checkChannelActivity(channel) {
-        // Use messageStreamId as the identifier (dual-stream)
+        // Use messageStreamId as the identifier (multiple-stream)
         const messageStreamId = channel.messageStreamId || channel.streamId;
         const password = channel.password || null;
 
@@ -541,18 +542,36 @@ class SubscriptionManager {
             );
 
             const messages = result.messages || [];
-            
-            // Count new messages since last check
-            // Reactions count too - they're legitimate activity
+
+            // Count only content messages for unread/background activity.
+            // P0 may include reactions, so filter them out explicitly.
+            const isContentMessage = (msg) => {
+                if (!msg) return false;
+                if (msg._deleted) return false;
+                const type = msg.type;
+                if (type === 'reaction' || type === 'edit' || type === 'delete') return false;
+                if (type === 'image' && msg.imageId) return true;
+                if (type === 'video_announce' && msg.metadata) return true;
+                if (type === 'text' || type === 'message') return true;
+                if (!type && msg.id && msg.text && msg.sender && msg.timestamp) return true;
+                return false;
+            };
+
             let newCount = 0;
             let latestTime = currentActivity.lastMessageTime;
 
             for (const msg of messages) {
-                if (msg.timestamp > currentActivity.lastMessageTime) {
+                if (!msg?.timestamp || msg.timestamp <= currentActivity.lastMessageTime) {
+                    continue;
+                }
+
+                // Advance watermark for any newer observed item to avoid reprocessing loops.
+                if (msg.timestamp > latestTime) {
+                    latestTime = msg.timestamp;
+                }
+
+                if (isContentMessage(msg)) {
                     newCount++;
-                    if (msg.timestamp > latestTime) {
-                        latestTime = msg.timestamp;
-                    }
                 }
             }
 

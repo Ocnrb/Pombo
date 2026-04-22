@@ -186,6 +186,8 @@ class ChannelManager {
             if (batch.timer) clearTimeout(batch.timer);
         }
         this.pendingVerifications.clear();
+        this.pendingFlushPromises.clear();
+        this.pendingOverrides.clear();
         Logger.debug('Channels cleared from memory');
     }
 
@@ -1107,6 +1109,24 @@ class ChannelManager {
         // Get or derive ephemeral stream ID
         const ephemeralStreamId = channel?.ephemeralStreamId || deriveEphemeralId(messageStreamId);
 
+        // Detect whether this stream supports dedicated control partition (P1)
+        let hasControlPartition = true;
+        try {
+            const partitionCount = await streamrController.getStreamPartitionCount(messageStreamId);
+            hasControlPartition = partitionCount >= 2;
+            channel._controlPartitionSupported = hasControlPartition;
+            Logger.debug('Message stream partition capability:', {
+                streamId: messageStreamId.slice(-20),
+                partitionCount,
+                hasControlPartition
+            });
+        } catch (e) {
+            // Fail-open for compatibility if partition introspection fails
+            hasControlPartition = true;
+            channel._controlPartitionSupported = true;
+            Logger.warn('Could not determine stream partition count, assuming control partition support:', e.message);
+        }
+
         // Mark channel as loading initial history (suppresses per-message renders)
         if (channel) {
             channel.initialLoadInProgress = true;
@@ -1137,6 +1157,14 @@ class ChannelManager {
             ephemeralStreamId,
             {
                 onMessage: (data) => this.handleTextMessage(messageStreamId, data),
+                onOverride: hasControlPartition
+                    ? (data) => this.handleOverrideMessage(
+                        messageStreamId,
+                        data,
+                        channel?.initialLoadInProgress ?? false
+                    )
+                    : null,
+                allowOverridesInContentPartition: !hasControlPartition,
                 onControl: (data) => this.handleControlMessage(messageStreamId, data),
                 onMedia: (data, senderId) => this.handleMediaMessage(messageStreamId, data, senderId)
             },
@@ -1334,8 +1362,16 @@ class ChannelManager {
 
             this.notifyHandlers('message_edited', { streamId, targetId });
 
-            // Publish to message stream (stored alongside messages)
-            await streamrController.publishMessage(streamId, override, channel.password);
+            // Publish to control partition when available, else fallback to content partition
+            const overridePartition = channel?._controlPartitionSupported === false
+                ? STREAM_CONFIG.MESSAGE_STREAM.MESSAGES
+                : STREAM_CONFIG.MESSAGE_STREAM.CONTROL;
+            await streamrController.publish(
+                streamId,
+                overridePartition,
+                override,
+                channel.password
+            );
             Logger.debug('Edit published for message:', targetId);
         } finally {
             setTimeout(() => this.pendingOverrides.delete(overrideKey), 2000);
@@ -1381,8 +1417,16 @@ class ChannelManager {
 
             this.notifyHandlers('message_deleted', { streamId, targetId });
 
-            // Publish to message stream (stored alongside messages)
-            await streamrController.publishMessage(streamId, override, channel.password);
+            // Publish to control partition when available, else fallback to content partition
+            const overridePartition = channel?._controlPartitionSupported === false
+                ? STREAM_CONFIG.MESSAGE_STREAM.MESSAGES
+                : STREAM_CONFIG.MESSAGE_STREAM.CONTROL;
+            await streamrController.publish(
+                streamId,
+                overridePartition,
+                override,
+                channel.password
+            );
             Logger.debug('Delete published for message:', targetId);
         } finally {
             setTimeout(() => this.pendingOverrides.delete(overrideKey), 2000);
@@ -1635,14 +1679,15 @@ class ChannelManager {
             return;
         }
         
-        // Edit/Delete overrides: route to override handler
-        // Pass fromHistory=true when initial load is in progress so no premature render events
-        // are fired mid-batch. Real-time edits during loading are also handled correctly:
-        // either the target is pending (stored for applyPendingOverrides) or already in
-        // channel.messages (applied silently; onHistoryComplete will render the final state).
+        // Edit/Delete overrides are normally handled on message stream partition 1 via onOverride.
+        // For streams without control partition support, accept overrides on content path.
         if (data?.type === 'edit' || data?.type === 'delete') {
             const channel = this.channels.get(streamId);
-            this.handleOverrideMessage(streamId, data, channel?.initialLoadInProgress ?? false);
+            if (channel?._controlPartitionSupported === false) {
+                this.handleOverrideMessage(streamId, data, channel?.initialLoadInProgress ?? false);
+                return;
+            }
+            Logger.debug('Ignoring override on content handler path:', data?.type);
             return;
         }
         
@@ -1882,7 +1927,12 @@ class ChannelManager {
         }
         const set = this.pendingFlushPromises.get(streamId);
         set.add(promise);
-        promise.finally(() => set.delete(promise));
+        promise.finally(() => {
+            set.delete(promise);
+            if (set.size === 0) {
+                this.pendingFlushPromises.delete(streamId);
+            }
+        });
     }
 
     /**
@@ -2189,16 +2239,31 @@ class ChannelManager {
         
         try {
             Logger.debug('Loading more history before:', new Date(beforeTimestamp).toISOString());
+            const supportsControlPartition = channel?._controlPartitionSupported !== false;
             
-            // Fetch from MESSAGE stream (messageStreamId ends with -1)
-            const result = await streamrController.fetchOlderHistory(
-                messageStreamId,
-                STREAM_CONFIG.MESSAGE_STREAM.MESSAGES, // partition 0
-                beforeTimestamp,
-                STREAM_CONFIG.LOAD_MORE_COUNT,
-                channel.password,
-                signal
-            );
+            // Fetch from MESSAGE stream partition 0 (content) and partition 1 (overrides)
+            const [contentResult, overrideResult] = await Promise.all([
+                streamrController.fetchOlderHistory(
+                    messageStreamId,
+                    STREAM_CONFIG.MESSAGE_STREAM.MESSAGES,
+                    beforeTimestamp,
+                    STREAM_CONFIG.LOAD_MORE_COUNT,
+                    channel.password,
+                    signal,
+                    !supportsControlPartition
+                ),
+                supportsControlPartition
+                    ? streamrController.fetchOlderHistory(
+                        messageStreamId,
+                        STREAM_CONFIG.MESSAGE_STREAM.CONTROL,
+                        beforeTimestamp,
+                        STREAM_CONFIG.LOAD_MORE_COUNT,
+                        channel.password,
+                        signal,
+                        false
+                    )
+                    : Promise.resolve({ messages: [], hasMore: false })
+            ]);
             
             // Discard results if user switched channels during fetch
             if (this.switchGeneration !== generationAtStart) {
@@ -2210,11 +2275,14 @@ class ChannelManager {
             // Separate reactions and overrides from content messages
             let addedCount = 0;
             
-            if (result.messages.length > 0) {
+            const contentMessagesRaw = contentResult.messages || [];
+            const overridesRaw = overrideResult.messages || [];
+
+            if (contentMessagesRaw.length > 0 || overridesRaw.length > 0) {
                 const contentMessages = [];
-                const overrides = [];
+                const overrides = [...overridesRaw];
                 
-                for (const msg of result.messages) {
+                for (const msg of contentMessagesRaw) {
                     // Route reactions to storeReaction (NOT channel.messages)
                     if (msg?.type === 'reaction') {
                         const reactionUser = msg.senderId || msg.user;
@@ -2227,9 +2295,9 @@ class ChannelManager {
                         }
                         continue;
                     }
-                    
-                    // Collect edit/delete overrides to apply after content messages
-                    if (msg?.type === 'edit' || msg?.type === 'delete') {
+
+                    // Legacy fallback path: stream has no control partition, overrides come from P0
+                    if (!supportsControlPartition && (msg?.type === 'edit' || msg?.type === 'delete')) {
                         if (msg.timestamp && (!channel.oldestTimestamp || msg.timestamp < channel.oldestTimestamp)) {
                             channel.oldestTimestamp = msg.timestamp;
                         }
@@ -2299,18 +2367,19 @@ class ChannelManager {
                 channel.messages = channel.messages.filter(m => !m._deleted);
             }
             
-            channel.hasMoreHistory = result.hasMore;
+            // Pagination is driven by content partition
+            channel.hasMoreHistory = contentResult.hasMore;
             channel.loadingHistory = false;
             
             this.notifyHandlers('history_loaded', { 
                 streamId: messageStreamId, 
                 loaded: addedCount, 
-                hasMore: result.hasMore 
+                hasMore: contentResult.hasMore 
             });
             
-            Logger.info(`Loaded ${addedCount} older messages (${result.messages.length} total fetched), hasMore: ${result.hasMore}`);
+            Logger.info(`Loaded ${addedCount} older messages (P0: ${contentMessagesRaw.length}, P1: ${overridesRaw.length}), hasMore: ${contentResult.hasMore}`);
             
-            return { loaded: addedCount, hasMore: result.hasMore };
+            return { loaded: addedCount, hasMore: contentResult.hasMore };
         } catch (error) {
             Logger.error('Failed to load more history:', error);
             channel.loadingHistory = false;
@@ -2597,8 +2666,8 @@ class ChannelManager {
             this.channels.delete(streamId);
             await this.saveChannels();
             
-            // Cancel any pending batch verifications for this channel
-            this.cancelPendingVerifications(streamId);
+            // Clear transient async/send state for this channel
+            this.clearStreamTransientState(streamId);
             
             // Remove from channel order
             await secureStorage.removeFromChannelOrder(streamId);
@@ -2632,7 +2701,25 @@ class ChannelManager {
         // Cancel any pending batch verifications for the previous channel
         // to avoid stale messages being processed after the switch
         if (previousChannel && previousChannel !== streamId) {
-            this.cancelPendingVerifications(previousChannel);
+            this.clearStreamTransientState(previousChannel);
+        }
+    }
+
+    /**
+     * Clear transient async/send state for a specific stream.
+     * Used on channel switch/delete to isolate stale in-flight work.
+     * @param {string} streamId - Stream ID
+     */
+    clearStreamTransientState(streamId) {
+        if (!streamId) return;
+        this.cancelPendingVerifications(streamId);
+        this.pendingFlushPromises.delete(streamId);
+
+        // Remove send-side override dedupe keys for this stream (format: streamId:targetId:type)
+        for (const key of [...this.pendingOverrides]) {
+            if (key.startsWith(`${streamId}:`)) {
+                this.pendingOverrides.delete(key);
+            }
         }
     }
 

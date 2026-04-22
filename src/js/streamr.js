@@ -6,7 +6,8 @@
  * Each channel uses 2 streams:
  * 
  * Message Stream (suffix -1): WITH STORAGE
- * - Partition 0: Text messages, reactions, images, video announcements
+ * - Partition 0: Content messages (text, reactions, images, video announcements)
+ * - Partition 1: Control overrides (edit, delete)
  * 
  * Ephemeral Stream (suffix -2): NO STORAGE
  * - Partition 0: Control/Metadata (presence, typing)
@@ -63,13 +64,14 @@ const STREAM_CONFIG = {
     LOAD_MORE_COUNT: CONFIG.stream.loadMoreCount,
     
     // Message Stream (with storage)
-    // Regular channels: 1 partition (messages only)
-    // DM inboxes: 3 partitions (messages + sync + sync_blobs)
+    // Regular channels: 2 partitions (content + control overrides)
+    // DM inboxes: 4 partitions (messages + sync + sync_blobs + notifications)
     MESSAGE_STREAM: {
         SUFFIX: '-1',
-        PARTITIONS: 1,        // Regular channels: messages only
+        PARTITIONS: 2,        // Regular channels: content + control overrides
         DM_PARTITIONS: 4,     // DM inboxes: messages + sync + sync_blobs + notifications
         MESSAGES: 0,          // Text, reactions, images, video announcements
+        CONTROL: 1,           // Edit/Delete overrides (regular channels)
         SYNC: 1,              // Cross-device sync payloads (self → self, DM inbox only)
         SYNC_BLOBS: 2,        // Image blobs sync (DM inbox only)
         NOTIFICATIONS: 3      // Channel invites / notifications (DM inbox only)
@@ -352,7 +354,7 @@ class StreamrController {
             Logger.info('Creating message stream...');
             const startTime = Date.now();
             
-            const messageStream = await createStreamWithRetry(messageStreamId, metadata, 'message', STREAM_CONFIG.MESSAGE_STREAM.PARTITIONS);  // 1 partition for channels
+            const messageStream = await createStreamWithRetry(messageStreamId, metadata, 'message', STREAM_CONFIG.MESSAGE_STREAM.PARTITIONS);  // 2 partitions for channels (content + control)
             
             // Step 2: Create EPHEMERAL STREAM (3 partitions: control + media signals + media data)
             Logger.info('Creating ephemeral stream...');
@@ -953,7 +955,7 @@ class StreamrController {
         const messageStream = await getOrCreate(
             messageStreamId,
             metadata,
-            STREAM_CONFIG.MESSAGE_STREAM.DM_PARTITIONS  // 3 partitions: messages + sync + sync_blobs
+            STREAM_CONFIG.MESSAGE_STREAM.DM_PARTITIONS  // 4 partitions: messages + sync + sync_blobs + notifications
         );
 
         // Step 2: Create/get ephemeral stream
@@ -1804,6 +1806,21 @@ class StreamrController {
     }
 
     /**
+     * Get partition count for a stream.
+     * @param {string} streamId - Stream ID
+     * @returns {Promise<number>} - Partition count
+     */
+    async getStreamPartitionCount(streamId) {
+        if (!this.client) {
+            throw new Error('Streamr client not initialized');
+        }
+
+        const stream = await this.client.getStream(streamId);
+        const partitions = await stream.getPartitionCount();
+        return typeof partitions === 'bigint' ? Number(partitions) : partitions;
+    }
+
+    /**
      * Publish a text message to MESSAGE STREAM (partition 0 - stored)
      * In dual-stream architecture: caller must pass messageStreamId
      * @param {string} messageStreamId - Message Stream ID (ends with -1)
@@ -2237,11 +2254,11 @@ class StreamrController {
         const messages = [];
         
         try {
-            // Streamr SDK resend: await before iterating
-            // Format: await client.resend(streamId, { last: N, partition: P })
+            // Streamr SDK resend for partitioned history:
+            // pass stream definition as first arg: { streamId, partition }
             const resend = await this.client.resend(
-                messageStreamId,
-                { last: count, partition: partition }
+                { streamId: messageStreamId, partition: partition },
+                { last: count }
             );
             
             // Manual iteration to catch decrypt errors per-message
@@ -2366,7 +2383,7 @@ class StreamrController {
      * @param {string} password - Password for encrypted channels (optional)
      * @returns {Promise<{messages: Array, hasMore: boolean}>} - Messages and pagination info
      */
-    async fetchOlderHistory(messageStreamId, partition = 0, beforeTimestamp, count = STREAM_CONFIG.LOAD_MORE_COUNT, password = null, signal = null) {
+    async fetchOlderHistory(messageStreamId, partition = 0, beforeTimestamp, count = STREAM_CONFIG.LOAD_MORE_COUNT, password = null, signal = null, allowOverridesInContentPartition = false) {
         if (!this.client) {
             throw new Error('Client not initialized');
         }
@@ -2376,13 +2393,20 @@ class StreamrController {
         // Ephemeral message types that should NEVER be loaded from history
         const EPHEMERAL_TYPES = ['presence', 'typing'];
         
-        // Valid message types for partition 0 (stored messages)
-        const isValidStoredMessage = (msg) => {
+        // Valid content message types for partition 0
+        const isValidContentMessage = (msg) => {
             if (msg?.type === 'text') return true;
             if (msg?.id && msg?.text && msg?.sender && msg?.timestamp && !msg?.type) return true;
             if (msg?.type === 'reaction') return true;
             if (msg?.type === 'image' && msg?.imageId) return true;
             if (msg?.type === 'video_announce' && msg?.metadata) return true;
+            if (allowOverridesInContentPartition && msg?.type === 'edit' && msg?.targetId) return true;
+            if (allowOverridesInContentPartition && msg?.type === 'delete' && msg?.targetId) return true;
+            return false;
+        };
+
+        // Valid override message types for partition 1
+        const isValidOverrideMessage = (msg) => {
             if (msg?.type === 'edit' && msg?.targetId) return true;
             if (msg?.type === 'delete' && msg?.targetId) return true;
             return false;
@@ -2394,9 +2418,8 @@ class StreamrController {
             // Streamr SDK resend with range: from epoch to beforeTimestamp
             // We request more than needed to account for filtered messages
             const resend = await this.client.resend(
-                messageStreamId,
-                { 
-                    partition: partition,
+                { streamId: messageStreamId, partition: partition },
+                {
                     from: { timestamp: 0 },
                     to: { timestamp: beforeTimestamp - 1 } // -1 to exclude the boundary message
                 }
@@ -2459,8 +2482,13 @@ class StreamrController {
                         continue;
                     }
                     
-                    // For partition 0: only accept valid stored message types
-                    if (partition === 0 && !isValidStoredMessage(content)) {
+                    // For partition 0: only accept content message types
+                    if (partition === STREAM_CONFIG.MESSAGE_STREAM.MESSAGES && !isValidContentMessage(content)) {
+                        continue;
+                    }
+
+                    // For partition 1: only accept override message types
+                    if (partition === STREAM_CONFIG.MESSAGE_STREAM.CONTROL && !isValidOverrideMessage(content)) {
                         continue;
                     }
                     
@@ -2517,9 +2545,8 @@ class StreamrController {
             Logger.debug(`fetchOlderHistoryWindowed: ${new Date(windowStart).toISOString()} → ${new Date(windowEnd).toISOString()}`);
 
             const resend = await this.client.resend(
-                streamId,
+                { streamId, partition },
                 {
-                    partition,
                     from: { timestamp: windowStart },
                     to: { timestamp: windowEnd }
                 }
@@ -2587,7 +2614,7 @@ class StreamrController {
      * @param {string} password - Password for encrypted channels (optional)
      * @returns {Promise<Object>} - Subscription object
      */
-    async subscribeWithHistory(streamId, partition, handler, historyCount = STREAM_CONFIG.INITIAL_MESSAGES, password = null, onHistoryComplete = null) {
+    async subscribeWithHistory(streamId, partition, handler, historyCount = STREAM_CONFIG.INITIAL_MESSAGES, password = null, onHistoryComplete = null, allowOverridesInContentPartition = false) {
         if (!this.client) {
             throw new Error('Client not initialized');
         }
@@ -2660,7 +2687,7 @@ class StreamrController {
             // Fetch history separately (may fail due to CORS on localhost)
             // This is non-blocking and fails gracefully
             // Pass password for decryption of encrypted channels
-            this.fetchHistoryAsync(streamId, partition, historyCount, handler, password, onHistoryComplete);
+            this.fetchHistoryAsync(streamId, partition, historyCount, handler, password, onHistoryComplete, allowOverridesInContentPartition);
         } else if (onHistoryComplete) {
             // No history to fetch, signal completion immediately
             try { onHistoryComplete(); } catch (e) { Logger.warn('onHistoryComplete error:', e); }
@@ -2679,14 +2706,14 @@ class StreamrController {
      * @param {Function} handler - Message handler
      * @param {string} password - Password for decryption (optional)
      */
-    async fetchHistoryAsync(streamId, partition, count, handler, password = null, onHistoryComplete = null) {
+    async fetchHistoryAsync(streamId, partition, count, handler, password = null, onHistoryComplete = null, allowOverridesInContentPartition = false) {
         try {
             Logger.debug(`Fetching ${count} historical messages for partition ${partition}${password ? ' (encrypted)' : ''}...`);
             
             // Streamr SDK resend: must await before iterating
             const resend = await this.client.resend(
-                streamId,
-                { last: count, partition: partition }
+                { streamId, partition },
+                { last: count }
             );
             
             Logger.debug(`Resend object received for partition ${partition}:`, typeof resend);
@@ -2722,10 +2749,14 @@ class StreamrController {
             // Format: { ct: base64, iv: base64, e: 'aes-256-gcm' }
             const isEncryptedEnvelope = (msg) => !!(msg && typeof msg.ct === 'string' && typeof msg.iv === 'string' && msg.e === 'aes-256-gcm');
             
-            // Valid message types for partition 0 (stored messages)
-            const isValidStoredMessage = (msg) => {
-                return isTextMessage(msg) || isReaction(msg) || isImageMessage(msg) || isVideoMessage(msg) || isEncryptedEnvelope(msg)
-                    || (msg?.type === 'edit' && msg?.targetId) || (msg?.type === 'delete' && msg?.targetId);
+            // Valid content message types for message partition 0 (stored content)
+            const isValidContentMessage = (msg) => {
+                return isTextMessage(msg) || isReaction(msg) || isImageMessage(msg) || isVideoMessage(msg) || isEncryptedEnvelope(msg);
+            };
+
+            // Valid override message types for message partition 1 (stored control)
+            const isValidOverrideMessage = (msg) => {
+                return (msg?.type === 'edit' && msg?.targetId) || (msg?.type === 'delete' && msg?.targetId);
             };
             
             // Use manual iteration to catch decryption errors per-message
@@ -2796,15 +2827,25 @@ class StreamrController {
                         continue;
                     }
                     
-                    // For partition 0 (messages): only accept valid stored message types
-                    if (partition === 0) {
-                        if (!isValidStoredMessage(content)) {
+                    // For message stream partition 0: accept only content messages
+                    if (partition === STREAM_CONFIG.MESSAGE_STREAM.MESSAGES) {
+                        const allowLegacyOverride = allowOverridesInContentPartition
+                            && (content?.type === 'edit' || content?.type === 'delete');
+                        if (!isValidContentMessage(content) && !allowLegacyOverride) {
+                            skippedCount++;
+                            continue;
+                        }
+                    }
+
+                    // For message stream partition 1: accept only edit/delete overrides
+                    if (partition === STREAM_CONFIG.MESSAGE_STREAM.CONTROL) {
+                        if (!isValidOverrideMessage(content)) {
                             skippedCount++;
                             continue;
                         }
                     }
                     
-                    handler(content);
+                    await handler(content);
                     msgCount++;
                 } catch (e) {
                     Logger.warn('Error processing historical message:', e.message);
@@ -2837,16 +2878,18 @@ class StreamrController {
     /**
      * Subscribe to dual-stream channel (message + ephemeral streams)
      * 
-     * Message Stream (-1):
-     *   - Partition 0: Text messages, reactions, images, video announcements (WITH history)
+    * Message Stream (-1):
+    *   - Partition 0: Content messages (WITH history)
+    *   - Partition 1: Control overrides edit/delete (WITH history)
      * 
-     * Ephemeral Stream (-2):
-     *   - Partition 0: Control/metadata (presence, typing) - NO history
-     *   - Partition 1: Media chunks (P2P transfer) - NO history
+    * Ephemeral Stream (-2):
+    *   - Partition 0: Control/metadata (presence, typing) - NO history
+    *   - Partition 1: Media signals (P2P coordination) - NO history
+    *   - Partition 2: Media data (binary chunks) - NO history
      * 
      * @param {string} messageStreamId - Message Stream ID (ends with -1)
      * @param {string} ephemeralStreamId - Ephemeral Stream ID (ends with -2)
-     * @param {Object} handlers - { onMessage, onControl, onMedia }
+    * @param {Object} handlers - { onMessage, onOverride, onControl, onMedia }
      * @param {string} password - Password for encrypted channels (optional)
      * @param {number} historyCount - Number of historical messages to fetch
      * @returns {Promise<boolean>} - Success
@@ -2864,32 +2907,91 @@ class StreamrController {
             Logger.warn('Invalid ephemeralStreamId (should end with -2):', ephemeralStreamId);
         }
 
+        const shouldTrackHistory = !!onHistoryComplete && historyCount > 0;
+        const trackedHistoryPartitions = [];
+        if (shouldTrackHistory && handlers.onMessage) {
+            trackedHistoryPartitions.push(STREAM_CONFIG.MESSAGE_STREAM.MESSAGES);
+        }
+        if (shouldTrackHistory && handlers.onOverride) {
+            trackedHistoryPartitions.push(STREAM_CONFIG.MESSAGE_STREAM.CONTROL);
+        }
+
+        let pendingHistoryCompletions = trackedHistoryPartitions.length;
+        let historyCompleteSignaled = false;
+        const completedHistoryPartitions = new Set();
+
+        const maybeSignalHistoryComplete = async () => {
+            if (historyCompleteSignaled || !onHistoryComplete) return;
+            if (pendingHistoryCompletions === 0) {
+                historyCompleteSignaled = true;
+                try { await onHistoryComplete(); } catch (e) { Logger.warn('onHistoryComplete error:', e); }
+            }
+        };
+
+        const completeHistoryPartition = async (partition, partitionLabel) => {
+            if (!shouldTrackHistory) return;
+            if (completedHistoryPartitions.has(partition)) return;
+            completedHistoryPartitions.add(partition);
+            pendingHistoryCompletions = Math.max(0, pendingHistoryCompletions - 1);
+            Logger.debug(`History complete for ${partitionLabel}. Pending: ${pendingHistoryCompletions}`);
+            await maybeSignalHistoryComplete();
+        };
+
+        const makePartitionHistoryCallback = (partition, partitionLabel) => {
+            if (!shouldTrackHistory) return null;
+            let called = false;
+            return async () => {
+                if (called) return;
+                called = true;
+                await completeHistoryPartition(partition, partitionLabel);
+            };
+        };
+
         try {
             // 1. Subscribe to MESSAGE STREAM (with storage)
-            if (!this.subscriptions.has(messageStreamId)) {
-                const msgSubs = {};
-                
-                // Partition 0: Messages WITH history
-                if (handlers.onMessage) {
-                    Logger.debug('Subscribing to messageStream partition 0 (messages) with history');
+            let msgSubs = this.subscriptions.get(messageStreamId);
+            if (!msgSubs) {
+                msgSubs = {};
+                this.subscriptions.set(messageStreamId, msgSubs);
+            }
+
+            // Partition 0: Content messages WITH history
+            if (handlers.onMessage) {
+                if (!msgSubs[STREAM_CONFIG.MESSAGE_STREAM.MESSAGES]) {
+                    Logger.debug('Subscribing to messageStream partition 0 (content) with history');
                     msgSubs[STREAM_CONFIG.MESSAGE_STREAM.MESSAGES] = await this.subscribeWithHistory(
                         messageStreamId,
                         STREAM_CONFIG.MESSAGE_STREAM.MESSAGES,
                         handlers.onMessage,
                         historyCount,
                         password,
-                        onHistoryComplete
+                        makePartitionHistoryCallback(STREAM_CONFIG.MESSAGE_STREAM.MESSAGES, 'messageStream P0'),
+                        handlers.allowOverridesInContentPartition === true
                     );
+                } else {
+                    await completeHistoryPartition(STREAM_CONFIG.MESSAGE_STREAM.MESSAGES, 'messageStream P0 (already subscribed)');
                 }
-                
-                this.subscriptions.set(messageStreamId, msgSubs);
-                Logger.info('Subscribed to message stream:', messageStreamId);
-            } else if (onHistoryComplete) {
-                // Already subscribed (e.g. from channel creation) — history already fetched.
-                // Signal completion immediately so initialLoadInProgress gets cleared.
-                Logger.debug('Already subscribed to message stream, signaling history complete:', messageStreamId);
-                try { await onHistoryComplete(); } catch (e) { Logger.warn('onHistoryComplete error (already subscribed):', e); }
             }
+
+            // Partition 1: Control overrides WITH history
+            if (handlers.onOverride) {
+                if (!msgSubs[STREAM_CONFIG.MESSAGE_STREAM.CONTROL]) {
+                    Logger.debug('Subscribing to messageStream partition 1 (control overrides) with history');
+                    msgSubs[STREAM_CONFIG.MESSAGE_STREAM.CONTROL] = await this.subscribeWithHistory(
+                        messageStreamId,
+                        STREAM_CONFIG.MESSAGE_STREAM.CONTROL,
+                        handlers.onOverride,
+                        historyCount,
+                        password,
+                        makePartitionHistoryCallback(STREAM_CONFIG.MESSAGE_STREAM.CONTROL, 'messageStream P1'),
+                        false
+                    );
+                } else {
+                    await completeHistoryPartition(STREAM_CONFIG.MESSAGE_STREAM.CONTROL, 'messageStream P1 (already subscribed)');
+                }
+            }
+
+            Logger.info('Subscribed to message stream:', messageStreamId);
 
             // 2. Subscribe to EPHEMERAL STREAM (no storage)
             if (!this.subscriptions.has(ephemeralStreamId)) {
@@ -2903,7 +3005,9 @@ class StreamrController {
                         STREAM_CONFIG.EPHEMERAL_STREAM.CONTROL,
                         handlers.onControl,
                         0, // NO history - ephemeral
-                        password
+                        password,
+                        null,
+                        false
                     );
                 }
                 
@@ -2918,6 +3022,9 @@ class StreamrController {
                 this.subscriptions.set(ephemeralStreamId, ephSubs);
                 Logger.info('Subscribed to ephemeral stream:', ephemeralStreamId);
             }
+
+            // If no history callbacks were registered, complete immediately.
+            await maybeSignalHistoryComplete();
 
             return true;
         } catch (error) {

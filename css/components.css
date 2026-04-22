@@ -505,14 +505,24 @@ body {
 
 .message-footer {
     display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
+    align-items: center;
+    justify-content: flex-start;
     gap: 8px;
     margin-top: 0px;
 }
 
 .message-footer .message-time {
     flex-shrink: 0;
+    margin-left: auto;
+}
+
+.message-footer .message-edited {
+    margin-left: auto;
+    line-height: 1;
+}
+
+.message-footer .message-edited + .message-time {
+    margin-left: -4px;
 }
 
 .reaction-badge {
