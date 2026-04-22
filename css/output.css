@@ -1711,6 +1711,11 @@ video {
   border-left-color: transparent;
 }
 
+.border-t-\[\#F6851B\] {
+  --tw-border-opacity: 1;
+  border-top-color: rgb(246 133 27 / var(--tw-border-opacity, 1));
+}
+
 .border-t-transparent {
   border-top-color: transparent;
 }

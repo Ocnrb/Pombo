@@ -2627,6 +2627,11 @@
 
             <!-- Platform-specific instructions -->
             <div id="install-instructions" class="space-y-3">
+                <!-- Waiting for Chromium beforeinstallprompt -->
+                <div id="install-waiting" class="hidden text-center py-4">
+                    <div class="inline-block w-6 h-6 border-2 border-white/20 border-t-[#F6851B] rounded-full animate-spin mb-2"></div>
+                    <p class="text-xs text-white/50">Preparing installation…</p>
+                </div>
                 <!-- iOS -->
                 <div id="install-ios" class="hidden">
                     <p class="text-xs text-white/50 uppercase tracking-wider font-semibold mb-3">Safari on iPhone / iPad</p>
