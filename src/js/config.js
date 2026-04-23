@@ -70,7 +70,17 @@ export const CONFIG = {
             'https://polygon.llamarpc.com',
             'https://1rpc.io/matic'
         ],
-        blockExplorer: 'https://polygonscan.com'
+        blockExplorer: 'https://polygonscan.com',
+        // Ethereum mainnet providers for ENS resolution 
+        ensProviderUrls: [
+            'https://ethereum-rpc.publicnode.com',
+            'https://eth.meowrpc.com',
+            'https://eth.llamarpc.com',
+            'https://eth.drpc.org',
+            'https://cloudflare-eth.com'
+        ],
+        rpcTimeoutMs: 5000,            // Per-call HTTP RPC timeout (GasEstimator)
+        fallbackGasPriceGwei: 30       // Fallback gas price when all RPCs fail
     },
 
     // Retry Configuration
@@ -131,14 +141,18 @@ export const CONFIG = {
         maxRetries: 3,                 // Message publish retry limit
         retryDelayMs: 2000,            // Delay between retries
         batchWindowMs: 100,            // Window to collect messages for batch verification
-        batchMaxSize: 50               // Maximum batch size before flushing
+        batchMaxSize: 50,              // Maximum batch size before flushing
+        accessHeartbeatMs: 15000       // Interval for persisting channel access (lastAccess)
     },
 
     // Identity & ENS
     identity: {
         ensCacheDurationMs: 24 * 60 * 60 * 1000,      // 24h ENS cache
+        ensNullCacheDurationMs: 15 * 60 * 1000,        // 15min cache for null ENS results
         maxEnsCacheSize: 500,                          // Max cached ENS entries
-        messageTimestampToleranceMs: 5 * 60 * 1000     // 5min replay-attack window
+        messageTimestampToleranceMs: 5 * 60 * 1000,    // 5min replay-attack window
+        providerCooldownMs: 5 * 60 * 1000,             // Skip failed ENS provider for 5min
+        ipfsGateway: 'https://cloudflare-ipfs.com/ipfs/' // Gateway for ipfs:// avatar URIs
     },
 
     // Media / File Transfer
@@ -175,11 +189,22 @@ export const CONFIG = {
         maxConcurrentSubs: 1,          // Only 1 full subscription at a time
         activityCheckMessages: 3,      // Messages to fetch for activity check
         previewPresenceIntervalMs: 20000, // Presence broadcast interval in preview
-        initialPollDelayMs: 5000       // Delay before first background poll
+        initialPollDelayMs: 5000,      // Delay before first background poll
+        maxPresenceFailures: 3         // Stop preview presence after N consecutive failures
     },
 
     // Push Notifications
     push: {
+        // Single stream for push notifications (MVP)
+        pushStreamId: '0xae340e799e8151f6a4999d245e466197aa217667/push',
+        // List of known relays
+        relays: [
+            {
+                name: 'Pombo Relay 1',
+                address: '0x905309e8b4d22a02b08459f42a203c7265abd3ad',
+                vapidPublicKey: 'BFsT-uCydgNHZA4r3_vKo2JRyTr0EwziKbJl6rNUNKtbSJLNOzA7Vxm81mVADuitIllOp_HI8fpvBNayOb8BDtY'
+            }
+        ],
         tagBytes: 1,                   // K-anonymity tag size (256 possible tags)
         powDifficulty: 4,              // PoW leading zeros required
         powMaxTimeMs: 30000,           // Max PoW computation time
@@ -202,6 +227,40 @@ export const CONFIG = {
         cacheDurationMs: 30000         // 30s query result cache
     },
 
+    // Explore / Channel Discovery Curation
+    explore: {
+        manifestUrl: '/curation/explore.json',
+        cacheTtlMs: 5 * 60 * 1000      // 5min in-memory manifest cache
+    },
+
+    // LocalStorage Key Registry
+    // Single source of truth for all `pombo_*` keys. Functions normalize
+    // addresses to lowercase to prevent case-drift silently splitting state.
+    storageKeys: {
+        // Static keys (no per-account scoping)
+        keystores: 'pombo_keystores',
+        rpcPreference: 'pombo_rpc_preference',
+        pushRegistration: 'pombo_push_registration',
+        pushRegistrationChannels: (addr) =>
+            addr ? `pombo_push_registration_channels_${addr.toLowerCase()}`
+                 : 'pombo_push_registration_channels',
+        pushRegistrationNativeChannels: (addr) =>
+            addr ? `pombo_push_registration_native_channels_${addr.toLowerCase()}`
+                 : 'pombo_push_registration_native_channels',
+
+        // Per-address keys (address is normalized to lowercase)
+        secure: (addr) => `pombo_secure_${addr.toLowerCase()}`,
+        ens: (addr) => `pombo_ens_${addr.toLowerCase()}`,
+        ensAvatar: (addr) => `pombo_ens_avatar_${addr.toLowerCase()}`,
+        username: (addr) => `pombo_username_${addr.toLowerCase()}`,
+        invites: (addr) => `pombo_invites_${addr.toLowerCase()}`,
+        invitesMuted: (addr) => `pombo_invites_muted_${addr.toLowerCase()}`,
+        dmPush: (addr) => `pombo_dm_push_${addr.toLowerCase()}`,
+
+        // Per-stream keys
+        channelAccess: (streamId) => `pombo_channel_access_${streamId}`
+    },
+
     // Application Metadata
     app: {
         name: 'pombo',
@@ -216,7 +275,7 @@ export const CONFIG = {
  */
 export function getRpcEndpoints() {
     // Check for user preference in localStorage
-    const saved = localStorage.getItem('pombo_rpc_preference');
+    const saved = localStorage.getItem(CONFIG.storageKeys.rpcPreference);
     if (saved) {
         try {
             const pref = JSON.parse(saved);

@@ -1298,7 +1298,7 @@ class DMManager {
         if (!force) {
             const address = authManager.getAddress();
             if (address) {
-                const storageKey = `pombo_dm_push_${address.toLowerCase()}`;
+                const storageKey = CONFIG.storageKeys.dmPush(address);
                 const dmPushEnabled = localStorage.getItem(storageKey) === 'true';
                 if (!dmPushEnabled) {
                     Logger.debug('DM: Push notifications preference disabled, skipping registration');

@@ -16,6 +16,7 @@ import { subscriptionManager } from './subscriptionManager.js';
 import { historyManager } from './historyManager.js';
 import { relayManager } from './relayManager.js';
 import { dmManager } from './dm.js';
+import { CONFIG } from './config.js';
 
 // UI Modules
 import { notificationUI } from './ui/NotificationUI.js';
@@ -517,8 +518,8 @@ class UIController {
      * This ensures lastAccess is saved even if app closes abruptly
      */
     setupAccessHeartbeat() {
-        // Heartbeat interval (15 seconds)
-        this.HEARTBEAT_INTERVAL = 15000;
+        // Heartbeat interval (from CONFIG.channels.accessHeartbeatMs)
+        this.HEARTBEAT_INTERVAL = CONFIG.channels.accessHeartbeatMs;
         this.heartbeatTimer = null;
         
         // Save access on page unload (best effort)
@@ -581,7 +582,7 @@ class UIController {
         const currentChannel = channelManager.getCurrentChannel();
         if (currentChannel) {
             // Use synchronous localStorage directly for reliability during unload
-            const key = `pombo_channel_access_${currentChannel.streamId}`;
+            const key = CONFIG.storageKeys.channelAccess(currentChannel.streamId);
             localStorage.setItem(key, Date.now().toString());
         }
     }
@@ -1352,9 +1353,48 @@ class UIController {
         const state = historyManager.getInitialState();
         
         if (!state || state.view === 'explore') {
-            // Default view - show explore and set initial history entry
-            await this.showExploreView();
-            historyManager.replaceState({ view: 'explore' });
+            // Default view - show explore and set initial history entry.
+            // On mobile, the sidebar (channel list) is the initial view.
+            // If the user has no channels yet, auto-open the Explore view
+            // so first-time users land directly on Explore instead of an
+            // empty channel list.
+            const hasChannels = channelManager.getAllChannels().length > 0;
+            const hasDMs = (dmManager.getConversations?.() || []).length > 0;
+            if (this.isMobileView() && !hasChannels && !hasDMs) {
+                // Open Explore as full-screen mobile view (navigates chat-area).
+                // Suppress slide transition so user doesn't see the chat-list
+                // briefly before Explore animates in on first load.
+                const sidebar = this.elements.sidebar;
+                const chatArea = this.elements.chatArea;
+                sidebar?.style.setProperty('transition', 'none');
+                chatArea?.style.setProperty('transition', 'none');
+
+                channelManager.setCurrentChannel(null);
+                this.openChatView();
+                await this.showExploreView();
+                document.querySelectorAll('.channel-item').forEach(item => {
+                    item.classList.remove('bg-white/[0.06]');
+                });
+                // Sync pill-nav highlight with the Explore view
+                headerUI.setActivePillTab?.('explore');
+
+                // Force reflow then restore transitions on next frame
+                // so subsequent navigations animate normally.
+                // eslint-disable-next-line no-unused-expressions
+                chatArea?.offsetHeight;
+                requestAnimationFrame(() => {
+                    sidebar?.style.removeProperty('transition');
+                    chatArea?.style.removeProperty('transition');
+                });
+
+                historyManager.replaceState({ view: 'explore' });
+            } else {
+                await this.showExploreView();
+                // Mobile default view is the sidebar (chats list); desktop
+                // shows Explore inline. Highlight the correct pill tab.
+                headerUI.setActivePillTab?.(this.isMobileView() ? 'chats' : 'explore');
+                historyManager.replaceState({ view: 'explore' });
+            }
             return;
         }
 

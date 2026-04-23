@@ -12,6 +12,7 @@ import { previewModeUI } from './PreviewModeUI.js';
 import { analyzeMessageGroups, getGroupPositionClass, analyzeSpacing, getSpacingClass } from './MessageGrouper.js';
 import { escapeHtml, formatAddress } from './utils.js';
 import { identityManager } from '../identity.js';
+import { CONFIG } from '../config.js';
 
 class ChatAreaUI {
     constructor() {
@@ -729,7 +730,7 @@ class ChatAreaUI {
         
         const names = users.map(u => {
             const addr = u.address || u;
-            const ensName = addr ? localStorage.getItem(`pombo_ens_${addr.toLowerCase()}`) : null;
+            const ensName = addr ? localStorage.getItem(CONFIG.storageKeys.ens(addr)) : null;
             return ensName || u.nickname || formatAddress(addr);
         }).join(', ');
         usersSpan.textContent = names + (users.length === 1 ? ' is' : ' are');

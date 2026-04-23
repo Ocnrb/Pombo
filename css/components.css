@@ -1511,7 +1511,9 @@ body {
     body.chat-open:not(.explore-open) #mobile-pill-nav,
     body.chat-open #sidebar-connect-float,
     body.new-channel-open #mobile-pill-nav,
-    body.new-channel-open #sidebar-connect-float {
+    body.new-channel-open #sidebar-connect-float,
+    body.wallet-flow-open #mobile-pill-nav,
+    body.wallet-flow-open #sidebar-connect-float {
         display: none !important;
     }
 

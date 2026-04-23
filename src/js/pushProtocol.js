@@ -229,21 +229,16 @@ export async function createNativeChannelNotificationPayload(streamId, difficult
 // ================================================
 
 // Default relay configuration
+// Values sourced from CONFIG.push (config.js); keep shape for backward compat.
 export const DEFAULT_CONFIG = {
     // Single stream for push notifications (MVP)
-    pushStreamId: '0xae340e799e8151f6a4999d245e466197aa217667/push',
-    
+    pushStreamId: CONFIG.push.pushStreamId,
+
     // PoW difficulty (must match relay)
     powDifficulty: CONFIG.push.powDifficulty,
-    
+
     // List of known relays
-    relays: [
-        {
-            name: 'Pombo Relay 1',
-            address: '0x905309e8b4d22a02b08459f42a203c7265abd3ad',
-            vapidPublicKey: 'BFsT-uCydgNHZA4r3_vKo2JRyTr0EwziKbJl6rNUNKtbSJLNOzA7Vxm81mVADuitIllOp_HI8fpvBNayOb8BDtY'
-        }
-    ]
+    relays: CONFIG.push.relays
 };
 
 export default {

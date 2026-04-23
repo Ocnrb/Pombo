@@ -19,23 +19,16 @@ import { CONFIG } from './config.js';
 const ENS_CACHE_DURATION = CONFIG.identity.ensCacheDurationMs;
 
 // Shorter cache for null results — retry sooner (ENS records may be propagating)
-const ENS_NULL_CACHE_DURATION = 15 * 60 * 1000; // 15 minutes
+const ENS_NULL_CACHE_DURATION = CONFIG.identity.ensNullCacheDurationMs;
 
 // Message timestamp tolerance - prevents replay attacks
 const MESSAGE_TIMESTAMP_TOLERANCE = CONFIG.identity.messageTimestampToleranceMs;
 
 // Ethereum mainnet providers for ENS (fallback order)
-// Requirements: free, no API key, good CORS, supports eth_call for ENS
-const ENS_PROVIDER_URLS = [
-    'https://ethereum-rpc.publicnode.com',
-    'https://eth.meowrpc.com',
-    'https://eth.llamarpc.com',
-    'https://eth.drpc.org',
-    'https://cloudflare-eth.com'
-];
+const ENS_PROVIDER_URLS = CONFIG.network.ensProviderUrls;
 
 // How long to skip a provider after it fails
-const PROVIDER_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+const PROVIDER_COOLDOWN_MS = CONFIG.identity.providerCooldownMs;
 
 class IdentityManager {
     constructor() {
@@ -467,7 +460,7 @@ class IdentityManager {
         }
 
         // Check localStorage (available pre-login for unlock/switch modals)
-        const stored = localStorage.getItem(`pombo_ens_avatar_${normalizedAddress}`);
+        const stored = localStorage.getItem(CONFIG.storageKeys.ensAvatar(normalizedAddress));
         if (stored) {
             this.ensAvatarCache.set(normalizedAddress, { url: stored, timestamp: Date.now() });
             return stored;
@@ -522,7 +515,7 @@ class IdentityManager {
                 // Convert IPFS URIs to HTTPS gateway URLs
                 if (avatarUrl.startsWith('ipfs://')) {
                     const cid = avatarUrl.slice(7);
-                    avatarUrl = `https://cloudflare-ipfs.com/ipfs/${cid}`;
+                    avatarUrl = `${CONFIG.identity.ipfsGateway}${cid}`;
                 }
 
                 // Validate URL: only allow HTTPS and data URIs
@@ -532,7 +525,7 @@ class IdentityManager {
                 }
 
                 this.ensAvatarCache.set(normalizedAddress, { url: avatarUrl, timestamp: Date.now() });
-                localStorage.setItem(`pombo_ens_avatar_${normalizedAddress}`, avatarUrl);
+                localStorage.setItem(CONFIG.storageKeys.ensAvatar(normalizedAddress), avatarUrl);
                 Logger.info(`ENS avatar: ${ensName} → ${avatarUrl.slice(0, 80)}`);
                 return avatarUrl;
             } catch (error) {
@@ -555,7 +548,7 @@ class IdentityManager {
         const normalizedAddress = address.toLowerCase();
         const cached = this.ensAvatarCache.get(normalizedAddress);
         if (cached?.url) return cached.url;
-        return localStorage.getItem(`pombo_ens_avatar_${normalizedAddress}`);
+        return localStorage.getItem(CONFIG.storageKeys.ensAvatar(normalizedAddress));
     }
 
     // ==================== TRUSTED CONTACTS ====================

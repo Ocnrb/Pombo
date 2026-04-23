@@ -37,7 +37,7 @@ class NotificationManager {
         this.muted = !!muted;
         const address = authManager.getAddress()?.toLowerCase();
         if (address) {
-            localStorage.setItem(`pombo_invites_muted_${address}`, this.muted ? '1' : '0');
+            localStorage.setItem(CONFIG.storageKeys.invitesMuted(address), this.muted ? '1' : '0');
         }
     }
 
@@ -57,7 +57,7 @@ class NotificationManager {
 
         // Restore muted preference
         const addr = address.toLowerCase();
-        this.muted = localStorage.getItem(`pombo_invites_muted_${addr}`) === '1';
+        this.muted = localStorage.getItem(CONFIG.storageKeys.invitesMuted(addr)) === '1';
 
         this.initialized = true;
         Logger.info('Notification system initialized');
@@ -290,7 +290,7 @@ class NotificationManager {
             const address = authManager.getAddress();
             if (!address) return;
             
-            const key = `pombo_invites_${address.toLowerCase()}`;
+            const key = CONFIG.storageKeys.invites(address);
             const saved = localStorage.getItem(key);
             if (saved) {
                 const invites = JSON.parse(saved);
@@ -312,7 +312,7 @@ class NotificationManager {
             const address = authManager.getAddress();
             if (!address) return;
             
-            const key = `pombo_invites_${address.toLowerCase()}`;
+            const key = CONFIG.storageKeys.invites(address);
             const invites = Array.from(this.pendingInvites.values());
             localStorage.setItem(key, JSON.stringify(invites));
         } catch (error) {

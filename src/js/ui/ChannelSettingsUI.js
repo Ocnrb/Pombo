@@ -9,6 +9,7 @@ import { escapeHtml, escapeAttr } from './utils.js';
 import { sanitizeText } from './sanitizer.js';
 import { relayManager } from '../relayManager.js';
 import { graphAPI } from '../graph.js';
+import { CONFIG } from '../config.js';
 
 class ChannelSettingsUI {
     constructor() {
@@ -201,9 +202,9 @@ class ChannelSettingsUI {
      */
     async populateStorageInfo(channel) {
         const { streamrController } = this.deps;
-        
+
         // Known storage node addresses for identification
-        const LOGSTORE_NODE = '0x17f98084757a75add72bf6c5b5a6f69008c28a57';
+        const LOGSTORE_NODE = CONFIG.storage.logstoreNode;
         
         // Show loading state
         if (this.elements.channelStorageProvider) {

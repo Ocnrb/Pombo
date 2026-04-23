@@ -34,7 +34,7 @@ export const GasEstimator = {
             
             try {
                 const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 5000); // 5s timeout
+                const timeout = setTimeout(() => controller.abort(), CONFIG.network.rpcTimeoutMs);
                 
                 const response = await fetch(rpcUrl, {
                     method: 'POST',
@@ -87,8 +87,8 @@ export const GasEstimator = {
             return gasPriceWei;
         } catch (error) {
             Logger.warn('Failed to fetch gas price:', error);
-            // Fallback to 30 gwei if all RPCs fail
-            return 30 * 1e9;
+            // Fallback gas price if all RPCs fail
+            return CONFIG.network.fallbackGasPriceGwei * 1e9;
         }
     },
     

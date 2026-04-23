@@ -5,6 +5,7 @@
 
 import { escapeHtml, escapeAttr } from './utils.js';
 import { sanitizeText } from './sanitizer.js';
+import { loadCurationManifest, applyCuration } from '../exploreCuration.js';
 
 class ExploreUI {
     constructor() {
@@ -202,8 +203,13 @@ class ExploreUI {
             if (!this.deps.getPublicChannels) {
                 throw new Error('getPublicChannels dependency not set');
             }
-            const channels = await this.deps.getPublicChannels();
-            this.cachedPublicChannels = channels;
+            // Fetch channels and curation manifest in parallel; curation failure
+            // is non-fatal (helper falls back to an empty manifest).
+            const [channels, manifest] = await Promise.all([
+                this.deps.getPublicChannels(),
+                loadCurationManifest(),
+            ]);
+            this.cachedPublicChannels = applyCuration(channels, manifest);
             this.filterChannels('');
         } catch (error) {
             console.error('Failed to load explore channels:', error);

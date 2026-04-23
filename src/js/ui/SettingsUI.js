@@ -442,7 +442,7 @@ class SettingsUI {
                         this.mediaController.reset();
 
                         // 7. Delete encrypted storage
-                        const storageKey = `pombo_secure_${currentAddress.toLowerCase()}`;
+                        const storageKey = CONFIG.storageKeys.secure(currentAddress);
                         localStorage.removeItem(storageKey);
 
                         // 8. Lock secure storage
@@ -1660,7 +1660,7 @@ class SettingsUI {
         }
 
         // Storage key for this preference
-        const storageKey = `pombo_dm_push_${address.toLowerCase()}`;
+        const storageKey = CONFIG.storageKeys.dmPush(address);
 
         if (enable) {
             // Ensure push notifications are enabled first
@@ -1718,7 +1718,7 @@ class SettingsUI {
                 if (this.elements.dmPushEnabled) {
                     const address = this.authManager?.getAddress();
                     if (address) {
-                        const storageKey = `pombo_dm_push_${address.toLowerCase()}`;
+                        const storageKey = CONFIG.storageKeys.dmPush(address);
                         const dmPushEnabled = localStorage.getItem(storageKey) === 'true';
                         this.elements.dmPushEnabled.checked = dmPushEnabled;
                     }
@@ -1869,7 +1869,7 @@ class SettingsUI {
         presetSelect.value = 'drpc';
         
         // Load saved preference
-        const saved = localStorage.getItem('pombo_rpc_preference');
+        const saved = localStorage.getItem(CONFIG.storageKeys.rpcPreference);
         if (saved) {
             try {
                 const pref = JSON.parse(saved);
@@ -1919,7 +1919,7 @@ class SettingsUI {
             pref.customUrl = customInput.value.trim();
         }
         
-        localStorage.setItem('pombo_rpc_preference', JSON.stringify(pref));
+        localStorage.setItem(CONFIG.storageKeys.rpcPreference, JSON.stringify(pref));
         this.Logger?.info('RPC preference saved:', pref);
         
         // Reconnect Streamr client with new RPC endpoints
@@ -2015,7 +2015,7 @@ class SettingsUI {
         const statusEl = document.getElementById('rpc-status');
         
         // Load saved preference
-        const saved = localStorage.getItem('pombo_rpc_preference');
+        const saved = localStorage.getItem(CONFIG.storageKeys.rpcPreference);
         if (saved && presetSelect) {
             try {
                 const pref = JSON.parse(saved);

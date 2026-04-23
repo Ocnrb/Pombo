@@ -33,7 +33,7 @@ const CONFIG = {
     relays: DEFAULT_CONFIG.relays,
     
     // Storage key for state persistence
-    storageKey: 'pombo_push_registration',
+    storageKey: APP_CONFIG.storageKeys.pushRegistration,
     
     // Re-registration interval to refresh tokens before expiry
     reRegistrationInterval: APP_CONFIG.push.reRegistrationIntervalMs
@@ -345,24 +345,22 @@ class RelayManager {
      */
     loadSubscribedChannels() {
         try {
-            const suffix = this.walletAddress ? `_${this.walletAddress}` : '';
-            
             // Load public/password channels
-            const stored = localStorage.getItem(CONFIG.storageKey + '_channels' + suffix);
+            const stored = localStorage.getItem(APP_CONFIG.storageKeys.pushRegistrationChannels(this.walletAddress));
             if (stored) {
                 const channels = JSON.parse(stored);
                 this.subscribedChannels = new Set(channels);
                 Logger.debug('Public channels with notifications:', this.subscribedChannels.size);
             }
-            
+
             // Load native channels
-            const storedNative = localStorage.getItem(CONFIG.storageKey + '_native_channels' + suffix);
+            const storedNative = localStorage.getItem(APP_CONFIG.storageKeys.pushRegistrationNativeChannels(this.walletAddress));
             if (storedNative) {
                 const nativeChannels = JSON.parse(storedNative);
                 this.subscribedNativeChannels = new Set(nativeChannels);
                 Logger.debug('Native channels with notifications:', this.subscribedNativeChannels.size);
             }
-            
+
             // Sync to Service Worker (delayed to ensure SW is ready)
             setTimeout(() => this.syncWithServiceWorker(), 1000);
         } catch (e) {
@@ -375,16 +373,14 @@ class RelayManager {
      */
     saveSubscribedChannels() {
         try {
-            const suffix = this.walletAddress ? `_${this.walletAddress}` : '';
-            
             // Save public/password channels
             const channels = Array.from(this.subscribedChannels);
-            localStorage.setItem(CONFIG.storageKey + '_channels' + suffix, JSON.stringify(channels));
-            
+            localStorage.setItem(APP_CONFIG.storageKeys.pushRegistrationChannels(this.walletAddress), JSON.stringify(channels));
+
             // Save native channels
             const nativeChannels = Array.from(this.subscribedNativeChannels);
-            localStorage.setItem(CONFIG.storageKey + '_native_channels' + suffix, JSON.stringify(nativeChannels));
-            
+            localStorage.setItem(APP_CONFIG.storageKeys.pushRegistrationNativeChannels(this.walletAddress), JSON.stringify(nativeChannels));
+
             // Sync to Service Worker for push verification
             this.syncWithServiceWorker();
         } catch (e) {

@@ -21,7 +21,6 @@ class SecureStorage {
         this.isUnlocked = false;      // Whether storage is decrypted
         this.cache = null;            // Decrypted data cache
         this.isGuestMode = false;     // Guest mode - no persistence
-        this.STORAGE_PREFIX = 'pombo_secure_';
         this.PBKDF2_ITERATIONS = CONFIG.crypto.pbkdf2Iterations;
         // Image ledger (IndexedDB)
         this.imageDB = null;          // IDBDatabase for PomboImageStore
@@ -104,9 +103,9 @@ class SecureStorage {
 
             // Sync username to plain localStorage for pre-unlock display
             if (this.cache.username) {
-                localStorage.setItem(`pombo_username_${this.address}`, this.cache.username);
+                localStorage.setItem(CONFIG.storageKeys.username(this.address), this.cache.username);
             } else {
-                localStorage.removeItem(`pombo_username_${this.address}`);
+                localStorage.removeItem(CONFIG.storageKeys.username(this.address));
             }
 
             Logger.info('🔓 Secure storage unlocked for:', this.address.slice(0, 8) + '...');
@@ -152,7 +151,7 @@ class SecureStorage {
      * Get the localStorage key for current wallet
      */
     getStorageKey() {
-        return `${this.STORAGE_PREFIX}${this.address}`;
+        return CONFIG.storageKeys.secure(this.address);
     }
 
     /**
@@ -430,9 +429,9 @@ class SecureStorage {
         // Skip in guest mode — guest sessions are memory-only
         if (this.address && !this.isGuestMode) {
             if (username) {
-                localStorage.setItem(`pombo_username_${this.address}`, username);
+                localStorage.setItem(CONFIG.storageKeys.username(this.address), username);
             } else {
-                localStorage.removeItem(`pombo_username_${this.address}`);
+                localStorage.removeItem(CONFIG.storageKeys.username(this.address));
             }
         }
         await this.saveToStorage();
@@ -530,7 +529,7 @@ class SecureStorage {
         const cachedAccess = this.cache.channelLastAccess?.[streamId] || 0;
         
         // Check emergency localStorage (saved on beforeunload/pagehide)
-        const emergencyKey = `pombo_channel_access_${streamId}`;
+        const emergencyKey = CONFIG.storageKeys.channelAccess(streamId);
         const emergencyValue = localStorage.getItem(emergencyKey);
         const emergencyAccess = emergencyValue ? parseInt(emergencyValue, 10) : 0;
         
@@ -564,7 +563,7 @@ class SecureStorage {
         this.cache.channelLastAccess[streamId] = timestamp;
         
         // Clean up any emergency localStorage value for this channel
-        const emergencyKey = `pombo_channel_access_${streamId}`;
+        const emergencyKey = CONFIG.storageKeys.channelAccess(streamId);
         localStorage.removeItem(emergencyKey);
         
         await this.saveToStorage();
@@ -1366,9 +1365,9 @@ class SecureStorage {
             // Also store in plain localStorage for pre-unlock display (unlock modal)
             if (this.address) {
                 if (data.username) {
-                    localStorage.setItem(`pombo_username_${this.address}`, data.username);
+                    localStorage.setItem(CONFIG.storageKeys.username(this.address), data.username);
                 } else {
-                    localStorage.removeItem(`pombo_username_${this.address}`);
+                    localStorage.removeItem(CONFIG.storageKeys.username(this.address));
                 }
             }
         }

@@ -271,7 +271,7 @@ class SubscriptionManager {
         
         // Track consecutive failures to avoid spamming logs
         let consecutiveFailures = 0;
-        const MAX_CONSECUTIVE_FAILURES = 3;
+        const MAX_CONSECUTIVE_FAILURES = CONFIG.subscriptions.maxPresenceFailures;
         
         const publishPresence = async () => {
             if (this.previewChannelId !== messageStreamId) return;

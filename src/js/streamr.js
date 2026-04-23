@@ -24,15 +24,25 @@ import { CONFIG, getRpcEndpoints } from './config.js';
 import { executeWithRetry, executeWithRetryAndVerify } from './utils/retry.js';
 import { isRpcError, createPermissionResult } from './utils/rpcErrors.js';
 import { authManager } from './auth.js';
+import {
+    MESSAGE_STREAM as MESSAGE_STREAM_CONSTANTS,
+    EPHEMERAL_STREAM as EPHEMERAL_STREAM_CONSTANTS,
+    deriveEphemeralId as _deriveEphemeralId,
+    deriveMessageId as _deriveMessageId,
+    isMessageStream as _isMessageStream,
+    isEphemeralStream as _isEphemeralStream
+} from './streamConstants.js';
 
 // === STREAM CONFIG (DUAL-STREAM ARCHITECTURE) ===
+// Protocol constants live in streamConstants.js; this object adds the
+// dynamic/environment bits (storage node address, provider catalog).
 const STREAM_CONFIG = {
     // Streamr's official storage node (will be set from SDK after load)
     NODE_ADDRESS: null, // Set dynamically in init()
-    
+
     // LogStore Virtual Storage Node
-    LOGSTORE_NODE: '0x17f98084757a75add72bf6c5b5a6f69008c28a57',
-    
+    LOGSTORE_NODE: CONFIG.storage.logstoreNode,
+
     // Storage Providers Configuration
     STORAGE_PROVIDERS: {
         STREAMR: {
@@ -40,7 +50,7 @@ const STREAM_CONFIG = {
             name: 'Streamr Official',
             description: 'Official Streamr storage cluster with configurable retention',
             supportsTTL: true,
-            defaultDays: 180,
+            defaultDays: CONFIG.storage.defaultRetentionDays,
             // Node address set dynamically from SDK
             getNodeAddress: () => STREAM_CONFIG.NODE_ADDRESS
         },
@@ -53,78 +63,30 @@ const STREAM_CONFIG = {
             getNodeAddress: () => STREAM_CONFIG.LOGSTORE_NODE
         }
     },
-    
+
     // Default storage provider
-    DEFAULT_STORAGE_PROVIDER: 'streamr',
+    DEFAULT_STORAGE_PROVIDER: CONFIG.storage.defaultProvider,
 
     // Number of messages to load on join (higher to account for reactions)
     INITIAL_MESSAGES: CONFIG.stream.initialMessages,
-    
+
     // Number of messages to load on scroll (pagination)
     LOAD_MORE_COUNT: CONFIG.stream.loadMoreCount,
-    
-    // Message Stream (with storage)
-    // Regular channels: 2 partitions (content + control overrides)
-    // DM inboxes: 4 partitions (messages + sync + sync_blobs + notifications)
-    MESSAGE_STREAM: {
-        SUFFIX: '-1',
-        PARTITIONS: 2,        // Regular channels: content + control overrides
-        DM_PARTITIONS: 4,     // DM inboxes: messages + sync + sync_blobs + notifications
-        MESSAGES: 0,          // Text, reactions, images, video announcements
-        CONTROL: 1,           // Edit/Delete overrides (regular channels)
-        SYNC: 1,              // Cross-device sync payloads (self → self, DM inbox only)
-        SYNC_BLOBS: 2,        // Image blobs sync (DM inbox only)
-        NOTIFICATIONS: 3      // Channel invites / notifications (DM inbox only)
-    },
-    
-    // Ephemeral Stream (no storage): 3 partitions
-    EPHEMERAL_STREAM: {
-        SUFFIX: '-2',
-        PARTITIONS: 3,
-        CONTROL: 0,       // Presence, typing (JSON)
-        MEDIA_SIGNALS: 1, // P2P coordination: piece_request, source_request/announce (JSON)
-        MEDIA_DATA: 2     // P2P heavy payloads: file_piece (Binary - Uint8Array)
-    }
+
+    // Message Stream (with storage) — see streamConstants.js
+    MESSAGE_STREAM: MESSAGE_STREAM_CONSTANTS,
+
+    // Ephemeral Stream (no storage) — see streamConstants.js
+    EPHEMERAL_STREAM: EPHEMERAL_STREAM_CONSTANTS
 };
 
 // === ID DERIVATION FUNCTIONS ===
-/**
- * Derive ephemeral stream ID from message stream ID
- * @param {string} messageStreamId - Message stream ID (ends with -1)
- * @returns {string} - Ephemeral stream ID (ends with -2)
- */
-function deriveEphemeralId(messageStreamId) {
-    if (!messageStreamId) return null;
-    return messageStreamId.replace(/-1$/, '-2');
-}
-
-/**
- * Derive message stream ID from ephemeral stream ID
- * @param {string} ephemeralStreamId - Ephemeral stream ID (ends with -2)
- * @returns {string} - Message stream ID (ends with -1)
- */
-function deriveMessageId(ephemeralStreamId) {
-    if (!ephemeralStreamId) return null;
-    return ephemeralStreamId.replace(/-2$/, '-1');
-}
-
-/**
- * Check if a stream ID is a message stream (ends with -1)
- * @param {string} streamId - Stream ID to check
- * @returns {boolean}
- */
-function isMessageStream(streamId) {
-    return streamId && streamId.endsWith('-1');
-}
-
-/**
- * Check if a stream ID is an ephemeral stream (ends with -2)
- * @param {string} streamId - Stream ID to check
- * @returns {boolean}
- */
-function isEphemeralStream(streamId) {
-    return streamId && streamId.endsWith('-2');
-}
+// Re-exported from streamConstants.js; kept as local names for readability
+// and to preserve the historical call-site surface of this module.
+const deriveEphemeralId = _deriveEphemeralId;
+const deriveMessageId = _deriveMessageId;
+const isMessageStream = _isMessageStream;
+const isEphemeralStream = _isEphemeralStream;
 
 class StreamrController {
     constructor() {
@@ -211,7 +173,7 @@ class StreamrController {
         
         try {
             // Use provided streamId or fall back to push stream
-            const warmupStreamId = streamId || '0xae340e799e8151f6a4999d245e466197aa217667/push';
+            const warmupStreamId = streamId || CONFIG.push.pushStreamId;
             
             // Subscribe and immediately unsubscribe - just to trigger node startup
             const sub = await this.client.subscribe(warmupStreamId, () => {});

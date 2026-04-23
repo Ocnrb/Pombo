@@ -17,6 +17,7 @@ import { relayManager } from './relayManager.js';
 import { dmManager } from './dm.js';
 import { syncManager } from './syncManager.js';
 import { Logger } from './logger.js';
+import { CONFIG } from './config.js';
 import { headerUI } from './ui/HeaderUI.js';
 import { settingsUI } from './ui/SettingsUI.js';
 import { contactsUI } from './ui/ContactsUI.js';
@@ -315,7 +316,7 @@ class App {
                             Logger.info('ENS active — cleared local username');
                         }
                         // Store ENS in plain localStorage for unlock modal display
-                        localStorage.setItem(`pombo_ens_${address.toLowerCase()}`, ensName);
+                        localStorage.setItem(CONFIG.storageKeys.ens(address), ensName);
                     }
                     // Resolve ENS avatar (needs ENS name first, so chain after name resolution)
                     identityManager.resolveENSAvatar(address).then(avatarUrl => {
@@ -356,7 +357,7 @@ class App {
                                     identityManager.setUsername(null);
                                     Logger.info('ENS active — cleared local username (post-sync)');
                                 }
-                                localStorage.setItem(`pombo_ens_${address.toLowerCase()}`, ensName);
+                                localStorage.setItem(CONFIG.storageKeys.ens(address), ensName);
                             }
                         }).catch(() => {});
                         // Pull image blobs (partition 2) after state sync

@@ -20,6 +20,7 @@ import {
     getPasswordStrengthHtml,
     setupPasswordStrengthValidation
 } from './ui/modalUtils.js';
+import { CONFIG } from './config.js';
 
 /**
  * Store credentials in browser's password manager using Credential Management API
@@ -73,6 +74,9 @@ class WalletFlows {
      * Connect wallet (generate, import, or load saved)
      */
     async connectWallet() {
+        // Hide mobile pill nav for the duration of the auth flow.
+        // Restored in finally{} so it always re-appears, even on error/cancel.
+        document.body.classList.add('wallet-flow-open');
         try {
             // If connected as Guest, show create/import modal to upgrade
             if (authManager.isGuestMode()) {
@@ -95,6 +99,8 @@ class WalletFlows {
                 console.error('Failed to connect wallet:', error);
                 uiController.showNotification('Failed to connect: ' + error.message, 'error');
             }
+        } finally {
+            document.body.classList.remove('wallet-flow-open');
         }
 
         // If still not connected after modal flow, fallback to Guest
@@ -151,21 +157,21 @@ class WalletFlows {
             // Helper to get display name - prefer ENS, then username, then wallet name
             const getDisplayName = (w, index) => {
                 // Check for ENS name stored in plain localStorage
-                const ensName = localStorage.getItem(`pombo_ens_${w.address.toLowerCase()}`);
+                const ensName = localStorage.getItem(CONFIG.storageKeys.ens(w.address));
                 if (ensName) return ensName;
                 // Check for username stored in plain localStorage (set via settings or sync)
-                const username = localStorage.getItem(`pombo_username_${w.address.toLowerCase()}`);
+                const username = localStorage.getItem(CONFIG.storageKeys.username(w.address));
                 if (username) return username;
                 // If name looks like auto-generated default, show "Account N"
                 const isDefaultName = !w.name || w.name.startsWith('Wallet ') || w.name.startsWith('Imported ') || w.name.startsWith('Account ');
                 return isDefaultName ? `Account ${index + 1}` : w.name;
             };
-            
+
             // Helper to check if wallet has ENS
-            const hasENS = (w) => !!localStorage.getItem(`pombo_ens_${w.address.toLowerCase()}`);
+            const hasENS = (w) => !!localStorage.getItem(CONFIG.storageKeys.ens(w.address));
 
             // Helper to get cached ENS avatar URL from localStorage
-            const getENSAvatarUrl = (w) => localStorage.getItem(`pombo_ens_avatar_${w.address.toLowerCase()}`);
+            const getENSAvatarUrl = (w) => localStorage.getItem(CONFIG.storageKeys.ensAvatar(w.address));
             
             const modal = document.createElement('div');
             modal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 animate-fadeIn';
@@ -473,7 +479,7 @@ class WalletFlows {
             // Note: Keystore V3 address doesn't include 0x prefix, but we need it normalized
             const rawAddress = backup.keystore.address.toLowerCase();
             const keystoreAddress = rawAddress.startsWith('0x') ? rawAddress : `0x${rawAddress}`;
-            const wallets = JSON.parse(localStorage.getItem('pombo_keystores') || '{}');
+            const wallets = JSON.parse(localStorage.getItem(CONFIG.storageKeys.keystores) || '{}');
             if (!wallets[keystoreAddress]) {
                 wallets[keystoreAddress] = {
                     name: result.data?.username || `Restored ${keystoreAddress.slice(0, 8)}`,
@@ -481,7 +487,7 @@ class WalletFlows {
                     createdAt: Date.now(),
                     lastUsed: Date.now()
                 };
-                localStorage.setItem('pombo_keystores', JSON.stringify(wallets));
+                localStorage.setItem(CONFIG.storageKeys.keystores, JSON.stringify(wallets));
             }
 
             // Now unlock the wallet with the same password
@@ -1546,17 +1552,17 @@ class WalletFlows {
     async showWalletSelector(wallets) {
         // Helper to get display name - check ENS, username, then stored name
         const getDisplayName = (w, index) => {
-            const ensName = localStorage.getItem(`pombo_ens_${w.address.toLowerCase()}`);
+            const ensName = localStorage.getItem(CONFIG.storageKeys.ens(w.address));
             if (ensName) return ensName;
-            const username = localStorage.getItem(`pombo_username_${w.address.toLowerCase()}`);
+            const username = localStorage.getItem(CONFIG.storageKeys.username(w.address));
             if (username) return username;
             const isDefaultName = !w.name || w.name.startsWith('Wallet ') || w.name.startsWith('Imported ') || w.name.startsWith('Account ');
             return isDefaultName ? `Account ${index + 1}` : w.name;
         };
 
-        const hasENS = (w) => !!localStorage.getItem(`pombo_ens_${w.address.toLowerCase()}`);
+        const hasENS = (w) => !!localStorage.getItem(CONFIG.storageKeys.ens(w.address));
 
-        const getENSAvatarUrl = (w) => localStorage.getItem(`pombo_ens_avatar_${w.address.toLowerCase()}`);
+        const getENSAvatarUrl = (w) => localStorage.getItem(CONFIG.storageKeys.ensAvatar(w.address));
         
         return new Promise((resolve) => {
             const modal = document.createElement('div');
