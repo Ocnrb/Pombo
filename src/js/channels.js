@@ -1174,6 +1174,16 @@ class ChannelManager {
         );
         
         Logger.debug('Subscribed to dual-stream channel:', messageStreamId);
+
+        // Re-announce persisted seed files for this channel (fire-and-forget).
+        // This runs on every subscribe path (initial join, post-refresh select,
+        // re-activation from background) so peers learn we're still seeding
+        // files we previously shared here. Safe to call when we have nothing
+        // persisted — reannounceForChannel() is a no-op in that case.
+        if (typeof mediaController?.reannounceForChannel === 'function') {
+            Promise.resolve(mediaController.reannounceForChannel(messageStreamId, pwd))
+                .catch(err => Logger.debug('reannounceForChannel failed (non-critical):', err?.message));
+        }
     }
 
     /**

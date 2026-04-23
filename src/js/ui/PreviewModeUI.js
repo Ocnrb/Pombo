@@ -126,6 +126,11 @@ class PreviewModeUI {
                 password: null, // Preview mode doesn't have password (public channels only)
                 messages: [],
                 _pendingOverrides: new Map(),
+                // In-flight dedup: ids currently being verified/pushed.
+                // Prevents races when the same message arrives via both the
+                // real-time websocket subscription and the HTTP resend, or via
+                // concurrent resend + loadMore fetches.
+                _processingIds: new Set(),
                 initialLoadInProgress: true
             };
 
@@ -453,13 +458,13 @@ class PreviewModeUI {
         // Handle edit/delete overrides in preview mode
         if (message?.type === 'edit' || message?.type === 'delete') {
             this._applyOrQueuePreviewOverride(message);
-            // Re-render only if not during initial load
-            if (!this.previewChannel.initialLoadInProgress) {
-                chatAreaUI.renderMessages(this.previewChannel.messages, () => {
-                    this.ui.attachReactionListeners();
-                    mediaHandler.attachLightboxListeners();
-                });
-            }
+            // Always re-render — the SDK resend iterator may never signal `done`
+            // for some streams (e.g. legacy native channels), which would leave
+            // `initialLoadInProgress` stuck at true and hide override results.
+            chatAreaUI.renderMessages(this.previewChannel.messages, () => {
+                this.ui.attachReactionListeners();
+                mediaHandler.attachLightboxListeners();
+            });
             return;
         }
 
@@ -477,66 +482,89 @@ class PreviewModeUI {
             return;
         }
 
-        // Deduplication: skip if message already exists
+        // Deduplication: skip if message already exists OR is currently being
+        // processed by a concurrent handler invocation (prevents races between
+        // realtime websocket delivery and HTTP resend iterator, which can both
+        // call this handler for the same message id).
+        if (this.previewChannel._processingIds.has(message.id)) {
+            Logger.debug('Preview: Message already being processed, skipping:', message.id);
+            return;
+        }
         const exists = this.previewChannel.messages.some(m => m.id === message.id);
         if (exists) {
             Logger.debug('Preview: Message already exists, skipping:', message.id);
             return;
         }
+        this.previewChannel._processingIds.add(message.id);
 
-        Logger.debug('Preview message received:', message.id, message.text?.slice(0, 30));
-
-        // Verify message signature (same as channel mode)
-        const streamId = this.previewChannel.streamId;
-        const isRecentMessage = Date.now() - message.timestamp < 30000;
-        
         try {
-            // Add channelId if missing
-            if (!message.channelId) {
-                message.channelId = streamId;
-            }
+            Logger.debug('Preview message received:', message.id, message.text?.slice(0, 30));
+
+            // Verify message signature (same as channel mode)
+            const streamId = this.previewChannel.streamId;
+            const isRecentMessage = Date.now() - message.timestamp < 30000;
             
-            const verification = await identityManager.verifyMessage(message, streamId, {
-                skipTimestampCheck: !isRecentMessage
+            try {
+                // Add channelId if missing
+                if (!message.channelId) {
+                    message.channelId = streamId;
+                }
+                
+                const verification = await identityManager.verifyMessage(message, streamId, {
+                    skipTimestampCheck: !isRecentMessage
+                });
+                message.verified = verification;
+            } catch (error) {
+                Logger.error('Preview verification error:', error);
+                message.verified = { valid: false, error: error.message, trustLevel: -1 };
+            }
+
+            // Check if preview channel still exists (may have been cleared during async verification)
+            if (!this.previewChannel) {
+                Logger.debug('Preview: Channel cleared during verification, skipping message');
+                return;
+            }
+
+            // Re-check dedup after async verify: defence-in-depth in case the
+            // _processingIds set was somehow bypassed (e.g. preview channel
+            // recreated mid-flight).
+            if (this.previewChannel.messages.some(m => m.id === message.id)) {
+                Logger.debug('Preview: Message raced in during verify, skipping:', message.id);
+                return;
+            }
+
+            // Mark as no longer loading (we got at least one message)
+            this.previewChannel.isLoading = false;
+
+            // Track oldest timestamp for pagination (scroll-to-top load-more)
+            if (!this.previewChannel.oldestTimestamp || message.timestamp < this.previewChannel.oldestTimestamp) {
+                this.previewChannel.oldestTimestamp = message.timestamp;
+            }
+
+            // Add message to preview channel
+            this.previewChannel.messages.push(message);
+
+            // Sort by timestamp to ensure correct order
+            this.previewChannel.messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+            // Always render — ChatAreaUI gates to spinner only when there are no
+            // cached messages. This safety net ensures messages become visible even
+            // if the SDK resend iterator never signals `done` (observed with some
+            // legacy streams), which would otherwise leave `initialLoadInProgress`
+            // stuck at true and suppress the final onHistoryComplete render.
+            chatAreaUI.renderMessages(this.previewChannel.messages, () => {
+                this.ui.attachReactionListeners();
+                mediaHandler.attachLightboxListeners();
             });
-            message.verified = verification;
-        } catch (error) {
-            Logger.error('Preview verification error:', error);
-            message.verified = { valid: false, error: error.message, trustLevel: -1 };
-        }
 
-        // Check if preview channel still exists (may have been cleared during async verification)
-        if (!this.previewChannel) {
-            Logger.debug('Preview: Channel cleared during verification, skipping message');
-            return;
-        }
-
-        // Mark as no longer loading (we got at least one message)
-        this.previewChannel.isLoading = false;
-
-        // Track oldest timestamp for pagination (scroll-to-top load-more)
-        if (!this.previewChannel.oldestTimestamp || message.timestamp < this.previewChannel.oldestTimestamp) {
-            this.previewChannel.oldestTimestamp = message.timestamp;
-        }
-
-        // Add message to preview channel
-        this.previewChannel.messages.push(message);
-
-        // Sort by timestamp to ensure correct order
-        this.previewChannel.messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-
-        // Skip per-message render during initial history load (onHistoryComplete will render)
-        if (this.previewChannel.initialLoadInProgress) return;
-
-        // Re-render messages
-        chatAreaUI.renderMessages(this.previewChannel.messages, () => {
-            this.ui.attachReactionListeners();
-            mediaHandler.attachLightboxListeners();
-        });
-
-        // Scroll to bottom
-        if (this.ui.elements.messagesArea) {
-            this.ui.elements.messagesArea.scrollTop = this.ui.elements.messagesArea.scrollHeight;
+            // Scroll to bottom
+            if (this.ui.elements.messagesArea) {
+                this.ui.elements.messagesArea.scrollTop = this.ui.elements.messagesArea.scrollHeight;
+            }
+        } finally {
+            // Always release the in-flight id, whether the message was added,
+            // rejected, or an error was thrown during verification.
+            this.previewChannel?._processingIds?.delete(message.id);
         }
     }
 
@@ -726,20 +754,29 @@ class PreviewModeUI {
 
                 if (!msg?.id || !msg?.sender || !msg?.timestamp) continue;
                 if (channel.messages.some(m => m.id === msg.id)) continue;
+                if (channel._processingIds?.has(msg.id)) continue;
+                channel._processingIds?.add(msg.id);
 
-                // Verify signature
                 try {
-                    if (!msg.channelId) msg.channelId = streamId;
-                    msg.verified = await identityManager.verifyMessage(msg, streamId, { skipTimestampCheck: true });
-                } catch (e) {
-                    msg.verified = { valid: false, error: e.message, trustLevel: -1 };
-                }
+                    // Verify signature
+                    try {
+                        if (!msg.channelId) msg.channelId = streamId;
+                        msg.verified = await identityManager.verifyMessage(msg, streamId, { skipTimestampCheck: true });
+                    } catch (e) {
+                        msg.verified = { valid: false, error: e.message, trustLevel: -1 };
+                    }
 
-                channel.messages.push(msg);
-                addedCount++;
+                    // Re-check after await (race with concurrent handler)
+                    if (channel.messages.some(m => m.id === msg.id)) continue;
 
-                if (!channel.oldestTimestamp || msg.timestamp < channel.oldestTimestamp) {
-                    channel.oldestTimestamp = msg.timestamp;
+                    channel.messages.push(msg);
+                    addedCount++;
+
+                    if (!channel.oldestTimestamp || msg.timestamp < channel.oldestTimestamp) {
+                        channel.oldestTimestamp = msg.timestamp;
+                    }
+                } finally {
+                    channel._processingIds?.delete(msg.id);
                 }
             }
 

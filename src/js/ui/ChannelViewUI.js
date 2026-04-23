@@ -146,19 +146,14 @@ class ChannelViewUI {
         reactionManager.loadFromChannelState(reactions);
         
         chatAreaUI._channelSwitching = false;
-        // Root fix: do not render conversation content until initial history (P0+P1)
-        // reconciliation is complete. This avoids showing pre-edit/orphaned deleted states.
-        if (channel.initialLoadInProgress) {
-            chatAreaUI.renderMessages([], () => {
-                this.deps.attachReactionListeners();
-                mediaHandler.attachLightboxListeners();
-            });
-        } else {
-            chatAreaUI.renderMessages(channel.messages, () => {
-                this.deps.attachReactionListeners();
-                mediaHandler.attachLightboxListeners();
-            });
-        }
+        // Always pass cached channel.messages — ChatAreaUI.renderMessages gates
+        // to an empty/spinner state only when nothing is cached. A second
+        // render fires on `initial_history_complete` once P0+P1 reconciliation
+        // is done.
+        chatAreaUI.renderMessages(channel.messages, () => {
+            this.deps.attachReactionListeners();
+            mediaHandler.attachLightboxListeners();
+        });
         
         // Mark channel as read
         await secureStorage.setChannelLastAccess(streamId, Date.now());

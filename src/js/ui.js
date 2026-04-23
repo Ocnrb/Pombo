@@ -841,10 +841,9 @@ class UIController {
             chatAreaUI.cancelEdit();
         });
 
-        // Lazy loading - scroll to top loads more history
-        this.elements.messagesArea?.addEventListener('scroll', () => {
-            chatAreaUI.handleMessagesScroll();
-        });
+        // Infinite-scroll history loading is driven by an IntersectionObserver
+        // sentinel installed by ChatAreaUI.renderMessages — no raw 'scroll'
+        // listener needed (avoids per-frame layout reads).
         
         // Mobile: tap on message to show reply/react buttons
         this.elements.messagesArea?.addEventListener('click', (e) => {

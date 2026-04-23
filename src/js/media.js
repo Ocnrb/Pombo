@@ -51,7 +51,7 @@ const CONFIG = {
     SEED_FILES_EXPIRE_DAYS: APP_CONFIG.media.seedFilesExpireDays,
     AUTO_SEED_ON_JOIN: true,               // Re-announce as seeder when joining channel
     PERSIST_PUBLIC_CHANNELS: true,         // Persist files from public channels
-    PERSIST_PRIVATE_CHANNELS: false,       // Don't persist files from private channels (privacy)
+    PERSIST_PRIVATE_CHANNELS: true,       // Don't persist files from private channels (privacy)
     
     // Push-first settings
     PUSH_WATCHDOG_INTERVAL: APP_CONFIG.media.pushWatchdogIntervalMs,

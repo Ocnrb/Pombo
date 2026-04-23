@@ -9,6 +9,7 @@ import { streamrController, STREAM_CONFIG } from './streamr.js';
 import { authManager } from './auth.js';
 import { Logger } from './logger.js';
 import { escapeHtml } from './ui/utils.js';
+import { sanitizeText } from './ui/sanitizer.js';
 import { CONFIG } from './config.js';
 import { dmCrypto } from './dmCrypto.js';
 
@@ -170,8 +171,8 @@ class NotificationManager {
             </svg>
             <div class="toast-content">
                 <div class="text-[13px] font-medium text-white/90 mb-1">Channel Invite</div>
-                <div class="text-[11px] text-white/50 mb-0.5">From: ${this.formatAddress(invite.from)}</div>
-                <div class="text-[12px] text-white/80 font-medium">${escapeHtml(invite.channel.name)}</div>
+                <div class="text-[11px] text-white/50 mb-0.5">From: ${escapeHtml(this.formatAddress(invite.from))}</div>
+                <div class="text-[12px] text-white/80 font-medium">${escapeHtml(sanitizeText(invite.channel.name))}</div>
                 <div class="mt-2.5 flex gap-2">
                     <button class="accept-btn bg-white/90 hover:bg-white text-[#0a0a0a] px-3 py-1 rounded-md text-[11px] font-medium transition">
                         Accept

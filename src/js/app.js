@@ -429,8 +429,10 @@ class App {
             if (event === 'message') {
                 chatAreaUI.updateUnreadCount(data.streamId);
                 if (data.streamId === currentStreamId) {
-                    // Skip render during initial history load — will render once when complete
-                    if (currentChannel?.initialLoadInProgress) return;
+                    // Append immediately even during initial history load.
+                    // ChatAreaUI.addMessage appends to existing DOM; the
+                    // subsequent full render on history_batch_loaded /
+                    // initial_history_complete will reconcile any ordering.
                     chatAreaUI.addMessage(data.message, data.streamId, () => {
                         uiController.attachReactionListeners();
                         mediaHandler.attachLightboxListeners();
@@ -471,14 +473,39 @@ class App {
                 if (data.streamId === currentStreamId) {
                     reactionManager.handleIncomingReaction(data.messageId, data.emoji, data.user, data.action || 'add');
                 }
-            } else if (event === 'message_edited' || event === 'message_deleted') {
+            } else if (event === 'message_edited') {
                 if (data.streamId === currentStreamId) {
                     const channel = channelManager.getCurrentChannel();
                     if (channel && !channel.initialLoadInProgress) {
-                        chatAreaUI.renderMessages(channel.messages, () => {
-                            uiController.attachReactionListeners();
-                            mediaHandler.attachLightboxListeners();
-                        });
+                        // Granular DOM update: find the edited message and replace
+                        // only that node instead of rebuilding the entire conversation.
+                        const edited = channel.messages.find(
+                            m => (m.id || m.timestamp) === data.targetId
+                        );
+                        const didUpdate = edited
+                            ? chatAreaUI.updateMessage(edited)
+                            : false;
+                        if (didUpdate === false) {
+                            // Fallback: message not in DOM (e.g. not yet rendered) — full render
+                            chatAreaUI.renderMessages(channel.messages, () => {
+                                uiController.attachReactionListeners();
+                                mediaHandler.attachLightboxListeners();
+                            });
+                        }
+                    }
+                }
+            } else if (event === 'message_deleted') {
+                if (data.streamId === currentStreamId) {
+                    const channel = channelManager.getCurrentChannel();
+                    if (channel && !channel.initialLoadInProgress) {
+                        // Granular DOM removal: just drop the deleted node.
+                        const didRemove = chatAreaUI.removeMessage(data.targetId);
+                        if (!didRemove) {
+                            chatAreaUI.renderMessages(channel.messages, () => {
+                                uiController.attachReactionListeners();
+                                mediaHandler.attachLightboxListeners();
+                            });
+                        }
                     }
                 }
             } else if (event === 'media') {
@@ -500,8 +527,13 @@ class App {
             } else if (event === 'history_batch_loaded') {
                 if (data.streamId === currentStreamId) {
                     const channel = channelManager.getCurrentChannel();
-                    // Skip render during initial load — will render once at initial_history_complete
-                    if (channel && !channel.initialLoadInProgress) {
+                    // Always render on batch completion — ChatAreaUI now renders
+                    // cached content even during initialLoadInProgress. This is
+                    // critical because, for some channels (notably legacy native
+                    // channels with partitionCount=1), the SDK resend iterator
+                    // never signals `done`, so onHistoryComplete may never fire
+                    // and `initialLoadInProgress` stays true indefinitely.
+                    if (channel) {
                         chatAreaUI.renderMessages(channel.messages, () => {
                             uiController.attachReactionListeners();
                             mediaHandler.attachLightboxListeners();

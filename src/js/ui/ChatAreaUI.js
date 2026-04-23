@@ -26,8 +26,7 @@ class ChatAreaUI {
         
         // Scroll/loading state
         this.isLoadingMore = false;
-        this.scrollThreshold = 100; // pixels from top to trigger load
-        this._channelSwitching = false; // guard against scroll events during channel transition
+        this._channelSwitching = false; // guard against spurious events during channel transition
         
         // Reply state
         this.replyingTo = null;
@@ -60,18 +59,16 @@ class ChatAreaUI {
     }
 
     /**
-     * Handle scroll event - loads more history when near top
+     * Trigger a history load. Invoked by the IntersectionObserver on the
+     * top sentinel (modern infinite-scroll pattern) — no per-frame scrollTop
+     * reads. Kept as a named method so tests and programmatic callers
+     * (e.g. _autoLoadIfContentShort) can still invoke it directly.
      */
     async handleMessagesScroll() {
         if (!this.messagesArea) return;
         
-        // Suppress scroll events during channel transitions (innerHTML='' triggers scroll)
+        // Suppress events during channel transitions (innerHTML='' can cause spurious events)
         if (this._channelSwitching) return;
-        
-        // Check if scrolled near the top
-        if (this.messagesArea.scrollTop > this.scrollThreshold) {
-            return; // Not near top, do nothing
-        }
         
         // Prevent concurrent loads
         if (this.isLoadingMore) return;
@@ -80,8 +77,12 @@ class ChatAreaUI {
         const channel = channelManager?.getCurrentChannel();
         const previewChannel = previewModeUI.getPreviewChannel();
         
-        // Don't trigger loadMore during initial history load — let it complete first
+        // Don't trigger loadMore during initial history load — let it complete
+        // first. Applies to both regular channels and preview mode (preview was
+        // previously unguarded, causing redundant P0/P1 refetches and duplicate
+        // message injections while the initial resend was still streaming).
         if (channel?.initialLoadInProgress) return;
+        if (previewChannel?.initialLoadInProgress) return;
         
         // Must have either a regular channel or a preview channel with more history
         if (channel && channel.hasMoreHistory) {
@@ -287,12 +288,19 @@ class ChatAreaUI {
         
         if (!this.messagesArea) return;
 
-        // Hard gate: never render in-between conversation states while initial history
-        // reconciliation is in progress. Show loading state until final render.
+        // While initial history reconciliation is in progress, render cached
+        // messages if any exist (avoids hiding persisted state behind a spinner
+        // while the storage-node resend iterator completes — particularly slow
+        // for native channels). Only gate to empty when there is nothing cached
+        // to show. A second render fires on `initial_history_complete` to
+        // reconcile with any newly fetched content/overrides.
         const sourceMessages = Array.isArray(messages) ? messages : [];
-        const messagesForRender = effectiveChannel?.initialLoadInProgress
+        const filteredSource = sourceMessages.filter(
+            (m) => m && !m._deleted && !['edit', 'delete'].includes(m.type)
+        );
+        const messagesForRender = effectiveChannel?.initialLoadInProgress && filteredSource.length === 0
             ? []
-            : sourceMessages.filter((m) => m && !m._deleted && !['edit', 'delete'].includes(m.type));
+            : filteredSource;
         
         // Clear any existing loading timeout
         if (this._loadingTimeoutId) {
@@ -355,7 +363,8 @@ class ChatAreaUI {
         // Analyze spacing for 3-level margin system
         const spacingTypes = analyzeSpacing(messagesForRender, currentAddress);
 
-        this.messagesArea.innerHTML = messagesForRender.map((msg, index) => {
+        // Build all HTML in a single pass (single innerHTML assignment — avoids double reflow)
+        const messagesHtml = messagesForRender.map((msg, index) => {
             const isOwn = msg.sender?.toLowerCase() === currentAddress?.toLowerCase();
             const msgDate = new Date(msg.timestamp);
             const time = msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -383,7 +392,7 @@ class ChatAreaUI {
             return dateSeparator + messageRenderer.buildMessageHTML(msg, isOwn, time, badge, displayName, groupClass, groupPositions[index], spacingClass, ensAvatarUrl);
         }).join('');
 
-        this.messagesArea.innerHTML = historyStartIndicator + this.messagesArea.innerHTML;
+        this.messagesArea.innerHTML = historyStartIndicator + messagesHtml;
 
         if (!this.isLoadingMore) {
             this.messagesArea.scrollTop = this.messagesArea.scrollHeight;
@@ -391,6 +400,9 @@ class ChatAreaUI {
             // Re-insert loading indicator destroyed by innerHTML replacement
             this.showLoadingMoreIndicator();
         }
+
+        // Install IntersectionObserver sentinel for infinite scroll (replaces scroll-event polling)
+        this._setupHistorySentinel();
         
         // Call render complete callback for attaching listeners
         if (onRenderComplete) {
@@ -401,6 +413,121 @@ class ChatAreaUI {
         if (!this.isLoadingMore) {
             requestAnimationFrame(() => this._autoLoadIfContentShort());
         }
+    }
+
+    /**
+     * Install a sentinel element at the top of the messages area and observe it
+     * with IntersectionObserver. When the sentinel enters the root viewport,
+     * more history is loaded. Replaces the old scroll-event + scrollTop threshold
+     * approach (which forces a layout read on every scroll frame).
+     * @private
+     */
+    _setupHistorySentinel() {
+        if (!this.messagesArea) return;
+
+        // Feature detect — older browsers / test environments without IO
+        if (typeof IntersectionObserver === 'undefined') return;
+
+        // Lazily create the observer (reused across renders)
+        if (!this._historyObserver) {
+            this._historyObserver = new IntersectionObserver((entries) => {
+                for (const entry of entries) {
+                    if (entry.isIntersecting) {
+                        this.handleMessagesScroll();
+                    }
+                }
+            }, {
+                root: this.messagesArea,
+                rootMargin: '200px 0px 0px 0px',
+                threshold: 0
+            });
+        } else {
+            this._historyObserver.disconnect();
+        }
+
+        // Only install sentinel when there's more history to load
+        const { channelManager } = this.deps;
+        const channel = channelManager?.getCurrentChannel();
+        const previewChannel = previewModeUI.getPreviewChannel?.();
+        const hasMore = (channel && channel.hasMoreHistory) ||
+                        (previewChannel && previewChannel.hasMoreHistory !== false);
+        if (!hasMore) return;
+
+        const sentinel = document.createElement('div');
+        sentinel.id = 'history-sentinel';
+        sentinel.setAttribute('aria-hidden', 'true');
+        sentinel.style.cssText = 'height:1px;width:100%;pointer-events:none;';
+        this.messagesArea.prepend(sentinel);
+        this._historyObserver.observe(sentinel);
+    }
+
+    /**
+     * Rebuild only a single message entry in the DOM (used when a message is edited).
+     * Avoids the cost of re-rendering the entire conversation.
+     * Falls back to a full render if the target node cannot be found.
+     * @param {Object} msg - Updated message object
+     */
+    updateMessage(msg) {
+        if (!this.messagesArea || !msg) return;
+        const msgId = msg.id || msg.timestamp;
+        if (msgId == null) return;
+
+        const selector = `.message-entry[data-msg-id="${CSS.escape(String(msgId))}"]`;
+        const existing = this.messagesArea.querySelector(selector);
+        if (!existing) {
+            // Not in DOM yet — fall back to full render via caller
+            return false;
+        }
+
+        const { authManager } = this.deps;
+        const currentAddress = authManager?.getAddress();
+        const isOwn = msg.sender?.toLowerCase() === currentAddress?.toLowerCase();
+        const msgDate = new Date(msg.timestamp);
+        const time = msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const badge = this.getVerificationBadge(msg, isOwn);
+        let displayName = msg.verified?.ensName || msg.senderName;
+        if (!displayName) displayName = formatAddress(msg.sender);
+
+        // Preserve existing grouping/spacing classes from the DOM so we don't
+        // need to re-analyze the whole conversation for a single edit.
+        const classes = Array.from(existing.classList);
+        const groupClass = classes.find(c => c.startsWith('msg-group-')) || 'msg-group-single';
+        const spacingClass = classes.find(c => c.startsWith('msg-space-') || c.startsWith('spacing-')) || '';
+        // Map class back to GroupPosition enum (buildMessageHTML uses it for avatar/name logic)
+        const groupPosition = groupClass === 'msg-group-first' ? 'first'
+            : groupClass === 'msg-group-middle' ? 'middle'
+            : groupClass === 'msg-group-last' ? 'last'
+            : 'single';
+        const ensAvatarUrl = identityManager.getCachedENSAvatar(msg.sender);
+
+        const html = messageRenderer.buildMessageHTML(
+            msg, isOwn, time, badge, displayName,
+            groupClass, groupPosition, spacingClass, ensAvatarUrl
+        );
+
+        const template = document.createElement('template');
+        template.innerHTML = html.trim();
+        const newEl = template.content.firstElementChild;
+        if (newEl) {
+            existing.replaceWith(newEl);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Remove a single message entry from the DOM (used when a message is deleted).
+     * Avoids the cost of re-rendering the entire conversation.
+     * @param {string} msgId - Message ID to remove
+     * @returns {boolean} - true if the node was found and removed
+     */
+    removeMessage(msgId) {
+        if (!this.messagesArea || msgId == null) return false;
+        const selector = `.message-entry[data-msg-id="${CSS.escape(String(msgId))}"]`;
+        const existing = this.messagesArea.querySelector(selector);
+        if (!existing) return false;
+        existing.remove();
+        return true;
     }
 
     /**
