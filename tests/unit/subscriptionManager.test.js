@@ -30,7 +30,7 @@ vi.mock('../../src/js/streamr.js', () => ({
     STREAM_CONFIG: { 
         partitions: 1,
         INITIAL_MESSAGES: 50,
-        MESSAGE_STREAM: { MESSAGES: 0 },
+        MESSAGE_STREAM: { MESSAGES: 0, CONTROL: 1 },
         EPHEMERAL_STREAM: { CONTROL: 0, MEDIA_SIGNALS: 1, MEDIA_DATA: 2 }
     },
     deriveEphemeralId: vi.fn((id) => `${id}/ephemeral`)
@@ -568,6 +568,7 @@ describe('SubscriptionManager', () => {
             const call = streamrController.subscribeToDualStream.mock.calls[0];
             expect(call[0]).toBe('preview-stream');
             expect(call[1]).toBe('preview-stream/ephemeral');
+            expect(typeof call[2].onOverride).toBe('function');
         });
 
         it('should not change if same preview already active', async () => {
@@ -818,8 +819,8 @@ describe('SubscriptionManager', () => {
             const now = Date.now();
             streamrController.fetchOlderHistory.mockResolvedValue({
                 messages: [
-                    { timestamp: now - 500 },
-                    { timestamp: now - 100 }
+                    { id: 'm1', text: 'hello', sender: '0x1', timestamp: now - 500 },
+                    { id: 'm2', text: 'world', sender: '0x2', timestamp: now - 100 }
                 ]
             });
             subscriptionManager.channelActivity.set('stream1', { lastMessageTime: now - 1000, unreadCount: 0, lastChecked: 0 });
@@ -834,8 +835,8 @@ describe('SubscriptionManager', () => {
             const now = Date.now();
             streamrController.fetchOlderHistory.mockResolvedValue({
                 messages: [
-                    { timestamp: now - 500 },
-                    { timestamp: now - 100 }
+                    { id: 'm1', text: 'hello', sender: '0x1', timestamp: now - 500 },
+                    { id: 'm2', text: 'world', sender: '0x2', timestamp: now - 100 }
                 ]
             });
             subscriptionManager.channelActivity.set('stream1', { lastMessageTime: now - 1000, unreadCount: 0, lastChecked: 0 });
@@ -851,7 +852,7 @@ describe('SubscriptionManager', () => {
             subscriptionManager.activityHandlers = [handler];
             const now = Date.now();
             streamrController.fetchOlderHistory.mockResolvedValue({
-                messages: [{ timestamp: now }]
+                messages: [{ id: 'm1', text: 'hello', sender: '0x1', timestamp: now }]
             });
             subscriptionManager.channelActivity.set('stream1', { lastMessageTime: now - 1000, unreadCount: 0, lastChecked: 0 });
             

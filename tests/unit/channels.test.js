@@ -41,7 +41,7 @@ vi.mock('../../src/js/streamr.js', () => ({
     STREAM_CONFIG: {
         partitions: 1,
         LOAD_MORE_COUNT: 20,
-        MESSAGE_STREAM: { MESSAGES: 0 }
+        MESSAGE_STREAM: { MESSAGES: 0, CONTROL: 1 }
     },
     deriveEphemeralId: vi.fn((id) => `${id}-ephemeral`),
     deriveMessageId: vi.fn((id) => `${id}-message`)
@@ -2027,11 +2027,12 @@ describe('ChannelManager', () => {
             await channelManager.loadMoreHistory(streamId);
             expect(streamrController.fetchOlderHistory).toHaveBeenCalledWith(
                 streamId,
-                expect.any(Number),     // partition
+                0,                      // partition (content)
                 expect.any(Number),     // beforeTimestamp
                 expect.any(Number),     // count
                 channel.password,
-                expect.anything()       // AbortSignal
+                expect.anything(),      // AbortSignal
+                false                   // allowOverridesInContentPartition
             );
         });
     });
@@ -2158,6 +2159,7 @@ describe('ChannelManager', () => {
 
         beforeEach(() => {
             streamId = 'stream-edit';
+            streamrController.publish.mockResolvedValue(undefined);
             channel = {
                 streamId,
                 name: 'Edit Channel',
@@ -2181,8 +2183,9 @@ describe('ChannelManager', () => {
         it('should publish edit override to network', async () => {
             await channelManager.sendEdit(streamId, 'msg-1', 'Edited text');
 
-            expect(streamrController.publishMessage).toHaveBeenCalledWith(
+            expect(streamrController.publish).toHaveBeenCalledWith(
                 streamId,
+                1,
                 expect.objectContaining({ type: 'edit', targetId: 'msg-1', text: 'Edited text' }),
                 null
             );
@@ -2237,7 +2240,7 @@ describe('ChannelManager', () => {
 
             // Message should NOT be changed
             expect(channel.messages[0].text).toBe('Original text');
-            expect(streamrController.publishMessage).not.toHaveBeenCalled();
+            expect(streamrController.publish).not.toHaveBeenCalled();
         });
 
         it('should route DM channels through dmManager', async () => {
@@ -2248,7 +2251,7 @@ describe('ChannelManager', () => {
             await channelManager.sendEdit(streamId, 'msg-1', 'dm edit');
 
             expect(dmManager.sendEdit).toHaveBeenCalledWith(streamId, 'msg-1', 'dm edit');
-            expect(streamrController.publishMessage).not.toHaveBeenCalled();
+            expect(streamrController.publish).not.toHaveBeenCalled();
         });
     });
 
@@ -2258,6 +2261,7 @@ describe('ChannelManager', () => {
 
         beforeEach(() => {
             streamId = 'stream-del';
+            streamrController.publish.mockResolvedValue(undefined);
             channel = {
                 streamId,
                 name: 'Delete Channel',
@@ -2281,8 +2285,9 @@ describe('ChannelManager', () => {
         it('should publish delete override to network', async () => {
             await channelManager.sendDelete(streamId, 'msg-1');
 
-            expect(streamrController.publishMessage).toHaveBeenCalledWith(
+            expect(streamrController.publish).toHaveBeenCalledWith(
                 streamId,
+                1,
                 expect.objectContaining({ type: 'delete', targetId: 'msg-1' }),
                 null
             );
@@ -2316,7 +2321,7 @@ describe('ChannelManager', () => {
 
             // Message should NOT be removed
             expect(channel.messages).toHaveLength(2);
-            expect(streamrController.publishMessage).not.toHaveBeenCalled();
+            expect(streamrController.publish).not.toHaveBeenCalled();
         });
 
         it('should route DM channels through dmManager', async () => {
@@ -2327,7 +2332,7 @@ describe('ChannelManager', () => {
             await channelManager.sendDelete(streamId, 'msg-1');
 
             expect(dmManager.sendDelete).toHaveBeenCalledWith(streamId, 'msg-1');
-            expect(streamrController.publishMessage).not.toHaveBeenCalled();
+            expect(streamrController.publish).not.toHaveBeenCalled();
         });
     });
 });

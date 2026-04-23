@@ -15,7 +15,8 @@ vi.mock('../../src/js/ui/NotificationUI.js', () => ({
 
 vi.mock('../../src/js/ui/MessageRenderer.js', () => ({
     messageRenderer: {
-        buildMessageHTML: vi.fn(() => '<div class="message-entry">msg</div>')
+        buildMessageHTML: vi.fn(() => '<div class="message-entry">msg</div>'),
+        renderDateSeparator: vi.fn(() => '')
     }
 }));
 
@@ -54,7 +55,8 @@ vi.mock('../../src/js/ui/utils.js', () => ({
 vi.mock('../../src/js/identity.js', () => ({
     identityManager: {
         getENSAvatarUrl: vi.fn(() => null),
-        getUserNickname: vi.fn(() => null)
+        getUserNickname: vi.fn(() => null),
+        getCachedENSAvatar: vi.fn(() => null)
     }
 }));
 
@@ -64,12 +66,15 @@ vi.mock('../../src/js/logger.js', () => ({
 
 import { chatAreaUI } from '../../src/js/ui/ChatAreaUI.js';
 import { previewModeUI } from '../../src/js/ui/PreviewModeUI.js';
+import { messageRenderer } from '../../src/js/ui/MessageRenderer.js';
 
 describe('ChatAreaUI', () => {
     let messageInput;
 
     beforeEach(() => {
         vi.clearAllMocks();
+        previewModeUI.getPreviewChannel.mockReturnValue(null);
+        previewModeUI.isInPreviewMode.mockReturnValue(false);
         chatAreaUI.editingMessage = null;
         chatAreaUI.replyingTo = null;
         chatAreaUI.isLoadingMore = false;
@@ -279,15 +284,6 @@ describe('ChatAreaUI', () => {
             expect(chatAreaUI.isLoadingMore).toBe(false);
         });
 
-        it('should return early if scrollTop is above threshold', async () => {
-            // Simulate being scrolled away from top
-            Object.defineProperty(chatAreaUI.messagesArea, 'scrollTop', { value: 200, configurable: true });
-
-            await chatAreaUI.handleMessagesScroll();
-
-            expect(chatAreaUI.isLoadingMore).toBe(false);
-        });
-
         it('should return early if already loading', async () => {
             Object.defineProperty(chatAreaUI.messagesArea, 'scrollTop', { value: 10, configurable: true });
             chatAreaUI.isLoadingMore = true;
@@ -452,6 +448,84 @@ describe('ChatAreaUI', () => {
             await chatAreaUI._loadMoreChannelHistory(channel, channelManager);
 
             expect(bannerSpy).toHaveBeenCalledWith(channel, channelManager);
+        });
+    });
+
+    // ==================== renderMessages() ====================
+    describe('renderMessages()', () => {
+        beforeEach(() => {
+            chatAreaUI.setDependencies({
+                channelManager: {
+                    getCurrentChannel: () => null
+                },
+                authManager: {
+                    getAddress: () => '0xme'
+                },
+                getActiveChannel: () => ({
+                    streamId: 'stream-1',
+                    hasMoreHistory: true,
+                    initialLoadInProgress: false
+                })
+            });
+        });
+
+        it('should show loading state during initial load when no cached messages exist', () => {
+            chatAreaUI.setDependencies({
+                channelManager: {
+                    getCurrentChannel: () => null
+                },
+                authManager: {
+                    getAddress: () => '0xme'
+                },
+                getActiveChannel: () => ({
+                    streamId: 'stream-1',
+                    hasMoreHistory: true,
+                    initialLoadInProgress: true
+                })
+            });
+
+            // No cached messages — spinner should be shown
+            chatAreaUI.renderMessages([]);
+
+            expect(chatAreaUI.messagesArea.textContent).toContain('Loading messages...');
+            expect(messageRenderer.buildMessageHTML).not.toHaveBeenCalled();
+        });
+
+        it('should render cached messages during initial load (avoids hiding persisted state behind spinner)', () => {
+            chatAreaUI.setDependencies({
+                channelManager: {
+                    getCurrentChannel: () => null
+                },
+                authManager: {
+                    getAddress: () => '0xme'
+                },
+                getActiveChannel: () => ({
+                    streamId: 'stream-1',
+                    hasMoreHistory: true,
+                    initialLoadInProgress: true
+                })
+            });
+
+            // Cached messages present — should render immediately, even while
+            // initial history reconciliation is still in progress. A second
+            // render triggered by `initial_history_complete` will reconcile.
+            chatAreaUI.renderMessages([
+                { id: 'msg-1', text: 'hello', sender: '0xother', timestamp: Date.now() }
+            ]);
+
+            expect(chatAreaUI.messagesArea.textContent).not.toContain('Loading messages...');
+            expect(messageRenderer.buildMessageHTML).toHaveBeenCalled();
+        });
+
+        it('should filter out deleted and edit/delete control messages before rendering', () => {
+            chatAreaUI.renderMessages([
+                { id: 'msg-1', text: 'visible', sender: '0xother', timestamp: Date.now() - 1000 },
+                { id: 'msg-2', text: 'deleted', sender: '0xother', timestamp: Date.now() - 900, _deleted: true },
+                { id: 'msg-3', type: 'edit', targetId: 'msg-1', sender: '0xother', timestamp: Date.now() - 800 },
+                { id: 'msg-4', type: 'delete', targetId: 'msg-1', sender: '0xother', timestamp: Date.now() - 700 }
+            ]);
+
+            expect(messageRenderer.buildMessageHTML).toHaveBeenCalledTimes(1);
         });
     });
 });

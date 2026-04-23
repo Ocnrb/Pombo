@@ -982,7 +982,10 @@ describe('StreamrController Core', () => {
         it('should call resend with last and partition', async () => {
             mockClient.resend.mockResolvedValue(createMockAsyncIterator([]));
             await streamrController.fetchHistory('stream-1', 0, 50);
-            expect(mockClient.resend).toHaveBeenCalledWith('stream-1', { last: 50, partition: 0 });
+            expect(mockClient.resend).toHaveBeenCalledWith(
+                { streamId: 'stream-1', partition: 0 },
+                { last: 50 }
+            );
         });
 
         it('should skip decrypt errors and continue', async () => {
@@ -1072,8 +1075,10 @@ describe('StreamrController Core', () => {
         it('should call resend with from/to timestamps', async () => {
             mockClient.resend.mockResolvedValue(createMockAsyncIterator([]));
             await streamrController.fetchOlderHistory('stream-1', 0, 5000, 10);
-            expect(mockClient.resend).toHaveBeenCalledWith('stream-1', {
-                partition: 0,
+            expect(mockClient.resend).toHaveBeenCalledWith({
+                streamId: 'stream-1',
+                partition: 0
+            }, {
                 from: { timestamp: 0 },
                 to: { timestamp: 4999 }
             });
