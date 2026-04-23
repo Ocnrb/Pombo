@@ -58,13 +58,19 @@ vi.mock('../../src/js/ui/utils.js', () => ({
     escapeHtml: vi.fn((str) => str)
 }));
 
-vi.mock('../../src/js/config.js', () => ({
-    CONFIG: {
-        notifications: {
-            inviteToastDurationMs: 10000
+vi.mock('../../src/js/config.js', async () => {
+    const actual = await vi.importActual('../../src/js/config.js');
+    return {
+        ...actual,
+        CONFIG: {
+            ...actual.CONFIG,
+            notifications: {
+                ...actual.CONFIG.notifications,
+                inviteToastDurationMs: 10000
+            }
         }
-    }
-}));
+    };
+});
 
 vi.mock('../../src/js/dmCrypto.js', () => ({
     dmCrypto: {

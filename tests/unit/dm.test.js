@@ -16,17 +16,24 @@ vi.mock('../../src/js/logger.js', () => ({
     }
 }));
 
-vi.mock('../../src/js/config.js', () => ({
-    CONFIG: {
-        dm: {
-            streamPrefix: 'Pombo-DM',
-            maxConversations: 100,
-            maxSentMessages: 200,
-            inboxHistoryCount: 100
-        },
-        app: { name: 'Pombo', version: '1.0' }
-    }
-}));
+vi.mock('../../src/js/config.js', async () => {
+    const actual = await vi.importActual('../../src/js/config.js');
+    return {
+        ...actual,
+        CONFIG: {
+            ...actual.CONFIG,
+            dm: {
+                ...actual.CONFIG.dm,
+                streamPrefix: 'Pombo-DM',
+                maxConversations: 100,
+                maxSentMessages: 200,
+                inboxHistoryCount: 100,
+                searchWindowMs: 7 * 24 * 60 * 60 * 1000
+            },
+            app: { ...actual.CONFIG.app, name: 'Pombo', version: '1.0' }
+        }
+    };
+});
 
 vi.mock('../../src/js/auth.js', () => ({
     authManager: {
@@ -68,7 +75,9 @@ vi.mock('../../src/js/secureStorage.js', () => ({
         getSentReactions: vi.fn().mockReturnValue({}),
         isBlocked: vi.fn().mockReturnValue(false),
         getDMLeftAt: vi.fn().mockReturnValue(null),
-        clearDMLeftAt: vi.fn().mockResolvedValue(undefined)
+        clearDMLeftAt: vi.fn().mockResolvedValue(undefined),
+        updateSentMessage: vi.fn().mockResolvedValue(undefined),
+        removeSentMessage: vi.fn().mockResolvedValue(undefined)
     }
 }));
 
@@ -88,6 +97,13 @@ vi.mock('../../src/js/streamr.js', () => ({
         setDMEncryptionKey: vi.fn().mockResolvedValue(undefined),
         setDMPublishKey: vi.fn().mockResolvedValue(undefined),
         addDMDecryptKey: vi.fn().mockResolvedValue(undefined),
+        unsubscribeFromPartition: vi.fn().mockResolvedValue(undefined),
+        diagnoseInbox: vi.fn().mockResolvedValue({ ok: true }),
+        repairInbox: vi.fn().mockResolvedValue({
+            messageStreamId: '0xmyaddress1234567890abcdef12345678/Pombo-DM-1',
+            ephemeralStreamId: '0xmyaddress1234567890abcdef12345678/Pombo-DM-2'
+        }),
+        fetchOlderHistoryWindowed: vi.fn().mockResolvedValue({ messages: [], hasMore: false }),
         client: {
             getStream: vi.fn().mockRejectedValue(new Error('not found'))
         }
@@ -126,6 +142,8 @@ vi.mock('../../src/js/channels.js', () => ({
         setCurrentChannel: vi.fn(),
         notifyHandlers: vi.fn(),
         handleControlMessage: vi.fn(),
+        handleOverrideMessage: vi.fn(),
+        storeReaction: vi.fn(),
         sendWakeSignals: vi.fn().mockResolvedValue(undefined)
     }
 }));
@@ -1490,6 +1508,387 @@ describe('DMManager', () => {
             await dmManager.routeInboxMedia(envelope);
 
             expect(mediaController.handleMediaMessage).not.toHaveBeenCalled();
+        });
+    });
+
+    // ==================== diagnoseInbox() / repairInbox() ====================
+    describe('diagnoseInbox()', () => {
+        beforeEach(() => {
+            authManager.getAddress.mockReturnValue('0xmyaddress1234567890abcdef12345678');
+        });
+
+        it('should throw if no wallet connected', async () => {
+            authManager.getAddress.mockReturnValueOnce(null);
+            await expect(dmManager.diagnoseInbox()).rejects.toThrow('No wallet connected');
+        });
+
+        it('should delegate to streamrController.diagnoseInbox', async () => {
+            streamrController.diagnoseInbox.mockResolvedValueOnce({ ok: true, missing: [] });
+            const result = await dmManager.diagnoseInbox();
+            expect(streamrController.diagnoseInbox).toHaveBeenCalledWith(
+                '0xmyaddress1234567890abcdef12345678'
+            );
+            expect(result).toEqual({ ok: true, missing: [] });
+        });
+    });
+
+    describe('repairInbox()', () => {
+        it('should run repair, set state and re-subscribe', async () => {
+            const diagnosis = { missing: ['storage'] };
+            const onStep = vi.fn();
+            const result = await dmManager.repairInbox(diagnosis, {}, onStep);
+
+            expect(streamrController.repairInbox).toHaveBeenCalledWith(
+                diagnosis, '0x02abc123', {}, onStep
+            );
+            expect(dmManager.inboxReady).toBe(true);
+            expect(dmManager.inboxMessageStreamId).toContain('Pombo-DM-1');
+            expect(result.messageStreamId).toContain('Pombo-DM-1');
+            // re-subscribe attempted
+            expect(streamrController.subscribeWithHistory).toHaveBeenCalled();
+        });
+
+        it('should default onStep to a no-op when omitted', async () => {
+            const diagnosis = { missing: [] };
+            await expect(dmManager.repairInbox(diagnosis, {})).resolves.toBeDefined();
+        });
+    });
+
+    // ==================== subscribeNotifications / unsubscribeNotifications ====================
+    describe('subscribeNotifications()', () => {
+        it('should no-op if no inbox', async () => {
+            await dmManager.subscribeNotifications();
+            expect(streamrController.subscribeToPartition).not.toHaveBeenCalled();
+        });
+
+        it('should no-op if already subscribed', async () => {
+            dmManager.inboxMessageStreamId = 'test/Pombo-DM-1';
+            dmManager.inboxNotificationSub = { id: 'existing' };
+            await dmManager.subscribeNotifications();
+            expect(streamrController.subscribeToPartition).not.toHaveBeenCalled();
+        });
+
+        it('should subscribe to notification partition (P3)', async () => {
+            dmManager.inboxMessageStreamId = 'test/Pombo-DM-1';
+            await dmManager.subscribeNotifications();
+            expect(streamrController.subscribeToPartition).toHaveBeenCalledWith(
+                'test/Pombo-DM-1', 3, expect.any(Function), null
+            );
+            expect(dmManager.inboxNotificationSub).toBeTruthy();
+
+            // Invoke the captured callback to cover the inline arrow
+            const cb = streamrController.subscribeToPartition.mock.calls[0][2];
+            await cb({ /* no senderId */ }); // returns early — covers route
+        });
+
+        it('should handle subscribeToPartition error gracefully', async () => {
+            dmManager.inboxMessageStreamId = 'test/Pombo-DM-1';
+            streamrController.subscribeToPartition.mockRejectedValueOnce(new Error('boom'));
+            await dmManager.subscribeNotifications();
+            expect(dmManager.inboxNotificationSub).toBeNull();
+        });
+    });
+
+    describe('unsubscribeNotifications()', () => {
+        it('should no-op if not subscribed', async () => {
+            dmManager.inboxNotificationSub = null;
+            await dmManager.unsubscribeNotifications();
+            expect(streamrController.unsubscribeFromPartition).not.toHaveBeenCalled();
+        });
+
+        it('should unsubscribe from P3 and clear state', async () => {
+            dmManager.inboxMessageStreamId = 'test/Pombo-DM-1';
+            dmManager.inboxNotificationSub = { id: 'sub' };
+            await dmManager.unsubscribeNotifications();
+            expect(streamrController.unsubscribeFromPartition).toHaveBeenCalledWith(
+                'test/Pombo-DM-1', 3
+            );
+            expect(dmManager.inboxNotificationSub).toBeNull();
+        });
+
+        it('should survive unsubscribe errors', async () => {
+            dmManager.inboxMessageStreamId = 'test/Pombo-DM-1';
+            dmManager.inboxNotificationSub = { id: 'sub' };
+            streamrController.unsubscribeFromPartition.mockRejectedValueOnce(new Error('fail'));
+            await dmManager.unsubscribeNotifications();
+            expect(dmManager.inboxNotificationSub).toBeNull();
+        });
+    });
+
+    // ==================== sendEdit / sendDelete ====================
+    describe('sendEdit()', () => {
+        const peerAddress = '0xpeeredit11111111111111111111111111111111';
+        const streamId = `${peerAddress}/Pombo-DM-1`;
+
+        beforeEach(() => {
+            authManager.getAddress.mockReturnValue('0xmyaddress1234567890abcdef12345678');
+            channelManager.channels.set(streamId, {
+                messageStreamId: streamId,
+                type: 'dm',
+                peerAddress,
+                messages: [{
+                    id: 'm-1',
+                    sender: '0xmyaddress1234567890abcdef12345678',
+                    text: 'hello',
+                    timestamp: 1
+                }]
+            });
+        });
+
+        it('should throw if channel missing or not a DM', async () => {
+            await expect(dmManager.sendEdit('nope', 'm-1', 'x'))
+                .rejects.toThrow('DM channel not found');
+        });
+
+        it('should throw if message not found', async () => {
+            await expect(dmManager.sendEdit(streamId, 'no-such', 'x'))
+                .rejects.toThrow('Message not found');
+        });
+
+        it('should throw when editing someone else\'s message', async () => {
+            const ch = channelManager.channels.get(streamId);
+            ch.messages[0].sender = '0xotherpeer';
+            await expect(dmManager.sendEdit(streamId, 'm-1', 'x'))
+                .rejects.toThrow('Can only edit your own messages');
+        });
+
+        it('should publish edit override and apply locally', async () => {
+            await dmManager.sendEdit(streamId, 'm-1', '  edited  ');
+            const ch = channelManager.channels.get(streamId);
+            expect(ch.messages[0].text).toBe('edited');
+            expect(ch.messages[0]._edited).toBe(true);
+            expect(secureStorage.updateSentMessage).toHaveBeenCalledWith(
+                streamId, 'm-1', expect.objectContaining({ text: 'edited', _edited: true })
+            );
+            expect(streamrController.setDMPublishKey).toHaveBeenCalledWith(streamId);
+            expect(streamrController.publishMessage).toHaveBeenCalled();
+        });
+
+        it('should throw when peer pub key is missing', async () => {
+            streamrController.getDMPublicKey.mockResolvedValueOnce(null);
+            dmCrypto.peerPublicKeys.clear();
+            await expect(dmManager.sendEdit(streamId, 'm-1', 'x'))
+                .rejects.toThrow('peer public key not available');
+        });
+    });
+
+    describe('sendDelete()', () => {
+        const peerAddress = '0xpeerdel111111111111111111111111111111111';
+        const streamId = `${peerAddress}/Pombo-DM-1`;
+
+        beforeEach(() => {
+            authManager.getAddress.mockReturnValue('0xmyaddress1234567890abcdef12345678');
+            channelManager.channels.set(streamId, {
+                messageStreamId: streamId,
+                type: 'dm',
+                peerAddress,
+                messages: [{
+                    id: 'm-1',
+                    sender: '0xmyaddress1234567890abcdef12345678',
+                    text: 'hello',
+                    timestamp: 1
+                }]
+            });
+        });
+
+        it('should throw if channel missing or not a DM', async () => {
+            await expect(dmManager.sendDelete('nope', 'm-1'))
+                .rejects.toThrow('DM channel not found');
+        });
+
+        it('should throw if message not found', async () => {
+            await expect(dmManager.sendDelete(streamId, 'no-such'))
+                .rejects.toThrow('Message not found');
+        });
+
+        it('should throw when deleting someone else\'s message', async () => {
+            const ch = channelManager.channels.get(streamId);
+            ch.messages[0].sender = '0xotherpeer';
+            await expect(dmManager.sendDelete(streamId, 'm-1'))
+                .rejects.toThrow('Can only delete your own messages');
+        });
+
+        it('should remove message locally and publish delete override', async () => {
+            await dmManager.sendDelete(streamId, 'm-1');
+            const ch = channelManager.channels.get(streamId);
+            expect(ch.messages).toHaveLength(0);
+            expect(secureStorage.removeSentMessage).toHaveBeenCalledWith(streamId, 'm-1');
+            expect(streamrController.publishMessage).toHaveBeenCalled();
+        });
+
+        it('should throw when peer pub key is missing', async () => {
+            streamrController.getDMPublicKey.mockResolvedValueOnce(null);
+            dmCrypto.peerPublicKeys.clear();
+            await expect(dmManager.sendDelete(streamId, 'm-1'))
+                .rejects.toThrow('peer public key not available');
+        });
+    });
+
+    // ==================== fetchOlderDMMessages() ====================
+    describe('fetchOlderDMMessages()', () => {
+        const peerAddress = '0xpeerolder11111111111111111111111111111111';
+        const streamId = `${peerAddress}/Pombo-DM-1`;
+
+        beforeEach(() => {
+            authManager.getAddress.mockReturnValue('0xmyaddress1234567890abcdef12345678');
+            dmCrypto.isEncrypted.mockReturnValue(false);
+            streamrController.getDMPublicKey.mockResolvedValue('0x02peerpubkey');
+            dmManager.inboxMessageStreamId = '0xmyaddress1234567890abcdef12345678/Pombo-DM-1';
+            dmManager.conversations.set(peerAddress, streamId);
+            channelManager.channels.set(streamId, {
+                messageStreamId: streamId,
+                type: 'dm',
+                peerAddress,
+                messages: [],
+                hasMoreHistory: true
+            });
+            streamrController.fetchOlderHistoryWindowed.mockResolvedValue({
+                messages: [], hasMore: false
+            });
+        });
+
+        it('should return empty when no conversation registered', async () => {
+            const result = await dmManager.fetchOlderDMMessages('0xunknownpeer');
+            expect(result).toEqual({ loaded: 0, hasMore: false, noResultsInWindow: false });
+        });
+
+        it('should return empty when channel missing', async () => {
+            channelManager.channels.delete(streamId);
+            const result = await dmManager.fetchOlderDMMessages(peerAddress);
+            expect(result).toEqual({ loaded: 0, hasMore: false, noResultsInWindow: false });
+        });
+
+        it('should return empty when inbox not initialized', async () => {
+            dmManager.inboxMessageStreamId = null;
+            const result = await dmManager.fetchOlderDMMessages(peerAddress);
+            expect(result).toEqual({ loaded: 0, hasMore: false, noResultsInWindow: false });
+        });
+
+        it('should add new peer messages to channel', async () => {
+            streamrController.fetchOlderHistoryWindowed.mockResolvedValueOnce({
+                messages: [{
+                    publisherId: peerAddress,
+                    content: { id: 'old-1', text: 'old', timestamp: 100 }
+                }],
+                hasMore: true
+            });
+            const result = await dmManager.fetchOlderDMMessages(peerAddress);
+            const ch = channelManager.channels.get(streamId);
+            expect(ch.messages).toHaveLength(1);
+            expect(ch.messages[0].id).toBe('old-1');
+            expect(ch.messages[0]._dmReceived).toBe(true);
+            expect(ch.oldestTimestamp).toBe(100);
+            expect(result).toEqual({ loaded: 1, hasMore: true, noResultsInWindow: false });
+        });
+
+        it('should skip own and other-peer messages', async () => {
+            streamrController.fetchOlderHistoryWindowed.mockResolvedValueOnce({
+                messages: [
+                    { publisherId: '0xmyaddress1234567890abcdef12345678', content: { id: 'mine', text: 'x', timestamp: 1 } },
+                    { publisherId: '0xotherpeer', content: { id: 'other', text: 'y', timestamp: 2 } },
+                    { publisherId: null, content: { id: 'noid', timestamp: 3 } }
+                ],
+                hasMore: true
+            });
+            const result = await dmManager.fetchOlderDMMessages(peerAddress);
+            expect(result.loaded).toBe(0);
+            expect(result.noResultsInWindow).toBe(true);
+        });
+
+        it('should deduplicate by id', async () => {
+            const ch = channelManager.channels.get(streamId);
+            ch.messages.push({ id: 'dup-1', text: 'existing', timestamp: 5 });
+            streamrController.fetchOlderHistoryWindowed.mockResolvedValueOnce({
+                messages: [{
+                    publisherId: peerAddress,
+                    content: { id: 'dup-1', text: 'duplicate', timestamp: 5 }
+                }],
+                hasMore: false
+            });
+            const result = await dmManager.fetchOlderDMMessages(peerAddress);
+            expect(result.loaded).toBe(0);
+            expect(ch.messages).toHaveLength(1);
+        });
+
+        it('should route reactions via channelManager.storeReaction', async () => {
+            streamrController.fetchOlderHistoryWindowed.mockResolvedValueOnce({
+                messages: [{
+                    publisherId: peerAddress,
+                    content: { type: 'reaction', messageId: 'm-1', emoji: '👍', action: 'add' }
+                }],
+                hasMore: false
+            });
+            await dmManager.fetchOlderDMMessages(peerAddress);
+            expect(channelManager.storeReaction).toHaveBeenCalledWith(
+                expect.any(Object), 'm-1', '👍', peerAddress, 'add'
+            );
+        });
+
+        it('should respect abort signal before fetching', async () => {
+            const ac = new AbortController();
+            streamrController.fetchOlderHistoryWindowed.mockImplementationOnce(async () => {
+                ac.abort();
+                return { messages: [{ publisherId: peerAddress, content: { id: 'x', timestamp: 1 } }], hasMore: true };
+            });
+            const result = await dmManager.fetchOlderDMMessages(peerAddress, ac.signal);
+            expect(result.loaded).toBe(0);
+        });
+
+        it('should return safe defaults on error', async () => {
+            streamrController.fetchOlderHistoryWindowed.mockRejectedValueOnce(new Error('network'));
+            const result = await dmManager.fetchOlderDMMessages(peerAddress);
+            expect(result).toEqual({ loaded: 0, hasMore: true, noResultsInWindow: false });
+        });
+    });
+
+    // ==================== Inline subscription callbacks ====================
+    describe('subscribeToInbox() callback wiring', () => {
+        it('should wire routeInboxMessage and routeNotification callbacks', async () => {
+            dmManager.inboxMessageStreamId = '0xmy/Pombo-DM-1';
+            dmManager.conversations.set('0xpeerwire1', 'stream');
+            await dmManager.subscribeToInbox();
+
+            // Message stream callback (subscribeWithHistory call)
+            const msgCb = streamrController.subscribeWithHistory.mock.calls[0][2];
+            expect(typeof msgCb).toBe('function');
+            await msgCb({ /* no senderId */ }); // exits early but executes the arrow
+
+            // Notification stream callback (subscribeToPartition call)
+            const notifCall = streamrController.subscribeToPartition.mock.calls.find(
+                c => c[0] === '0xmy/Pombo-DM-1'
+            );
+            expect(notifCall).toBeDefined();
+            const notifCb = notifCall[2];
+            await notifCb({}); // no senderId — early return covers arrow
+        });
+    });
+
+    describe('subscribeDMEphemeral() callback wiring', () => {
+        it('should wire control and media partition callbacks', async () => {
+            dmManager.inboxEphemeralStreamId = '0xmy/Pombo-DM-2';
+            await dmManager.subscribeDMEphemeral();
+
+            // Control callback (subscribeWithHistory)
+            const controlCall = streamrController.subscribeWithHistory.mock.calls.find(
+                c => c[0] === '0xmy/Pombo-DM-2'
+            );
+            expect(controlCall).toBeDefined();
+            const controlCb = controlCall[2];
+            await controlCb({}); // early-return covers arrow
+
+            // Media P1 callback
+            const p1Call = streamrController.subscribeToPartition.mock.calls.find(
+                c => c[0] === '0xmy/Pombo-DM-2' && c[1] === 1
+            );
+            expect(p1Call).toBeDefined();
+            await p1Call[2]({});
+
+            // Media P2 callback (with senderId)
+            const p2Call = streamrController.subscribeToPartition.mock.calls.find(
+                c => c[0] === '0xmy/Pombo-DM-2' && c[1] === 2
+            );
+            expect(p2Call).toBeDefined();
+            await p2Call[2]({}, 'someSender');
         });
     });
 });

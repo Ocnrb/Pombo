@@ -438,8 +438,12 @@ describe('secureStorage', () => {
     });
 
     describe('Constants', () => {
-        it('should have correct storage prefix', () => {
-            expect(secureStorage.STORAGE_PREFIX).toBe('pombo_secure_');
+        it('should derive storage key with the pombo_secure_ prefix', () => {
+            // STORAGE_PREFIX is no longer a property — the key is now derived
+            // via the centralized CONFIG.storageKeys registry. Verify the
+            // prefix is preserved for backward compatibility with existing data.
+            secureStorage.address = '0xabcdef0000000000000000000000000000001234';
+            expect(secureStorage.getStorageKey()).toMatch(/^pombo_secure_0x[a-f0-9]{40}$/);
         });
 
         it('should have reasonable PBKDF2 iterations', () => {
