@@ -143,6 +143,7 @@ class UIController {
             notificationUI,
             contactsUI,
             dmManager,
+            showCreateDMInboxModal: () => dmModalsUI.showCreateInboxModal(),
             showNotification: (msg, type) => this.showNotification(msg, type),
             updateWalletInfo: (address, isGuest) => headerUI.updateWalletInfo(address, isGuest),
             updateDisplayName: (username) => headerUI.updateDisplayName(username),

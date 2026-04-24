@@ -276,6 +276,7 @@ class DMModalsUI {
             await this.dmManager.createInbox(options);
             this.showNotification('DM inbox created!', 'success');
             await this.updateVisibility();
+            document.dispatchEvent(new CustomEvent('pombo:dm-inbox-ready'));
         } catch (err) {
             this.Logger?.error('DMModalsUI: Failed to create inbox', err);
             this.showNotification('Failed to create DM inbox', 'error');

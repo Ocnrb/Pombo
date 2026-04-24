@@ -38,6 +38,7 @@ class SettingsUI {
     get relayManager() { return this.deps.relayManager; }
     get notificationUI() { return this.deps.notificationUI; }
     get dmManager() { return this.deps.dmManager; }
+    get showCreateDMInboxModal() { return this.deps.showCreateDMInboxModal; }
     get isMobileView() { return this.deps.isMobileView; }
     get showExploreView() { return this.deps.showExploreView; }
 
@@ -2045,17 +2046,65 @@ class SettingsUI {
      */
     initRepairUI() {
         this._repairDiagnosis = null;
+        this._repairPrimaryAction = 'diagnose';
 
         const diagnoseBtn = document.getElementById('repair-diagnose-btn');
         const fixBtn = document.getElementById('repair-fix-btn');
 
-        diagnoseBtn?.addEventListener('click', () => this.runDiagnosis());
+        diagnoseBtn?.addEventListener('click', () => this.handleRepairPrimaryAction());
         fixBtn?.addEventListener('click', () => this.runRepair());
+
+        if (!this._repairInboxReadyListenerAttached) {
+            document.addEventListener('pombo:dm-inbox-ready', () => {
+                const repairPanel = document.getElementById('settings-panel-repair');
+                if (!repairPanel || repairPanel.classList.contains('hidden')) return;
+
+                this.runDiagnosis().catch((error) => {
+                    this.Logger?.debug('Repair UI refresh failed:', error.message);
+                });
+            });
+            this._repairInboxReadyListenerAttached = true;
+        }
+    }
+
+    handleRepairPrimaryAction() {
+        if (this._repairPrimaryAction === 'create') {
+            if (this.showCreateDMInboxModal) {
+                this.showCreateDMInboxModal();
+            } else {
+                this.modalManager?.show('dm-inbox-setup-modal');
+            }
+            return;
+        }
+
+        this.runDiagnosis();
+    }
+
+    _setRepairPrimaryAction(mode = 'diagnose') {
+        const button = document.getElementById('repair-diagnose-btn');
+        const icon = button?.querySelector('svg');
+        const label = button?.querySelector('span');
+        if (!button || !icon || !label) return;
+
+        this._repairPrimaryAction = mode;
+
+        if (mode === 'create') {
+            button.className = 'flex-1 px-5 py-2.5 bg-[#F6851B]/15 hover:bg-[#F6851B]/25 text-white border border-[#F6851B]/30 text-sm font-medium rounded-xl transition-all duration-200 inline-flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-[#F6851B]/10';
+            icon.setAttribute('class', 'w-4 h-4');
+            icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>';
+            label.textContent = 'Create DM Inbox';
+            return;
+        }
+
+        button.className = 'flex-1 bg-white/5 hover:bg-white/10 text-white/70 border border-white/10 px-3 py-2 rounded-lg text-xs transition flex items-center justify-center gap-1.5';
+        icon.setAttribute('class', 'w-3.5 h-3.5');
+        icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>';
+        label.textContent = 'Diagnose';
     }
 
     /**
      * Update the unified repair status card
-     * @param {'idle'|'loading'|'healthy'|'issues'|'error'|'repairing'|'repaired'} state
+     * @param {'idle'|'loading'|'noInbox'|'healthy'|'issues'|'error'|'repairing'|'repaired'} state
      * @param {string} [detail] - Optional detail text
      */
     _setRepairStatus(state, detail) {
@@ -2064,6 +2113,10 @@ class SettingsUI {
         const title = document.getElementById('repair-status-title');
         const detailEl = document.getElementById('repair-status-detail');
         if (!card || !icon || !title || !detailEl) return;
+
+        const hideCard = state === 'noInbox';
+        card.classList.toggle('hidden', hideCard);
+        if (hideCard) return;
 
         const states = {
             idle: {
@@ -2130,6 +2183,7 @@ class SettingsUI {
      */
     async runDiagnosis() {
         if (!this.dmManager) {
+            this._setRepairPrimaryAction('diagnose');
             this._setRepairStatus('error', 'DM system not available');
             return;
         }
@@ -2141,8 +2195,18 @@ class SettingsUI {
         if (diagnoseBtn) diagnoseBtn.disabled = true;
 
         try {
+            const hasInbox = await this.dmManager.hasInbox();
+            if (!hasInbox) {
+                this._repairDiagnosis = null;
+                this._setRepairPrimaryAction('create');
+                this._setRepairStatus('noInbox');
+                fixBtn?.classList.add('hidden');
+                return;
+            }
+
             const diagnosis = await this.dmManager.diagnoseInbox();
             this._repairDiagnosis = diagnosis;
+            this._setRepairPrimaryAction('diagnose');
 
             // Count issues
             const issues = [];
@@ -2169,6 +2233,8 @@ class SettingsUI {
                 fixBtn?.classList.add('hidden');
             }
         } catch (e) {
+            this._repairDiagnosis = null;
+            this._setRepairPrimaryAction('diagnose');
             this._setRepairStatus('error', e.message);
             fixBtn?.classList.add('hidden');
         } finally {
