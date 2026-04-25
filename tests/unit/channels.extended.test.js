@@ -34,12 +34,15 @@ vi.mock('../../src/js/streamr.js', () => ({
         grantPublicPermissions: vi.fn(),
         grantPermissionsToAddresses: vi.fn().mockResolvedValue(undefined),
         revokePermissionsFromAddresses: vi.fn().mockResolvedValue(undefined),
+        setStreamPermissions: vi.fn().mockResolvedValue(undefined),
         updatePermissions: vi.fn().mockResolvedValue(undefined),
         deleteStream: vi.fn().mockResolvedValue(undefined),
         resend: vi.fn(),
         unsubscribeFromDualStream: vi.fn().mockResolvedValue(undefined),
         fetchOlderHistory: vi.fn().mockResolvedValue({ messages: [], hasMore: false }),
         subscribeToDualStream: vi.fn().mockResolvedValue(undefined),
+        subscribeToAdminStream: vi.fn().mockResolvedValue(undefined),
+        publishAdminState: vi.fn().mockResolvedValue(undefined),
         setDMPublishKey: vi.fn().mockResolvedValue(undefined),
         checkPermissions: vi.fn().mockResolvedValue({ canSubscribe: true, canPublish: true, isOwner: false })
     },
@@ -47,10 +50,13 @@ vi.mock('../../src/js/streamr.js', () => ({
         partitions: 1,
         LOAD_MORE_COUNT: 20,
         INITIAL_MESSAGES: 50,
-        MESSAGE_STREAM: { MESSAGES: 0 }
+        ADMIN_HISTORY_COUNT: 10,
+        MESSAGE_STREAM: { MESSAGES: 0 },
+        ADMIN_STREAM: { MODERATION: 0 }
     },
     deriveEphemeralId: vi.fn((id) => `${id}-ephemeral`),
-    deriveMessageId: vi.fn((id) => `${id}-message`)
+    deriveMessageId: vi.fn((id) => `${id}-message`),
+    deriveAdminId: vi.fn((id) => `${id}-admin`)
 }));
 
 vi.mock('../../src/js/auth.js', () => ({
@@ -189,12 +195,18 @@ describe('ChannelManager Extended', () => {
             });
         });
 
-        it('grants permissions on both streams', async () => {
+        it('grants permissions on all 3 streams', async () => {
             await channelManager.addMember(streamId, '0xnewmember');
 
+            // -1 and -2 use grantPermissionsToAddresses (subscribe+publish)
             expect(streamrController.grantPermissionsToAddresses).toHaveBeenCalledTimes(2);
             expect(streamrController.grantPermissionsToAddresses).toHaveBeenCalledWith(streamId, ['0xnewmember']);
             expect(streamrController.grantPermissionsToAddresses).toHaveBeenCalledWith(`${streamId}-ephemeral`, ['0xnewmember']);
+            // -3 admin uses setStreamPermissions with subscribe-only
+            expect(streamrController.setStreamPermissions).toHaveBeenCalledWith(
+                `${streamId}-admin`,
+                expect.objectContaining({ memberPermissions: ['subscribe'], members: ['0xnewmember'] })
+            );
         });
 
         it('updates local members list', async () => {
@@ -265,11 +277,13 @@ describe('ChannelManager Extended', () => {
             });
         });
 
-        it('revokes permissions on both streams', async () => {
+        it('revokes permissions on all 3 streams', async () => {
             await channelManager.removeMember(streamId, '0xmember1');
 
-            expect(streamrController.revokePermissionsFromAddresses).toHaveBeenCalledTimes(2);
+            expect(streamrController.revokePermissionsFromAddresses).toHaveBeenCalledTimes(3);
             expect(streamrController.revokePermissionsFromAddresses).toHaveBeenCalledWith(streamId, ['0xmember1']);
+            expect(streamrController.revokePermissionsFromAddresses).toHaveBeenCalledWith(`${streamId}-ephemeral`, ['0xmember1']);
+            expect(streamrController.revokePermissionsFromAddresses).toHaveBeenCalledWith(`${streamId}-admin`, ['0xmember1']);
         });
 
         it('removes member from local list', async () => {

@@ -24,16 +24,23 @@ vi.mock('../../src/js/streamr.js', () => ({
         isInitialized: vi.fn().mockReturnValue(true),
         publish: vi.fn(),
         subscribeToDualStream: vi.fn().mockResolvedValue(undefined),
+        subscribeToAdminStream: vi.fn().mockImplementation(async (_id, _h, opts) => {
+            if (opts?.onHistoryComplete) await opts.onHistoryComplete();
+            return {};
+        }),
         publishControl: vi.fn().mockResolvedValue(undefined),
         fetchOlderHistory: vi.fn().mockResolvedValue({ messages: [] })
     },
     STREAM_CONFIG: { 
         partitions: 1,
         INITIAL_MESSAGES: 50,
+        ADMIN_HISTORY_COUNT: 10,
         MESSAGE_STREAM: { MESSAGES: 0, CONTROL: 1 },
-        EPHEMERAL_STREAM: { CONTROL: 0, MEDIA_SIGNALS: 1, MEDIA_DATA: 2 }
+        EPHEMERAL_STREAM: { CONTROL: 0, MEDIA_SIGNALS: 1, MEDIA_DATA: 2 },
+        ADMIN_STREAM: { MODERATION: 0 }
     },
-    deriveEphemeralId: vi.fn((id) => `${id}/ephemeral`)
+    deriveEphemeralId: vi.fn((id) => `${id}/ephemeral`),
+    deriveAdminId: vi.fn((id) => `${id}/admin`)
 }));
 
 vi.mock('../../src/js/channels.js', () => ({

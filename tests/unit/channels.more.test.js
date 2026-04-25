@@ -51,6 +51,8 @@ vi.mock('../../src/js/streamr.js', () => ({
         unsubscribeFromDualStream: vi.fn().mockResolvedValue(undefined),
         fetchOlderHistory: vi.fn().mockResolvedValue({ messages: [], hasMore: false }),
         subscribeToDualStream: vi.fn().mockResolvedValue(undefined),
+        subscribeToAdminStream: vi.fn().mockResolvedValue(undefined),
+        publishAdminState: vi.fn().mockResolvedValue(undefined),
         setDMPublishKey: vi.fn().mockResolvedValue(undefined),
         checkPermissions: vi.fn().mockResolvedValue({ canSubscribe: true, canPublish: true, isOwner: false })
     },
@@ -58,10 +60,13 @@ vi.mock('../../src/js/streamr.js', () => ({
         partitions: 1,
         LOAD_MORE_COUNT: 20,
         INITIAL_MESSAGES: 50,
-        MESSAGE_STREAM: { MESSAGES: 0 }
+        ADMIN_HISTORY_COUNT: 10,
+        MESSAGE_STREAM: { MESSAGES: 0 },
+        ADMIN_STREAM: { MODERATION: 0 }
     },
     deriveEphemeralId: vi.fn((id) => `${id}-ephemeral`),
-    deriveMessageId: vi.fn((id) => `${id}-message`)
+    deriveMessageId: vi.fn((id) => `${id}-message`),
+    deriveAdminId: vi.fn((id) => `${id}-admin`)
 }));
 
 vi.mock('../../src/js/auth.js', () => ({
