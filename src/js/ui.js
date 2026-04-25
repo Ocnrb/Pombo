@@ -33,6 +33,8 @@ import { settingsUI } from './ui/SettingsUI.js';
 import { exploreUI } from './ui/ExploreUI.js';
 import { channelSettingsUI } from './ui/ChannelSettingsUI.js';
 import { contactsUI } from './ui/ContactsUI.js';
+import { messageContextMenuUI } from './ui/MessageContextMenuUI.js';
+import { pinnedBannerUI } from './ui/PinnedBannerUI.js';
 import { channelListUI } from './ui/ChannelListUI.js';
 import { chatAreaUI } from './ui/ChatAreaUI.js';
 import { inputUI } from './ui/InputUI.js';
@@ -198,6 +200,28 @@ class UIController {
             showRemoveContactModal: (address, cb) => modalManager.showRemoveContactModal(address, cb)
         });
 
+        // MessageContextMenuUI — owns the right-click menu on messages
+        messageContextMenuUI.setDependencies({
+            Logger,
+            channelManager,
+            identityManager,
+            dmManager,
+            chatAreaUI,
+            contactsUI,
+            showNotification: (msg, type) => this.showNotification(msg, type),
+            renderChannelList: () => this.renderChannelList(),
+            selectChannel: (streamId) => this.selectChannel(streamId),
+            showConnectedNoChannelState: () => this.showConnectedNoChannelState()
+        });
+
+        // PinnedBannerUI — top-of-chat banner showing the latest pinned message
+        pinnedBannerUI.setDependencies({
+            Logger,
+            channelManager,
+            chatAreaUI,
+            getActiveChannel: () => this.getActiveChannel()
+        });
+
         // ChannelListUI
         channelListUI.setDependencies({
             channelManager,
@@ -260,6 +284,10 @@ class UIController {
             channelMenuBtnMobile: document.getElementById('channel-menu-btn-mobile'),
             closeChannelBtn: document.getElementById('close-channel-btn'),
             messagesArea: document.getElementById('messages-area'),
+            pinnedBanner: document.getElementById('pinned-banner'),
+            pinnedBannerName: document.getElementById('pinned-banner-name'),
+            pinnedBannerText: document.getElementById('pinned-banner-text'),
+            pinnedBannerClose: document.getElementById('pinned-banner-close'),
             messageInput: document.getElementById('message-input'),
             messageInputContainer: document.getElementById('message-input-container'),
             sendMessageBtn: document.getElementById('send-message-btn'),
@@ -373,6 +401,7 @@ class UIController {
         // Set element references for UI modules
         channelSettingsUI.setElements(this.elements);
         contactsUI.setElements(this.elements);
+        messageContextMenuUI.setElements(this.elements);
         channelListUI.setElements(this.elements);
         channelModalsUI.setElements(this.elements);
         
@@ -595,6 +624,8 @@ class UIController {
     setupActivityHandler() {
         // Wire preview message callback (avoids circular dependency with subscriptionManager)
         subscriptionManager.onPreviewMessage = (msg) => this.handlePreviewMessage(msg);
+        // Wire preview admin-state callback so moderation is applied during preview
+        subscriptionManager.onPreviewAdmin = (streamId, adminMsg) => previewModeUI.handlePreviewAdmin(streamId, adminMsg);
         
         subscriptionManager.onActivity((streamId, activity) => {
             Logger.debug('Background activity update:', streamId, activity);
@@ -1154,6 +1185,17 @@ class UIController {
         // Initialize contacts UI
         contactsUI.init();
 
+        // Initialize message context menu UI
+        messageContextMenuUI.init();
+
+        // Initialize pinned-message banner UI
+        pinnedBannerUI.init({
+            banner: this.elements.pinnedBanner,
+            name: this.elements.pinnedBannerName,
+            text: this.elements.pinnedBannerText,
+            closeBtn: this.elements.pinnedBannerClose
+        });
+
         // Initialize DM modals UI
         dmModalsUI.init();
         
@@ -1519,6 +1561,10 @@ class UIController {
                 
             case 'channel-settings':
                 channelSettingsUI.show();
+                break;
+                
+            case 'show-pinned':
+                pinnedBannerUI.showAndScroll();
                 break;
                 
             case 'leave-channel':

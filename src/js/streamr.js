@@ -14,8 +14,10 @@
  * - Partition 1: Media signals (P2P coordination: requests, discovery)
  * - Partition 2: Media data (P2P heavy payloads: file pieces, image data) [Binary]
  * 
- * This solves the privacy problem where Streamr storage is per-stream,
- * not per-partition, causing presence metadata to be persisted.
+ * Admin Stream (suffix -3): WITH STORAGE, OWNER-ONLY WRITES
+ * - Partition 0: Moderation (bannedMembers, hiddenMessageIds, pins)
+ * - Partition 1: Channel image (reserved)
+ * - Partition 2: Password challenge (reserved)
  */
 
 import { Logger } from './logger.js';
@@ -27,10 +29,13 @@ import { authManager } from './auth.js';
 import {
     MESSAGE_STREAM as MESSAGE_STREAM_CONSTANTS,
     EPHEMERAL_STREAM as EPHEMERAL_STREAM_CONSTANTS,
+    ADMIN_STREAM as ADMIN_STREAM_CONSTANTS,
     deriveEphemeralId as _deriveEphemeralId,
     deriveMessageId as _deriveMessageId,
+    deriveAdminId as _deriveAdminId,
     isMessageStream as _isMessageStream,
-    isEphemeralStream as _isEphemeralStream
+    isEphemeralStream as _isEphemeralStream,
+    isAdminStream as _isAdminStream
 } from './streamConstants.js';
 
 // === STREAM CONFIG (DUAL-STREAM ARCHITECTURE) ===
@@ -77,7 +82,13 @@ const STREAM_CONFIG = {
     MESSAGE_STREAM: MESSAGE_STREAM_CONSTANTS,
 
     // Ephemeral Stream (no storage) — see streamConstants.js
-    EPHEMERAL_STREAM: EPHEMERAL_STREAM_CONSTANTS
+    EPHEMERAL_STREAM: EPHEMERAL_STREAM_CONSTANTS,
+
+    ADMIN_STREAM: ADMIN_STREAM_CONSTANTS,
+
+    // History count to fetch when bootstrapping admin state on channel open.
+    // Snapshot is `latest-wins`; a small window is sufficient.
+    ADMIN_HISTORY_COUNT: 10
 };
 
 // === ID DERIVATION FUNCTIONS ===
@@ -85,8 +96,10 @@ const STREAM_CONFIG = {
 // and to preserve the historical call-site surface of this module.
 const deriveEphemeralId = _deriveEphemeralId;
 const deriveMessageId = _deriveMessageId;
+const deriveAdminId = _deriveAdminId;
 const isMessageStream = _isMessageStream;
 const isEphemeralStream = _isEphemeralStream;
+const isAdminStream = _isAdminStream;
 
 class StreamrController {
     constructor() {
@@ -227,15 +240,15 @@ class StreamrController {
     }
 
     /**
-     * Create a new channel with dual-stream architecture
-     * Creates 2 streams: Message stream (with storage) and Ephemeral stream (no storage)
+     * Create a new channel with triple-stream architecture
+     * Creates 3 streams: Message stream (with storage), Ephemeral stream (no storage), Admin stream (with storage, owner-only writes)
      * 
      * @param {string} channelName - Name of the channel
      * @param {string} creatorAddress - Creator's Ethereum address
      * @param {string} type - Channel type: 'public', 'password', 'native'
      * @param {string[]} members - Array of member addresses (for native channels)
      * @param {Object} options - Additional options { exposure: 'visible'|'hidden' }
-     * @returns {Promise<Object>} - Stream info with messageStreamId and ephemeralStreamId
+     * @returns {Promise<Object>} - Stream info with messageStreamId, ephemeralStreamId, adminStreamId
      */
     async createStream(channelName, creatorAddress, type = 'public', members = [], options = {}) {
         if (!this.client) {
@@ -249,12 +262,13 @@ class StreamrController {
         const randomHash = cryptoManager.generateRandomHex(8);
         const baseStreamPath = `${ownerAddress}/${randomHash}`;
         
-        // Dual-stream IDs
+        // Triple-stream IDs
         const messageStreamId = `${baseStreamPath}-1`;
         const ephemeralStreamId = `${baseStreamPath}-2`;
+        const adminStreamId = `${baseStreamPath}-3`;
 
         try {
-            Logger.debug('Creating dual-stream channel:', { messageStreamId, ephemeralStreamId });
+            Logger.debug('Creating triple-stream channel:', { messageStreamId, ephemeralStreamId, adminStreamId });
             Logger.debug('   Owner address:', ownerAddress);
             Logger.debug('   Original name:', channelName);
             Logger.debug('   Type:', type);
@@ -281,6 +295,13 @@ class StreamrController {
                 a: 'pombo',           // app
                 v: '1',               // version
                 ln: messageStreamId   // linkedTo (parentStream)
+            });
+
+            const adminMetadata = JSON.stringify({
+                a: 'pombo',           // app
+                v: '1',               // version
+                ln: messageStreamId,  // linkedTo (parentStream)
+                k: 'admin'            // kind
             });
 
             // === SERIAL CREATION: Streams must be created one after another ===
@@ -321,12 +342,16 @@ class StreamrController {
             // Step 2: Create EPHEMERAL STREAM (3 partitions: control + media signals + media data)
             Logger.info('Creating ephemeral stream...');
             const ephemeralStream = await createStreamWithRetry(ephemeralStreamId, ephemeralMetadata, 'ephemeral', STREAM_CONFIG.EPHEMERAL_STREAM.PARTITIONS);
+
+            // Step 3: Create ADMIN STREAM (3 partitions reserved by protocol; only P0 used now)
+            Logger.info('Creating admin stream...');
+            const adminStream = await createStreamWithRetry(adminStreamId, adminMetadata, 'admin', STREAM_CONFIG.ADMIN_STREAM.PARTITIONS);
             
             const createTime = ((Date.now() - startTime) / 1000).toFixed(1);
-            Logger.info(`✓ Both streams created in ${createTime}s`);
+            Logger.info(`✓ All streams created in ${createTime}s`);
 
-            // Step 3: Set permissions on both streams (SEQUENTIAL - blockchain tx nonce conflicts if parallel)
-            Logger.info('Setting permissions on both streams...');
+            // Step 4: Set permissions on streams (SEQUENTIAL - blockchain tx nonce conflicts if parallel)
+            Logger.info('Setting permissions on streams...');
             const permStartTime = Date.now();
             
             if (type === 'public' || type === 'password') {
@@ -339,6 +364,9 @@ class StreamrController {
                 
                 // Ephemeral stream always gets full public permissions (presence data)
                 const ephemeralGrantFn = (stream) => this.grantPublicPermissions(stream);
+                
+                // Admin stream: public subscribe only; only owner publishes
+                const adminGrantFn = (stream) => this.grantPublicReadOnlyPermissions(stream);
                 
                 // Sequential to avoid nonce conflicts
                 try {
@@ -353,6 +381,13 @@ class StreamrController {
                     Logger.info('✓ Ephemeral stream: public permissions set');
                 } catch (e) {
                     Logger.error('✗ Ephemeral stream permissions failed:', e.message);
+                }
+
+                try {
+                    await adminGrantFn(adminStream);
+                    Logger.info('✓ Admin stream: public read-only permissions set (owner-only publish)');
+                } catch (e) {
+                    Logger.error('✗ Admin stream permissions failed:', e.message);
                 }
                 
                 const permTime = ((Date.now() - permStartTime) / 1000).toFixed(1);
@@ -373,6 +408,18 @@ class StreamrController {
                 } catch (e) {
                     Logger.error('✗ Ephemeral stream permissions failed:', e.message);
                 }
+
+                // Admin stream: members get SUBSCRIBE only (no publish); owner publishes by ownership
+                try {
+                    await this.setStreamPermissions(adminStream.id, {
+                        public: false,
+                        members,
+                        memberPermissions: ['subscribe']
+                    });
+                    Logger.info('✓ Admin stream: members subscribe-only permissions set');
+                } catch (e) {
+                    Logger.error('✗ Admin stream permissions failed:', e.message);
+                }
                 
                 const permTime = ((Date.now() - permStartTime) / 1000).toFixed(1);
                 Logger.info(`Permissions configured in ${permTime}s`);
@@ -384,6 +431,7 @@ class StreamrController {
             return {
                 messageStreamId: messageStream.id,
                 ephemeralStreamId: ephemeralStream.id,
+                adminStreamId: adminStream.id,
                 type: type,
                 name: channelName
             };
@@ -495,6 +543,11 @@ class StreamrController {
      * @param {Object} options - Permission options
      * @param {boolean} options.public - Whether to grant public permissions
      * @param {string[]} options.members - Array of member addresses
+     * @param {string[]} options.memberPermissions - Permissions to grant per member
+     *   (default: ['subscribe', 'publish']). Use ['subscribe'] for read-only members
+     *   (e.g. admin stream `-3` where only owner publishes).
+     * @param {string[]} options.publicPermissions - Permissions to grant publicly
+     *   (default: ['subscribe', 'publish']).
      * @param {number} retries - Number of retry attempts
      */
     async setStreamPermissions(streamId, options = {}, retries = 7) {
@@ -502,19 +555,21 @@ class StreamrController {
             throw new Error('Streamr client not initialized');
         }
 
+        const memberPermissions = options.memberPermissions || ['subscribe', 'publish'];
+        const publicPermissions = options.publicPermissions || ['subscribe', 'publish'];
         const assignments = [];
 
         // Add public permissions if requested
         if (options.public) {
             assignments.push({
                 public: true,
-                permissions: ['subscribe', 'publish']
+                permissions: publicPermissions
             });
         }
 
         // Add member permissions
         if (options.members && options.members.length > 0) {
-            Logger.debug('Granting permissions to', options.members.length, 'members...');
+            Logger.debug('Granting permissions to', options.members.length, 'members:', memberPermissions);
             
             for (const member of options.members) {
                 // Normalize to lowercase (Streamr uses lowercase internally)
@@ -524,7 +579,7 @@ class StreamrController {
                 
                 assignments.push({
                     userId: normalizedMember,
-                    permissions: ['subscribe', 'publish']
+                    permissions: memberPermissions
                 });
             }
             
@@ -1859,6 +1914,73 @@ class StreamrController {
     }
 
     /**
+     * Publish ADMIN_STATE snapshot to ADMIN STREAM (partition 0 - moderation)
+     * Only the channel owner can successfully publish (enforced by stream permissions).
+     * In `password` channels the snapshot is encrypted with the channel password.
+     *
+     * @param {string} adminStreamId - Admin stream ID (ends with -3)
+     * @param {Object} state - Full ADMIN_STATE message ({ type, v, rev, ts, createdBy, state })
+     * @param {string} password - Password for encrypted channels (optional)
+     */
+    async publishAdminState(adminStreamId, state, password = null) {
+        Logger.debug('publishAdminState called - sending to adminStream partition 0:', { adminStreamId, rev: state?.rev });
+        return await this.publish(adminStreamId, STREAM_CONFIG.ADMIN_STREAM.MODERATION, state, password);
+    }
+
+    /**
+     * Subscribe to ADMIN STREAM partition 0 (moderation) with short history.
+     * The caller is expected to choose the snapshot with the highest `rev`.
+     *
+     * @param {string} adminStreamId - Admin stream ID (ends with -3)
+     * @param {Function} handler - Message handler invoked for each ADMIN_STATE
+     * @param {Object} options - { password, historyCount, onHistoryComplete }
+     * @returns {Promise<Object>} Subscription object
+     */
+    async subscribeToAdminStream(adminStreamId, handler, options = {}) {
+        if (!this.client) {
+            throw new Error('Streamr client not initialized');
+        }
+
+        if (!isAdminStream(adminStreamId)) {
+            Logger.warn('Invalid adminStreamId (should end with -3):', adminStreamId);
+        }
+
+        const password = options.password ?? null;
+        const historyCount = options.historyCount ?? STREAM_CONFIG.ADMIN_HISTORY_COUNT;
+        const onHistoryComplete = options.onHistoryComplete ?? null;
+
+        // Reuse subscription map to avoid double-subscribing
+        let adminSubs = this.subscriptions.get(adminStreamId);
+        if (!adminSubs) {
+            adminSubs = {};
+            this.subscriptions.set(adminStreamId, adminSubs);
+        }
+
+        const partition = STREAM_CONFIG.ADMIN_STREAM.MODERATION;
+        if (adminSubs[partition]) {
+            Logger.debug('Already subscribed to admin stream P0:', adminStreamId);
+            if (onHistoryComplete) {
+                try { await onHistoryComplete(); } catch (e) { Logger.warn('admin onHistoryComplete error:', e); }
+            }
+            return adminSubs[partition];
+        }
+
+        Logger.debug('Subscribing to adminStream partition 0 (moderation) with history:', historyCount);
+        const sub = await this.subscribeWithHistory(
+            adminStreamId,
+            partition,
+            handler,
+            historyCount,
+            password,
+            onHistoryComplete,
+            false
+        );
+        adminSubs[partition] = sub;
+        Logger.info('Subscribed to admin stream:', adminStreamId);
+        return sub;
+    }
+
+    /**
      * Unsubscribe from a stream
      * @param {string} streamId - Stream ID
      */
@@ -2094,9 +2216,9 @@ class StreamrController {
             throw new Error('Client not initialized');
         }
         
-        // Safety check: only enable storage for message streams
-        if (!isMessageStream(messageStreamId)) {
-            Logger.warn('enableStorage called on non-message stream, ignoring:', messageStreamId);
+        // Safety check: only enable storage for streams that should persist (-1 message, -3 admin)
+        if (!isMessageStream(messageStreamId) && !isAdminStream(messageStreamId)) {
+            Logger.warn('enableStorage called on non-persistent stream, ignoring:', messageStreamId);
             return { success: false, provider: null, storageDays: null };
         }
         
@@ -2789,8 +2911,14 @@ class StreamrController {
                         continue;
                     }
                     
+                    // Partition-specific content/override filters apply ONLY to the
+                    // dual-stream messageStream (-1). Other streams (admin -3, DM, etc.)
+                    // share the same partition numbers but carry different payload
+                    // shapes (e.g. ADMIN_STATE) and must bypass these filters.
+                    const isMsgStream = isMessageStream(streamId);
+
                     // For message stream partition 0: accept only content messages
-                    if (partition === STREAM_CONFIG.MESSAGE_STREAM.MESSAGES) {
+                    if (isMsgStream && partition === STREAM_CONFIG.MESSAGE_STREAM.MESSAGES) {
                         const allowLegacyOverride = allowOverridesInContentPartition
                             && (content?.type === 'edit' || content?.type === 'delete');
                         if (!isValidContentMessage(content) && !allowLegacyOverride) {
@@ -2800,7 +2928,7 @@ class StreamrController {
                     }
 
                     // For message stream partition 1: accept only edit/delete overrides
-                    if (partition === STREAM_CONFIG.MESSAGE_STREAM.CONTROL) {
+                    if (isMsgStream && partition === STREAM_CONFIG.MESSAGE_STREAM.CONTROL) {
                         if (!isValidOverrideMessage(content)) {
                             skippedCount++;
                             continue;
@@ -3029,4 +3157,4 @@ class StreamrController {
 
 // Export singleton instance and config
 export const streamrController = new StreamrController();
-export { STREAM_CONFIG, deriveEphemeralId, deriveMessageId, isMessageStream, isEphemeralStream };
+export { STREAM_CONFIG, deriveEphemeralId, deriveMessageId, deriveAdminId, isMessageStream, isEphemeralStream, isAdminStream };

@@ -1,5 +1,5 @@
 /**
- * Stream Architecture Constants (DUAL-STREAM)
+ * Stream Architecture Constants (TRIPLE-STREAM)
  *
  * These are *protocol* constants, not tunable configuration — changing them
  * breaks interoperability with already-published messages. They live in a
@@ -7,9 +7,10 @@
  * explicit and prevent accidental edits.
  *
  * ARCHITECTURE:
- *   Each channel uses 2 streams, derived from a base ID by appending:
- *     -1  → Message stream  (WITH storage)
- *     -2  → Ephemeral stream (NO storage)
+ *   Each regular channel uses up to 3 streams, derived from a base ID by appending:
+ *     -1  → Message stream   (WITH storage) — content (text, reactions, media announces, edit/delete overrides)
+ *     -2  → Ephemeral stream (NO storage)   — presence, typing, P2P media coordination
+ *     -3  → Admin stream     (WITH storage) — admin-only writes (moderation state)
  *
  * MESSAGE STREAM (-1):
  *   Regular channels use 2 partitions (content + control overrides).
@@ -17,11 +18,20 @@
  *
  * EPHEMERAL STREAM (-2):
  *   3 partitions: control (presence/typing), media signals, media data.
+ *
+ * ADMIN STREAM (-3):
+ *   3 partitions reserved by protocol; only P0 used in initial scope.
+ *     P0: ADMIN_STATE  (moderation: bannedMembers, hiddenMessageIds, pins) — IMPLEMENTED
+ *     P1: CHANNEL_IMAGE                                                    — RESERVED
+ *     P2: PASSWORD_CHALLENGE                                               — RESERVED
+ *   Permissions: only owner publishes; readers vary by channel type
+ *   (public/password: public subscribe; native: members-only subscribe).
  */
 
 export const STREAM_SUFFIX = Object.freeze({
     MESSAGE: '-1',
-    EPHEMERAL: '-2'
+    EPHEMERAL: '-2',
+    ADMIN: '-3'
 });
 
 export const MESSAGE_STREAM = Object.freeze({
@@ -45,6 +55,16 @@ export const EPHEMERAL_STREAM = Object.freeze({
     CONTROL: 0,           // Presence, typing (JSON)
     MEDIA_SIGNALS: 1,     // P2P coordination: piece_request, source_request/announce (JSON)
     MEDIA_DATA: 2         // P2P heavy payloads: file_piece (Binary - Uint8Array)
+});
+
+export const ADMIN_STREAM = Object.freeze({
+    SUFFIX: STREAM_SUFFIX.ADMIN,
+    PARTITIONS: 3,        // P0 implemented; P1 (channel image) and P2 (password challenge) reserved
+
+    // Partition indexes
+    MODERATION: 0,        // ADMIN_STATE: bannedMembers, hiddenMessageIds, pins
+    CHANNEL_IMAGE: 1,     // RESERVED — channel image / profile metadata
+    PASSWORD_CHALLENGE: 2 // RESERVED — password challenge protocol
 });
 
 // ================================================
@@ -72,6 +92,16 @@ export function deriveMessageId(ephemeralStreamId) {
 }
 
 /**
+ * Derive admin stream ID from a message stream ID.
+ * @param {string} messageStreamId - Message stream ID (ends with -1)
+ * @returns {string|null} Admin stream ID (ends with -3) or null
+ */
+export function deriveAdminId(messageStreamId) {
+    if (!messageStreamId) return null;
+    return messageStreamId.replace(/-1$/, STREAM_SUFFIX.ADMIN);
+}
+
+/**
  * @param {string} streamId
  * @returns {boolean} true if streamId ends with the message-stream suffix
  */
@@ -85,4 +115,12 @@ export function isMessageStream(streamId) {
  */
 export function isEphemeralStream(streamId) {
     return !!streamId && streamId.endsWith(STREAM_SUFFIX.EPHEMERAL);
+}
+
+/**
+ * @param {string} streamId
+ * @returns {boolean} true if streamId ends with the admin-stream suffix
+ */
+export function isAdminStream(streamId) {
+    return !!streamId && streamId.endsWith(STREAM_SUFFIX.ADMIN);
 }

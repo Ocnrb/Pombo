@@ -9,7 +9,7 @@
  */
 
 import { Logger } from './logger.js';
-import { streamrController, STREAM_CONFIG, deriveEphemeralId, deriveMessageId } from './streamr.js';
+import { streamrController, STREAM_CONFIG, deriveEphemeralId, deriveMessageId, deriveAdminId } from './streamr.js';
 import { authManager } from './auth.js';
 import { identityManager } from './identity.js';
 import { secureStorage } from './secureStorage.js';
@@ -104,6 +104,14 @@ class ChannelManager {
                     channel.loadingHistory = false;
                     channel.oldestTimestamp = null;
                     channel.streamId = channel.messageStreamId;
+                    // Backfill adminStreamId for channels persisted before -3 existed
+                    if (!channel.adminStreamId) {
+                        channel.adminStreamId = deriveAdminId(channel.messageStreamId);
+                    }
+                    // Admin moderation state (rebuilt on subscribe)
+                    channel.adminState = { bannedMembers: [], hiddenMessageIds: [], pins: [] };
+                    channel.adminRev = 0;
+                    channel.adminLoaded = false;
                     this.channels.set(channel.messageStreamId, channel);
                 }
             }
@@ -131,6 +139,7 @@ class ChannelManager {
             const channelsData = Array.from(this.channels.values()).map(ch => ({
                 messageStreamId: ch.messageStreamId,
                 ephemeralStreamId: ch.ephemeralStreamId,
+                adminStreamId: ch.adminStreamId,
                 name: ch.name,
                 type: ch.type,
                 createdAt: ch.createdAt,
@@ -152,6 +161,7 @@ class ChannelManager {
                 inboxStreamId: ch.inboxStreamId || null
                 // messages: excluded - loaded from storage
                 // reactions: excluded - loaded from storage
+                // adminState: excluded - rebuilt from -3/P0 on subscribe
             }));
             Logger.debug('Saving channels to secure storage:', channelsData.length);
 
@@ -221,12 +231,13 @@ class ChannelManager {
                 type === 'native' ? members : [],
                 options
             );
-            Logger.debug('Dual-stream created:', { 
+            Logger.debug('Triple-stream created:', { 
                 messageStreamId: streamInfo.messageStreamId, 
-                ephemeralStreamId: streamInfo.ephemeralStreamId 
+                ephemeralStreamId: streamInfo.ephemeralStreamId,
+                adminStreamId: streamInfo.adminStreamId
             });
 
-            // Enable storage ONLY for message stream (ephemeral stream intentionally not stored)
+            // Enable storage on persistent streams (message + admin); ephemeral never stored
             // Pass storage options (provider, days)
             let storageResult = { success: false, provider: null, storageDays: null };
             try {
@@ -234,9 +245,21 @@ class ChannelManager {
                     storageProvider: options.storageProvider,
                     storageDays: options.storageDays
                 });
-                Logger.debug('Storage result:', storageResult);
+                Logger.debug('Message storage result:', storageResult);
             } catch (storageError) {
-                Logger.warn('Failed to enable storage (continuing without history):', storageError.message);
+                Logger.warn('Failed to enable storage on message stream (continuing without history):', storageError.message);
+            }
+
+            if (streamInfo.adminStreamId) {
+                try {
+                    const adminStorageResult = await streamrController.enableStorage(streamInfo.adminStreamId, {
+                        storageProvider: options.storageProvider,
+                        storageDays: options.storageDays
+                    });
+                    Logger.debug('Admin storage result:', adminStorageResult);
+                } catch (storageError) {
+                    Logger.warn('Failed to enable storage on admin stream (continuing without admin history):', storageError.message);
+                }
             }
 
             // Create channel object with dual-stream IDs
@@ -255,6 +278,7 @@ class ChannelManager {
             const channel = {
                 messageStreamId: streamInfo.messageStreamId,
                 ephemeralStreamId: streamInfo.ephemeralStreamId,
+                adminStreamId: streamInfo.adminStreamId || deriveAdminId(streamInfo.messageStreamId),
                 streamId: streamInfo.messageStreamId,  // Alias for convenience
                 name: name,
                 type: type,
@@ -264,6 +288,10 @@ class ChannelManager {
                 members: channelMembers,
                 messages: [],
                 reactions: {}, // messageId -> { emoji -> [users] }
+                // Admin moderation state (-3/P0)
+                adminState: { bannedMembers: [], hiddenMessageIds: [], pins: [] },
+                adminRev: 0,
+                adminLoaded: false,
                 storageEnabled: storageResult.success,
                 // Storage configuration
                 storageProvider: storageResult.provider || 'streamr',
@@ -334,8 +362,9 @@ class ChannelManager {
      */
     async joinChannel(messageStreamId, password = null, options = {}) {
         try {
-            // Derive ephemeral stream ID from message stream ID
+            // Derive ephemeral and admin stream IDs from message stream ID
             const ephemeralStreamId = deriveEphemeralId(messageStreamId);
+            const adminStreamId = deriveAdminId(messageStreamId);
             
             // Check if already joined (use messageStreamId as key)
             if (this.channels.has(messageStreamId)) {
@@ -424,6 +453,7 @@ class ChannelManager {
             const channel = {
                 messageStreamId: messageStreamId,
                 ephemeralStreamId: ephemeralStreamId,
+                adminStreamId: adminStreamId,
                 streamId: messageStreamId,  // Alias for convenience
                 name: channelName,
                 type: channelType,
@@ -433,6 +463,10 @@ class ChannelManager {
                 members: members,
                 messages: [],
                 reactions: {}, // messageId -> { emoji -> [users] }
+                // Admin moderation state (-3/P0)
+                adminState: { bannedMembers: [], hiddenMessageIds: [], pins: [] },
+                adminRev: 0,
+                adminLoaded: false,
                 classification: classification,
                 readOnly: options.readOnly || false,
                 writeOnly: permissions.canPublish && !permissions.canSubscribe,
@@ -530,6 +564,7 @@ class ChannelManager {
     async persistChannelFromPreview(messageStreamId, previewInfo = {}) {
         try {
             const ephemeralStreamId = deriveEphemeralId(messageStreamId);
+            const adminStreamId = deriveAdminId(messageStreamId);
             
             // Check if already joined
             if (this.channels.has(messageStreamId)) {
@@ -552,6 +587,7 @@ class ChannelManager {
             const channel = {
                 messageStreamId: messageStreamId,
                 ephemeralStreamId: ephemeralStreamId,
+                adminStreamId: adminStreamId,
                 streamId: messageStreamId,
                 name: channelName,
                 type: channelType,
@@ -561,6 +597,10 @@ class ChannelManager {
                 members: [],
                 messages: previewMessages,  // Transfer messages from preview
                 reactions: previewReactions, // Transfer reactions from preview
+                // Admin moderation state (-3/P0)
+                adminState: { bannedMembers: [], hiddenMessageIds: [], pins: [] },
+                adminRev: 0,
+                adminLoaded: false,
                 classification: classification,
                 readOnly: previewInfo.readOnly || false,
                 historyLoaded: previewMessages.length > 0,  // Mark as loaded if we have messages
@@ -696,15 +736,22 @@ class ChannelManager {
             throw new Error('Address is already a member');
         }
 
-        // Get ephemeral stream ID
+        // Get ephemeral and admin stream IDs
         const ephemeralStreamId = channel.ephemeralStreamId || deriveEphemeralId(messageStreamId);
+        const adminStreamId = channel.adminStreamId || deriveAdminId(messageStreamId);
 
         try {
-            // Grant permissions on BOTH streams (messageStream and ephemeralStream)
-            await Promise.all([
-                streamrController.grantPermissionsToAddresses(messageStreamId, [address]),
-                streamrController.grantPermissionsToAddresses(ephemeralStreamId, [address])
-            ]);
+            // Grant permissions on all 3 streams (sequential to avoid nonce conflicts).
+            // Admin stream: subscribe-only (members read admin state, owner publishes).
+            await streamrController.grantPermissionsToAddresses(messageStreamId, [address]);
+            await streamrController.grantPermissionsToAddresses(ephemeralStreamId, [address]);
+            if (adminStreamId) {
+                await streamrController.setStreamPermissions(adminStreamId, {
+                    public: false,
+                    members: [address],
+                    memberPermissions: ['subscribe']
+                });
+            }
             
             // Clear Graph cache to refresh member list
             graphAPI.clearCache();
@@ -713,7 +760,7 @@ class ChannelManager {
             channel.members.push(address);
             await this.saveChannels();
             
-            Logger.info('Member added to dual-stream channel:', address);
+            Logger.info('Member added to triple-stream channel:', address);
             return true;
         } catch (error) {
             Logger.error('Failed to add member:', error);
@@ -752,15 +799,17 @@ class ChannelManager {
             throw new Error('Cannot remove the channel creator');
         }
 
-        // Get ephemeral stream ID
+        // Get ephemeral and admin stream IDs
         const ephemeralStreamId = channel.ephemeralStreamId || deriveEphemeralId(messageStreamId);
+        const adminStreamId = channel.adminStreamId || deriveAdminId(messageStreamId);
 
         try {
-            // Revoke permissions on BOTH streams (messageStream and ephemeralStream)
-            await Promise.all([
-                streamrController.revokePermissionsFromAddresses(messageStreamId, [address]),
-                streamrController.revokePermissionsFromAddresses(ephemeralStreamId, [address])
-            ]);
+            // Revoke permissions on all 3 streams (sequential to avoid nonce conflicts).
+            await streamrController.revokePermissionsFromAddresses(messageStreamId, [address]);
+            await streamrController.revokePermissionsFromAddresses(ephemeralStreamId, [address]);
+            if (adminStreamId) {
+                await streamrController.revokePermissionsFromAddresses(adminStreamId, [address]);
+            }
             
             // Clear Graph cache to refresh member list
             graphAPI.clearCache();
@@ -769,7 +818,7 @@ class ChannelManager {
             channel.members.splice(memberIndex, 1);
             await this.saveChannels();
             
-            Logger.info('Member removed from dual-stream channel:', address);
+            Logger.info('Member removed from triple-stream channel:', address);
             return true;
         } catch (error) {
             Logger.error('Failed to remove member:', error);
@@ -777,6 +826,306 @@ class ChannelManager {
             throw new Error(chainError.message);
         }
     }
+
+    // ===== ADMIN STREAM (-3/P0) =====================================================
+
+    /**
+     * Validate the shape of an ADMIN_STATE message before applying it.
+     * @private
+     */
+    _isValidAdminState(msg) {
+        if (!msg || typeof msg !== 'object') return false;
+        if (msg.type !== 'ADMIN_STATE') return false;
+        if (typeof msg.rev !== 'number' || !Number.isFinite(msg.rev) || msg.rev < 0) return false;
+        if (!msg.state || typeof msg.state !== 'object') return false;
+        return true;
+    }
+
+    /**
+     * Normalize an ADMIN_STATE.state object into the channel.adminState shape.
+     * Drops unknown fields and coerces missing ones to safe defaults.
+     * @private
+     */
+    _normalizeAdminState(state) {
+        const banned = Array.isArray(state.bannedMembers) ? state.bannedMembers : [];
+        const hidden = Array.isArray(state.hiddenMessageIds) ? state.hiddenMessageIds : [];
+        const pins = Array.isArray(state.pins) ? state.pins : [];
+        return {
+            bannedMembers: banned.filter(a => typeof a === 'string').map(a => a.toLowerCase()),
+            hiddenMessageIds: hidden.filter(id => typeof id === 'string'),
+            pins: pins.filter(p => p && typeof p === 'object' && typeof p.targetId === 'string')
+        };
+    }
+
+    /**
+     * Apply an admin state snapshot to the channel if its `rev` is higher than
+     * the currently applied one (latest-wins).
+     * @param {Object} channel - Channel object
+     * @param {Object} adminMsg - ADMIN_STATE message ({ type, rev, ts, createdBy, state })
+     * @returns {boolean} true if applied, false otherwise
+     */
+    applyAdminState(channel, adminMsg) {
+        if (!channel) return false;
+        if (!this._isValidAdminState(adminMsg)) return false;
+
+        // Only the channel creator (admin) is allowed to mutate admin state.
+        // Stream-level permissions already enforce this on the network, but we
+        // double-check locally in case storage is replayed for any reason.
+        if (channel.createdBy && adminMsg.createdBy
+            && adminMsg.createdBy.toLowerCase() !== channel.createdBy.toLowerCase()) {
+            Logger.warn('Ignoring ADMIN_STATE from non-admin:', adminMsg.createdBy);
+            return false;
+        }
+
+        const currentRev = typeof channel.adminRev === 'number' ? channel.adminRev : 0;
+        const currentTs = typeof channel.adminTs === 'number' ? channel.adminTs : 0;
+        const incomingTs = typeof adminMsg.ts === 'number' ? adminMsg.ts : 0;
+        // Latest-wins by (rev, ts). Tiebreaker on ts is required because the
+        // publisher may republish rev=1 across sessions if its local adminRev
+        // wasn't bootstrapped yet — the most recent ts must still win.
+        if (channel.adminLoaded) {
+            if (adminMsg.rev < currentRev) return false;
+            if (adminMsg.rev === currentRev && incomingTs <= currentTs) return false;
+        }
+
+        channel.adminState = this._normalizeAdminState(adminMsg.state);
+        channel.adminRev = adminMsg.rev;
+        channel.adminTs = incomingTs;
+        channel.adminLoaded = true;
+        Logger.debug('Admin state applied:', {
+            streamId: channel.messageStreamId.slice(-20),
+            rev: adminMsg.rev,
+            ts: incomingTs,
+            banned: channel.adminState.bannedMembers.length,
+            hidden: channel.adminState.hiddenMessageIds.length,
+            pins: channel.adminState.pins.length
+        });
+        return true;
+    }
+
+    /**
+     * Handle an ADMIN_STATE message arriving on the admin stream.
+     * @param {string} messageStreamId - Channel key (-1 stream id)
+     * @param {Object} data - Decoded ADMIN_STATE payload
+     */
+    handleAdminMessage(messageStreamId, data) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) return;
+        const applied = this.applyAdminState(channel, data);
+        if (applied) {
+            this.notifyHandlers('admin_state_updated', {
+                streamId: messageStreamId,
+                adminState: channel.adminState,
+                rev: channel.adminRev
+            });
+        }
+    }
+
+    /**
+     * Bootstrap admin state by subscribing to -3/P0 with short history.
+     * Picks the snapshot with the highest `rev` from the warm-up window
+     * before the channel content stream is subscribed.
+     * @param {string} messageStreamId - Channel key (-1)
+     * @param {string} adminStreamId - Admin stream id (-3)
+     * @param {string|null} password - Channel password for encrypted channels
+     */
+    async bootstrapAdminState(messageStreamId, adminStreamId, password = null) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) return;
+
+        // Hard barrier: wait for the admin-stream history resend to complete
+        // before returning, so that hiddenMessageIds / bannedMembers / pins
+        // are applied before the messageStream timeline starts rendering.
+        // Falls back via timeout if the storage node is slow/unreachable, so
+        // the UI never blocks indefinitely.
+        const ADMIN_BOOTSTRAP_TIMEOUT_MS = 5000;
+        let resolveHistory;
+        const historyDone = new Promise((resolve) => { resolveHistory = resolve; });
+
+        await streamrController.subscribeToAdminStream(
+            adminStreamId,
+            (data) => this.handleAdminMessage(messageStreamId, data),
+            {
+                password,
+                historyCount: STREAM_CONFIG.ADMIN_HISTORY_COUNT,
+                onHistoryComplete: async () => {
+                    // Mark loaded even if no message arrived (channel never had admin events)
+                    if (!channel.adminLoaded) {
+                        channel.adminLoaded = true;
+                        Logger.debug('Admin state bootstrap complete (no events) for', messageStreamId.slice(-20));
+                    } else {
+                        Logger.debug('Admin state bootstrap complete with rev', channel.adminRev);
+                    }
+                    resolveHistory();
+                }
+            }
+        );
+
+        // Wait for history (or fallback timeout) before returning to caller
+        await Promise.race([
+            historyDone,
+            new Promise((resolve) => setTimeout(() => {
+                if (!channel.adminLoaded) {
+                    Logger.warn('Admin bootstrap timeout — proceeding without admin state for', messageStreamId.slice(-20));
+                }
+                resolve();
+            }, ADMIN_BOOTSTRAP_TIMEOUT_MS))
+        ]);
+    }
+
+    /**
+     * Publish a new ADMIN_STATE snapshot. Caller may pass either a full
+     * `state` object or a `patch` object (merged onto the current state).
+     * Only the channel admin (creator) should call this — the stream
+     * permissions reject non-admin publishes at network level.
+     *
+     * @param {string} messageStreamId - Channel key (-1)
+     * @param {Object} update - Either { state } (full snapshot) or { patch } (partial update)
+     * @returns {Promise<{rev: number, state: Object}>} The published snapshot
+     */
+    async publishAdminState(messageStreamId, update = {}) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) {
+            throw new Error('Channel not found');
+        }
+        const adminStreamId = channel.adminStreamId || deriveAdminId(messageStreamId);
+        if (!adminStreamId) {
+            throw new Error('Channel has no admin stream');
+        }
+
+        const senderAddress = authManager.getAddress();
+        if (!senderAddress) {
+            throw new Error('Not authenticated');
+        }
+        if (channel.createdBy && senderAddress.toLowerCase() !== channel.createdBy.toLowerCase()) {
+            throw new Error('Only the channel admin can publish admin state');
+        }
+
+        // Ensure we know the latest rev before publishing — otherwise on a fresh
+        // session we'd republish rev=1 and collide with prior snapshots.
+        if (!channel.adminLoaded) {
+            try {
+                await this.bootstrapAdminState(messageStreamId, adminStreamId, channel.password || null);
+            } catch (e) {
+                Logger.warn('Bootstrap before publish failed (may publish stale rev):', e.message);
+            }
+        }
+
+        // Compose new state: full replace if `state` provided, otherwise merge `patch`.
+        const current = channel.adminState || { bannedMembers: [], hiddenMessageIds: [], pins: [] };
+        const next = update.state
+            ? this._normalizeAdminState(update.state)
+            : this._normalizeAdminState({
+                bannedMembers: update.patch?.bannedMembers ?? current.bannedMembers,
+                hiddenMessageIds: update.patch?.hiddenMessageIds ?? current.hiddenMessageIds,
+                pins: update.patch?.pins ?? current.pins
+            });
+
+        const newRev = (channel.adminRev || 0) + 1;
+        const adminMsg = {
+            type: 'ADMIN_STATE',
+            v: 1,
+            rev: newRev,
+            ts: Date.now(),
+            createdBy: senderAddress,
+            state: next
+        };
+
+        await streamrController.publishAdminState(adminStreamId, adminMsg, channel.password || null);
+
+        // Optimistically apply locally so UI reflects the change immediately.
+        this.applyAdminState(channel, adminMsg);
+        this.notifyHandlers('admin_state_updated', {
+            streamId: messageStreamId,
+            adminState: channel.adminState,
+            rev: channel.adminRev
+        });
+
+        Logger.info('Published ADMIN_STATE rev', newRev, 'for', messageStreamId.slice(-20));
+        return { rev: newRev, state: next };
+    }
+
+    // High-level convenience helpers built on top of publishAdminState ----------
+
+    /** @returns {Promise<{rev:number, state:Object}>} */
+    async banMember(messageStreamId, address) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) throw new Error('Channel not found');
+        const lower = String(address).toLowerCase();
+        const set = new Set((channel.adminState?.bannedMembers || []).map(a => a.toLowerCase()));
+        set.add(lower);
+        return this.publishAdminState(messageStreamId, { patch: { bannedMembers: Array.from(set) } });
+    }
+
+    /** @returns {Promise<{rev:number, state:Object}>} */
+    async unbanMember(messageStreamId, address) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) throw new Error('Channel not found');
+        const lower = String(address).toLowerCase();
+        const next = (channel.adminState?.bannedMembers || []).filter(a => a.toLowerCase() !== lower);
+        return this.publishAdminState(messageStreamId, { patch: { bannedMembers: next } });
+    }
+
+    /** @returns {Promise<{rev:number, state:Object}>} */
+    async hideMessage(messageStreamId, targetId) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) throw new Error('Channel not found');
+        const set = new Set(channel.adminState?.hiddenMessageIds || []);
+        set.add(targetId);
+        return this.publishAdminState(messageStreamId, { patch: { hiddenMessageIds: Array.from(set) } });
+    }
+
+    /** @returns {Promise<{rev:number, state:Object}>} */
+    async unhideMessage(messageStreamId, targetId) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) throw new Error('Channel not found');
+        const next = (channel.adminState?.hiddenMessageIds || []).filter(id => id !== targetId);
+        return this.publishAdminState(messageStreamId, { patch: { hiddenMessageIds: next } });
+    }
+
+    /** @returns {Promise<{rev:number, state:Object}>} */
+    async pinMessage(messageStreamId, targetId, snapshot = null) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) throw new Error('Channel not found');
+        const existing = (channel.adminState?.pins || []).filter(p => p.targetId !== targetId);
+        const msg = !snapshot ? channel.messages.find(m => m.id === targetId) : null;
+        const pin = {
+            targetId,
+            pinnedAt: Date.now(),
+            snapshot: snapshot || (msg ? {
+                sender: msg.sender,
+                senderName: msg.senderName || null,
+                ensName: msg.verified?.ensName || null,
+                text: msg.text,
+                timestamp: msg.timestamp
+            } : null)
+        };
+        return this.publishAdminState(messageStreamId, { patch: { pins: [...existing, pin] } });
+    }
+
+    /** @returns {Promise<{rev:number, state:Object}>} */
+    async unpinMessage(messageStreamId, targetId) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) throw new Error('Channel not found');
+        const next = (channel.adminState?.pins || []).filter(p => p.targetId !== targetId);
+        return this.publishAdminState(messageStreamId, { patch: { pins: next } });
+    }
+
+    /** Read helpers used by UI/render layers. */
+    isMessageHidden(channel, messageId) {
+        if (!channel || !messageId) return false;
+        const list = channel.adminState?.hiddenMessageIds;
+        return Array.isArray(list) && list.includes(messageId);
+    }
+
+    isMemberBanned(channel, address) {
+        if (!channel || !address) return false;
+        const list = channel.adminState?.bannedMembers;
+        if (!Array.isArray(list)) return false;
+        return list.includes(String(address).toLowerCase());
+    }
+
+    // ===== END ADMIN STREAM =========================================================
 
     /**
      * Get members of a channel with their permissions
@@ -1106,8 +1455,20 @@ class ChannelManager {
             return;
         }
 
-        // Get or derive ephemeral stream ID
+        // Get or derive ephemeral and admin stream IDs
         const ephemeralStreamId = channel?.ephemeralStreamId || deriveEphemeralId(messageStreamId);
+        const adminStreamId = channel?.adminStreamId || deriveAdminId(messageStreamId);
+
+        // Step 1: Bootstrap admin state from -3/P0 BEFORE subscribing to content.
+        // This ensures hiddenMessageIds, bannedMembers and pins are applied
+        // before the timeline renders.
+        if (adminStreamId) {
+            try {
+                await this.bootstrapAdminState(messageStreamId, adminStreamId, pwd);
+            } catch (e) {
+                Logger.warn('Admin stream bootstrap failed (continuing without admin state):', e.message);
+            }
+        }
 
         // Detect whether this stream supports dedicated control partition (P1)
         let hasControlPartition = true;

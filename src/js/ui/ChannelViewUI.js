@@ -4,6 +4,7 @@
  * Consolidates logic previously split across selectChannel and _selectChannelWithoutHistory.
  */
 import { Logger } from '../logger.js';
+import { pinnedBannerUI } from './PinnedBannerUI.js';
 
 // Forward declarations - dependencies injected via setDependencies()
 let channelManager = null;
@@ -213,6 +214,9 @@ class ChannelViewUI {
         this.elements.onlineHeader?.classList.remove('flex');
         this.elements.onlineSeparator?.classList.add('hidden');
         
+        // Hide pinned banner (no active channel)
+        pinnedBannerUI.update();
+        
         // Reset online users
         this._resetOnlineUsers();
         
@@ -256,6 +260,9 @@ class ChannelViewUI {
         this.elements.onlineHeader?.classList.add('hidden');
         this.elements.onlineSeparator?.classList.add('hidden');
         
+        // Hide pinned banner in Explore view
+        pinnedBannerUI.update();
+        
         // Close button: hide on mobile (pill nav handles navigation), show close on desktop
         if (isMobile) {
             this.elements.closeChannelBtn?.classList.add('hidden');
@@ -298,6 +305,9 @@ class ChannelViewUI {
         this.elements.onlineHeader?.classList.add('hidden');
         this.elements.onlineHeader?.classList.remove('flex');
         this.elements.onlineSeparator?.classList.add('hidden');
+        
+        // Hide pinned banner (disconnected)
+        pinnedBannerUI.update();
         
         // Reset online users
         this._resetOnlineUsers();

@@ -54,11 +54,13 @@ class MediaHandler {
     /**
      * Open lightbox by media ID (safe method)
      * @param {string} mediaId - Registered media ID
+     * @param {Element} [triggerEl] - The DOM element that opened the lightbox
+     *   (used to anchor scroll restoration to the originating message).
      */
-    openLightboxById(mediaId) {
+    openLightboxById(mediaId, triggerEl = null) {
         const media = this.mediaCache.get(mediaId);
         if (media) {
-            this.openLightbox(media.url, media.type);
+            this.openLightbox(media.url, media.type, triggerEl);
         }
     }
 
@@ -66,8 +68,10 @@ class MediaHandler {
      * Open media lightbox
      * @param {string} src - Media source URL
      * @param {string} type - 'image' or 'video'
+     * @param {Element} [triggerEl] - Element that triggered the open; its closest
+     *   `.message-entry` is remembered so we can restore scroll on close.
      */
-    openLightbox(src, type = 'image') {
+    openLightbox(src, type = 'image', triggerEl = null) {
         const modal = document.getElementById('media-lightbox-modal');
         const imageEl = document.getElementById('lightbox-image');
         const videoEl = document.getElementById('lightbox-video');
@@ -95,6 +99,30 @@ class MediaHandler {
 
         // Unlock native pinch-zoom while lightbox is open
         document.body.style.touchAction = 'manipulation';
+
+        // Snapshot messages-area scroll so we can restore it on close.
+        // We anchor on the message element when available — re-finding it
+        // and aligning to the same viewport offset is robust to reflows
+        // (image decode, viewport meta toggle, address bar resize, etc.).
+        const messagesArea = document.getElementById('messages-area');
+        if (messagesArea) {
+            this._savedScrollEl = messagesArea;
+            this._savedScrollTop = messagesArea.scrollTop;
+            const anchorEl = triggerEl?.closest?.('.message-entry') || null;
+            if (anchorEl && messagesArea.contains(anchorEl)) {
+                this._savedAnchorEl = anchorEl;
+                this._savedAnchorOffset =
+                    anchorEl.getBoundingClientRect().top
+                    - messagesArea.getBoundingClientRect().top;
+            } else {
+                this._savedAnchorEl = null;
+                this._savedAnchorOffset = 0;
+            }
+        } else {
+            this._savedScrollEl = null;
+            this._savedScrollTop = null;
+            this._savedAnchorEl = null;
+        }
 
         // Push history state so back button closes lightbox instead of navigating
         if (!this._lightboxOpen) {
@@ -137,6 +165,48 @@ class MediaHandler {
             }
             this._lightboxOpen = false;
         }
+
+        // Restore messages-area scroll. We re-pin over ~500ms because the
+        // viewport meta toggle, image decode, address-bar resize and
+        // history.back() can each schedule a late layout pass that
+        // resets scrollTop. We also prefer anchoring on the originating
+        // message element when we have one (robust to list reflow).
+        const el = this._savedScrollEl;
+        const anchorEl = this._savedAnchorEl;
+        const anchorOffset = this._savedAnchorOffset || 0;
+        const fallbackTop = this._savedScrollTop;
+
+        const apply = () => {
+            if (!el || !el.isConnected) return;
+            if (anchorEl && el.contains(anchorEl)) {
+                const desired =
+                    el.scrollTop
+                    + (anchorEl.getBoundingClientRect().top - el.getBoundingClientRect().top)
+                    - anchorOffset;
+                el.scrollTop = desired;
+            } else if (fallbackTop != null) {
+                el.scrollTop = fallbackTop;
+            }
+        };
+
+        if (el && (anchorEl || fallbackTop != null)) {
+            apply();
+            // Re-apply on next frames + a short interval to defeat late layout passes.
+            requestAnimationFrame(apply);
+            requestAnimationFrame(() => requestAnimationFrame(apply));
+            const start = Date.now();
+            const tick = () => {
+                if (Date.now() - start > 500) return;
+                apply();
+                setTimeout(tick, 50);
+            };
+            setTimeout(tick, 50);
+        }
+
+        this._savedScrollEl = null;
+        this._savedScrollTop = null;
+        this._savedAnchorEl = null;
+        this._savedAnchorOffset = 0;
     }
 
     /**
@@ -165,7 +235,7 @@ class MediaHandler {
                 e.stopPropagation();
                 const mediaId = el.dataset.mediaId;
                 if (mediaId) {
-                    this.openLightboxById(mediaId);
+                    this.openLightboxById(mediaId, el);
                 }
             });
         });

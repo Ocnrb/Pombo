@@ -1,6 +1,9 @@
-/**
+﻿/**
  * ContactsUI
- * Manages contacts modal, context menu, and trusted contacts
+ * Manages the contacts modal, the trusted contacts list, and the
+ * Add/Remove Contact confirmation modals.
+ *
+ * The message right-click context menu lives in MessageContextMenuUI.
  */
 
 import { modalManager } from './ModalManager.js';
@@ -13,7 +16,6 @@ class ContactsUI {
     constructor() {
         this.deps = null;
         this.elements = null;
-        this.contextMenuTarget = null;
     }
 
     /**
@@ -41,8 +43,6 @@ class ContactsUI {
         this.elements.addContactAddress = document.getElementById('add-contact-address');
         this.elements.addContactNickname = document.getElementById('add-contact-nickname');
         this.elements.closeContactsBtn = document.getElementById('close-contacts-btn');
-        
-        this.elements.contextMenu = document.getElementById('message-context-menu');
 
         // Contacts modal listeners
         if (this.elements.addContactBtn) {
@@ -51,20 +51,9 @@ class ContactsUI {
         if (this.elements.closeContactsBtn) {
             this.elements.closeContactsBtn.addEventListener('click', () => this.hide());
         }
-        
+
         // Register onHide callback for back button and programmatic hide
         modalManager.registerOnHide('contacts-modal', () => this._cleanupOnHide());
-
-        // Context menu listeners
-        if (this.elements.contextMenu) {
-            document.addEventListener('click', () => this.hideContextMenu());
-            this.elements.contextMenu.querySelectorAll('.context-menu-item').forEach(item => {
-                item.addEventListener('click', (e) => this.handleContextMenuAction(e));
-            });
-        }
-
-        // Right-click on messages
-        document.addEventListener('contextmenu', (e) => this.handleMessageRightClick(e));
     }
 
     /**
@@ -228,278 +217,6 @@ class ContactsUI {
             showNotification('Failed to add contact: ' + error.message, 'error');
         } finally {
             if (isLoading) hideLoading();
-        }
-    }
-
-    /**
-     * Handle message right-click for context menu
-     */
-    handleMessageRightClick(e) {
-        const { Logger } = this.deps;
-        
-        const messageDiv = e.target.closest('.message-entry');
-        if (!messageDiv || !this.elements.messagesArea?.contains(messageDiv)) {
-            return;
-        }
-
-        e.preventDefault();
-        
-        // Get the full sender address from data attribute
-        const senderAddress = messageDiv.dataset.sender;
-        
-        if (!senderAddress) {
-            Logger.warn('No sender address found for message');
-            return;
-        }
-
-        // Store for context menu actions
-        this.contextMenuTarget = {
-            element: messageDiv,
-            sender: senderAddress,
-            msgId: messageDiv.dataset.msgId,
-            msgType: messageDiv.dataset.type
-        };
-
-        const isSelf = messageDiv.classList.contains('own-message');
-
-        // Show/hide "Send DM" — hide if sender is yourself or you're already in a DM with them
-        const sendDMBtn = document.getElementById('context-menu-send-dm-btn');
-        if (sendDMBtn) {
-            const { channelManager } = this.deps;
-            const currentChannel = channelManager?.getCurrentChannel?.();
-            const alreadyInDM = currentChannel?.type === 'dm' && currentChannel.peerAddress?.toLowerCase() === senderAddress.toLowerCase();
-            sendDMBtn.classList.toggle('hidden', isSelf || alreadyInDM);
-        }
-
-        // Show/hide "Add/Remove Contact" based on whether sender is already a contact
-        const addContactBtn = document.getElementById('context-menu-add-contact-btn');
-        const removeContactBtn = document.getElementById('context-menu-remove-contact-btn');
-        const isContact = !!this.deps.identityManager?.getTrustedContact?.(senderAddress);
-        if (addContactBtn) addContactBtn.classList.toggle('hidden', isContact);
-        if (removeContactBtn) removeContactBtn.classList.toggle('hidden', !isContact);
-
-        // Show/hide "Block User" based on whether we're in a DM channel
-        const blockBtn = document.getElementById('context-menu-block-btn');
-        const blockDivider = document.getElementById('context-menu-block-divider');
-        const currentChannel = this.deps.channelManager?.getCurrentChannel?.();
-        const isDM = currentChannel?.type === 'dm' && senderAddress.toLowerCase() !== this.deps.identityManager?.getAddress?.()?.toLowerCase();
-        if (blockBtn) blockBtn.classList.toggle('hidden', !isDM);
-        if (blockDivider) blockDivider.classList.toggle('hidden', !isDM);
-
-        // Show/hide "Edit / Delete" — only for own messages
-        const editBtn = document.getElementById('context-menu-edit-btn');
-        const deleteBtn = document.getElementById('context-menu-delete-btn');
-        const editDivider = document.getElementById('context-menu-edit-divider');
-        const msgType = messageDiv.dataset.type;
-        const showEdit = isSelf && msgType === 'text';
-        const showDelete = isSelf;
-        if (editBtn) editBtn.classList.toggle('hidden', !showEdit);
-        if (deleteBtn) deleteBtn.classList.toggle('hidden', !showDelete);
-        if (editDivider) editDivider.classList.toggle('hidden', !showEdit && !showDelete);
-
-        // Position and show context menu
-        this.showContextMenu(e.clientX, e.clientY);
-    }
-
-    /**
-     * Show context menu at position
-     */
-    showContextMenu(x, y) {
-        if (!this.elements.contextMenu) {
-            this.init();
-        }
-        
-        // Block scroll on messages area while menu is open (using event listeners to avoid reflow)
-        this._blockScroll();
-        
-        if (this.elements.contextMenu) {
-            // Temporarily show to measure dimensions
-            this.elements.contextMenu.style.visibility = 'hidden';
-            this.elements.contextMenu.classList.remove('hidden');
-            
-            const menuWidth = this.elements.contextMenu.offsetWidth;
-            const menuHeight = this.elements.contextMenu.offsetHeight;
-            const viewportWidth = window.innerWidth;
-            const viewportHeight = window.innerHeight;
-            
-            // Adjust position if menu would overflow right edge
-            if (x + menuWidth > viewportWidth - 10) {
-                x = viewportWidth - menuWidth - 10;
-            }
-            
-            // Adjust position if menu would overflow bottom edge
-            if (y + menuHeight > viewportHeight - 10) {
-                y = viewportHeight - menuHeight - 10;
-            }
-            
-            // Ensure minimum left/top
-            x = Math.max(10, x);
-            y = Math.max(10, y);
-            
-            this.elements.contextMenu.style.left = `${x}px`;
-            this.elements.contextMenu.style.top = `${y}px`;
-            this.elements.contextMenu.style.visibility = 'visible';
-        }
-    }
-
-    /**
-     * Hide context menu
-     */
-    hideContextMenu() {
-        this.elements.contextMenu?.classList.add('hidden');
-        this._unblockScroll();
-    }
-
-    /** Block scroll on messages area without changing overflow (avoids layout reflow) */
-    _blockScroll() {
-        const messagesArea = document.getElementById('messages-area');
-        if (!messagesArea || this._scrollBlocker) return;
-        const prevent = (e) => e.preventDefault();
-        messagesArea.addEventListener('wheel', prevent, { passive: false });
-        messagesArea.addEventListener('touchmove', prevent, { passive: false });
-        this._scrollBlocker = { el: messagesArea, handler: prevent };
-    }
-
-    /** Restore scroll on messages area */
-    _unblockScroll() {
-        if (!this._scrollBlocker) return;
-        const { el, handler } = this._scrollBlocker;
-        el.removeEventListener('wheel', handler);
-        el.removeEventListener('touchmove', handler);
-        this._scrollBlocker = null;
-    }
-
-    /**
-     * Handle context menu action
-     */
-    async handleContextMenuAction(e) {
-        const { showNotification, showAddContactModal, showRemoveContactModal } = this.deps;
-        
-        const action = e.currentTarget.dataset.action;
-        const target = this.contextMenuTarget;
-        
-        if (!target?.sender) {
-            this.hideContextMenu();
-            return;
-        }
-
-        const address = target.sender;
-        this.hideContextMenu();
-
-        switch (action) {
-            case 'send-dm':
-                this.handleSendDM(address);
-                break;
-
-            case 'add-contact':
-                this.showAddModal(address);
-                break;
-                
-            case 'copy-text': {
-                const msgContent = target.element?.querySelector('.message-content');
-                const text = msgContent?.innerText || msgContent?.textContent || '';
-                try {
-                    await navigator.clipboard.writeText(text);
-                    showNotification('Text copied!', 'success');
-                } catch {
-                    showNotification('Failed to copy', 'error');
-                }
-                break;
-            }
-
-            case 'copy-address':
-                try {
-                    await navigator.clipboard.writeText(address);
-                    showNotification('Address copied!', 'success');
-                } catch {
-                    showNotification('Failed to copy', 'error');
-                }
-                break;
-                
-            case 'remove-contact':
-                this.showRemoveModal(address);
-                break;
-                
-            case 'block-user':
-                this.handleBlockUser(address);
-                break;
-                
-            case 'edit-message':
-                if (target.msgId && this.deps.chatAreaUI) {
-                    this.deps.chatAreaUI.startEdit(target.msgId);
-                }
-                break;
-                
-            case 'delete-message':
-                if (target.msgId && confirm('Delete this message?')) {
-                    const { channelManager } = this.deps;
-                    const ch = channelManager?.getCurrentChannel?.();
-                    if (ch) {
-                        channelManager.sendDelete(ch.streamId, target.msgId);
-                    }
-                }
-                break;
-        }
-    }
-
-    /**
-     * Start a DM conversation from the context menu
-     * @param {string} address - Address of the user to DM
-     */
-    async handleSendDM(address) {
-        const { dmManager, showNotification } = this.deps;
-        if (!dmManager) {
-            showNotification('DM system not available', 'error');
-            return;
-        }
-        try {
-            await dmManager.startDM(address);
-        } catch (e) {
-            showNotification(e.message || 'Failed to start DM', 'error');
-        }
-    }
-
-    /**
-     * Block a user from the context menu — finds the DM channel and leaves with block
-     * @param {string} address - Address of the user to block
-     */
-
-    async handleBlockUser(address) {
-        const { channelManager, showNotification, renderChannelList, selectChannel, showConnectedNoChannelState } = this.deps;
-        if (!channelManager) return;
-
-        // Find the DM channel for this peer
-        const channels = channelManager.getAllChannels();
-        const dmChannel = channels.find(
-            ch => ch.type === 'dm' && ch.peerAddress?.toLowerCase() === address.toLowerCase()
-        );
-
-        if (!dmChannel) {
-            showNotification('Could not find DM conversation', 'error');
-            return;
-        }
-
-        // Confirm before blocking
-        const short = address.slice(0, 6) + '…' + address.slice(-4);
-        if (!confirm(`Block ${short}? All messages from this user will be permanently ignored.`)) {
-            return;
-        }
-
-        try {
-            await channelManager.leaveChannel(dmChannel.messageStreamId || dmChannel.streamId, { block: true });
-            showNotification('User blocked', 'info');
-
-            // Refresh channel list and navigate away
-            const remaining = channelManager.getAllChannels();
-            if (remaining.length > 0) {
-                renderChannelList?.();
-                await selectChannel?.(remaining[0].streamId);
-            } else {
-                renderChannelList?.();
-                showConnectedNoChannelState?.();
-            }
-        } catch (err) {
-            showNotification('Failed to block user: ' + err.message, 'error');
         }
     }
 

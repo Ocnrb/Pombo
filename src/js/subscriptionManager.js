@@ -10,7 +10,7 @@
  * but only actively use one at a time.
  */
 
-import { streamrController, STREAM_CONFIG, deriveEphemeralId } from './streamr.js';
+import { streamrController, STREAM_CONFIG, deriveEphemeralId, deriveAdminId } from './streamr.js';
 import { channelManager } from './channels.js';
 import { secureStorage } from './secureStorage.js';
 import { authManager } from './auth.js';
@@ -37,6 +37,11 @@ class SubscriptionManager {
         
         // Preview message callback (set by ui.js to avoid circular dependency)
         this.onPreviewMessage = null;
+
+        // Preview admin-state callback — receives ADMIN_STATE messages from -3/P0
+        // so PreviewModeUI can apply moderation (banned, hidden, pins) before
+        // and during render. Set by ui.js to avoid circular dependency.
+        this.onPreviewAdmin = null;
         
         // Configuration
         this.config = {
@@ -176,6 +181,43 @@ class SubscriptionManager {
         // Using streamrController directly since channel is not in channelManager yet
         try {
             const ephemeralStreamId = deriveEphemeralId(messageStreamId);
+            const adminStreamId = deriveAdminId(messageStreamId);
+
+            // Step 1: Bootstrap admin state from -3/P0 BEFORE subscribing to content,
+            // mirroring the flow used for active channels. This ensures the
+            // moderation layer (bannedMembers / hiddenMessageIds / pins) is
+            // applied before the preview timeline renders.
+            if (adminStreamId) {
+                const ADMIN_BOOTSTRAP_TIMEOUT_MS = 5000;
+                let resolveAdmin;
+                const adminHistoryDone = new Promise((resolve) => { resolveAdmin = resolve; });
+                try {
+                    await streamrController.subscribeToAdminStream(
+                        adminStreamId,
+                        (data) => {
+                            if (this.onPreviewAdmin) {
+                                try { this.onPreviewAdmin(messageStreamId, data); }
+                                catch (e) { Logger.warn('onPreviewAdmin error:', e.message); }
+                            }
+                        },
+                        {
+                            password: null,
+                            historyCount: STREAM_CONFIG.ADMIN_HISTORY_COUNT,
+                            onHistoryComplete: async () => { resolveAdmin(); }
+                        }
+                    );
+                    await Promise.race([
+                        adminHistoryDone,
+                        new Promise((resolve) => setTimeout(() => {
+                            Logger.warn('Preview admin bootstrap timeout — proceeding for', messageStreamId.slice(-20));
+                            resolve();
+                        }, ADMIN_BOOTSTRAP_TIMEOUT_MS))
+                    ]);
+                } catch (e) {
+                    Logger.warn('Preview admin bootstrap failed (continuing without moderation):', e.message);
+                }
+            }
+
             await streamrController.subscribeToDualStream(
                 messageStreamId,
                 ephemeralStreamId,
@@ -340,6 +382,12 @@ class SubscriptionManager {
         try {
             const ephemeralStreamId = deriveEphemeralId(streamId);
             await streamrController.unsubscribeFromDualStream(streamId, ephemeralStreamId);
+            // Also unsubscribe admin stream — best-effort
+            const adminStreamId = deriveAdminId(streamId);
+            if (adminStreamId) {
+                try { await streamrController.unsubscribe(adminStreamId); }
+                catch (e) { Logger.debug('Preview admin unsubscribe error (ignored):', e.message); }
+            }
         } catch (error) {
             Logger.warn('Error unsubscribing from preview:', error.message);
         }

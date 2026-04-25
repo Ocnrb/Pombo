@@ -16,8 +16,11 @@ class ChannelSettingsUI {
         this.deps = null;
         this.elements = null;
         this.showDangerTab = false;
+        this.showModerationTab = false;
         this.showMembersTab = true; // Only for native channels
         this._mobileSubPanelOpen = null; // Track which sub-panel is open on mobile
+        this._adminHandlerWired = false;
+        this._currentModerationStreamId = null;
     }
 
     /**
@@ -171,6 +174,19 @@ class ChannelSettingsUI {
         dangerTabDivider?.classList.toggle('hidden', !canDelete);
         dangerTabBtn?.classList.toggle('hidden', !canDelete);
 
+        // Show/hide moderation tab for users with DELETE permission (admin) on non-DM channels
+        const moderationTabBtn = document.getElementById('moderation-tab-btn');
+        const isDMChannel = currentChannel.type === 'dm';
+        this.showModerationTab = canDelete && !isDMChannel && !isPreviewMode;
+        moderationTabBtn?.classList.toggle('hidden', !this.showModerationTab);
+        if (this.showModerationTab) {
+            this._currentModerationStreamId = currentChannel.streamId;
+            this.loadBannedMembers(currentChannel);
+            this._wireAdminStateHandler();
+        } else {
+            this._currentModerationStreamId = null;
+        }
+
         // Select appropriate starting tab (desktop) or show unified view (mobile)
         if (this.isMobileView()) {
             this.showMobileUnifiedView(currentChannel, isPreviewMode);
@@ -287,6 +303,88 @@ class ChannelSettingsUI {
     }
 
     /**
+     * Render the list of banned members for the moderation tab.
+     * Each row shows the address (and ENS/contact nickname if available) plus an Unban button.
+     * @param {Object} channel - Channel object
+     */
+    loadBannedMembers(channel) {
+        const list = document.getElementById('banned-members-list');
+        const counter = document.getElementById('banned-members-count');
+        if (!list) return;
+
+        const { channelManager, identityManager, showNotification } = this.deps;
+        const banned = Array.isArray(channel?.adminState?.bannedMembers)
+            ? channel.adminState.bannedMembers.slice()
+            : [];
+
+        if (counter) counter.textContent = String(banned.length);
+
+        if (banned.length === 0) {
+            list.innerHTML = '<div class="text-center text-white/30 py-6 text-sm">No banned members</div>';
+            return;
+        }
+
+        list.innerHTML = banned.map(addr => {
+            const lower = String(addr).toLowerCase();
+            const nickname = identityManager?.getTrustedContact?.(lower)?.nickname || '';
+            const short = `${lower.slice(0, 6)}…${lower.slice(-4)}`;
+            const label = nickname ? sanitizeText(nickname) : short;
+            return `
+                <div class="flex items-center justify-between gap-3 px-3 py-2.5 bg-white/[0.03] border border-white/5 rounded-xl">
+                    <div class="min-w-0 flex-1">
+                        <div class="text-sm text-white/80 truncate">${escapeHtml(label)}</div>
+                        <code class="text-xs text-white/40 font-mono truncate block">${escapeHtml(lower)}</code>
+                    </div>
+                    <button data-unban-address="${escapeAttr(lower)}" class="banned-unban-btn shrink-0 bg-white/10 hover:bg-white/20 text-white/80 border border-white/10 px-3 py-1.5 rounded-lg text-xs transition">
+                        Unban
+                    </button>
+                </div>
+            `;
+        }).join('');
+
+        list.querySelectorAll('.banned-unban-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const addr = btn.dataset.unbanAddress;
+                if (!addr) return;
+                if (!confirm('Unban this user?')) return;
+                btn.disabled = true;
+                btn.textContent = '...';
+                try {
+                    await channelManager.unbanMember(channel.streamId, addr);
+                    showNotification?.('User unbanned', 'success');
+                    // List will be refreshed by admin_state_updated handler
+                } catch (err) {
+                    btn.disabled = false;
+                    btn.textContent = 'Unban';
+                    showNotification?.(err?.message || 'Failed to unban user', 'error');
+                }
+            });
+        });
+    }
+
+    /**
+     * Wire one-time listener that refreshes the moderation tab whenever
+     * the admin state changes for the currently-shown channel.
+     */
+    _wireAdminStateHandler() {
+        if (this._adminHandlerWired) return;
+        const { channelManager } = this.deps;
+        if (!channelManager?.onMessage) return;
+        channelManager.onMessage((event, data) => {
+            if (event !== 'admin_state_updated') return;
+            if (!this._currentModerationStreamId) return;
+            if (data?.streamId !== this._currentModerationStreamId) return;
+            const channel = channelManager.channels?.get?.(this._currentModerationStreamId);
+            if (!channel) return;
+            // Only re-render if the modal is open and on the moderation panel (or mobile)
+            const modal = document.getElementById('channel-settings-modal');
+            if (!modal || modal.classList.contains('hidden')) return;
+            this.loadBannedMembers(channel);
+        });
+        this._adminHandlerWired = true;
+    }
+
+    /**
      * Initialize channel settings tabs navigation
      */
     initTabs() {
@@ -357,9 +455,11 @@ class ChannelSettingsUI {
         // Toggle nav item visibility based on permissions/type
         const membersNav = unified.querySelector('[data-mobile-nav="members"]');
         const dangerNav = unified.querySelector('[data-mobile-nav="danger"]');
+        const moderationNav = unified.querySelector('[data-mobile-nav="moderation"]');
 
         membersNav?.classList.toggle('hidden', !this.showMembersTab);
         dangerNav?.classList.toggle('hidden', !this.showDangerTab);
+        moderationNav?.classList.toggle('hidden', !this.showModerationTab);
 
         // Attach click handlers (clone to remove old listeners)
         unified.querySelectorAll('.channel-mobile-nav-item').forEach(btn => {
@@ -466,6 +566,7 @@ class ChannelSettingsUI {
         // Update header title
         const titles = {
             'members': 'Members',
+            'moderation': 'Moderation',
             'danger': 'Delete Channel'
         };
         if (header) header.textContent = titles[panelName] || 'Channel Details';

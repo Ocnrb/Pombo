@@ -9,6 +9,7 @@ import { messageRenderer } from './MessageRenderer.js';
 import { reactionManager } from './ReactionManager.js';
 import { mediaHandler } from './MediaHandler.js';
 import { previewModeUI } from './PreviewModeUI.js';
+import { pinnedBannerUI } from './PinnedBannerUI.js';
 import { analyzeMessageGroups, getGroupPositionClass, analyzeSpacing, getSpacingClass } from './MessageGrouper.js';
 import { escapeHtml, formatAddress } from './utils.js';
 import { identityManager } from '../identity.js';
@@ -57,6 +58,28 @@ class ChatAreaUI {
         this.replyToName = elements.replyToName;
         this.replyToText = elements.replyToText;
         this.messageInput = elements.messageInput;
+        this._wireAdminStateHandler();
+    }
+
+    /**
+     * Re-render the active channel whenever its admin state changes so
+     * banned-member messages and hidden message IDs disappear immediately
+     * (e.g. after the admin-stream bootstrap arrives post-render).
+     * @private
+     */
+    _wireAdminStateHandler() {
+        if (this._adminHandlerWired) return;
+        const { channelManager } = this.deps;
+        if (!channelManager?.onMessage) return;
+        channelManager.onMessage((event, data) => {
+            if (event !== 'admin_state_updated') return;
+            const channel = channelManager.getCurrentChannel?.();
+            if (!channel || channel.streamId !== data?.streamId) return;
+            this.renderMessages(channel.messages, () => {
+                this._attachMessageListeners?.();
+            });
+        });
+        this._adminHandlerWired = true;
     }
 
     /**
@@ -289,6 +312,10 @@ class ChatAreaUI {
         
         if (!this.messagesArea) return;
 
+        // Refresh pinned-message banner whenever we re-render (channel switch,
+        // admin update, history complete, etc.).
+        pinnedBannerUI.update();
+
         // While initial history reconciliation is in progress, render cached
         // messages if any exist (avoids hiding persisted state behind a spinner
         // while the storage-node resend iterator completes — particularly slow
@@ -296,9 +323,19 @@ class ChatAreaUI {
         // to show. A second render fires on `initial_history_complete` to
         // reconcile with any newly fetched content/overrides.
         const sourceMessages = Array.isArray(messages) ? messages : [];
-        const filteredSource = sourceMessages.filter(
-            (m) => m && !m._deleted && !['edit', 'delete'].includes(m.type)
-        );
+        const adminState = effectiveChannel?.adminState;
+        const hiddenIds = adminState && Array.isArray(adminState.hiddenMessageIds)
+            ? new Set(adminState.hiddenMessageIds)
+            : null;
+        const bannedSet = adminState && Array.isArray(adminState.bannedMembers)
+            ? new Set(adminState.bannedMembers.map((a) => String(a).toLowerCase()))
+            : null;
+        const filteredSource = sourceMessages.filter((m) => {
+            if (!m || m._deleted || ['edit', 'delete'].includes(m.type)) return false;
+            if (hiddenIds && m.id && hiddenIds.has(m.id)) return false;
+            if (bannedSet && m.sender && bannedSet.has(String(m.sender).toLowerCase())) return false;
+            return true;
+        });
         const messagesForRender = effectiveChannel?.initialLoadInProgress && filteredSource.length === 0
             ? []
             : filteredSource;

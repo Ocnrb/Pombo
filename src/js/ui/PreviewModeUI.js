@@ -119,11 +119,19 @@ class PreviewModeUI {
             // Store preview state
             this.previewChannel = {
                 streamId,
+                // Mirror messageStreamId so channelManager.applyAdminState() can be reused
+                messageStreamId: streamId,
                 channelInfo,
                 name: this._getChannelDisplayName(streamId, channelInfo),
                 type: channelInfo?.type || 'public',
                 readOnly: channelInfo?.readOnly || false,
                 password: null, // Preview mode doesn't have password (public channels only)
+                // Admin/moderation layer (rebuilt on subscribe to -3/P0)
+                createdBy: channelInfo?.createdBy || streamId.split('/')[0] || null,
+                adminState: { bannedMembers: [], hiddenMessageIds: [], pins: [] },
+                adminRev: 0,
+                adminTs: 0,
+                adminLoaded: false,
                 messages: [],
                 _pendingOverrides: new Map(),
                 // In-flight dedup: ids currently being verified/pushed.
@@ -425,6 +433,29 @@ class PreviewModeUI {
         } catch (error) {
             Logger.error('Error exiting preview mode:', error);
             this.previewChannel = null;
+        }
+    }
+
+    /**
+     * Handle ADMIN_STATE message received on the preview channel's -3/P0 stream.
+     * Reuses channelManager.applyAdminState() so the latest-wins logic
+     * (rev + ts tiebreaker) and validation remain in one place.
+     * Triggers a re-render so banned/hidden messages disappear immediately.
+     * @param {string} streamId - Preview channel streamId
+     * @param {Object} adminMsg - Decoded ADMIN_STATE payload
+     */
+    handlePreviewAdmin(streamId, adminMsg) {
+        if (!this.previewChannel || this.previewChannel.streamId !== streamId) return;
+        const { channelManager, chatAreaUI } = this.deps;
+        if (!channelManager?.applyAdminState) return;
+        const applied = channelManager.applyAdminState(this.previewChannel, adminMsg);
+        if (!applied) return;
+        // Re-render preview timeline to drop banned/hidden messages
+        if (chatAreaUI?.renderMessages) {
+            chatAreaUI.renderMessages(this.previewChannel.messages, () => {
+                this.ui?.attachReactionListeners?.();
+                this.deps.mediaHandler?.attachLightboxListeners?.();
+            });
         }
     }
 

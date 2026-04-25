@@ -403,8 +403,24 @@
                 </div>
             </div>
 
-            <!-- Messages Area -->
-            <div id="messages-area" class="flex-1 overflow-y-auto p-4 messages-area">
+            <!-- Messages Area (with overlay pinned banner) -->
+            <div class="messages-wrapper">
+                <div id="pinned-banner" class="pinned-banner hidden" role="button" tabindex="0" title="Jump to pinned message">
+                    <svg class="pinned-banner-icon" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5v6l1 1 1-1v-6h5v-2l-2-2z"/>
+                    </svg>
+                    <div class="pinned-banner-body">
+                        <div class="pinned-banner-name" id="pinned-banner-name"></div>
+                        <div class="pinned-banner-text" id="pinned-banner-text"></div>
+                    </div>
+                    <button id="pinned-banner-close" class="pinned-banner-close" title="Dismiss" aria-label="Dismiss pinned message">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                <div id="messages-area" class="flex-1 overflow-y-auto p-4 messages-area">
+                </div>
             </div>
 
             <!-- Typing Indicator -->
@@ -1408,6 +1424,10 @@
                             <span>Storage</span>
                         </button>
                         <div id="danger-tab-divider" class="hidden my-2 mx-3 border-t border-white/5"></div>
+                        <button id="moderation-tab-btn" data-channel-tab="moderation" class="hidden channel-settings-tab w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-all text-white/60 hover:text-white/90 hover:bg-white/5">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z"/></svg>
+                            <span>Moderation</span>
+                        </button>
                         <button id="danger-tab-btn" data-channel-tab="danger" class="hidden channel-settings-tab w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-all text-white/60 hover:text-red-400 hover:bg-red-500/5">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
                             <span>Delete</span>
@@ -1608,6 +1628,24 @@
                         </div>
                     </div>
 
+                    <!-- Moderation Panel (Admin only) -->
+                    <div id="channel-panel-moderation" class="channel-settings-panel hidden">
+                        <div class="space-y-5">
+                            <div>
+                                <div class="flex items-center justify-between mb-3">
+                                    <label class="text-sm font-medium text-white/40 uppercase tracking-wider">Banned Members</label>
+                                    <span id="banned-members-count" class="text-xs text-white/30">0</span>
+                                </div>
+                                <div id="banned-members-list" class="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                                    <div class="text-center text-white/30 py-6 text-sm">No banned members</div>
+                                </div>
+                            </div>
+                            <p class="text-sm text-white/30 leading-relaxed">
+                                Banned members can no longer publish messages in this channel. They can still view existing messages until removed.
+                            </p>
+                        </div>
+                    </div>
+
                     <!-- Danger Panel (Owner only) -->
                     <div id="channel-panel-danger" class="channel-settings-panel hidden">
                         <div id="delete-channel-section" class="space-y-4">
@@ -1636,6 +1674,13 @@
                                 <span class="flex items-center gap-3">
                                     <svg class="w-[18px] h-[18px] text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
                                     <span>Members</span>
+                                </span>
+                                <svg class="w-4 h-4 text-white/20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
+                            </button>
+                            <button data-mobile-nav="moderation" class="channel-mobile-nav-item hidden w-full flex items-center justify-between px-4 py-4 text-sm text-white/70 bg-white/[0.03] hover:bg-white/[0.06] transition rounded-xl border border-white/5">
+                                <span class="flex items-center gap-3">
+                                    <svg class="w-[18px] h-[18px] text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z"/></svg>
+                                    <span>Moderation</span>
                                 </span>
                                 <svg class="w-4 h-4 text-white/20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
                             </button>
@@ -2355,8 +2400,25 @@
             Edit Message
         </button>
         <button id="context-menu-delete-btn" class="context-menu-item w-full text-left px-4 py-2 hover:bg-red-500/10 text-sm text-red-400 flex items-center gap-2 hidden" data-action="delete-message">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><polyline stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" points="3 6 5 6 21 6"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
             Delete Message
+        </button>
+        <hr class="border-white/[0.06] my-1 hidden" id="context-menu-admin-divider">
+        <button id="context-menu-pin-btn" class="context-menu-item w-full text-left px-4 py-2 hover:bg-white/[0.08] text-sm flex items-center gap-2 hidden" data-action="pin-message">
+            <svg class="w-4 h-4 text-amber-400" fill="currentColor" viewBox="0 0 24 24"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5v6l1 1 1-1v-6h5v-2l-2-2z"/></svg>
+            Pin Message
+        </button>
+        <button id="context-menu-unpin-btn" class="context-menu-item w-full text-left px-4 py-2 hover:bg-white/[0.08] text-sm flex items-center gap-2 hidden" data-action="unpin-message">
+            <svg class="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/></svg>
+            Unpin Message
+        </button>
+        <button id="context-menu-admin-delete-btn" class="context-menu-item w-full text-left px-4 py-2 hover:bg-red-500/10 text-sm text-red-400 flex items-center gap-2 hidden" data-action="admin-delete-message">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
+            Delete Message
+        </button>
+        <button id="context-menu-ban-btn" class="context-menu-item w-full text-left px-4 py-2 hover:bg-red-500/10 text-sm text-red-400 flex items-center gap-2 hidden" data-action="ban-user">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+            Ban User
         </button>
         <hr class="border-white/[0.06] my-1 hidden" id="context-menu-block-divider">
         <button class="context-menu-item w-full text-left px-4 py-2 hover:bg-red-500/10 text-sm text-red-400 flex items-center gap-2 hidden" data-action="block-user" id="context-menu-block-btn">

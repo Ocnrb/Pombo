@@ -641,6 +641,98 @@ body {
     margin-top: 2px;
 }
 
+/* ----- Pinned Message Banner -----
+   Glass effect consistent with mobile pill nav (.pill-nav-inner).
+   The banner is overlaid on top of the messages-area so the blur has
+   real content to refract — without overlay, blur over a solid bg looks
+   identical to the bg itself. */
+.messages-wrapper {
+    position: relative;
+    flex: 1 1 0%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.pinned-banner {
+    position: absolute;
+    top: 0.625rem;
+    left: 0.75rem;
+    right: 0.75rem;
+    z-index: 5;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.5rem 0.75rem 0.5rem 0.875rem;
+    background: rgba(255, 255, 255, 0.06);
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 1rem;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    cursor: pointer;
+    transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.pinned-banner:hover {
+    background: rgba(255, 255, 255, 0.09);
+}
+
+.pinned-banner.hidden {
+    display: none;
+}
+
+.pinned-banner-icon {
+    width: 1rem;
+    height: 1rem;
+    color: #F6851B;
+    flex-shrink: 0;
+}
+
+.pinned-banner-body {
+    min-width: 0;
+    line-height: 1.25;
+}
+
+.pinned-banner-name {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: #F6851B;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pinned-banner-text {
+    font-size: 0.8125rem;
+    color: rgba(255, 255, 255, 0.75);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 1px;
+}
+
+.pinned-banner-close {
+    flex-shrink: 0;
+    padding: 0.375rem;
+    border-radius: 0.375rem;
+    color: rgba(255, 255, 255, 0.4);
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.pinned-banner-close:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.85);
+}
+
+/* When banner is visible, push messages content down so the first row
+   isn't hidden behind the floating pill. Pill height ~52px + top offset
+   10px + small gap. */
+.messages-wrapper:has(.pinned-banner:not(.hidden)) #messages-area {
+    padding-top: calc(1rem + 62px);
+}
+
 /* ----- Reply Bar ----- */
 .reply-bar {
     background: rgba(255, 255, 255, 0.03);

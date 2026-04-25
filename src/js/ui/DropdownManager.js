@@ -37,6 +37,15 @@ class DropdownManager {
                 Leave Channel
             </button>
         `;
+
+        // "Pinned" only when channel has at least one pinned message
+        const hasPins = Array.isArray(channel?.adminState?.pins) && channel.adminState.pins.length > 0;
+        const pinnedItem = hasPins ? `
+            <button class="channel-action w-full text-left px-4 py-2.5 hover:bg-white/5 text-sm text-white/70 hover:text-white transition flex items-center gap-2" data-action="show-pinned">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5v6l1 1 1-1v-6h5v-2l-2-2z"/></svg>
+                Pinned
+            </button>
+        ` : '';
         
         // Create dropdown
         const dropdown = document.createElement('div');
@@ -51,6 +60,7 @@ class DropdownManager {
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Channel Details
             </button>
+            ${pinnedItem}
             ${leaveChannelItem}
         `;
         
