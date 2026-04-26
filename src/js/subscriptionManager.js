@@ -12,6 +12,7 @@
 
 import { streamrController, STREAM_CONFIG, deriveEphemeralId, deriveAdminId } from './streamr.js';
 import { channelManager } from './channels.js';
+import { adminStatePoller } from './adminStatePoller.js';
 import { secureStorage } from './secureStorage.js';
 import { authManager } from './auth.js';
 import { identityManager } from './identity.js';
@@ -38,9 +39,10 @@ class SubscriptionManager {
         // Preview message callback (set by ui.js to avoid circular dependency)
         this.onPreviewMessage = null;
 
-        // Preview admin-state callback — receives ADMIN_STATE messages from -3/P0
-        // so PreviewModeUI can apply moderation (banned, hidden, pins) before
-        // and during render. Set by ui.js to avoid circular dependency.
+        // Preview admin-state callback — invoked once after an on-open
+        // resend of -3/P0 (and on each subsequent poll/invalidate refresh)
+        // so PreviewModeUI can apply moderation (banned, hidden, pins) and
+        // re-render. Set by ui.js to avoid circular dependency.
         this.onPreviewAdmin = null;
         
         // Configuration
@@ -94,6 +96,14 @@ class SubscriptionManager {
             Logger.error('Failed to subscribe to active channel:', error);
             throw error;
         }
+
+        // Start admin-state polling for the active channel. Resend-only model:
+        // no live -3 subscription, periodic refresh + invalidation signal.
+        try {
+            adminStatePoller.start(messageStreamId, () => channelManager.refreshAdminState(messageStreamId));
+        } catch (e) {
+            Logger.debug('Admin poller start failed (non-fatal):', e?.message || e);
+        }
     }
 
     /**
@@ -102,6 +112,13 @@ class SubscriptionManager {
      */
     async downgradeToBackground(messageStreamId) {
         if (!messageStreamId) return;
+
+        // Stop admin polling for this channel — no -3 traffic in background.
+        try {
+            if (adminStatePoller.getStreamId() === messageStreamId) {
+                adminStatePoller.stop();
+            }
+        } catch (e) { /* ignore */ }
 
         try {
             // Store current activity state before unsubscribing
@@ -183,39 +200,46 @@ class SubscriptionManager {
             const ephemeralStreamId = deriveEphemeralId(messageStreamId);
             const adminStreamId = deriveAdminId(messageStreamId);
 
-            // Step 1: Bootstrap admin state from -3/P0 BEFORE subscribing to content,
-            // mirroring the flow used for active channels. This ensures the
-            // moderation layer (bannedMembers / hiddenMessageIds / pins) is
-            // applied before the preview timeline renders.
+            // Step 1: Bootstrap admin state via a one-shot resend of -3/P0
+            // BEFORE subscribing to content, mirroring the flow used for
+            // active channels. The resend-based model removes the live
+            // websocket on -3 entirely — subsequent updates arrive via the
+            // AdminStatePoller (started below) and via ADMIN_INVALIDATE
+            // signals received on the ephemeral -2/P0 control partition.
             if (adminStreamId) {
-                const ADMIN_BOOTSTRAP_TIMEOUT_MS = 5000;
-                let resolveAdmin;
-                const adminHistoryDone = new Promise((resolve) => { resolveAdmin = resolve; });
                 try {
-                    await streamrController.subscribeToAdminStream(
-                        adminStreamId,
-                        (data) => {
-                            if (this.onPreviewAdmin) {
-                                try { this.onPreviewAdmin(messageStreamId, data); }
-                                catch (e) { Logger.warn('onPreviewAdmin error:', e.message); }
-                            }
-                        },
-                        {
-                            password: null,
-                            historyCount: STREAM_CONFIG.ADMIN_HISTORY_COUNT,
-                            onHistoryComplete: async () => { resolveAdmin(); }
-                        }
-                    );
-                    await Promise.race([
-                        adminHistoryDone,
-                        new Promise((resolve) => setTimeout(() => {
-                            Logger.warn('Preview admin bootstrap timeout — proceeding for', messageStreamId.slice(-20));
-                            resolve();
-                        }, ADMIN_BOOTSTRAP_TIMEOUT_MS))
-                    ]);
+                    const latest = await streamrController.resendAdminState(adminStreamId, {
+                        historyCount: STREAM_CONFIG.ADMIN_HISTORY_COUNT,
+                        password: null
+                    });
+                    if (latest && this.onPreviewAdmin) {
+                        try { this.onPreviewAdmin(messageStreamId, latest); }
+                        catch (e) { Logger.warn('onPreviewAdmin error (initial):', e.message); }
+                    }
                 } catch (e) {
-                    Logger.warn('Preview admin bootstrap failed (continuing without moderation):', e.message);
+                    Logger.warn('Preview admin bootstrap resend failed (continuing without moderation):', e.message);
                 }
+            }
+
+            // Start the admin-state poller for the preview channel. The
+            // refresh function calls back into ui.js (via onPreviewAdmin)
+            // after each resend so PreviewModeUI can apply the snapshot
+            // through channelManager.applyAdminState and re-render.
+            try {
+                adminStatePoller.start(messageStreamId, async () => {
+                    if (this.previewChannelId !== messageStreamId) return;
+                    if (!adminStreamId) return;
+                    const latest = await streamrController.resendAdminState(adminStreamId, {
+                        historyCount: 5,
+                        password: null
+                    });
+                    if (latest && this.onPreviewAdmin) {
+                        try { this.onPreviewAdmin(messageStreamId, latest); }
+                        catch (e) { Logger.warn('onPreviewAdmin error (poll):', e.message); }
+                    }
+                });
+            } catch (e) {
+                Logger.debug('Preview admin poller start failed (non-fatal):', e?.message || e);
             }
 
             await streamrController.subscribeToDualStream(
@@ -285,6 +309,25 @@ class SubscriptionManager {
                 streamId: streamId, 
                 user: msg.senderId || msg.user 
             });
+        } else if (msg.type === 'admin_invalidate') {
+            // Apply the canonical ADMIN_STATE snapshot embedded in the
+            // ephemeral signal. Sender authenticity is enforced at network
+            // level by the -3/P0 publish permission (only the channel admin
+            // can publish moderation), and the matching -2/P0 signal is
+            // published by the same admin. We additionally inject createdBy
+            // from the senderId so applyAdminState's owner check passes.
+            if (!msg.snapshot || typeof msg.snapshot !== 'object') return;
+            const sender = (msg.senderId || msg.user || '').toLowerCase();
+            if (!msg.snapshot.createdBy && sender) {
+                msg.snapshot.createdBy = sender;
+            }
+            if (this.onPreviewAdmin) {
+                try { this.onPreviewAdmin(streamId, msg.snapshot); }
+                catch (e) { Logger.warn('onPreviewAdmin error (signal):', e.message); }
+            }
+            if (adminStatePoller.getStreamId() === streamId) {
+                adminStatePoller.markFresh();
+            }
         }
     }
 
@@ -375,19 +418,21 @@ class SubscriptionManager {
 
         const streamId = this.previewChannelId;
         Logger.info('Clearing preview channel:', streamId);
-        
+
         // Stop presence broadcasting
         this._stopPreviewPresence();
+
+        // Stop admin-state polling for the preview channel — no live -3
+        // subscription to drop in the resend-only model.
+        try {
+            if (adminStatePoller.getStreamId() === streamId) {
+                adminStatePoller.stop();
+            }
+        } catch (e) { /* ignore */ }
 
         try {
             const ephemeralStreamId = deriveEphemeralId(streamId);
             await streamrController.unsubscribeFromDualStream(streamId, ephemeralStreamId);
-            // Also unsubscribe admin stream — best-effort
-            const adminStreamId = deriveAdminId(streamId);
-            if (adminStreamId) {
-                try { await streamrController.unsubscribe(adminStreamId); }
-                catch (e) { Logger.debug('Preview admin unsubscribe error (ignored):', e.message); }
-            }
         } catch (error) {
             Logger.warn('Error unsubscribing from preview:', error.message);
         }
@@ -411,12 +456,32 @@ class SubscriptionManager {
         // Stop preview presence broadcasting
         this._stopPreviewPresence();
 
-        // Transfer state - keep subscription alive!
+        // Stop the preview's admin-state poller — caller (PreviewModeUI)
+        // re-bootstraps admin state through channelManager and the active
+        // poller is started by setActiveChannel on the next selection. In
+        // the resend-only model there is no live -3 subscription to drop.
+        try {
+            if (adminStatePoller.getStreamId() === messageStreamId) {
+                adminStatePoller.stop();
+            }
+        } catch (e) { /* ignore */ }
+
+        // Transfer state - keep MESSAGE subscription alive!
         // The preview handlers (_handlePreviewMessage, _handlePreviewEphemeral) 
         // automatically forward to channelManager when channel exists there
         this.activeChannelId = messageStreamId;
         this.previewChannelId = null;
-        
+
+        // Start the active-channel admin-state poller. The on-open snapshot
+        // is fetched by the caller (PreviewModeUI.addPreviewToList) via
+        // channelManager.bootstrapAdminState; the poller takes over for
+        // periodic refresh and reacts to ADMIN_INVALIDATE signals.
+        try {
+            adminStatePoller.start(messageStreamId, () => channelManager.refreshAdminState(messageStreamId));
+        } catch (e) {
+            Logger.debug('Active admin poller start (after promote) failed (non-fatal):', e?.message || e);
+        }
+
         Logger.debug('Preview promoted - subscription reused, handlers auto-forward');
     }
 

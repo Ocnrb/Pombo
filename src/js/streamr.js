@@ -1928,56 +1928,102 @@ class StreamrController {
     }
 
     /**
-     * Subscribe to ADMIN STREAM partition 0 (moderation) with short history.
-     * The caller is expected to choose the snapshot with the highest `rev`.
+     * One-shot resend of ADMIN STREAM partition 0 (moderation).
+     * Used by the resend-based admin-state model: instead of holding a live
+     * subscription on -3, callers fetch the latest snapshot on channel open
+     * and on each polling tick, complemented by a low-latency invalidation
+     * signal published on the ephemeral -2/P0 control partition.
+     *
+     * Returns the highest-`rev` snapshot from the resend window, or `null`
+     * if the stream has no ADMIN_STATE published yet (or all entries failed
+     * to decrypt). Does NOT register anything in `this.subscriptions`.
      *
      * @param {string} adminStreamId - Admin stream ID (ends with -3)
-     * @param {Function} handler - Message handler invoked for each ADMIN_STATE
-     * @param {Object} options - { password, historyCount, onHistoryComplete }
-     * @returns {Promise<Object>} Subscription object
+     * @param {Object} [options]
+     * @param {number} [options.historyCount=ADMIN_HISTORY_COUNT] Last N to fetch
+     * @param {string|null} [options.password=null] Channel password (encrypted channels)
+     * @returns {Promise<Object|null>} Latest ADMIN_STATE or null
      */
-    async subscribeToAdminStream(adminStreamId, handler, options = {}) {
+    async resendAdminState(adminStreamId, { historyCount, password = null } = {}) {
         if (!this.client) {
             throw new Error('Streamr client not initialized');
         }
-
         if (!isAdminStream(adminStreamId)) {
             Logger.warn('Invalid adminStreamId (should end with -3):', adminStreamId);
         }
 
-        const password = options.password ?? null;
-        const historyCount = options.historyCount ?? STREAM_CONFIG.ADMIN_HISTORY_COUNT;
-        const onHistoryComplete = options.onHistoryComplete ?? null;
-
-        // Reuse subscription map to avoid double-subscribing
-        let adminSubs = this.subscriptions.get(adminStreamId);
-        if (!adminSubs) {
-            adminSubs = {};
-            this.subscriptions.set(adminStreamId, adminSubs);
-        }
-
+        const last = historyCount ?? STREAM_CONFIG.ADMIN_HISTORY_COUNT;
         const partition = STREAM_CONFIG.ADMIN_STREAM.MODERATION;
-        if (adminSubs[partition]) {
-            Logger.debug('Already subscribed to admin stream P0:', adminStreamId);
-            if (onHistoryComplete) {
-                try { await onHistoryComplete(); } catch (e) { Logger.warn('admin onHistoryComplete error:', e); }
+
+        let latest = null;
+
+        try {
+            const resend = await this.client.resend(
+                { streamId: adminStreamId, partition },
+                { last }
+            );
+
+            const iterator = resend[Symbol.asyncIterator]();
+            let iteratorDone = false;
+
+            while (!iteratorDone) {
+                let message;
+                try {
+                    const result = await iterator.next();
+                    iteratorDone = result.done;
+                    if (iteratorDone) break;
+                    message = result.value;
+                } catch (iterError) {
+                    if (iterError.code === 'DECRYPT_ERROR' || iterError.message?.includes('encryption key')) {
+                        continue;
+                    }
+                    Logger.warn('resendAdminState iteration error:', iterError.message);
+                    continue;
+                }
+
+                try {
+                    let content = message.content || message;
+                    if (password && typeof content === 'string') {
+                        try {
+                            content = await cryptoManager.decryptJSON(content, password);
+                        } catch (decryptError) {
+                            continue;
+                        }
+                    }
+                    if (!content || typeof content !== 'object') continue;
+                    if (content.type && content.type !== 'ADMIN_STATE') continue;
+
+                    // Inject publisher info so caller can validate sender == createdBy
+                    if (typeof message.getPublisherId === 'function') {
+                        const publisherId = message.getPublisherId();
+                        if (publisherId && !content.createdBy) {
+                            content.createdBy = publisherId;
+                        }
+                    }
+
+                    const incomingRev = typeof content.rev === 'number' ? content.rev : 0;
+                    const incomingTs = typeof content.ts === 'number' ? content.ts : 0;
+                    const latestRev = latest ? (latest.rev || 0) : -1;
+                    const latestTs = latest ? (latest.ts || 0) : 0;
+                    if (incomingRev > latestRev || (incomingRev === latestRev && incomingTs > latestTs)) {
+                        latest = content;
+                    }
+                } catch (e) {
+                    Logger.debug('resendAdminState entry processing error:', e.message);
+                    continue;
+                }
             }
-            return adminSubs[partition];
+        } catch (error) {
+            Logger.warn('resendAdminState error:', error.message);
+            return null;
         }
 
-        Logger.debug('Subscribing to adminStream partition 0 (moderation) with history:', historyCount);
-        const sub = await this.subscribeWithHistory(
-            adminStreamId,
-            partition,
-            handler,
-            historyCount,
-            password,
-            onHistoryComplete,
-            false
-        );
-        adminSubs[partition] = sub;
-        Logger.info('Subscribed to admin stream:', adminStreamId);
-        return sub;
+        Logger.debug('resendAdminState result:', {
+            adminStreamId: adminStreamId.slice(-30),
+            found: !!latest,
+            rev: latest?.rev
+        });
+        return latest;
     }
 
     /**

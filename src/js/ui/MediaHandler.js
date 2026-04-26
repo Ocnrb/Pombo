@@ -124,11 +124,18 @@ class MediaHandler {
             this._savedAnchorEl = null;
         }
 
-        // Push history state so back button closes lightbox instead of navigating
+        // Push history state so back button closes lightbox instead of navigating.
+        // The popstate that pops THIS entry will carry the PREVIOUS entry's state
+        // (e.g. the preview view), so we cannot rely on `event.state.modal` to
+        // detect it — instead we track our own pending flag and stop propagation
+        // in capture phase to keep historyManager out of the loop.
         if (!this._lightboxOpen) {
             this._lightboxOpen = true;
-            window.history.pushState({ lightbox: true }, '');
-            window.addEventListener('popstate', this._popstateHandler, true);
+            this._historyEntryPending = true;
+            window.history.pushState({ modal: true, lightbox: true }, '');
+            // Listener is already attached globally in initLightboxModal();
+            // we just toggle _historyEntryPending to gate it.
+            Logger.debug('[Lightbox] pushed history entry (listener pre-attached)');
         }
     }
 
@@ -157,13 +164,20 @@ class MediaHandler {
             requestAnimationFrame(() => vp.setAttribute('content', original));
         }
 
-        // Pop the history entry we pushed (unless triggered by popstate)
+        // Pop the history entry we pushed.
+        // The capture-phase _onPopState handler will fire on history.back()
+        // and stop propagation so historyManager never sees a synthetic back-nav.
+        // For user-triggered popstate (skipHistory=true), the handler already ran
+        // — we just clear our state here.
         if (this._lightboxOpen) {
-            window.removeEventListener('popstate', this._popstateHandler, true);
-            if (!options.skipHistory) {
+            this._lightboxOpen = false;
+            if (options.skipHistory) {
+                // popstate already consumed our entry; clear the gate.
+                this._historyEntryPending = false;
+            } else if (this._historyEntryPending) {
+                // Trigger synthetic back; _onPopState will clear flag.
                 window.history.back();
             }
-            this._lightboxOpen = false;
         }
 
         // Restore messages-area scroll. We re-pin over ~500ms because the
@@ -210,14 +224,26 @@ class MediaHandler {
     }
 
     /**
-     * Handle popstate (back button) while lightbox is open
+     * Capture-phase popstate handler.
+     *
+     * Why capture phase: the popstate that fires when our pushed entry is
+     * popped carries the PREVIOUS entry's state (e.g. preview view). If we let
+     * it bubble, historyManager will re-navigate to that view — which for
+     * preview means tearing down and rebuilding the Streamr subscription.
+     *
+     * We always stop propagation when our history entry was pending, so
+     * historyManager never processes the synthetic/user-triggered back.
      * @private
      */
     _onPopState(event) {
+        Logger.debug('[Lightbox] _onPopState fired, pending=', this._historyEntryPending);
+        if (!this._historyEntryPending) return;
+        // Stop propagation FIRST so historyManager (registered later) never runs.
+        event.stopImmediatePropagation();
+        this._historyEntryPending = false;
+        // Visually close lightbox if still open (idempotent if already closed).
         if (this._lightboxOpen) {
-            // Close without calling history.back() (popstate already consumed it)
             this.closeLightbox({ skipHistory: true });
-            event.stopImmediatePropagation();
         }
     }
 
@@ -243,9 +269,21 @@ class MediaHandler {
 
     /**
      * Initialize lightbox modal event listeners
-     * Called once on app startup to avoid inline onclick (CSP 'unsafe-inline')
+     * Called once on app startup to avoid inline onclick (CSP 'unsafe-inline').
+     *
+     * IMPORTANT: This runs before `historyManager.init()` so our popstate
+     * listener is registered first. For events dispatched directly on the
+     * window object (like `popstate`), capture-vs-bubble does not change
+     * ordering — listeners run in registration order. Registering early
+     * lets us `stopImmediatePropagation()` before historyManager navigates.
      */
     initLightboxModal() {
+        // Attach popstate handler once — it self-gates on _historyEntryPending.
+        if (!this._popstateAttached) {
+            window.addEventListener('popstate', this._popstateHandler);
+            this._popstateAttached = true;
+        }
+
         const modal = document.getElementById('media-lightbox-modal');
         const closeBtn = document.getElementById('lightbox-close-btn');
         const imageEl = document.getElementById('lightbox-image');

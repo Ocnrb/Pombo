@@ -1864,7 +1864,11 @@ body {
     
     /* Chat header adjustments */
     #chat-header {
-        padding: 0.75rem 1rem;
+        height: 3.5rem;
+        padding-top: 0;
+        padding-right: 0.5rem;
+        padding-bottom: 0;
+        padding-left: 0.5rem;
     }
     
     #current-channel-name {
@@ -2282,6 +2286,14 @@ body {
         height: 3rem;
         padding-left: 0.375rem;
         padding-right: 0.5rem;
+    }
+
+    #chat-header {
+        height: 3.5rem;
+        padding-top: 0;
+        padding-right: 0.5rem;
+        padding-bottom: 0;
+        padding-left: 0.5rem;
     }
     
     .app-container {

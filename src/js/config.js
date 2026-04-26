@@ -190,7 +190,8 @@ export const CONFIG = {
         activityCheckMessages: 3,      // Messages to fetch for activity check
         previewPresenceIntervalMs: 20000, // Presence broadcast interval in preview
         initialPollDelayMs: 5000,      // Delay before first background poll
-        maxPresenceFailures: 3         // Stop preview presence after N consecutive failures
+        maxPresenceFailures: 3,        // Stop preview presence after N consecutive failures
+        adminPollIntervalMs: 30000     // Poll interval for admin-state resend 
     },
 
     // Push Notifications

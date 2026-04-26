@@ -21,6 +21,7 @@ import { dmCrypto } from './dmCrypto.js';
 import { CONFIG } from './config.js';
 import { StorageError } from './utils/errors.js';
 import { mediaController } from './media.js';
+import { adminStatePoller } from './adminStatePoller.js';
 
 class ChannelManager {
     constructor() {
@@ -597,10 +598,20 @@ class ChannelManager {
                 members: [],
                 messages: previewMessages,  // Transfer messages from preview
                 reactions: previewReactions, // Transfer reactions from preview
-                // Admin moderation state (-3/P0)
-                adminState: { bannedMembers: [], hiddenMessageIds: [], pins: [] },
-                adminRev: 0,
-                adminLoaded: false,
+                // Admin moderation state (-3/P0). Carry over whatever the
+                // preview already collected so pins / bans / hidden ids stay
+                // visible immediately after Join (the underlying admin stream
+                // subscription is rewired to channelManager by the caller).
+                adminState: previewInfo.adminState && typeof previewInfo.adminState === 'object'
+                    ? {
+                        bannedMembers: Array.isArray(previewInfo.adminState.bannedMembers) ? [...previewInfo.adminState.bannedMembers] : [],
+                        hiddenMessageIds: Array.isArray(previewInfo.adminState.hiddenMessageIds) ? [...previewInfo.adminState.hiddenMessageIds] : [],
+                        pins: Array.isArray(previewInfo.adminState.pins) ? [...previewInfo.adminState.pins] : []
+                    }
+                    : { bannedMembers: [], hiddenMessageIds: [], pins: [] },
+                adminRev: Number.isFinite(previewInfo.adminRev) ? previewInfo.adminRev : 0,
+                adminTs: Number.isFinite(previewInfo.adminTs) ? previewInfo.adminTs : 0,
+                adminLoaded: !!previewInfo.adminLoaded,
                 classification: classification,
                 readOnly: previewInfo.readOnly || false,
                 historyLoaded: previewMessages.length > 0,  // Mark as loaded if we have messages
@@ -922,9 +933,18 @@ class ChannelManager {
     }
 
     /**
-     * Bootstrap admin state by subscribing to -3/P0 with short history.
-     * Picks the snapshot with the highest `rev` from the warm-up window
-     * before the channel content stream is subscribed.
+     * Bootstrap admin state via a one-shot resend of -3/P0 (no live
+     * websocket subscription). Picks the snapshot with the highest `rev`
+     * from the resend window before the channel content stream is
+     * subscribed. Always resolves quickly — if the storage node is
+     * unreachable the call returns with `adminLoaded=true` and an empty
+     * state so the UI never blocks.
+     *
+     * Live updates while the channel remains active are delivered via:
+     *   1. AdminStatePoller (periodic resend tick — convergence safety net)
+     *   2. ADMIN_INVALIDATE control message on -2/P0 carrying the full
+     *      snapshot (instant, applied inline by handleControlMessage)
+     *
      * @param {string} messageStreamId - Channel key (-1)
      * @param {string} adminStreamId - Admin stream id (-3)
      * @param {string|null} password - Channel password for encrypted channels
@@ -933,44 +953,67 @@ class ChannelManager {
         const channel = this.channels.get(messageStreamId);
         if (!channel) return;
 
-        // Hard barrier: wait for the admin-stream history resend to complete
-        // before returning, so that hiddenMessageIds / bannedMembers / pins
-        // are applied before the messageStream timeline starts rendering.
-        // Falls back via timeout if the storage node is slow/unreachable, so
-        // the UI never blocks indefinitely.
-        const ADMIN_BOOTSTRAP_TIMEOUT_MS = 5000;
-        let resolveHistory;
-        const historyDone = new Promise((resolve) => { resolveHistory = resolve; });
-
-        await streamrController.subscribeToAdminStream(
-            adminStreamId,
-            (data) => this.handleAdminMessage(messageStreamId, data),
-            {
-                password,
+        try {
+            const latest = await streamrController.resendAdminState(adminStreamId, {
                 historyCount: STREAM_CONFIG.ADMIN_HISTORY_COUNT,
-                onHistoryComplete: async () => {
-                    // Mark loaded even if no message arrived (channel never had admin events)
-                    if (!channel.adminLoaded) {
-                        channel.adminLoaded = true;
-                        Logger.debug('Admin state bootstrap complete (no events) for', messageStreamId.slice(-20));
-                    } else {
-                        Logger.debug('Admin state bootstrap complete with rev', channel.adminRev);
-                    }
-                    resolveHistory();
-                }
+                password
+            });
+            if (latest) {
+                this.handleAdminMessage(messageStreamId, latest);
             }
-        );
+        } catch (e) {
+            Logger.warn('Admin bootstrap resend failed (continuing without admin state):', e.message);
+        } finally {
+            // Mark loaded even if no message arrived or the resend failed,
+            // so subsequent publishAdminState calls compute a sane next rev
+            // and the timeline is not held back waiting for moderation data.
+            channel.adminLoaded = true;
+            Logger.debug('Admin state bootstrap complete', {
+                streamId: messageStreamId.slice(-20),
+                rev: channel.adminRev || 0
+            });
+        }
+    }
 
-        // Wait for history (or fallback timeout) before returning to caller
-        await Promise.race([
-            historyDone,
-            new Promise((resolve) => setTimeout(() => {
-                if (!channel.adminLoaded) {
-                    Logger.warn('Admin bootstrap timeout — proceeding without admin state for', messageStreamId.slice(-20));
-                }
-                resolve();
-            }, ADMIN_BOOTSTRAP_TIMEOUT_MS))
-        ]);
+    /**
+     * Periodic / on-demand refresh of admin state via resend on -3/P0.
+     * Used by AdminStatePoller and by ADMIN_INVALIDATE handlers.
+     * Applies the latest snapshot only if its (rev, ts) beats the current
+     * one — relies on `applyAdminState` for latest-wins comparison.
+     *
+     * @param {string} messageStreamId - Channel key (-1)
+     * @returns {Promise<boolean>} true if a newer snapshot was applied
+     */
+    async refreshAdminState(messageStreamId) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) return false;
+        const adminStreamId = channel.adminStreamId || deriveAdminId(messageStreamId);
+        if (!adminStreamId) return false;
+
+        try {
+            const latest = await streamrController.resendAdminState(adminStreamId, {
+                // Smaller window for cheap polling — only the most recent
+                // snapshot wins regardless of how many entries we fetch.
+                historyCount: 5,
+                password: channel.password || null
+            });
+            if (!latest) return false;
+            const incomingRev = typeof latest.rev === 'number' ? latest.rev : 0;
+            const currentRev = channel.adminRev || 0;
+            if (incomingRev <= currentRev) return false;
+            const applied = this.applyAdminState(channel, latest);
+            if (applied) {
+                this.notifyHandlers('admin_state_updated', {
+                    streamId: messageStreamId,
+                    adminState: channel.adminState,
+                    rev: channel.adminRev
+                });
+            }
+            return applied;
+        } catch (e) {
+            Logger.debug('refreshAdminState error (ignored):', e.message);
+            return false;
+        }
     }
 
     /**
@@ -1040,6 +1083,39 @@ class ChannelManager {
             adminState: channel.adminState,
             rev: channel.adminRev
         });
+
+        // Reset the poller window so we don't redundantly re-fetch our own
+        // freshly-applied state on the very next interval tick.
+        if (adminStatePoller.getStreamId() === messageStreamId) {
+            adminStatePoller.markFresh();
+        }
+
+        // Fire-and-forget invalidation signal on the ephemeral -2/P0 control
+        // partition so other clients with the channel active update immediately
+        // (instead of waiting for the next 30s poller tick). The signal embeds
+        // the full ADMIN_STATE snapshot so receivers can apply it inline
+        // without a -3/P0 resend round-trip. The canonical resend path on
+        // -3/P0 (bootstrap-on-open + periodic poll + on-demand fallback)
+        // remains as a convergence safety net for clients that miss the
+        // ephemeral signal. Best-effort: failure here is non-fatal.
+        try {
+            const ephemeralStreamId = channel.ephemeralStreamId || deriveEphemeralId(messageStreamId);
+            if (ephemeralStreamId) {
+                const signal = {
+                    type: 'admin_invalidate',
+                    rev: newRev,
+                    ts: adminMsg.ts,
+                    snapshot: adminMsg
+                };
+                streamrController.publishControl(
+                    ephemeralStreamId,
+                    signal,
+                    channel.password || null
+                ).catch(e => Logger.debug('admin_invalidate publish failed (non-fatal):', e.message));
+            }
+        } catch (e) {
+            Logger.debug('admin_invalidate prepare failed (non-fatal):', e.message);
+        }
 
         Logger.info('Published ADMIN_STATE rev', newRev, 'for', messageStreamId.slice(-20));
         return { rev: newRev, state: next };
@@ -1988,6 +2064,7 @@ class ChannelManager {
         if (!authManager.isConnected()) {
             return;
         }
+        if (!data || typeof data !== 'object') return;
         
         // Handle different control message types
         // Use senderId from Streamr SDK (cryptographically guaranteed) instead of self-reported fields
@@ -1996,6 +2073,40 @@ class ChannelManager {
         } else if (data.type === 'presence') {
             // Handle presence update
             this.handlePresenceMessage(streamId, data);
+        } else if (data.type === 'admin_invalidate') {
+            // Low-latency notification that ADMIN_STATE was updated by the
+            // channel admin. We only honour signals that came from the
+            // channel creator (network-level publish permission already
+            // restricts this to the owner, but we double-check locally
+            // before triggering work) and only when the announced rev is
+            // strictly newer than what we have applied. The actual snapshot
+            // is fetched canonically via the resend path so the signal
+            // itself cannot be used to inject state.
+            const channel = this.channels.get(streamId);
+            if (!channel) return;
+            const sender = (data.senderId || data.user || '').toLowerCase();
+            const owner = (channel.createdBy || '').toLowerCase();
+            if (owner && sender && sender !== owner) {
+                Logger.debug('Ignoring admin_invalidate from non-admin:', sender);
+                return;
+            }
+            const incomingRev = typeof data.rev === 'number' ? data.rev : 0;
+            if (incomingRev <= (channel.adminRev || 0)) return;
+            if (!this._isValidAdminState(data.snapshot)) return;
+
+            // Sender authenticity is already validated above (senderId ===
+            // channel.createdBy). Inject createdBy into the snapshot so
+            // applyAdminState's owner check passes even if the publisher
+            // omitted it from the body.
+            if (!data.snapshot.createdBy && sender) {
+                data.snapshot.createdBy = sender;
+            }
+            this.handleAdminMessage(streamId, data.snapshot);
+            // Reset the poller window so the next periodic tick is one full
+            // interval away (avoids redundant resend right after this).
+            if (adminStatePoller.getStreamId() === streamId) {
+                adminStatePoller.markFresh();
+            }
         } else if (data.type === 'reaction') {
             // Someone reacted to a message - store in memory only
             const reactionUser = data.senderId || data.user;
@@ -2949,7 +3060,9 @@ class ChannelManager {
                 Logger.debug('DM: Cleaned up local data for', channel.peerAddress);
             }
             
-            // Unsubscribe from both streams
+            // Unsubscribe from both streams. There is no admin-stream (-3)
+            // subscription to drop — the resend-based admin model holds no
+            // live websocket on -3 (see adminStatePoller).
             await streamrController.unsubscribeFromDualStream(messageStreamId, ephemeralStreamId);
             
             // Cancel any pending batch verifications for this channel

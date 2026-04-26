@@ -351,7 +351,7 @@ class PreviewModeUI {
         const { channelManager, subscriptionManager, reactionManager, notificationUI } = this.deps;
 
         try {
-            const { streamId, channelInfo, name, type, readOnly, messages } = this.previewChannel;
+            const { streamId, channelInfo, name, type, readOnly, messages, adminState, adminRev, adminTs, adminLoaded } = this.previewChannel;
 
             notificationUI.showLoadingToast('Joining channel...', 'Saving channel...');
 
@@ -363,7 +363,13 @@ class PreviewModeUI {
                 createdBy: channelInfo?.createdBy,
                 messages: messages || [],
                 reactions: reactionManager.exportAsObject(),
-                oldestTimestamp: this.previewChannel.oldestTimestamp || null
+                oldestTimestamp: this.previewChannel.oldestTimestamp || null,
+                // Carry over moderation layer so pins / bans / hidden ids
+                // stay visible across the preview→joined transition.
+                adminState,
+                adminRev,
+                adminTs,
+                adminLoaded
             });
 
             // Clear preview state
@@ -371,7 +377,25 @@ class PreviewModeUI {
             this.previewChannel = null;
 
             // Transfer subscription handlers from preview to channelManager
+            // (also unsubscribes the admin stream so we can rewire it below).
             await subscriptionManager.promotePreviewToActive(previewStreamId);
+
+            // Re-bootstrap admin stream against channelManager so live
+            // ADMIN_STATE updates after Join keep flowing into the joined
+            // channel. Best-effort — pin/ban state already carried over via
+            // persistChannelFromPreview, so failure here doesn't lose UI.
+            try {
+                const joined = channelManager.getChannel(previewStreamId);
+                if (joined?.adminStreamId) {
+                    await channelManager.bootstrapAdminState(
+                        previewStreamId,
+                        joined.adminStreamId,
+                        joined.password || null
+                    );
+                }
+            } catch (e) {
+                Logger.warn('Post-join admin bootstrap failed:', e.message);
+            }
 
             // Update UI - hide Join, show Invite
             this.ui.elements.joinChannelBtn?.classList.add('hidden');
