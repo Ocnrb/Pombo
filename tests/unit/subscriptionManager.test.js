@@ -24,10 +24,7 @@ vi.mock('../../src/js/streamr.js', () => ({
         isInitialized: vi.fn().mockReturnValue(true),
         publish: vi.fn(),
         subscribeToDualStream: vi.fn().mockResolvedValue(undefined),
-        subscribeToAdminStream: vi.fn().mockImplementation(async (_id, _h, opts) => {
-            if (opts?.onHistoryComplete) await opts.onHistoryComplete();
-            return {};
-        }),
+        resendAdminState: vi.fn().mockResolvedValue(null),
         publishControl: vi.fn().mockResolvedValue(undefined),
         fetchOlderHistory: vi.fn().mockResolvedValue({ messages: [] })
     },
@@ -43,6 +40,16 @@ vi.mock('../../src/js/streamr.js', () => ({
     deriveAdminId: vi.fn((id) => `${id}/admin`)
 }));
 
+vi.mock('../../src/js/adminStatePoller.js', () => ({
+    adminStatePoller: {
+        start: vi.fn(),
+        stop: vi.fn(),
+        pollNow: vi.fn(),
+        markFresh: vi.fn(),
+        getStreamId: vi.fn().mockReturnValue(null)
+    }
+}));
+
 vi.mock('../../src/js/channels.js', () => ({
     channelManager: {
         getChannel: vi.fn(),
@@ -52,7 +59,8 @@ vi.mock('../../src/js/channels.js', () => ({
         stopPresenceTracking: vi.fn(),
         handlePresenceMessage: vi.fn(),
         handleTextMessage: vi.fn(),
-        handleMediaMessage: vi.fn()
+        handleMediaMessage: vi.fn(),
+        refreshAdminState: vi.fn().mockResolvedValue(false)
     }
 }));
 

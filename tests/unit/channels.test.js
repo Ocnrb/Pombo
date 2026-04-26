@@ -36,7 +36,7 @@ vi.mock('../../src/js/streamr.js', () => ({
         unsubscribeFromDualStream: vi.fn().mockResolvedValue(undefined),
         fetchOlderHistory: vi.fn().mockResolvedValue({ messages: [], hasMore: false }),
         subscribeToDualStream: vi.fn().mockResolvedValue(undefined),
-        subscribeToAdminStream: vi.fn().mockResolvedValue(undefined),
+        resendAdminState: vi.fn().mockResolvedValue(null),
         publishAdminState: vi.fn().mockResolvedValue(undefined),
         checkPermissions: vi.fn().mockResolvedValue({ canSubscribe: true, canPublish: true, isOwner: false })
     },

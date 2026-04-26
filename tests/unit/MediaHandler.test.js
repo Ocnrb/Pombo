@@ -191,16 +191,16 @@ describe('MediaHandler', () => {
             expect(mediaHandler._lightboxOpen).toBe(true);
         });
 
-        it('should push history state with lightbox flag', () => {
+        it('should push history state with modal+lightbox flags', () => {
             setupLightboxDOM();
             mediaHandler.openLightbox('https://x.com/img.png', 'image');
-            expect(pushStateSpy).toHaveBeenCalledWith({ lightbox: true }, '');
+            expect(pushStateSpy).toHaveBeenCalledWith({ modal: true, lightbox: true }, '');
         });
 
-        it('should register popstate listener in capture phase', () => {
+        it('should set _historyEntryPending so the global popstate handler activates', () => {
             setupLightboxDOM();
             mediaHandler.openLightbox('https://x.com/img.png', 'image');
-            expect(addEventSpy).toHaveBeenCalledWith('popstate', mediaHandler._popstateHandler, true);
+            expect(mediaHandler._historyEntryPending).toBe(true);
         });
 
         it('should unlock touch-action on body', () => {
@@ -278,11 +278,12 @@ describe('MediaHandler', () => {
             expect(backSpy).not.toHaveBeenCalled();
         });
 
-        it('should remove popstate listener on close', () => {
+        it('should clear _historyEntryPending on close', () => {
             setupCloseLightboxDOM();
             mediaHandler._lightboxOpen = true;
-            mediaHandler.closeLightbox();
-            expect(removeEventSpy).toHaveBeenCalledWith('popstate', mediaHandler._popstateHandler, true);
+            mediaHandler._historyEntryPending = true;
+            mediaHandler.closeLightbox({ skipHistory: true });
+            expect(mediaHandler._historyEntryPending).toBe(false);
         });
 
         it('should reset viewport zoom on close', () => {
@@ -300,9 +301,10 @@ describe('MediaHandler', () => {
 
     // ==================== _onPopState (back button) ====================
     describe('_onPopState()', () => {
-        it('should close lightbox with skipHistory on popstate', () => {
+        it('should close lightbox with skipHistory on popstate when entry is pending', () => {
             const closeSpy = vi.spyOn(mediaHandler, 'closeLightbox');
             mediaHandler._lightboxOpen = true;
+            mediaHandler._historyEntryPending = true;
 
             const event = new Event('popstate');
             event.stopImmediatePropagation = vi.fn();
@@ -312,9 +314,10 @@ describe('MediaHandler', () => {
             expect(event.stopImmediatePropagation).toHaveBeenCalled();
         });
 
-        it('should do nothing if lightbox is not open', () => {
+        it('should do nothing if no history entry is pending', () => {
             const closeSpy = vi.spyOn(mediaHandler, 'closeLightbox');
             mediaHandler._lightboxOpen = false;
+            mediaHandler._historyEntryPending = false;
 
             const event = new Event('popstate');
             event.stopImmediatePropagation = vi.fn();

@@ -323,6 +323,79 @@ describe('StreamrController Core', () => {
         });
     });
 
+    // ==================== resendAdminState() ====================
+    describe('resendAdminState()', () => {
+        it('returns null when stream has no admin entries', async () => {
+            mockClient.resend = vi.fn().mockResolvedValue(createMockAsyncIterator([]));
+            const result = await streamrController.resendAdminState('stream-3');
+            expect(result).toBeNull();
+        });
+
+        it('returns the highest-rev snapshot from the resend window', async () => {
+            const messages = [
+                createMockMessage({ type: 'ADMIN_STATE', rev: 1, ts: 100, state: { pins: [] } }),
+                createMockMessage({ type: 'ADMIN_STATE', rev: 3, ts: 300, state: { pins: ['x'] } }),
+                createMockMessage({ type: 'ADMIN_STATE', rev: 2, ts: 200, state: { pins: [] } })
+            ];
+            mockClient.resend = vi.fn().mockResolvedValue(createMockAsyncIterator(messages));
+            const result = await streamrController.resendAdminState('stream-3');
+            expect(result).not.toBeNull();
+            expect(result.rev).toBe(3);
+            expect(result.state.pins).toEqual(['x']);
+        });
+
+        it('breaks rev ties by larger ts', async () => {
+            const messages = [
+                createMockMessage({ type: 'ADMIN_STATE', rev: 5, ts: 100 }),
+                createMockMessage({ type: 'ADMIN_STATE', rev: 5, ts: 500 }),
+                createMockMessage({ type: 'ADMIN_STATE', rev: 5, ts: 200 })
+            ];
+            mockClient.resend = vi.fn().mockResolvedValue(createMockAsyncIterator(messages));
+            const result = await streamrController.resendAdminState('stream-3');
+            expect(result.ts).toBe(500);
+        });
+
+        it('passes { last } and partition to client.resend', async () => {
+            mockClient.resend = vi.fn().mockResolvedValue(createMockAsyncIterator([]));
+            await streamrController.resendAdminState('stream-3', { historyCount: 7 });
+            expect(mockClient.resend).toHaveBeenCalledWith(
+                { streamId: 'stream-3', partition: STREAM_CONFIG.ADMIN_STREAM.MODERATION },
+                { last: 7 }
+            );
+        });
+
+        it('returns null on resend exception', async () => {
+            mockClient.resend = vi.fn().mockRejectedValue(new Error('network'));
+            const result = await streamrController.resendAdminState('stream-3');
+            expect(result).toBeNull();
+        });
+
+        it('decrypts encrypted entries when password is supplied', async () => {
+            cryptoManager.decryptJSON.mockImplementationOnce(async () => ({
+                type: 'ADMIN_STATE', rev: 4, ts: 400, state: { pins: [] }
+            }));
+            const messages = [createMockMessage('encrypted-blob')];
+            mockClient.resend = vi.fn().mockResolvedValue(createMockAsyncIterator(messages));
+            const result = await streamrController.resendAdminState('stream-3', { password: 'pw' });
+            expect(cryptoManager.decryptJSON).toHaveBeenCalledWith('encrypted-blob', 'pw');
+            expect(result.rev).toBe(4);
+        });
+
+        it('skips entries that fail to decrypt', async () => {
+            cryptoManager.decryptJSON.mockImplementationOnce(async () => { throw new Error('bad key'); });
+            cryptoManager.decryptJSON.mockImplementationOnce(async () => ({
+                type: 'ADMIN_STATE', rev: 2, ts: 200
+            }));
+            const messages = [
+                createMockMessage('bad'),
+                createMockMessage('good')
+            ];
+            mockClient.resend = vi.fn().mockResolvedValue(createMockAsyncIterator(messages));
+            const result = await streamrController.resendAdminState('stream-3', { password: 'pw' });
+            expect(result.rev).toBe(2);
+        });
+    });
+
     // ==================== subscribeToPartition() ====================
     describe('subscribeToPartition()', () => {
         it('should throw if client is null', async () => {
