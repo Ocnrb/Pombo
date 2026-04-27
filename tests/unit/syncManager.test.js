@@ -368,6 +368,50 @@ describe('syncManager', () => {
             
             expect(identityManager.loadUsername).toHaveBeenCalled();
         });
+
+        it('should preserve an optimistic local channel snapshot when remote history is stale', async () => {
+            authManager.wallet = { privateKey: '0x1234' };
+            authManager.getAddress.mockReturnValue('0xabc123');
+
+            const localChannels = [{ messageStreamId: 'ch-new', name: 'New Channel' }];
+            const staleRemoteChannels = [{ messageStreamId: 'ch-old', name: 'Old Channel' }];
+
+            secureStorage.exportForBackup.mockReturnValue({
+                sentMessages: {},
+                sentReactions: {},
+                channels: localChannels,
+                blockedPeers: [],
+                dmLeftAt: {},
+                trustedContacts: {},
+                ensCache: {},
+                username: null,
+                graphApiKey: null
+            });
+
+            dmCrypto.decrypt.mockResolvedValue({
+                type: 'sync',
+                v: 1,
+                ts: 1000,
+                data: { channels: staleRemoteChannels }
+            });
+
+            streamrController.fetchPartitionHistory.mockResolvedValue([
+                { content: { ct: 'enc' }, publisherId: '0xABC123', timestamp: 1000 }
+            ]);
+
+            await syncManager.pullSync({
+                optimisticPayload: {
+                    type: 'sync',
+                    v: 1,
+                    ts: 2000,
+                    data: { channels: localChannels }
+                }
+            });
+
+            expect(secureStorage.importFromSync).toHaveBeenCalledWith(expect.objectContaining({
+                channels: localChannels
+            }));
+        });
     });
 
     describe('mergeState', () => {

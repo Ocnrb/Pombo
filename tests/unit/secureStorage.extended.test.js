@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { secureStorage } from '../../src/js/secureStorage.js';
 
 describe('secureStorage extended', () => {
-    let originalCache, originalIsUnlocked, originalIsGuestMode, originalAddress, originalStorageKey;
+    let originalCache, originalIsUnlocked, originalIsGuestMode, originalAddress, originalStorageKey, originalStateDB;
 
     beforeEach(() => {
         originalCache = secureStorage.cache;
@@ -18,15 +18,20 @@ describe('secureStorage extended', () => {
         originalIsGuestMode = secureStorage.isGuestMode;
         originalAddress = secureStorage.address;
         originalStorageKey = secureStorage.storageKey;
+        originalStateDB = secureStorage.stateDB;
         localStorage.clear();
     });
 
     afterEach(() => {
+        if (secureStorage.stateDB && secureStorage.stateDB !== originalStateDB) {
+            secureStorage.stateDB.close();
+        }
         secureStorage.cache = originalCache;
         secureStorage.isUnlocked = originalIsUnlocked;
         secureStorage.isGuestMode = originalIsGuestMode;
         secureStorage.address = originalAddress;
         secureStorage.storageKey = originalStorageKey;
+        secureStorage.stateDB = originalStateDB;
         vi.restoreAllMocks();
     });
 

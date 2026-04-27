@@ -10,7 +10,7 @@ import { secureStorage } from '../../src/js/secureStorage.js';
 
 describe('secureStorage image ledger', () => {
     let originalCache, originalIsUnlocked, originalIsGuestMode, originalAddress,
-        originalStorageKey, originalImageDB, originalImageBlobCache, originalImageBlobCacheBytes;
+        originalStorageKey, originalStateDB, originalImageDB, originalImageBlobCache, originalImageBlobCacheBytes;
 
     beforeEach(async () => {
         originalCache = secureStorage.cache;
@@ -18,6 +18,7 @@ describe('secureStorage image ledger', () => {
         originalIsGuestMode = secureStorage.isGuestMode;
         originalAddress = secureStorage.address;
         originalStorageKey = secureStorage.storageKey;
+        originalStateDB = secureStorage.stateDB;
         originalImageDB = secureStorage.imageDB;
         originalImageBlobCache = secureStorage.imageBlobCache;
         originalImageBlobCacheBytes = secureStorage.imageBlobCacheBytes;
@@ -25,11 +26,15 @@ describe('secureStorage image ledger', () => {
     });
 
     afterEach(() => {
+        if (secureStorage.stateDB && secureStorage.stateDB !== originalStateDB) {
+            secureStorage.stateDB.close();
+        }
         secureStorage.cache = originalCache;
         secureStorage.isUnlocked = originalIsUnlocked;
         secureStorage.isGuestMode = originalIsGuestMode;
         secureStorage.address = originalAddress;
         secureStorage.storageKey = originalStorageKey;
+        secureStorage.stateDB = originalStateDB;
         secureStorage.imageDB = originalImageDB;
         secureStorage.imageBlobCache = originalImageBlobCache;
         secureStorage.imageBlobCacheBytes = originalImageBlobCacheBytes;

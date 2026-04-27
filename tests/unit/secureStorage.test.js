@@ -15,6 +15,7 @@ describe('secureStorage', () => {
     let originalIsUnlocked;
     let originalIsGuestMode;
     let originalAddress;
+    let originalStateDB;
 
     beforeEach(() => {
         // Save current state
@@ -22,14 +23,19 @@ describe('secureStorage', () => {
         originalIsUnlocked = secureStorage.isUnlocked;
         originalIsGuestMode = secureStorage.isGuestMode;
         originalAddress = secureStorage.address;
+        originalStateDB = secureStorage.stateDB;
     });
 
     afterEach(() => {
         // Restore original state
+        if (secureStorage.stateDB && secureStorage.stateDB !== originalStateDB) {
+            secureStorage.stateDB.close();
+        }
         secureStorage.cache = originalCache;
         secureStorage.isUnlocked = originalIsUnlocked;
         secureStorage.isGuestMode = originalIsGuestMode;
         secureStorage.address = originalAddress;
+        secureStorage.stateDB = originalStateDB;
     });
 
     describe('initAsGuest', () => {
@@ -1343,6 +1349,19 @@ describe('secureStorage', () => {
                 
                 // undefined should not trigger update
                 expect(secureStorage.cache.username).toBe('keep');
+            });
+
+            it('should skip save and channel refresh when imported state is identical', async () => {
+                secureStorage.initAsGuest('0xsame');
+                secureStorage.cache.channels = [{ messageStreamId: 'same-ch' }];
+                const saveSpy = vi.spyOn(secureStorage, 'saveToStorage');
+
+                const result = await secureStorage.importFromSync({
+                    channels: [{ messageStreamId: 'same-ch' }]
+                });
+
+                expect(result).toBe(false);
+                expect(saveSpy).not.toHaveBeenCalled();
             });
         });
     });

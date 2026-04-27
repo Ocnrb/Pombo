@@ -125,7 +125,8 @@ describe('syncManager extended', () => {
         });
 
         it('should push then pull on success', async () => {
-            const pushSpy = vi.spyOn(syncManager, 'pushSync').mockResolvedValue(undefined);
+            const optimisticPayload = { type: 'sync', v: 1, ts: 1234, data: { channels: [] } };
+            const pushSpy = vi.spyOn(syncManager, 'pushSync').mockResolvedValue(optimisticPayload);
             const pullSpy = vi.spyOn(syncManager, 'pullSync').mockResolvedValue({ merged: true });
             vi.spyOn(syncManager, 'pushImageBlobs').mockResolvedValue(undefined);
             vi.spyOn(syncManager, 'pullImageBlobs').mockResolvedValue(undefined);
@@ -133,7 +134,7 @@ describe('syncManager extended', () => {
             const result = await syncManager.smartSync();
 
             expect(pushSpy).toHaveBeenCalled();
-            expect(pullSpy).toHaveBeenCalled();
+            expect(pullSpy).toHaveBeenCalledWith({ optimisticPayload });
             expect(result).toEqual({ pulled: true, pushed: true, noInbox: false });
         });
 
@@ -173,6 +174,32 @@ describe('syncManager extended', () => {
             vi.spyOn(syncManager, 'pullSync').mockRejectedValue(new Error('pull fail'));
 
             await expect(syncManager.smartSync()).rejects.toThrow('pull fail');
+        });
+    });
+
+    describe('runForegroundSync()', () => {
+        it('should emit a success event after a completed foreground sync', async () => {
+            const handler = vi.fn();
+            syncManager.on('sync_activity_success', handler);
+
+            const result = await syncManager.runForegroundSync('Syncing devices', async () => 'ok');
+
+            expect(result).toBe('ok');
+            expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+                label: 'Sync complete',
+                activityLabel: 'Syncing devices'
+            }));
+        });
+
+        it('should not emit a success event when the foreground sync fails', async () => {
+            const handler = vi.fn();
+            syncManager.on('sync_activity_success', handler);
+
+            await expect(syncManager.runForegroundSync('Syncing devices', async () => {
+                throw new Error('sync failed');
+            })).rejects.toThrow('sync failed');
+
+            expect(handler).not.toHaveBeenCalled();
         });
     });
 
