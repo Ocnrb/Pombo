@@ -333,19 +333,26 @@ class StreamrController {
                 );
             };
             
+            // Optional progress callback — invoked once after each successful on-chain step
+            // (3 createStream + 3 setPermissions = 6 invocations from this method).
+            const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
+
             // Step 1: Create MESSAGE STREAM first (sequential to avoid nonce conflicts)
             Logger.info('Creating message stream...');
             const startTime = Date.now();
             
             const messageStream = await createStreamWithRetry(messageStreamId, metadata, 'message', STREAM_CONFIG.MESSAGE_STREAM.PARTITIONS);  // 2 partitions for channels (content + control)
+            try { onProgress(); } catch (_) { /* progress callback errors must not break creation */ }
             
             // Step 2: Create EPHEMERAL STREAM (3 partitions: control + media signals + media data)
             Logger.info('Creating ephemeral stream...');
             const ephemeralStream = await createStreamWithRetry(ephemeralStreamId, ephemeralMetadata, 'ephemeral', STREAM_CONFIG.EPHEMERAL_STREAM.PARTITIONS);
+            try { onProgress(); } catch (_) { /* see above */ }
 
             // Step 3: Create ADMIN STREAM (3 partitions reserved by protocol; only P0 used now)
             Logger.info('Creating admin stream...');
             const adminStream = await createStreamWithRetry(adminStreamId, adminMetadata, 'admin', STREAM_CONFIG.ADMIN_STREAM.PARTITIONS);
+            try { onProgress(); } catch (_) { /* see above */ }
             
             const createTime = ((Date.now() - startTime) / 1000).toFixed(1);
             Logger.info(`✓ All streams created in ${createTime}s`);
@@ -368,12 +375,15 @@ class StreamrController {
                 // Admin stream: public subscribe only; only owner publishes
                 const adminGrantFn = (stream) => this.grantPublicReadOnlyPermissions(stream);
                 
-                // Sequential to avoid nonce conflicts
+                // Sequential to avoid nonce conflicts. Progress is reported regardless
+                // of success: the user has already paid the time cost for the attempt.
                 try {
                     await messageGrantFn(messageStream);
                     Logger.info('✓ Message stream: public permissions set');
                 } catch (e) {
                     Logger.error('✗ Message stream permissions failed:', e.message);
+                } finally {
+                    try { onProgress(); } catch (_) { /* ignore */ }
                 }
                 
                 try {
@@ -381,6 +391,8 @@ class StreamrController {
                     Logger.info('✓ Ephemeral stream: public permissions set');
                 } catch (e) {
                     Logger.error('✗ Ephemeral stream permissions failed:', e.message);
+                } finally {
+                    try { onProgress(); } catch (_) { /* ignore */ }
                 }
 
                 try {
@@ -388,6 +400,8 @@ class StreamrController {
                     Logger.info('✓ Admin stream: public read-only permissions set (owner-only publish)');
                 } catch (e) {
                     Logger.error('✗ Admin stream permissions failed:', e.message);
+                } finally {
+                    try { onProgress(); } catch (_) { /* ignore */ }
                 }
                 
                 const permTime = ((Date.now() - permStartTime) / 1000).toFixed(1);
@@ -400,6 +414,8 @@ class StreamrController {
                     Logger.info('✓ Message stream: permissions set');
                 } catch (e) {
                     Logger.error('✗ Message stream permissions failed:', e.message);
+                } finally {
+                    try { onProgress(); } catch (_) { /* ignore */ }
                 }
                 
                 try {
@@ -407,6 +423,8 @@ class StreamrController {
                     Logger.info('✓ Ephemeral stream: permissions set');
                 } catch (e) {
                     Logger.error('✗ Ephemeral stream permissions failed:', e.message);
+                } finally {
+                    try { onProgress(); } catch (_) { /* ignore */ }
                 }
 
                 // Admin stream: members get SUBSCRIBE only (no publish); owner publishes by ownership
@@ -419,6 +437,8 @@ class StreamrController {
                     Logger.info('✓ Admin stream: members subscribe-only permissions set');
                 } catch (e) {
                     Logger.error('✗ Admin stream permissions failed:', e.message);
+                } finally {
+                    try { onProgress(); } catch (_) { /* ignore */ }
                 }
                 
                 const permTime = ((Date.now() - permStartTime) / 1000).toFixed(1);
@@ -968,12 +988,20 @@ class StreamrController {
             }
         };
 
+        // Optional progress callback — invoked once after each on-chain step.
+        // Worst case (fresh inbox, Streamr storage): 6 steps total
+        //   (2× createStream + 2× setPermissions + addToStorageNode + setStorageDayCount).
+        // If a stream already exists, that "create" step is essentially free but we
+        // still report progress so the UI ring reflects work completed.
+        const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
+
         // Step 1: Create/get message stream (sequential to avoid nonce conflicts)
         const messageStream = await getOrCreate(
             messageStreamId,
             metadata,
             STREAM_CONFIG.MESSAGE_STREAM.DM_PARTITIONS  // 4 partitions: messages + sync + sync_blobs + notifications
         );
+        try { onProgress(); } catch (_) { /* progress callback errors must not break flow */ }
 
         // Step 2: Create/get ephemeral stream
         const ephemeralStream = await getOrCreate(
@@ -981,6 +1009,7 @@ class StreamrController {
             ephemeralMetadata,
             STREAM_CONFIG.EPHEMERAL_STREAM.PARTITIONS
         );
+        try { onProgress(); } catch (_) { /* see above */ }
 
         // Step 3: Set many-to-one permissions (public PUBLISH, owner-only SUBSCRIBE)
         // Protects social graph: only inbox owner can see who writes to them
@@ -989,6 +1018,8 @@ class StreamrController {
             Logger.info('✓ DM message stream: many-to-one permissions set (public publish, owner subscribe)');
         } catch (e) {
             Logger.error('✗ DM message stream permissions failed:', e.message);
+        } finally {
+            try { onProgress(); } catch (_) { /* ignore */ }
         }
 
         try {
@@ -996,13 +1027,16 @@ class StreamrController {
             Logger.info('✓ DM ephemeral stream: many-to-one permissions set');
         } catch (e) {
             Logger.error('✗ DM ephemeral stream permissions failed:', e.message);
+        } finally {
+            try { onProgress(); } catch (_) { /* ignore */ }
         }
 
         // Step 4: Enable storage on message stream with user-selected options
         try {
             await this.enableStorage(messageStreamId, {
                 storageProvider: options.storageProvider,
-                storageDays: options.storageDays
+                storageDays: options.storageDays,
+                onProgress
             });
             Logger.info('✓ DM inbox storage enabled');
         } catch (e) {
@@ -2437,6 +2471,7 @@ class StreamrController {
                 
                 // Add to storage node
                 await stream.addToStorageNode(nodeAddress);
+                try { options.onProgress?.(); } catch (_) { /* progress callback errors must not break flow */ }
                 
                 // Set storage days if supported by provider
                 if (storageDays && providerConfig.supportsTTL) {
@@ -2445,6 +2480,8 @@ class StreamrController {
                         Logger.debug('Storage days set to:', storageDays);
                     } catch (ttlError) {
                         Logger.warn('Could not set storage days (continuing):', ttlError.message);
+                    } finally {
+                        try { options.onProgress?.(); } catch (_) { /* ignore */ }
                     }
                 }
                 

@@ -80,7 +80,7 @@ export const CONFIG = {
             'https://cloudflare-eth.com'
         ],
         rpcTimeoutMs: 5000,            // Per-call HTTP RPC timeout (GasEstimator)
-        fallbackGasPriceGwei: 30       // Fallback gas price when all RPCs fail
+        fallbackGasPriceGwei: 120      // Fallback gas price when all RPCs fail
     },
 
     // Retry Configuration

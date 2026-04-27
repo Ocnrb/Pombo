@@ -17,6 +17,7 @@ export const GasEstimator = {
         setPublicPermissions: 80000,    // Public permissions (single assignment)
         setPermissionsBatch: 210000,    // Batch setPermissions (multiple members)
         addStorageNode: 165000,         // Adding stream to storage node
+        setStorageDayCount: 50000,      // Setting storage retention days (single SSTORE)
     },
     
     cachedGasPrice: null,
@@ -107,13 +108,29 @@ export const GasEstimator = {
     async estimateCosts() {
         const gasPrice = await this.getGasPrice();
         
-        // All channels create 2 streams (message + ephemeral) + set permissions on both + storage on message stream
-        // Public/Password: 2× createStream + 2× setPublicPermissions + 1× addStorageNode
-        const publicCost = gasPrice * (2 * this.GAS_UNITS.createStream + 2 * this.GAS_UNITS.setPublicPermissions + this.GAS_UNITS.addStorageNode);
-        // Native: 2× createStream + 2× setPermissionsBatch + 1× addStorageNode
-        const nativeCost = gasPrice * (2 * this.GAS_UNITS.createStream + 2 * this.GAS_UNITS.setPermissionsBatch + this.GAS_UNITS.addStorageNode);
-        // DM Inbox: same as public (2 streams + 2 public permissions + 1 storage node)
-        const dmInboxCost = publicCost;
+        // Channels create 3 streams (-1 message + -2 ephemeral + -3 admin) + permissions on all three
+        // Storage is enabled on -1 (message) and -3 (admin) → 2× addStorageNode + 2× setStorageDayCount (Streamr provider)
+        // Public/Password: 3× createStream + 3× setPublicPermissions + 2× addStorageNode + 2× setStorageDayCount
+        const publicCost = gasPrice * (
+            3 * this.GAS_UNITS.createStream
+            + 3 * this.GAS_UNITS.setPublicPermissions
+            + 2 * this.GAS_UNITS.addStorageNode
+            + 2 * this.GAS_UNITS.setStorageDayCount
+        );
+        // Native: 3× createStream + 3× setPermissionsBatch + 2× addStorageNode + 2× setStorageDayCount
+        const nativeCost = gasPrice * (
+            3 * this.GAS_UNITS.createStream
+            + 3 * this.GAS_UNITS.setPermissionsBatch
+            + 2 * this.GAS_UNITS.addStorageNode
+            + 2 * this.GAS_UNITS.setStorageDayCount
+        );
+        // DM Inbox: 2 streams (-1 + -2) + 2 public permissions + 1 addStorageNode + 1 setStorageDayCount
+        const dmInboxCost = gasPrice * (
+            2 * this.GAS_UNITS.createStream
+            + 2 * this.GAS_UNITS.setPublicPermissions
+            + this.GAS_UNITS.addStorageNode
+            + this.GAS_UNITS.setStorageDayCount
+        );
         
         return {
             public: publicCost,

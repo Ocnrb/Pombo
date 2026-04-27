@@ -125,6 +125,7 @@ class DMManager {
      * @param {Object} options - Storage options
      * @param {string} options.storageProvider - 'streamr' or 'logstore' (default: 'streamr')
      * @param {number} options.storageDays - Retention days for Streamr (default: 180)
+     * @param {Function} [options.onProgress] - Called once per on-chain step
      * @returns {Promise<{messageStreamId: string, ephemeralStreamId: string}>}
      */
     async createInbox(options = {}) {

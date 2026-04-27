@@ -224,6 +224,8 @@ class ChannelManager {
 
             Logger.debug('Creating dual-stream channel:', { name, type, realAddress, members: type === 'native' ? members : [] });
 
+            const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+
             // Create dual-stream channel - streamrController handles on-chain operations
             // Returns: { messageStreamId, ephemeralStreamId, type, name }
             const streamInfo = await streamrController.createStream(
@@ -231,7 +233,7 @@ class ChannelManager {
                 realAddress, 
                 type, 
                 type === 'native' ? members : [],
-                options
+                { ...options, onProgress }
             );
             Logger.debug('Triple-stream created:', { 
                 messageStreamId: streamInfo.messageStreamId, 
@@ -245,7 +247,8 @@ class ChannelManager {
             try {
                 storageResult = await streamrController.enableStorage(streamInfo.messageStreamId, {
                     storageProvider: options.storageProvider,
-                    storageDays: options.storageDays
+                    storageDays: options.storageDays,
+                    onProgress
                 });
                 Logger.debug('Message storage result:', storageResult);
             } catch (storageError) {
@@ -256,7 +259,8 @@ class ChannelManager {
                 try {
                     const adminStorageResult = await streamrController.enableStorage(streamInfo.adminStreamId, {
                         storageProvider: options.storageProvider,
-                        storageDays: options.storageDays
+                        storageDays: options.storageDays,
+                        onProgress
                     });
                     Logger.debug('Admin storage result:', adminStorageResult);
                 } catch (storageError) {

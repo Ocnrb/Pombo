@@ -4,6 +4,7 @@
  */
 
 import { GasEstimator } from './GasEstimator.js';
+import { authManager } from '../auth.js';
 
 class DMModalsUI {
     constructor() {
@@ -188,8 +189,8 @@ class DMModalsUI {
             })
             .catch(error => {
                 this.Logger?.warn('Failed to estimate DM inbox gas cost:', error);
-                costEl.textContent = '~0.03 POL';
-                costEl.dataset.tooltip = 'Gas: ~30 gwei';
+                costEl.textContent = '~0.15 POL';
+                costEl.dataset.tooltip = 'Gas: ~120 gwei';
             });
     }
 
@@ -268,12 +269,81 @@ class DMModalsUI {
             storageDays: this.selectedStorageProvider === 'streamr' ? this.selectedStorageDays : null
         };
 
-        // Close modal immediately and show loading toast (like channel creation)
+        // ─── Pre-flight balance check ──────────────────────────────────────
+        // Block on zero/insufficient; warn (with confirmation) when balance is
+        // close to the estimated cost. Margin: require 1.5× the estimate.
+        const SAFETY_MULTIPLIER = 1.5;
+        try {
+            const address = authManager.getAddress?.() || this.authManager?.getAddress?.();
+            if (address) {
+                const [balanceWei, estimates] = await Promise.all([
+                    GasEstimator.getBalance(address),
+                    GasEstimator.estimateCosts()
+                ]);
+                const estimateWei = estimates.dmInbox;
+                const formattedEstimate = estimates.formatted.dmInbox;
+                const formattedBalance = GasEstimator.formatBalancePOL(balanceWei);
+
+                if (balanceWei === null) {
+                    this.Logger?.warn('Could not fetch balance for DM inbox pre-flight check; proceeding anyway');
+                } else if (balanceWei === 0) {
+                    this.showNotification(
+                        `No POL in wallet — DM inbox creation costs about ${formattedEstimate}. Top up and try again.`,
+                        'error',
+                        6000
+                    );
+                    return;
+                } else if (balanceWei < estimateWei) {
+                    this.showNotification(
+                        `Insufficient POL: balance ${formattedBalance} is below the estimated cost (${formattedEstimate}).`,
+                        'error',
+                        6000
+                    );
+                    return;
+                } else if (balanceWei < estimateWei * SAFETY_MULTIPLIER) {
+                    const confirmed = await this.notificationUI?.showConfirmToast?.(
+                        'Low POL balance',
+                        `Your balance (${formattedBalance}) is close to the estimated cost (${formattedEstimate}). If gas spikes, the transaction may fail. Continue anyway?`,
+                        { confirmLabel: 'Create anyway', cancelLabel: 'Cancel', variant: 'warning' }
+                    );
+                    if (!confirmed) {
+                        this.Logger?.debug('DM inbox creation cancelled by user (low balance)');
+                        return;
+                    }
+                }
+            }
+        } catch (preflightError) {
+            this.Logger?.warn('Balance pre-flight check failed (continuing):', preflightError);
+        }
+
+        // Close modal immediately and show loading toast with progress ring
         this.hideCreateInboxModal();
-        this.notificationUI?.showLoadingToast('Creating DM inbox...', 'This may take a minute');
+
+        // Total on-chain steps:
+        //   2× createStream + 2× setPermissions + addToStorageNode (= 5)
+        //   + setStorageDayCount when provider supports TTL (Streamr) -> 6 total
+        const totalSteps = options.storageProvider === 'streamr' ? 6 : 5;
+        this.notificationUI?.showLoadingToast(
+            'Creating DM inbox...',
+            'This may take a minute',
+            { steps: totalSteps, initialLabel: 'Creating Inbox...' }
+        );
+
+        // [1; 2] Creating Inbox · [3; 4] Setting Permissions · [5; total] Setting Storage
+        const labelForStep = (s) => {
+            if (s <= 2) return 'Creating Inbox...';
+            if (s <= 4) return 'Setting Permissions...';
+            return 'Setting Storage...';
+        };
+
+        let currentStep = 0;
+        const onProgress = () => {
+            currentStep += 1;
+            this.notificationUI?.setLoadingProgress(currentStep, labelForStep(currentStep));
+        };
 
         try {
-            await this.dmManager.createInbox(options);
+            await this.dmManager.createInbox({ ...options, onProgress });
             this.showNotification('DM inbox created!', 'success');
             await this.updateVisibility();
             document.dispatchEvent(new CustomEvent('pombo:dm-inbox-ready'));

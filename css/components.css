@@ -1196,6 +1196,50 @@ body {
     animation: toastLoadingProgress 1.5s ease-in-out infinite;
 }
 
+/* Optional progress ring on the right side of a loading toast.
+   Shows a determinate circular progress + small status label below. */
+.toast-progress-ring {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 0 0.125rem;
+    align-self: center;
+    min-width: 44px;
+}
+
+.toast-progress-ring .ring-svg {
+    width: 28px;
+    height: 28px;
+    transform: rotate(-90deg);
+}
+
+.toast-progress-ring .ring-track {
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.08);
+    stroke-width: 3;
+}
+
+.toast-progress-ring .ring-fill {
+    fill: none;
+    stroke: #ff5c00;
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-dasharray: 100;
+    stroke-dashoffset: 100;
+    transition: stroke-dashoffset 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.toast-progress-ring .ring-label {
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.45);
+    text-align: center;
+    white-space: nowrap;
+    line-height: 1.2;
+    transition: opacity 0.2s ease;
+}
+
 .toast-exit {
     animation: toastSlideOut 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }

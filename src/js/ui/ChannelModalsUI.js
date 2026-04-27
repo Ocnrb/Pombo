@@ -4,6 +4,7 @@
  */
 
 import { GasEstimator } from './GasEstimator.js';
+import { authManager } from '../auth.js';
 
 class ChannelModalsUI {
     constructor() {
@@ -122,17 +123,17 @@ class ChannelModalsUI {
             }
         } catch (error) {
             this.Logger?.warn('Failed to estimate gas costs:', error);
-            const fallbackTooltip = 'Gas: ~30 gwei';
+            const fallbackTooltip = 'Gas: ~120 gwei';
             if (costPublic) {
-                costPublic.textContent = '~0.01 POL';
+                costPublic.textContent = '~0.23 POL';
                 costPublic.dataset.tooltip = fallbackTooltip;
             }
             if (costPassword) {
-                costPassword.textContent = '~0.01 POL';
+                costPassword.textContent = '~0.23 POL';
                 costPassword.dataset.tooltip = fallbackTooltip;
             }
             if (costNative) {
-                costNative.textContent = '~0.02 POL';
+                costNative.textContent = '~0.28 POL';
                 costNative.dataset.tooltip = fallbackTooltip;
             }
         }
@@ -495,12 +496,12 @@ class ChannelModalsUI {
             : null;
 
         if (!name) {
-            alert('Please enter a channel name');
+            this.showNotification('Please enter a channel name', 'warning');
             return;
         }
 
         if (type === 'password' && !password) {
-            alert('Please enter a password');
+            this.showNotification('Please enter a password', 'warning');
             return;
         }
 
@@ -521,11 +522,88 @@ class ChannelModalsUI {
 
         this.Logger?.debug('Creating channel:', { name, type, password: password ? '***' : null, members, options });
 
+        // ─── Pre-flight balance check ──────────────────────────────────────
+        // Block on zero balance; warn (with confirmation) when balance is
+        // close to the estimated cost. Margin: require 1.5× the estimate as
+        // "safe"; below that we ask the user to confirm.
+        const SAFETY_MULTIPLIER = 1.5;
         try {
-            this.notificationUI?.showLoadingToast('Creating channel...', 'This may take a minute');
+            const address = authManager.getAddress();
+            if (address) {
+                const [balanceWei, estimates] = await Promise.all([
+                    GasEstimator.getBalance(address),
+                    GasEstimator.estimateCosts()
+                ]);
+                const estimateWei = type === 'native' ? estimates.native : estimates.public;
+                const formattedEstimate = type === 'native' ? estimates.formatted.native : estimates.formatted.public;
+                const formattedBalance = GasEstimator.formatBalancePOL(balanceWei);
+
+                if (balanceWei === null) {
+                    // RPC failed — don't block, just log. The user can still try.
+                    this.Logger?.warn('Could not fetch balance for pre-flight check; proceeding anyway');
+                } else if (balanceWei === 0) {
+                    this.showNotification(
+                        `No POL in wallet — channel creation costs about ${formattedEstimate}. Top up and try again.`,
+                        'error',
+                        6000
+                    );
+                    return;
+                } else if (balanceWei < estimateWei) {
+                    this.showNotification(
+                        `Insufficient POL: balance ${formattedBalance} is below the estimated cost (${formattedEstimate}).`,
+                        'error',
+                        6000
+                    );
+                    return;
+                } else if (balanceWei < estimateWei * SAFETY_MULTIPLIER) {
+                    const confirmed = await this.notificationUI?.showConfirmToast?.(
+                        'Low POL balance',
+                        `Your balance (${formattedBalance}) is close to the estimated cost (${formattedEstimate}). If gas spikes, the transaction may fail. Continue anyway?`,
+                        { confirmLabel: 'Create anyway', cancelLabel: 'Cancel', variant: 'warning' }
+                    );
+                    if (!confirmed) {
+                        this.Logger?.debug('Channel creation cancelled by user (low balance)');
+                        return;
+                    }
+                }
+            }
+        } catch (preflightError) {
+            // Never block creation on pre-flight errors — user already filled the form
+            this.Logger?.warn('Balance pre-flight check failed (continuing):', preflightError);
+        }
+
+        try {
+            // Total on-chain steps:
+            //   3× createStream + 3× setPermissions + 2× addToStorageNode (= 8)
+            //   + 2× setStorageDayCount when provider supports TTL (Streamr) -> 10 total
+            // Logstore has no setStorageDayCount, so 8.
+            const totalSteps = storageProvider === 'streamr' ? 10 : 8;
+            this.notificationUI?.showLoadingToast(
+                'Creating channel...',
+                'This may take a minute',
+                { steps: totalSteps, initialLabel: 'Creating Channel...' }
+            );
+
+            // Map step index -> phase label.
+            // [1; 3] Creating Channel · [4; 6] Setting Permissions · [7; total] Setting Storage
+            const labelForStep = (s) => {
+                if (s <= 3) return 'Creating Channel...';
+                if (s <= 6) return 'Setting Permissions...';
+                return 'Setting Storage...';
+            };
+
+            let currentStep = 0;
+            const onProgress = () => {
+                currentStep += 1;
+                this.notificationUI?.setLoadingProgress(currentStep, labelForStep(currentStep));
+            };
+
             this.hide();
             
-            const channel = await this.channelManager.createChannel(name, type, password, members, options);
+            const channel = await this.channelManager.createChannel(name, type, password, members, {
+                ...options,
+                onProgress
+            });
             this.Logger?.debug('Channel created in UI:', channel);
 
             this.deps.renderChannelList?.();

@@ -34,7 +34,8 @@ class NotificationUI {
     _isPersistent(toast) {
         return toast.classList.contains('loading') || 
                toast.classList.contains('error') ||
-               toast.classList.contains('invite');
+               toast.classList.contains('invite') ||
+               toast.classList.contains('confirm');
     }
 
     /**
@@ -222,12 +223,95 @@ class NotificationUI {
     }
 
     /**
+     * Show a persistent confirm toast with Confirm / Cancel actions.
+     * Resolves with `true` if the user confirms, `false` otherwise (cancel,
+     * close button, or auto-dismiss timeout).
+     *
+     * Designed to keep the same minimalist look as other toasts — just an
+     * icon + title/subtitle + two small action buttons.
+     *
+     * @param {string} message - Title/headline
+     * @param {string} [subtitle] - Optional secondary line
+     * @param {Object} [options]
+     * @param {string} [options.confirmLabel='Confirm']
+     * @param {string} [options.cancelLabel='Cancel']
+     * @param {'warning'|'info'|'error'} [options.variant='warning'] - Icon/accent color
+     * @param {number} [options.timeoutMs] - Auto-dismiss after N ms (default: no timeout)
+     * @returns {Promise<boolean>}
+     */
+    showConfirmToast(message, subtitle = '', options = {}) {
+        const container = document.getElementById('toast-container');
+        if (!container) {
+            Logger.warn('Toast container not found — falling back to window.confirm');
+            return Promise.resolve(window.confirm(`${message}\n\n${subtitle}`));
+        }
+
+        const {
+            confirmLabel = 'Confirm',
+            cancelLabel = 'Cancel',
+            variant = 'warning',
+            timeoutMs = 0,
+        } = options;
+
+        return new Promise((resolve) => {
+            const toast = document.createElement('div');
+            toast.className = `toast confirm ${variant}`;
+            toast.innerHTML = `
+                ${TOAST_ICONS[variant] || TOAST_ICONS.warning}
+                <div class="toast-content">
+                    <div class="text-[13px] font-medium text-white/90">${escapeHtml(message)}</div>
+                    ${subtitle ? `<div class="text-[11px] text-white/50 mt-0.5">${escapeHtml(subtitle)}</div>` : ''}
+                    <div class="mt-2.5 flex gap-2">
+                        <button class="confirm-btn bg-white/90 hover:bg-white text-[#0a0a0a] px-3 py-1 rounded-md text-[11px] font-medium transition">
+                            ${escapeHtml(confirmLabel)}
+                        </button>
+                        <button class="cancel-btn bg-white/10 hover:bg-white/20 text-white/70 px-3 py-1 rounded-md text-[11px] font-medium transition">
+                            ${escapeHtml(cancelLabel)}
+                        </button>
+                    </div>
+                </div>
+                <span class="toast-close" title="Cancel">
+                    <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </span>
+            `;
+
+            let settled = false;
+            const settle = (value) => {
+                if (settled) return;
+                settled = true;
+                if (toast._dismissTimeout) {
+                    clearTimeout(toast._dismissTimeout);
+                    toast._dismissTimeout = null;
+                }
+                this._dismissToast(toast);
+                resolve(value);
+            };
+
+            toast.querySelector('.confirm-btn').addEventListener('click', () => settle(true));
+            toast.querySelector('.cancel-btn').addEventListener('click', () => settle(false));
+            toast.querySelector('.toast-close')?.addEventListener('click', () => settle(false));
+
+            container.appendChild(toast);
+            this._setupSwipeHandlers(toast);
+
+            if (timeoutMs > 0) {
+                toast._dismissTimeout = setTimeout(() => settle(false), timeoutMs);
+            }
+        });
+    }
+
+    /**
      * Show a persistent loading toast notification (for long operations)
      * @param {string} message - Loading message
      * @param {string} subtitle - Optional subtitle with more info
+     * @param {Object} [options]
+     * @param {number} [options.steps] - When provided, renders a determinate
+     *   progress ring on the right side. Update via {@link setLoadingProgress}.
+     * @param {string} [options.initialLabel] - Label shown below the ring
+     *   (defaults to the toast message).
      * @returns {HTMLElement} - Toast element (call hideLoadingToast to dismiss)
      */
-    showLoadingToast(message, subtitle = 'This may take a moment...') {
+    showLoadingToast(message, subtitle = 'This may take a moment...', options = {}) {
         const container = document.getElementById('toast-container');
         if (!container) {
             Logger.debug(`[loading] ${message}`);
@@ -239,24 +323,72 @@ class NotificationUI {
 
         const toast = document.createElement('div');
         toast.className = 'toast loading';
+
+        const showRing = Number.isFinite(options.steps) && options.steps > 0;
+        const ringHtml = showRing
+            ? `
+            <div class="toast-progress-ring" aria-hidden="true">
+                <svg class="ring-svg" viewBox="0 0 36 36">
+                    <circle class="ring-track" cx="18" cy="18" r="15.9155"></circle>
+                    <circle class="ring-fill" cx="18" cy="18" r="15.9155"></circle>
+                </svg>
+                <span class="ring-label">${escapeHtml(options.initialLabel || message)}</span>
+            </div>`
+            : '';
+
         toast.innerHTML = `
             <svg class="toast-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"/>
             </svg>
             <div class="toast-content">
                 <span class="toast-message">${escapeHtml(message)}</span>
                 ${subtitle ? `<span class="text-[11px] text-white/40 block mt-0.5">${escapeHtml(subtitle)}</span>` : ''}
             </div>
+            ${ringHtml}
             <div class="toast-progress"></div>
         `;
-        
+
+        if (showRing) {
+            toast.dataset.totalSteps = String(options.steps);
+            toast.dataset.currentStep = '0';
+        }
+
         container.appendChild(toast);
         this.currentLoadingToast = toast;
-        
+
         // Setup mobile swipe handlers
         this._setupSwipeHandlers(toast);
-        
+
         return toast;
+    }
+
+    /**
+     * Update the determinate progress ring on the current loading toast.
+     * Safe no-op if the toast was created without `options.steps`.
+     * @param {number} step - Current step (1-based). Clamped to [0, totalSteps].
+     * @param {string} [label] - Optional new status label below the ring.
+     */
+    setLoadingProgress(step, label = null) {
+        const toast = this.currentLoadingToast;
+        if (!toast) return;
+        const total = parseInt(toast.dataset.totalSteps || '0', 10);
+        if (!total) return;
+
+        const clamped = Math.max(0, Math.min(total, step));
+        toast.dataset.currentStep = String(clamped);
+
+        const ringFill = toast.querySelector('.ring-fill');
+        if (ringFill) {
+            const pct = (clamped / total) * 100;
+            ringFill.style.strokeDashoffset = String(100 - pct);
+        }
+
+        if (label) {
+            const labelEl = toast.querySelector('.ring-label');
+            if (labelEl && labelEl.textContent !== label) {
+                labelEl.textContent = label;
+            }
+        }
     }
 
     /**
