@@ -536,13 +536,18 @@ describe('MessageRenderer', () => {
             expect(result).toContain('data-msg-id="msg-3"');
         });
         
-        it('should include avatar for other\'s message', () => {
-            const msg = { id: 'msg-4', sender: '0x123', text: 'Test' };
-            
-            const result = messageRenderer.buildMessageHTML(
-                msg, false, '15:00', { html: '' }, 'User'
-            );
-            
+        it('should include avatar in group open HTML for other\'s sender', () => {
+            // Avatars now live at the group level, not per-message, since each
+            // run of consecutive messages from the same sender shares a single
+            // sticky avatar rendered by buildMessageGroupOpenHTML().
+            const result = messageRenderer.buildMessageGroupOpenHTML({
+                sender: '0x123',
+                isOwn: false,
+                ensAvatarUrl: null
+            });
+
+            expect(result).toContain('message-group');
+            expect(result).toContain('message-group-avatar-rail');
             expect(result).toContain('message-avatar');
             expect(result).toContain('<svg'); // Avatar SVG
         });

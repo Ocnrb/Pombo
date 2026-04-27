@@ -16,6 +16,8 @@ vi.mock('../../src/js/ui/NotificationUI.js', () => ({
 vi.mock('../../src/js/ui/MessageRenderer.js', () => ({
     messageRenderer: {
         buildMessageHTML: vi.fn(() => '<div class="message-entry">msg</div>'),
+        buildMessageGroupOpenHTML: vi.fn(() => '<div class="message-group">'),
+        buildMessageGroupCloseHTML: vi.fn(() => '</div>'),
         renderDateSeparator: vi.fn(() => '')
     }
 }));
@@ -44,7 +46,8 @@ vi.mock('../../src/js/ui/MessageGrouper.js', () => ({
     analyzeMessageGroups: vi.fn(() => []),
     getGroupPositionClass: vi.fn(() => ''),
     analyzeSpacing: vi.fn(() => []),
-    getSpacingClass: vi.fn(() => '')
+    getSpacingClass: vi.fn(() => ''),
+    shouldGroup: vi.fn(() => false)
 }));
 
 vi.mock('../../src/js/ui/utils.js', () => ({
