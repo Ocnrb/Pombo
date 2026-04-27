@@ -1707,7 +1707,8 @@ class StreamrController {
 
     /**
      * Delete a stream (only owner can delete)
-     * For dual-stream architecture, deletes BOTH messageStream and ephemeralStream
+     * For dual-stream architecture, deletes message stream (-1), ephemeral stream (-2)
+     * and admin stream (-3) so no orphan streams are left on the network.
      * @param {string} streamId - Stream ID (can be either messageStreamId or ephemeralStreamId)
      * @param {number} retries - Number of retry attempts per stream
      * @returns {Promise<void>}
@@ -1717,53 +1718,87 @@ class StreamrController {
             throw new Error('Streamr client not initialized');
         }
 
-        // Derive both stream IDs (v0 dual-stream architecture)
-        let messageStreamId, ephemeralStreamId;
-        
+        // Derive all stream IDs (message + ephemeral + admin)
+        let messageStreamId, ephemeralStreamId, adminStreamId;
+
         if (isMessageStream(streamId)) {
             messageStreamId = streamId;
-            ephemeralStreamId = deriveEphemeralId(streamId);
         } else if (isEphemeralStream(streamId)) {
-            ephemeralStreamId = streamId;
             messageStreamId = deriveMessageId(streamId);
         } else {
             throw new Error('Invalid stream ID format - must end with -1 or -2');
         }
 
+        ephemeralStreamId = deriveEphemeralId(messageStreamId);
+        adminStreamId = deriveAdminId(messageStreamId);
+
+        // Helper: detect "stream does not exist" — idempotent success case.
+        // The stream may have been deleted in a previous attempt or never existed
+        // (e.g. legacy channels without -3). Either way, no retry is needed.
+        const isStreamGoneError = (err) => {
+            const msg = String(err?.reason || err?.message || err || '');
+            return /streamDoesNotExist|stream.*does.*not.*exist|stream.*not.*found/i.test(msg);
+        };
+
         // Helper function to delete a single stream with retries
         const deleteWithRetry = async (sid, description) => {
             try {
                 await executeWithRetry(`delete(${description})`, async () => {
-                    await this.client.deleteStream(sid);
-                    Logger.info(`✓ ${description} deleted:`, sid);
+                    try {
+                        await this.client.deleteStream(sid);
+                        Logger.info(`✓ ${description} deleted:`, sid);
+                    } catch (err) {
+                        if (isStreamGoneError(err)) {
+                            Logger.info(`✓ ${description} already gone (idempotent):`, sid);
+                            return; // treat as success, stop retrying
+                        }
+                        throw err;
+                    }
                 }, { maxRetries: retries });
                 return { success: true };
             } catch (error) {
+                if (isStreamGoneError(error)) {
+                    Logger.info(`✓ ${description} already gone (idempotent):`, sid);
+                    return { success: true };
+                }
                 Logger.error(`All delete attempts failed for ${description}:`, sid);
                 return { success: false, error };
             }
         };
 
         try {
-            Logger.info('Deleting channel streams...', { messageStreamId, ephemeralStreamId });
-            
-            // Unsubscribe from both streams first
-            await this.unsubscribeFromDualStream(messageStreamId).catch(e => 
+            Logger.info('Deleting channel streams...', { messageStreamId, ephemeralStreamId, adminStreamId });
+
+            // Unsubscribe from message + ephemeral first
+            await this.unsubscribeFromDualStream(messageStreamId).catch(e =>
                 Logger.warn('Unsubscribe warning:', e.message)
             );
-            
-            // Delete message stream first (primary), then ephemeral (sequential for nonce)
+            // Unsubscribe from admin stream too (best-effort)
+            if (adminStreamId) {
+                await this.unsubscribe(adminStreamId).catch(e =>
+                    Logger.warn('Admin unsubscribe warning:', e.message)
+                );
+            }
+
+            // Delete sequentially (preserves wallet nonce ordering):
+            // message (primary) → ephemeral → admin.
             const msgResult = await deleteWithRetry(messageStreamId, 'message stream');
-            
+
             if (ephemeralStreamId) {
                 await deleteWithRetry(ephemeralStreamId, 'ephemeral stream');
             }
-            
+
+            if (adminStreamId) {
+                // Admin stream may not exist on legacy channels created before
+                // the -3 feature; failures here are non-critical (logged, not thrown).
+                await deleteWithRetry(adminStreamId, 'admin stream');
+            }
+
             // Throw if message stream failed (primary stream)
             if (!msgResult.success) {
                 throw msgResult.error;
             }
-            
+
         } catch (error) {
             Logger.error('Failed to delete streams:', error);
             throw error;
