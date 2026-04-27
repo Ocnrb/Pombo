@@ -99,6 +99,10 @@ describe('GasEstimator', () => {
         it('should have addStorageNode gas estimate', () => {
             expect(GasEstimator.GAS_UNITS.addStorageNode).toBe(165000);
         });
+
+        it('should have setStorageDayCount gas estimate', () => {
+            expect(GasEstimator.GAS_UNITS.setStorageDayCount).toBe(50000);
+        });
     });
 
     describe('RPC_URLS configuration', () => {
@@ -149,8 +153,8 @@ describe('GasEstimator', () => {
             
             const price = await GasEstimator.getGasPrice();
             
-            // Should return fallback 30 gwei
-            expect(price).toBe(30 * 1e9);
+            // Should return fallback 120 gwei (CONFIG.network.fallbackGasPriceGwei)
+            expect(price).toBe(120 * 1e9);
             
             globalThis.fetch = originalFetch;
         });
@@ -166,8 +170,9 @@ describe('GasEstimator', () => {
         it('should calculate public channel cost', async () => {
             const costs = await GasEstimator.estimateCosts();
             
-            // Public = 2× createStream + 2× setPublicPermissions + addStorageNode
-            const expectedGas = 2 * 420000 + 2 * 80000 + 165000; // 1165000
+            // Public = 3× createStream + 3× setPublicPermissions
+            //        + 2× addStorageNode + 2× setStorageDayCount
+            const expectedGas = 3 * 420000 + 3 * 80000 + 2 * 165000 + 2 * 50000;
             const expectedCost = 30 * 1e9 * expectedGas;
             
             expect(costs.public).toBe(expectedCost);
@@ -176,8 +181,9 @@ describe('GasEstimator', () => {
         it('should calculate native channel cost', async () => {
             const costs = await GasEstimator.estimateCosts();
             
-            // Native = 2× createStream + 2× setPermissionsBatch + addStorageNode
-            const expectedGas = 2 * 420000 + 2 * 210000 + 165000; // 1425000
+            // Native = 3× createStream + 3× setPermissionsBatch
+            //        + 2× addStorageNode + 2× setStorageDayCount
+            const expectedGas = 3 * 420000 + 3 * 210000 + 2 * 165000 + 2 * 50000;
             const expectedCost = 30 * 1e9 * expectedGas;
             
             expect(costs.native).toBe(expectedCost);
@@ -188,9 +194,15 @@ describe('GasEstimator', () => {
             expect(costs.password).toBe(costs.public);
         });
 
-        it('should have dmInbox cost equal to public cost', async () => {
+        it('should calculate dmInbox cost (2 streams + 1 storage node + 1 storage day count)', async () => {
             const costs = await GasEstimator.estimateCosts();
-            expect(costs.dmInbox).toBe(costs.public);
+
+            // DM inbox = 2× createStream + 2× setPublicPermissions
+            //          + 1× addStorageNode + 1× setStorageDayCount
+            const expectedGas = 2 * 420000 + 2 * 80000 + 165000 + 50000;
+            const expectedCost = 30 * 1e9 * expectedGas;
+
+            expect(costs.dmInbox).toBe(expectedCost);
         });
 
         it('should return formatted values', async () => {
