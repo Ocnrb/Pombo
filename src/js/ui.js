@@ -852,9 +852,9 @@ class UIController {
             this.handleSendMessage();
         });
 
-        // Enter key to send message (Shift+Enter for new line)
+        // Ctrl/Cmd+Enter to send (Enter alone inserts a newline). On mobile, use the send button.
         this.elements.messageInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
                 this.handleSendMessage();
             }
