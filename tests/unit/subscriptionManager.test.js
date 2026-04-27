@@ -983,9 +983,9 @@ describe('SubscriptionManager', () => {
             subscriptionManager.previewChannelId = 'stream1';
             channelManager.getChannel.mockReturnValue({ streamId: 'stream1' });
             const msg = { id: 'msg1', type: 'text' };
-            
-            subscriptionManager._handlePreviewMessage(msg);
-            
+
+            subscriptionManager._handlePreviewMessage('stream1', msg);
+
             expect(channelManager.handleTextMessage).toHaveBeenCalledWith('stream1', msg);
         });
 
@@ -995,22 +995,43 @@ describe('SubscriptionManager', () => {
             const callback = vi.fn();
             subscriptionManager.onPreviewMessage = callback;
             const msg = { id: 'msg1' };
-            
-            subscriptionManager._handlePreviewMessage(msg);
-            
+
+            subscriptionManager._handlePreviewMessage('stream1', msg);
+
             expect(callback).toHaveBeenCalledWith(msg);
-            
+
             subscriptionManager.onPreviewMessage = null;
         });
 
-        it('should use activeChannelId if previewChannelId is null', () => {
+        it('should forward to channelManager when source matches activeChannelId (post-promote)', () => {
+            // After promotePreviewToActive the preview slot is null but
+            // the stream is in channelManager and tracked as active.
             subscriptionManager.previewChannelId = null;
             subscriptionManager.activeChannelId = 'active-stream';
             channelManager.getChannel.mockReturnValue({ streamId: 'active-stream' });
-            
-            subscriptionManager._handlePreviewMessage({ id: 'msg1' });
-            
+
+            subscriptionManager._handlePreviewMessage('active-stream', { id: 'msg1' });
+
             expect(channelManager.handleTextMessage).toHaveBeenCalledWith('active-stream', expect.any(Object));
+        });
+
+        it('should drop messages from orphan/stale subscriptions', () => {
+            // sourceStreamId doesn't match preview/active and channel is
+            // not registered — typical rapid-Explore-switch leak signature.
+            subscriptionManager.previewChannelId = 'current-preview';
+            subscriptionManager.activeChannelId = null;
+            channelManager.getChannel.mockReturnValue(null);
+            subscriptionManager.onPreviewMessage = vi.fn();
+            // Stub the orphan unsub so we don't hit streamrController in tests.
+            subscriptionManager._scheduleOrphanPreviewUnsub = vi.fn();
+
+            subscriptionManager._handlePreviewMessage('stale-stream', { id: 'msg1' });
+
+            expect(channelManager.handleTextMessage).not.toHaveBeenCalled();
+            expect(subscriptionManager.onPreviewMessage).not.toHaveBeenCalled();
+            expect(subscriptionManager._scheduleOrphanPreviewUnsub).toHaveBeenCalledWith('stale-stream');
+
+            subscriptionManager.onPreviewMessage = null;
         });
     });
 
@@ -1018,9 +1039,9 @@ describe('SubscriptionManager', () => {
         it('should handle presence messages', () => {
             subscriptionManager.previewChannelId = 'stream1';
             const msg = { type: 'presence', user: 'testuser' };
-            
-            subscriptionManager._handlePreviewEphemeral(msg);
-            
+
+            subscriptionManager._handlePreviewEphemeral('stream1', msg);
+
             expect(channelManager.handlePresenceMessage).toHaveBeenCalledWith('stream1', msg);
         });
 
@@ -1028,18 +1049,23 @@ describe('SubscriptionManager', () => {
             subscriptionManager.previewChannelId = 'stream1';
             channelManager.notifyHandlers = vi.fn();
             const msg = { type: 'typing', user: 'testuser' };
-            
-            subscriptionManager._handlePreviewEphemeral(msg);
-            
+
+            subscriptionManager._handlePreviewEphemeral('stream1', msg);
+
             expect(channelManager.notifyHandlers).toHaveBeenCalledWith('typing', expect.objectContaining({ streamId: 'stream1' }));
         });
 
-        it('should do nothing if no stream id', () => {
-            subscriptionManager.previewChannelId = null;
+        it('should drop ephemerals from orphan/stale subscriptions', () => {
+            subscriptionManager.previewChannelId = 'current-preview';
             subscriptionManager.activeChannelId = null;
-            
-            // Should not throw
-            subscriptionManager._handlePreviewEphemeral({ type: 'presence' });
+            channelManager.getChannel.mockReturnValue(null);
+            channelManager.handlePresenceMessage.mockClear?.();
+            subscriptionManager._scheduleOrphanPreviewUnsub = vi.fn();
+
+            subscriptionManager._handlePreviewEphemeral('stale-stream', { type: 'presence' });
+
+            expect(channelManager.handlePresenceMessage).not.toHaveBeenCalled();
+            expect(subscriptionManager._scheduleOrphanPreviewUnsub).toHaveBeenCalledWith('stale-stream');
         });
     });
 
