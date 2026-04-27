@@ -22,6 +22,7 @@ import { CONFIG } from './config.js';
 import { StorageError } from './utils/errors.js';
 import { mediaController } from './media.js';
 import { adminStatePoller } from './adminStatePoller.js';
+import { channelImageManager } from './channelImageManager.js';
 
 class ChannelManager {
     constructor() {
@@ -1187,6 +1188,81 @@ class ChannelManager {
         return this.publishAdminState(messageStreamId, { patch: { pins: next } });
     }
 
+    /**
+     * Publish a new CHANNEL_IMAGE on -3/P1.
+     * Owner-only; encryption is opt-in via `encrypt` flag (default false).
+     *
+     * @param {string} messageStreamId - Channel key (-1)
+     * @param {Object} input - { dataUrl: 'data:image/jpeg;base64,...', hash: 'hex' }
+     * @param {Object} [options]
+     * @param {boolean} [options.encrypt=false] - Encrypt with channel password
+     * @returns {Promise<{rev:number, hash:string}>}
+     */
+    async publishChannelImage(messageStreamId, input, { encrypt = false } = {}) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) throw new Error('Channel not found');
+
+        const adminStreamId = channel.adminStreamId || deriveAdminId(messageStreamId);
+        if (!adminStreamId) throw new Error('Channel has no admin stream');
+
+        const senderAddress = authManager.getAddress();
+        if (!senderAddress) throw new Error('Not authenticated');
+        if (channel.createdBy && senderAddress.toLowerCase() !== channel.createdBy.toLowerCase()) {
+            throw new Error('Only the channel admin can publish channel image');
+        }
+
+        if (!input?.dataUrl || !input?.hash) {
+            throw new Error('publishChannelImage requires { dataUrl, hash }');
+        }
+        if (encrypt && !channel.password) {
+            throw new Error('Cannot encrypt: channel has no password');
+        }
+
+        const newRev = ((channel.channelImageRev) || 0) + 1;
+        // Derive mime from the data URL prefix so PNGs (with transparency)
+        // and JPEGs round-trip honestly.
+        const mimeMatch = /^data:([^;]+);/i.exec(input.dataUrl);
+        const mime = mimeMatch ? mimeMatch[1].toLowerCase() : 'image/jpeg';
+        const payload = {
+            type: 'CHANNEL_IMAGE',
+            v: 1,
+            rev: newRev,
+            ts: Date.now(),
+            createdBy: senderAddress,
+            encrypted: !!encrypt,
+            mime,
+            hash: input.hash,
+            data: input.dataUrl
+        };
+
+        await streamrController.publishChannelImage(
+            adminStreamId,
+            payload,
+            encrypt ? channel.password : null
+        );
+
+        channel.channelImageRev = newRev;
+
+        // Optimistically update the shared cache so all surfaces re-render.
+        await channelImageManager.setLocal(adminStreamId, {
+            hash: input.hash,
+            dataUrl: input.dataUrl,
+            encrypted: !!encrypt,
+            ts: payload.ts,
+            rev: newRev,
+            owner: senderAddress
+        });
+
+        Logger.info('Channel image published', {
+            streamId: messageStreamId.slice(-20),
+            rev: newRev,
+            encrypted: !!encrypt,
+            bytes: input.dataUrl.length
+        });
+
+        return { rev: newRev, hash: input.hash };
+    }
+
     /** Read helpers used by UI/render layers. */
     isMessageHidden(channel, messageId) {
         if (!channel || !messageId) return false;
@@ -1543,6 +1619,11 @@ class ChannelManager {
                 await this.bootstrapAdminState(messageStreamId, adminStreamId, pwd);
             } catch (e) {
                 Logger.warn('Admin stream bootstrap failed (continuing without admin state):', e.message);
+            }
+            // Fire-and-forget: pull channel image (-3/P1). Skipped for DMs.
+            // The manager dedups across UI surfaces and caches in IDB.
+            if (channel && channel.type !== 'dm') {
+                channelImageManager.get(adminStreamId, { password: pwd }).catch(() => {});
             }
         }
 

@@ -8,6 +8,8 @@ module.exports = {
     app: './src/js/app.js',
     // Crypto Worker bundle: Offloads heavy crypto operations
     'crypto.worker': './src/js/workers/cryptoWorker.js',
+    // Sync Worker bundle: Offloads sync-state merge work
+    'sync.worker': './src/js/workers/syncWorker.js',
   },
   output: {
     filename: 'js/[name].bundle.js',

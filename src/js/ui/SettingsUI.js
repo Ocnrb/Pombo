@@ -443,8 +443,7 @@ class SettingsUI {
                         this.mediaController.reset();
 
                         // 7. Delete encrypted storage
-                        const storageKey = CONFIG.storageKeys.secure(currentAddress);
-                        localStorage.removeItem(storageKey);
+                        await this.secureStorage.deletePersistentState(currentAddress);
 
                         // 8. Lock secure storage
                         this.secureStorage.lock();

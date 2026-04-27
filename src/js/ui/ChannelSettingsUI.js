@@ -10,6 +10,10 @@ import { sanitizeText } from './sanitizer.js';
 import { relayManager } from '../relayManager.js';
 import { graphAPI } from '../graph.js';
 import { CONFIG } from '../config.js';
+import { mediaController } from '../media.js';
+import { channelImageManager } from '../channelImageManager.js';
+import { deriveAdminId } from '../streamConstants.js';
+import { getAvatarHtml } from './AvatarGenerator.js';
 
 class ChannelSettingsUI {
     constructor() {
@@ -152,6 +156,10 @@ class ChannelSettingsUI {
 
         // Populate storage info
         this.populateStorageInfo(currentChannel);
+
+        // Render channel image section (admin upload + preview for everyone).
+        // Skipped for DM channels.
+        this._renderChannelImageSection(currentChannel, !isPreviewMode);
 
         // Show/hide members-related elements based on permission to add members
         this.elements.addMemberForm?.classList.toggle('hidden', !canAddMembers);
@@ -1580,6 +1588,209 @@ class ChannelSettingsUI {
         } catch (error) {
             showNotification('Failed to save name: ' + error.message, 'error');
             Logger.error('Failed to save channel name:', error);
+        }
+    }
+
+    // ==================== CHANNEL IMAGE ====================
+
+    /**
+     * Render the channel-image section in the Info panel.
+     * Visible for all members (preview); upload controls visible only to
+     * the channel admin on non-DM channels.
+     */
+    _renderChannelImageSection(channel, canEdit) {
+        const section = document.getElementById('channel-image-section');
+        if (!section) return;
+
+        const isDM = channel.type === 'dm';
+        if (isDM) {
+            section.classList.add('hidden');
+            return;
+        }
+        section.classList.remove('hidden');
+
+        const previewEl = document.getElementById('channel-image-preview');
+        const controls = document.getElementById('channel-image-controls');
+        const fileInput = document.getElementById('channel-image-input');
+        const uploadBtn = document.getElementById('channel-image-upload-btn');
+        const status = document.getElementById('channel-image-status');
+
+        const adminStreamId = channel.adminStreamId || deriveAdminId(channel.streamId);
+        const ownerAddress = (channel.createdBy || '').toLowerCase();
+        const myAddress = (this.deps.authManager?.getAddress() || '').toLowerCase();
+        const isOwner = !!myAddress && !!ownerAddress && myAddress === ownerAddress;
+
+        // Render preview helper (uses cache; falls back to deterministic avatar)
+        const renderPreview = (entry) => {
+            if (!previewEl) return;
+            if (entry?.dataUrl) {
+                previewEl.innerHTML = `<img src="${escapeAttr(entry.dataUrl)}" alt="Channel image" class="w-full h-full object-cover" />`;
+            } else {
+                // Fallback: deterministic avatar from streamId
+                previewEl.innerHTML = getAvatarHtml(channel.streamId, 80, 0.25, null);
+            }
+        };
+
+        // Initial render from cache (sync) — manager will refresh in background
+        renderPreview(channelImageManager.getCached(adminStreamId));
+
+        // Subscribe to updates while modal is open; replace any prior listener
+        if (this._channelImageUnsub) {
+            try { this._channelImageUnsub(); } catch {}
+            this._channelImageUnsub = null;
+        }
+        if (adminStreamId) {
+            this._channelImageUnsub = channelImageManager.subscribe(adminStreamId, renderPreview);
+            // Trigger fetch (manager dedups). Don't await; just refresh asynchronously.
+            channelImageManager.get(adminStreamId, { password: channel.password || null })
+                .then(entry => { if (entry) renderPreview(entry); })
+                .catch(() => {});
+        }
+
+        // Reset status display when re-rendering
+        if (status) {
+            status.textContent = '';
+            status.classList.add('hidden');
+        }
+
+        // Show controls only to admin (and only if not preview mode)
+        const showControls = canEdit && isOwner;
+        controls?.classList.toggle('hidden', !showControls);
+        if (!showControls) return;
+
+        // Wire upload (clone to drop any prior listener)
+        if (uploadBtn && fileInput) {
+            const newBtn = uploadBtn.cloneNode(true);
+            uploadBtn.parentNode.replaceChild(newBtn, uploadBtn);
+            const newInput = fileInput.cloneNode(true);
+            fileInput.parentNode.replaceChild(newInput, fileInput);
+
+            newBtn.addEventListener('click', () => newInput.click());
+            newInput.addEventListener('change', async (ev) => {
+                const file = ev.target.files?.[0];
+                ev.target.value = '';
+                if (!file) return;
+                await this._openChannelImageConfirm(channel, file, status, newBtn);
+            });
+        }
+    }
+
+    /**
+     * Show the confirmation modal with the cropped preview, encryption option
+     * (only for password channels) and Upload/Cancel buttons. On confirm,
+     * delegates to _handleChannelImageUpload.
+     */
+    async _openChannelImageConfirm(channel, file, statusEl, btnEl) {
+        const modal = document.getElementById('channel-image-confirm-modal');
+        const previewEl = document.getElementById('channel-image-confirm-preview');
+        const encryptRow = document.getElementById('channel-image-encrypt-row');
+        const encryptCb = document.getElementById('channel-image-encrypt');
+        const cancelBtn = document.getElementById('cancel-channel-image-btn');
+        const confirmBtn = document.getElementById('confirm-channel-image-btn');
+        if (!modal || !confirmBtn || !cancelBtn) return;
+
+        // Process the image now so the preview is what will actually be uploaded
+        let dataUrl;
+        try {
+            dataUrl = await mediaController.cropAndResizeSquare(file, 512, 0.85);
+        } catch (e) {
+            this.deps.showNotification?.('Failed to process image: ' + e.message, 'error');
+            return;
+        }
+        if (previewEl) {
+            previewEl.innerHTML = `<img src="${escapeAttr(dataUrl)}" alt="Preview" class="w-full h-full object-cover" />`;
+        }
+
+        // Encrypt option only for password channels
+        const isPassword = channel.type === 'password' && !!channel.password;
+        if (encryptRow) {
+            encryptRow.classList.toggle('hidden', !isPassword);
+            encryptRow.classList.toggle('flex', isPassword);
+        }
+        if (encryptCb) encryptCb.checked = false;
+
+        modal.classList.remove('hidden');
+
+        // Replace listeners by cloning
+        const newCancel = cancelBtn.cloneNode(true);
+        cancelBtn.parentNode.replaceChild(newCancel, cancelBtn);
+        const newConfirm = confirmBtn.cloneNode(true);
+        confirmBtn.parentNode.replaceChild(newConfirm, confirmBtn);
+
+        const close = () => modal.classList.add('hidden');
+        newCancel.addEventListener('click', close);
+
+        // Backdrop click to dismiss
+        const onBackdrop = (ev) => {
+            if (ev.target === modal) close();
+        };
+        modal.addEventListener('click', onBackdrop, { once: true });
+
+        newConfirm.addEventListener('click', async () => {
+            const encrypt = !!document.getElementById('channel-image-encrypt')?.checked;
+            close();
+            await this._handleChannelImageUpload(channel, dataUrl, encrypt, statusEl, btnEl);
+        });
+    }
+
+    async _handleChannelImageUpload(channel, dataUrl, encrypt, statusEl, btnEl) {
+        const setStatus = (text, kind = 'info') => {
+            if (!statusEl) return;
+            statusEl.textContent = text;
+            statusEl.classList.remove('hidden', 'text-red-400', 'text-green-400', 'text-white/40');
+            statusEl.classList.add(
+                kind === 'error' ? 'text-red-400'
+                    : kind === 'success' ? 'text-green-400'
+                        : 'text-white/40'
+            );
+        };
+
+        const lock = (locked) => {
+            if (!btnEl) return;
+            btnEl.disabled = locked;
+            btnEl.classList.toggle('opacity-50', locked);
+            btnEl.classList.toggle('pointer-events-none', locked);
+        };
+
+        try {
+            lock(true);
+            setStatus('Publishing…');
+
+            const base64 = dataUrl.split(',')[1] || dataUrl;
+            const sha = await channelImageManager.sha256Hex(base64);
+
+            const { channelManager } = this.deps;
+            const adminStreamId = channel.adminStreamId || deriveAdminId(channel.streamId);
+
+            await channelManager.publishChannelImage(channel.streamId, {
+                dataUrl,
+                hash: sha
+            }, { encrypt });
+
+            // Verify by force-fetching the latest from Streamr storage so we
+            // confirm the publish actually persisted (and didn't only land
+            // in the optimistic local cache).
+            setStatus('Verifying…');
+            const verified = await channelImageManager
+                .get(adminStreamId, {
+                    password: encrypt ? channel.password : null,
+                    force: true
+                })
+                .catch(() => null);
+
+            if (verified && verified.hash === sha) {
+                setStatus('Image updated', 'success');
+            } else {
+                setStatus('Published — propagating…', 'success');
+            }
+            // Refresh sidebar so the new image shows immediately there too.
+            this.deps.renderChannelList?.();
+        } catch (e) {
+            Logger.error('Channel image upload failed:', e);
+            setStatus('Failed: ' + (e?.message || 'unknown error'), 'error');
+            this.deps.showNotification?.('Failed to upload image: ' + e.message, 'error');
+        } finally {
+            lock(false);
         }
     }
 }

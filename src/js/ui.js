@@ -264,6 +264,8 @@ class UIController {
             disconnectWalletBtn: document.getElementById('disconnect-wallet'),
             switchWalletBtn: document.getElementById('switch-wallet'),
             contactsBtn: document.getElementById('contacts-btn'),
+            globalSyncIndicator: document.getElementById('global-sync-indicator'),
+            globalSyncText: document.getElementById('global-sync-text'),
             // Desktop account dropdown
             desktopAccountWrapper: document.getElementById('desktop-account-wrapper'),
             desktopAccountBtn: document.getElementById('desktop-account-btn'),
@@ -280,6 +282,7 @@ class UIController {
             chatHeader: document.getElementById('chat-header'),
             currentChannelName: document.getElementById('current-channel-name'),
             currentChannelInfo: document.getElementById('current-channel-info'),
+            currentChannelThumb: document.getElementById('current-channel-thumb'),
             channelMenuBtn: document.getElementById('channel-menu-btn'),
             channelMenuBtnMobile: document.getElementById('channel-menu-btn-mobile'),
             closeChannelBtn: document.getElementById('close-channel-btn'),
@@ -491,8 +494,11 @@ class UIController {
             switchWalletBtn: this.elements.switchWalletBtn,
             contactsBtn: this.elements.contactsBtn,
             settingsBtn: document.getElementById('settings-btn'),
+            globalSyncIndicator: this.elements.globalSyncIndicator,
+            globalSyncText: this.elements.globalSyncText,
             currentChannelName: this.elements.currentChannelName,
             currentChannelInfo: this.elements.currentChannelInfo,
+            currentChannelThumb: this.elements.currentChannelThumb,
             chatHeaderRight: this.elements.chatHeaderRight,
             desktopAccountWrapper: this.elements.desktopAccountWrapper,
             desktopAccountBtn: this.elements.desktopAccountBtn,
@@ -1261,6 +1267,7 @@ class UIController {
         this.elements.currentChannelName.textContent = 'Explore Channels';
         this.elements.currentChannelInfo.textContent = '';
         this.elements.currentChannelInfo.parentElement.classList.add('hidden');
+        headerUI.clearChannelThumb();
         this.elements.messageInputContainer.classList.add('hidden');
         
         this.elements.inviteUsersBtn?.classList.add('hidden');

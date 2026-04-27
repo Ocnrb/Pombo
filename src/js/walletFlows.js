@@ -71,6 +71,13 @@ class WalletFlows {
     }
 
     /**
+     * Release wallet-flow mobile UI locks before heavy session bootstrap completes.
+     */
+    releaseWalletFlowUI() {
+        document.body.classList.remove('wallet-flow-open');
+    }
+
+    /**
      * Connect wallet (generate, import, or load saved)
      */
     async connectWallet() {
@@ -702,6 +709,7 @@ class WalletFlows {
                 // Save wallet with password
                 await this.saveWalletWithProgress(setupResult.password, setupResult.displayName);
 
+                this.releaseWalletFlowUI();
                 await this._onWalletConnected(importResult.address, importResult.signer);
 
                 // Save display name to secureStorage (after it's initialized)
@@ -1509,6 +1517,7 @@ class WalletFlows {
             });
             
             this.hideProgressModal(modal);
+            this.releaseWalletFlowUI();
             await this._onWalletConnected(result.address, result.signer);
             return result;
         } catch (error) {
@@ -1649,6 +1658,7 @@ class WalletFlows {
                 await this.saveWalletWithProgress(password);
             }
 
+            this.releaseWalletFlowUI();
             await this._onWalletConnected(result.address, result.signer);
             uiController.showNotification('Account imported!', 'success');
         } catch (error) {

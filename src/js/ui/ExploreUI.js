@@ -6,6 +6,9 @@
 import { escapeHtml, escapeAttr } from './utils.js';
 import { sanitizeText } from './sanitizer.js';
 import { loadCurationManifest, applyCuration } from '../exploreCuration.js';
+import { channelImageManager } from '../channelImageManager.js';
+import { deriveAdminId } from '../streamConstants.js';
+import { getAvatarHtml } from './AvatarGenerator.js';
 
 class ExploreUI {
     constructor() {
@@ -317,16 +320,35 @@ class ExploreUI {
             const description = ch.description 
                 ? `<p class="text-xs text-white/40 mt-1 line-clamp-2">${escapeHtml(sanitizeText(ch.description))}</p>` 
                 : '';
-            
+
+            // Channel thumbnail: cached if available, else spinner placeholder
+            // (or deterministic fallback once lookup has settled).
+            // We always pass through the manager so the same fetch is
+            // shared with the sidebar and Channel Details panes.
+            const adminStreamId = deriveAdminId(ch.streamId);
+            const cachedImage = adminStreamId ? channelImageManager.getCached(adminStreamId) : null;
+            if (!this._exploreResolvedImages) this._exploreResolvedImages = new Set();
+            let thumb;
+            if (cachedImage?.dataUrl) {
+                thumb = `<img class="w-12 h-12 rounded-xl object-cover flex-shrink-0" alt="" src="${escapeAttr(cachedImage.dataUrl)}" data-channel-thumb="${escapeAttr(adminStreamId)}" />`;
+            } else if (adminStreamId && !this._exploreResolvedImages.has(adminStreamId)) {
+                thumb = `<div class="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 bg-white/[0.04]" data-channel-thumb="${escapeAttr(adminStreamId)}"><div class="thumb-spinner" style="width:20px;height:20px"></div></div>`;
+            } else {
+                thumb = `<div class="w-12 h-12 rounded-xl overflow-hidden flex-shrink-0" data-channel-thumb="${escapeAttr(adminStreamId || '')}">${getAvatarHtml(ch.streamId, 48, 0.25, null)}</div>`;
+            }
+
             return `
             <div class="p-3.5 bg-white/[0.03] border border-white/[0.05] rounded-2xl hover:bg-white/[0.06] hover:border-white/[0.1] transition-all duration-200 cursor-pointer explore-channel-item group" data-stream-id="${escapeAttr(ch.streamId)}" data-type="${escapeAttr(ch.type || 'public')}">
                 <div class="flex items-start justify-between gap-3">
-                    <div class="flex-1 min-w-0">
-                        <div class="flex items-center gap-2 flex-wrap">
-                            ${readOnlyBadge}
-                            <h4 class="text-sm font-medium text-white/90 truncate">${escapeHtml(sanitizeText(ch.name || ch.displayName || 'Unknown'))}</h4>
+                    <div class="flex items-start gap-3 flex-1 min-w-0">
+                        ${thumb}
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                ${readOnlyBadge}
+                                <h4 class="text-sm font-medium text-white/90 truncate">${escapeHtml(sanitizeText(ch.name || ch.displayName || 'Unknown'))}</h4>
+                            </div>
+                            ${description}
                         </div>
-                        ${description}
                     </div>
                     <svg class="w-4 h-4 text-white/15 group-hover:text-white/30 flex-shrink-0 mt-0.5 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
@@ -339,6 +361,36 @@ class ExploreUI {
             </div>
             `;
         }).join('');
+
+        // Lazy-fetch missing thumbnails (deduped by manager).
+        // Public/password channels are publicly readable on -3, so this works
+        // even before joining. Native channels will simply fall back.
+        for (const ch of channels) {
+            const adminStreamId = deriveAdminId(ch.streamId);
+            if (!adminStreamId) continue;
+            if (channelImageManager.getCached(adminStreamId)?.dataUrl) continue;
+            if (this._exploreResolvedImages.has(adminStreamId)) continue;
+            channelImageManager.get(adminStreamId, { password: null })
+                .then(entry => {
+                    if (!entry?.dataUrl) return;
+                    const slot = listEl.querySelector(`[data-channel-thumb="${CSS.escape(adminStreamId)}"]`);
+                    if (slot && !(slot.tagName === 'IMG')) {
+                        slot.outerHTML = `<img class="w-12 h-12 rounded-xl object-cover flex-shrink-0" alt="" src="${escapeAttr(entry.dataUrl)}" data-channel-thumb="${escapeAttr(adminStreamId)}" />`;
+                    } else if (slot && slot.tagName === 'IMG') {
+                        slot.src = entry.dataUrl;
+                    }
+                })
+                .catch(() => {})
+                .finally(() => {
+                    this._exploreResolvedImages.add(adminStreamId);
+                    // If still showing spinner placeholder (no image found),
+                    // swap to deterministic fallback avatar.
+                    const slot = listEl.querySelector(`[data-channel-thumb="${CSS.escape(adminStreamId)}"]`);
+                    if (slot && slot.tagName !== 'IMG' && !channelImageManager.getCached(adminStreamId)?.dataUrl) {
+                        slot.outerHTML = `<div class="w-12 h-12 rounded-xl overflow-hidden flex-shrink-0" data-channel-thumb="${escapeAttr(adminStreamId)}">${getAvatarHtml(ch.streamId, 48, 0.25, null)}</div>`;
+                    }
+                });
+        }
 
         // Add click listeners
         listEl.querySelectorAll('.explore-channel-item').forEach(item => {

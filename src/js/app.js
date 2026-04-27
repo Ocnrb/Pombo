@@ -24,8 +24,7 @@ import { contactsUI } from './ui/ContactsUI.js';
 import { chatAreaUI } from './ui/ChatAreaUI.js';
 import { reactionManager } from './ui/ReactionManager.js';
 import { mediaHandler } from './ui/MediaHandler.js';
-import { walletFlows } from './walletFlows.js';
-import { inviteHandler } from './inviteHandler.js';
+import { walletFlows } from './walletFlows.js';import { inviteHandler } from './inviteHandler.js';
 import { channelModalsUI } from './ui/ChannelModalsUI.js';
 
 class App {
@@ -59,6 +58,13 @@ class App {
 
             // Set up message handlers
             this.setupMessageHandlers();
+
+            syncManager.on('sync_activity', ({ active, label }) => {
+                headerUI.setGlobalSyncState(active, label);
+            });
+            syncManager.on('sync_activity_success', ({ label }) => {
+                headerUI.flashGlobalSyncSuccess(label);
+            });
 
             // Set up wallet connection handlers
             this.setupWalletHandlers();
@@ -154,17 +160,15 @@ class App {
                 if (textEl) textEl.textContent = 'Syncing...';
                 if (iconEl) iconEl.classList.add('animate-spin');
 
-                const result = await syncManager.smartSync();
+                const result = await syncManager.runForegroundSync(
+                    'Syncing devices',
+                    () => syncManager.smartSync()
+                );
 
                 if (result.noInbox) {
                     uiController.showNotification('Create DM inbox first to enable sync', 'warning');
-                } else if (result.pulled && result.pushed) {
+                } else if (result.pulled) {
                     uiController.renderChannelList();
-                    uiController.showNotification('Devices synced successfully', 'success');
-                } else if (result.pushed) {
-                    uiController.showNotification('Your data has been saved', 'success');
-                } else {
-                    uiController.showNotification('Already in sync', 'info');
                 }
             } catch (err) {
                 Logger.error('Sync failed:', err);
@@ -339,27 +343,31 @@ class App {
                         mediaController.handleImageData({ type: 'image_data', imageId, data });
                     });
 
-                    uiController.showNotification('Syncing your data...', 'info');
-                    syncManager.pullSync().then(async () => {
+                    syncManager.runForegroundSync('Syncing your data', async () => {
+                        const pullResult = await syncManager.pullSync();
                         Logger.info('Sync: Initial pull complete');
-                        uiController.renderChannelList();
 
-                        // Update header with synced username or ENS
-                        const syncedUsername = identityManager.getUsername();
-                        if (syncedUsername) {
-                            headerUI.updateDisplayName(syncedUsername);
-                        }
-                        // Always resolve own ENS after sync — overrides local username
-                        identityManager.resolveENS(address).then(ensName => {
-                            if (ensName) {
-                                headerUI.updateDisplayName(ensName);
-                                if (identityManager.getUsername()) {
-                                    identityManager.setUsername(null);
-                                    Logger.info('ENS active — cleared local username (post-sync)');
-                                }
-                                localStorage.setItem(CONFIG.storageKeys.ens(address), ensName);
+                        if (pullResult !== null) {
+                            uiController.renderChannelList();
+
+                            // Update header with synced username or ENS
+                            const syncedUsername = identityManager.getUsername();
+                            if (syncedUsername) {
+                                headerUI.updateDisplayName(syncedUsername);
                             }
-                        }).catch(() => {});
+                            // Always resolve own ENS after sync — overrides local username
+                            identityManager.resolveENS(address).then(ensName => {
+                                if (ensName) {
+                                    headerUI.updateDisplayName(ensName);
+                                    if (identityManager.getUsername()) {
+                                        identityManager.setUsername(null);
+                                        Logger.info('ENS active — cleared local username (post-sync)');
+                                    }
+                                    localStorage.setItem(CONFIG.storageKeys.ens(address), ensName);
+                                }
+                            }).catch(() => {});
+                        }
+
                         // Pull image blobs (partition 2) after state sync
                         try {
                             await syncManager.pullImageBlobs();
@@ -367,7 +375,6 @@ class App {
                         } catch (e) {
                             Logger.debug('Sync: Image blob pull failed (non-critical):', e.message);
                         }
-                        uiController.showNotification('Your data is up to date', 'success');
                     }).catch(e => {
                         Logger.debug('Sync: Initial pull failed (non-critical):', e.message);
                     });

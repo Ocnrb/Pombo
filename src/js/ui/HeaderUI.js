@@ -7,6 +7,9 @@
 import { escapeHtml } from './utils.js';
 import { generateAvatar, getAvatarHtml } from './AvatarGenerator.js';
 import { identityManager } from '../identity.js';
+import { channelImageManager } from '../channelImageManager.js';
+import { deriveAdminId } from '../streamConstants.js';
+import { escapeAttr } from './utils.js';
 
 class HeaderUI {
     constructor() {
@@ -17,6 +20,8 @@ class HeaderUI {
         this._boundCloseDesktopDropdown = null;
         this._currentAddress = null;
         this._currentDisplayName = null;
+        this._globalSyncSuccessTimeout = null;
+        this._isGlobalSyncActive = false;
         
         // DOM elements
         this.elements = {
@@ -25,8 +30,11 @@ class HeaderUI {
             switchWalletBtn: null,
             contactsBtn: null,
             settingsBtn: null,
+            globalSyncIndicator: null,
+            globalSyncText: null,
             currentChannelName: null,
             currentChannelInfo: null,
+            currentChannelThumb: null,
             chatHeaderRight: null,
             // Desktop dropdown
             desktopAccountWrapper: null,
@@ -60,8 +68,11 @@ class HeaderUI {
             switchWalletBtn: elements.switchWalletBtn,
             contactsBtn: elements.contactsBtn,
             settingsBtn: elements.settingsBtn,
+            globalSyncIndicator: elements.globalSyncIndicator,
+            globalSyncText: elements.globalSyncText,
             currentChannelName: elements.currentChannelName,
             currentChannelInfo: elements.currentChannelInfo,
+            currentChannelThumb: elements.currentChannelThumb,
             chatHeaderRight: elements.chatHeaderRight,
             // Desktop dropdown
             desktopAccountWrapper: elements.desktopAccountWrapper,
@@ -176,6 +187,7 @@ class HeaderUI {
         } else {
             this._currentAddress = null;
             this._currentDisplayName = null;
+            this.setGlobalSyncState(false);
             walletInfo.textContent = 'Not Connected';
             walletInfo.classList.add('hidden');
             // Show connect button with original text
@@ -239,6 +251,73 @@ class HeaderUI {
     updateNetworkStatus() {}
 
     /**
+     * Update the persistent global sync indicator in the header.
+     * @param {boolean} active - Whether foreground sync is active
+     * @param {string} label - Indicator label
+     */
+    setGlobalSyncState(active, label = 'Syncing your data') {
+        const { globalSyncIndicator, globalSyncText } = this.elements;
+        if (!globalSyncIndicator) return;
+
+        this._isGlobalSyncActive = active;
+
+        if (globalSyncText && label) {
+            globalSyncText.textContent = label;
+        }
+
+        if (active) {
+            if (this._globalSyncSuccessTimeout) {
+                clearTimeout(this._globalSyncSuccessTimeout);
+                this._globalSyncSuccessTimeout = null;
+            }
+
+            globalSyncIndicator.classList.remove('is-success', 'hidden');
+            globalSyncIndicator.setAttribute('aria-hidden', 'false');
+            return;
+        }
+
+        if (globalSyncIndicator.classList.contains('is-success')) {
+            globalSyncIndicator.classList.remove('hidden');
+            globalSyncIndicator.setAttribute('aria-hidden', 'false');
+            return;
+        }
+
+        globalSyncIndicator.classList.add('hidden');
+        globalSyncIndicator.setAttribute('aria-hidden', 'true');
+    }
+
+    /**
+     * Briefly swap the spinner for a success check mark after a completed sync.
+     * @param {string} label - Accessible status text
+     */
+    flashGlobalSyncSuccess(label = 'Sync complete') {
+        const { globalSyncIndicator, globalSyncText } = this.elements;
+        if (!globalSyncIndicator) return;
+
+        if (this._globalSyncSuccessTimeout) {
+            clearTimeout(this._globalSyncSuccessTimeout);
+        }
+
+        if (globalSyncText && label) {
+            globalSyncText.textContent = label;
+        }
+
+        globalSyncIndicator.classList.remove('hidden');
+        globalSyncIndicator.classList.add('is-success');
+        globalSyncIndicator.setAttribute('aria-hidden', 'false');
+
+        this._globalSyncSuccessTimeout = setTimeout(() => {
+            this._globalSyncSuccessTimeout = null;
+            globalSyncIndicator.classList.remove('is-success');
+
+            if (!this._isGlobalSyncActive) {
+                globalSyncIndicator.classList.add('hidden');
+                globalSyncIndicator.setAttribute('aria-hidden', 'true');
+            }
+        }, 1100);
+    }
+
+    /**
      * Update channel title in header
      * @param {string} name - Channel name
      */
@@ -267,6 +346,105 @@ class HeaderUI {
         if (this.elements.currentChannelInfo) {
             this.elements.currentChannelInfo.textContent = '';
             this.elements.currentChannelInfo.parentElement?.classList.add('hidden');
+        }
+    }
+
+    /**
+     * Render the chat-header thumbnail for the active channel.
+     * For DMs uses the peer's ENS avatar (or deterministic avatar).
+     * For other channels uses the cached channel image (or fallback avatar).
+     * Subscribes to channelImageManager so a freshly-published image
+     * appears without a manual refresh.
+     * @param {Object} channel - Active channel object
+     */
+    updateChannelThumb(channel) {
+        const slot = this.elements.currentChannelThumb;
+        if (!slot) return;
+        // Tear down any prior subscription
+        if (this._thumbUnsub) { try { this._thumbUnsub(); } catch {} this._thumbUnsub = null; }
+        if (!channel || !channel.streamId) {
+            slot.classList.add('hidden');
+            slot.innerHTML = '';
+            return;
+        }
+
+        const sizePx = 36;
+        const sizeCls = 'w-9 h-9';
+        const radiusCls = 'rounded-lg';
+        const spinnerHtml = `<div class="${sizeCls} ${radiusCls} flex items-center justify-center bg-white/[0.04]"><div class="thumb-spinner" style="width:18px;height:18px"></div></div>`;
+        const fallbackHtml = (seed) => `<div class="${sizeCls} ${radiusCls} overflow-hidden">${getAvatarHtml(seed, sizePx, 0.25, null)}</div>`;
+        const imgHtml = (url) => `<img class="${sizeCls} ${radiusCls} object-cover" alt="" src="${escapeAttr(url)}" />`;
+
+        const renderDM = () => {
+            const peer = channel.peerAddress;
+            const seed = peer || channel.streamId;
+            const ens = peer ? (identityManager.getCachedENSAvatar?.(peer) || null) : null;
+            if (ens) { slot.innerHTML = imgHtml(ens); return; }
+            // No cached ENS — show spinner while resolving
+            if (peer && identityManager.resolveENSAvatar) {
+                slot.innerHTML = spinnerHtml;
+                identityManager.resolveENSAvatar(peer)
+                    .then(url => {
+                        if (this.elements.currentChannelThumb !== slot) return;
+                        slot.innerHTML = url ? imgHtml(url) : fallbackHtml(seed);
+                    })
+                    .catch(() => {
+                        if (this.elements.currentChannelThumb !== slot) return;
+                        slot.innerHTML = fallbackHtml(seed);
+                    });
+            } else {
+                slot.innerHTML = fallbackHtml(seed);
+            }
+        };
+
+        const renderChannel = () => {
+            const adminStreamId = channel.adminStreamId || deriveAdminId(channel.streamId);
+            const setImg = (url) => {
+                if (this.elements.currentChannelThumb !== slot) return;
+                slot.innerHTML = imgHtml(url);
+            };
+            const cached = channelImageManager.getCached(adminStreamId);
+            if (cached?.dataUrl) {
+                slot.innerHTML = imgHtml(cached.dataUrl);
+            } else {
+                // Unknown — show spinner until resolution
+                slot.innerHTML = spinnerHtml;
+            }
+            // Subscribe so newly-published image lands here too
+            this._thumbUnsub = channelImageManager.subscribe(adminStreamId, (entry) => {
+                if (entry?.dataUrl) setImg(entry.dataUrl);
+            });
+            // Trigger fetch and resolve directly too — covers cases where
+            // the entry was already in flight before we subscribed.
+            channelImageManager
+                .get(adminStreamId, { password: channel.password || null })
+                .then(entry => {
+                    if (this.elements.currentChannelThumb !== slot) return;
+                    if (entry?.dataUrl) setImg(entry.dataUrl);
+                    // Only swap to deterministic fallback if still showing spinner
+                    else if (!cached?.dataUrl) slot.innerHTML = fallbackHtml(channel.streamId);
+                })
+                .catch(() => {
+                    if (this.elements.currentChannelThumb === slot && !cached?.dataUrl) {
+                        slot.innerHTML = fallbackHtml(channel.streamId);
+                    }
+                });
+        };
+
+        slot.classList.remove('hidden');
+        if (channel.type === 'dm') renderDM();
+        else renderChannel();
+    }
+
+    /**
+     * Hide channel thumbnail (e.g. on Explore mode)
+     */
+    clearChannelThumb() {
+        if (this._thumbUnsub) { try { this._thumbUnsub(); } catch {} this._thumbUnsub = null; }
+        const slot = this.elements.currentChannelThumb;
+        if (slot) {
+            slot.classList.add('hidden');
+            slot.innerHTML = '';
         }
     }
 
@@ -321,6 +499,7 @@ class HeaderUI {
     setExploreMode() {
         this.updateChannelTitle('Explore Channels');
         this.hideChannelInfo();
+        this.clearChannelThumb();
         this.showHeaderRight(false);
     }
 
@@ -331,6 +510,7 @@ class HeaderUI {
     setChannelMode(channel) {
         this.updateChannelTitle(channel.name);
         this.updateChannelInfo(channel.type, channel.readOnly);
+        this.updateChannelThumb(channel);
         this.showHeaderRight(true);
     }
 

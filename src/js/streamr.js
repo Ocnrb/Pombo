@@ -2027,6 +2027,113 @@ class StreamrController {
     }
 
     /**
+     * Publish CHANNEL_IMAGE to ADMIN STREAM partition 1.
+     * Only the channel owner can successfully publish (enforced by stream
+     * permissions). Encryption is *opt-in* (caller decides), independent of
+     * channel type — by default this is published unencrypted so other
+     * surfaces (sidebar, Explore) can read the image without the channel
+     * password.
+     *
+     * @param {string} adminStreamId - Admin stream ID (ends with -3)
+     * @param {Object} payload - { type:'CHANNEL_IMAGE', v, rev, ts, createdBy, encrypted, mime, hash, data }
+     * @param {string|null} [password=null] - Pass channel password ONLY when caller wants encryption
+     */
+    async publishChannelImage(adminStreamId, payload, password = null) {
+        Logger.debug('publishChannelImage called - adminStream partition 1:', {
+            adminStreamId: String(adminStreamId).slice(-30),
+            rev: payload?.rev,
+            encrypted: !!password
+        });
+        return await this.publish(adminStreamId, STREAM_CONFIG.ADMIN_STREAM.CHANNEL_IMAGE, payload, password);
+    }
+
+    /**
+     * One-shot resend of ADMIN STREAM partition 1 (channel image).
+     * Always returns only the most-recent published entry (last:1) — image
+     * is single-valued; older revs are irrelevant.
+     *
+     * @param {string} adminStreamId - Admin stream ID (ends with -3)
+     * @param {Object} [options]
+     * @param {string|null} [options.password=null] - Channel password (used if entry is encrypted)
+     * @returns {Promise<Object|null>} Latest CHANNEL_IMAGE payload or null
+     */
+    async resendChannelImage(adminStreamId, { password = null } = {}) {
+        if (!this.client) {
+            throw new Error('Streamr client not initialized');
+        }
+        if (!isAdminStream(adminStreamId)) {
+            Logger.warn('Invalid adminStreamId (should end with -3):', adminStreamId);
+        }
+
+        const partition = STREAM_CONFIG.ADMIN_STREAM.CHANNEL_IMAGE;
+        let latest = null;
+
+        try {
+            const resend = await this.client.resend(
+                { streamId: adminStreamId, partition },
+                { last: 1 }
+            );
+
+            const iterator = resend[Symbol.asyncIterator]();
+            let iteratorDone = false;
+
+            while (!iteratorDone) {
+                let message;
+                try {
+                    const result = await iterator.next();
+                    iteratorDone = result.done;
+                    if (iteratorDone) break;
+                    message = result.value;
+                } catch (iterError) {
+                    if (iterError.code === 'DECRYPT_ERROR' || iterError.message?.includes('encryption key')) {
+                        continue;
+                    }
+                    Logger.warn('resendChannelImage iteration error:', iterError.message);
+                    continue;
+                }
+
+                try {
+                    let content = message.content || message;
+                    // Encrypted entries arrive as base64/JSON string; non-encrypted as object.
+                    if (typeof content === 'string') {
+                        if (!password) continue; // can't decrypt, skip
+                        try {
+                            content = await cryptoManager.decryptJSON(content, password);
+                        } catch (decryptError) {
+                            continue;
+                        }
+                    }
+                    if (!content || typeof content !== 'object') continue;
+                    if (content.type && content.type !== 'CHANNEL_IMAGE') continue;
+
+                    if (typeof message.getPublisherId === 'function') {
+                        const publisherId = message.getPublisherId();
+                        if (publisherId && !content.createdBy) {
+                            content.createdBy = publisherId;
+                        }
+                    }
+
+                    latest = content;
+                } catch (e) {
+                    Logger.debug('resendChannelImage entry processing error:', e.message);
+                    continue;
+                }
+            }
+        } catch (error) {
+            Logger.warn('resendChannelImage error:', error.message);
+            return null;
+        }
+
+        Logger.debug('resendChannelImage result:', {
+            adminStreamId: String(adminStreamId).slice(-30),
+            found: !!latest,
+            hash: latest?.hash?.slice(0, 8),
+            rev: latest?.rev
+        });
+        return latest;
+    }
+
+    /**
      * Unsubscribe from a stream
      * @param {string} streamId - Stream ID
      */

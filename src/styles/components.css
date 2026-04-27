@@ -73,6 +73,116 @@ body {
     height: calc(100vh - 3.5rem - env(safe-area-inset-top, 0px));
 }
 
+/* ----- Global Sync Indicator ----- */
+.global-sync-indicator {
+    position: static;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    color: transparent;
+    pointer-events: none;
+    z-index: 2;
+    flex-shrink: 0;
+}
+
+.global-sync-indicator:not(.hidden) {
+    display: flex;
+}
+
+.global-sync-spinner {
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    border: 2.5px solid rgba(246, 133, 27, 0.16);
+    border-top-color: #F6851B;
+    border-right-color: rgba(246, 133, 27, 0.72);
+    animation: pombo-spin 0.8s linear infinite;
+    flex-shrink: 0;
+}
+
+.global-sync-indicator.is-success .global-sync-spinner {
+    border: none;
+    animation: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #F6851B;
+}
+
+.global-sync-indicator.is-success .global-sync-spinner::before {
+    content: '';
+    width: 6px;
+    height: 11px;
+    border-right: 2.5px solid currentColor;
+    border-bottom: 2.5px solid currentColor;
+    transform: rotate(45deg) translate(-1px, -1px);
+    transform-origin: center;
+    box-sizing: border-box;
+}
+
+/* ----- Avatar Placeholder Spinner -----
+   Used inside channel image / DM avatar slots while we determine whether
+   a remote image / ENS avatar exists. Visually consistent with
+   .global-sync-spinner but neutral so it works in any slot size. */
+.thumb-spinner {
+    border-radius: 999px;
+    border: 2px solid rgba(255, 255, 255, 0.08);
+    border-top-color: rgba(255, 255, 255, 0.55);
+    border-right-color: rgba(255, 255, 255, 0.32);
+    animation: pombo-spin 0.8s linear infinite;
+    flex-shrink: 0;
+}
+
+.global-sync-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+@keyframes pombo-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@media (max-width: 767px) {
+    .global-sync-indicator {
+        position: absolute;
+        left: auto;
+        right: 1.25rem;
+        top: 50%;
+        transform: translateY(-50%);
+    }
+
+    .mobile-channel-menu-btn,
+    .mobile-close-btn,
+    #header-create-channel-btn {
+        align-items: center !important;
+        justify-content: center !important;
+        align-self: center;
+        line-height: 0;
+    }
+
+    body.chat-open .global-sync-indicator,
+    body.settings-open .global-sync-indicator,
+    body.contacts-open .global-sync-indicator,
+    body.new-channel-open .global-sync-indicator,
+    body.wallet-flow-open .global-sync-indicator {
+        display: none !important;
+    }
+}
+
 .chat-container {
     height: calc(100vh - 3.5rem - env(safe-area-inset-top, 0px));
 }
@@ -1350,6 +1460,52 @@ body {
     display: none !important;
 }
 
+#channel-list {
+    --channel-item-padding-top: 0.5rem;
+    --channel-item-padding-right: 0.75rem;
+    --channel-item-padding-bottom: 0.5rem;
+    --channel-item-padding-left: 0.75rem;
+    --channel-item-main-offset: 0.75rem;
+    --channel-item-type-offset: 0.75rem;
+    --channel-item-type-gap: 0.25rem;
+    --channel-item-actions-offset: 0.5rem;
+    --channel-item-actions-gap: 0.375rem;
+    --channel-item-badge-padding-y: 0.125rem;
+    --channel-item-badge-padding-x: 0.375rem;
+}
+
+#channel-list .channel-item {
+    padding-top: var(--channel-item-padding-top);
+    padding-right: var(--channel-item-padding-right);
+    padding-bottom: var(--channel-item-padding-bottom);
+    padding-left: var(--channel-item-padding-left);
+}
+
+#channel-list .channel-item-image {
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: element;
+    -webkit-touch-callout: none;
+}
+
+#channel-list .channel-item-main {
+    margin-left: var(--channel-item-main-offset);
+}
+
+#channel-list .channel-item-type-icons {
+    gap: var(--channel-item-type-gap);
+    margin-left: var(--channel-item-type-offset);
+}
+
+#channel-list .channel-item-actions {
+    gap: var(--channel-item-actions-gap);
+    margin-left: var(--channel-item-actions-offset);
+}
+
+#channel-list .channel-msg-count {
+    padding: var(--channel-item-badge-padding-y) var(--channel-item-badge-padding-x);
+}
+
 /* ===========================================
    MOBILE (< 768px) + LANDSCAPE SHORT SCREENS
    Sidebar = initial view, Chat = push navigation
@@ -1849,10 +2005,7 @@ body {
         color: #f6851b !important;
     }
 
-    /* Channel list items taller on mobile */
     #channel-list .channel-item {
-        padding-top: 0.8rem;
-        padding-bottom: 0.8rem;
         background-color: rgba(255, 255, 255, 0.05);
         border-color: rgba(255, 255, 255, 0.085);
     }
@@ -1889,8 +2042,8 @@ body {
     
     /* Message input area - flush at bottom */
     #message-input-container {
-        padding: 0.75rem;
-        padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+        padding: 0.5rem;
+        padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
     }
     
     /* Safe area padding utility */
@@ -2324,9 +2477,9 @@ body {
     }
     
     /* Channel list items compact */
-    #channel-list .channel-item {
-        padding-left: 0.75rem;
-        padding-right: 0.75rem;
+    #channel-list {
+        --channel-item-padding-left: 0.75rem;
+        --channel-item-padding-right: 0.75rem;
     }
 }
 

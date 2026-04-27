@@ -23,6 +23,16 @@ import { dmCrypto } from './dmCrypto.js';
 import { channelManager } from './channels.js';
 import { dmManager } from './dm.js';
 import { identityManager } from './identity.js';
+import { mergePayloadSeries as mergeSyncPayloadSeries, mergeSentMessages as mergeSyncSentMessages, mergeSentReactions as mergeSyncSentReactions, mergeState as mergeSyncState } from './syncMerge.js';
+import { syncWorkerClient } from './workers/syncWorkerClient.js';
+
+const getNow = () => (
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now()
+);
+
+const roundDuration = (duration) => Number(duration.toFixed(1));
 
 class SyncManager {
     constructor() {
@@ -30,6 +40,8 @@ class SyncManager {
         this.lastSyncTs = null;
         this.handlers = [];
         this.isSyncing = false;
+        this.foregroundSyncDepth = 0;
+        this.foregroundSyncLabel = null;
     }
 
     /**
@@ -70,6 +82,49 @@ class SyncManager {
     }
 
     /**
+     * Emit the current foreground sync activity state.
+     */
+    notifyForegroundSyncState() {
+        this.notifyHandlers('sync_activity', {
+            active: this.foregroundSyncDepth > 0,
+            label: this.foregroundSyncLabel || 'Syncing your data'
+        });
+    }
+
+    /**
+     * Run a user-visible sync task with a persistent header activity indicator.
+     * @param {string} label - Header label shown while the task is running
+     * @param {Function} task - Async task to execute
+     * @returns {Promise<*>}
+     */
+    async runForegroundSync(label, task) {
+        const activityLabel = label || this.foregroundSyncLabel || 'Syncing your data';
+        this.foregroundSyncDepth += 1;
+        this.foregroundSyncLabel = activityLabel;
+        this.notifyForegroundSyncState();
+        let succeeded = false;
+
+        try {
+            const result = await task();
+            succeeded = true;
+            return result;
+        } finally {
+            this.foregroundSyncDepth = Math.max(0, this.foregroundSyncDepth - 1);
+            const shouldNotifySuccess = succeeded && this.foregroundSyncDepth === 0;
+            if (this.foregroundSyncDepth === 0) {
+                this.foregroundSyncLabel = null;
+            }
+            this.notifyForegroundSyncState();
+            if (shouldNotifySuccess) {
+                this.notifyHandlers('sync_activity_success', {
+                    label: 'Sync complete',
+                    activityLabel
+                });
+            }
+        }
+    }
+
+    /**
      * Get the inbox stream ID for sync operations
      * @returns {string|null}
      */
@@ -82,23 +137,24 @@ class SyncManager {
     /**
      * Push current local state to sync partition.
      * Encrypts with self-ECDH so only the owner can decrypt.
+     * @returns {Promise<Object|null>} - Published payload snapshot, or null if skipped
      */
     async pushSync() {
         if (authManager.isGuestMode()) {
             Logger.debug('Sync: Skipping push in guest mode');
-            return;
+            return null;
         }
 
         if (this.isSyncing) {
             Logger.warn('Sync: Already syncing, skipping push');
-            return;
+            return null;
         }
 
         // Check if inbox exists (required for sync)
         const hasInbox = await dmManager.hasInbox();
         if (!hasInbox) {
             Logger.debug('Sync: No inbox yet, skipping push');
-            return;
+            return null;
         }
 
         const privateKey = authManager.wallet?.privateKey;
@@ -143,6 +199,7 @@ class SyncManager {
             Logger.info('Sync: Pushed state to storage nodes', { ts: payload.ts });
 
             this.notifyHandlers('sync_pushed', { ts: payload.ts });
+            return payload;
         } finally {
             this.isSyncing = false;
         }
@@ -187,6 +244,7 @@ class SyncManager {
         this.isSyncing = true;
 
         try {
+            const pullStartedAt = getNow();
             Logger.info('Sync: Pulling from storage nodes...', { streamId: inboxStreamId, partition: STREAM_CONFIG.MESSAGE_STREAM.SYNC });
 
             // Add our own decrypt key for Streamr-layer encryption
@@ -199,6 +257,7 @@ class SyncManager {
                 STREAM_CONFIG.MESSAGE_STREAM.SYNC,
                 options.limit || 10
             );
+            const fetchCompletedAt = getNow();
 
             Logger.info('Sync: Fetched messages:', { count: messages.length });
 
@@ -208,6 +267,7 @@ class SyncManager {
             }
 
             // Decrypt payloads
+            const decryptStartedAt = getNow();
             const myPubKey = dmCrypto.getMyPublicKey(privateKey);
             const aesKey = await dmCrypto.deriveSharedKey(privateKey, myPubKey);
 
@@ -240,6 +300,7 @@ class SyncManager {
                     Logger.warn('Sync: Failed to decrypt payload', e.message);
                 }
             }
+            const decryptCompletedAt = getNow();
 
             Logger.info('Sync: Valid payloads found:', { count: decrypted.length });
 
@@ -251,18 +312,39 @@ class SyncManager {
             // Sort by timestamp (oldest first) and merge all
             decrypted.sort((a, b) => a.ts - b.ts);
 
+            const payloadsToMerge = [...decrypted];
+            const optimisticPayload = options.optimisticPayload;
+            if (optimisticPayload?.type === 'sync' && optimisticPayload.v === 1) {
+                const optimisticAlreadyVisible = payloadsToMerge.some(
+                    payload => payload.ts === optimisticPayload.ts
+                );
+
+                if (!optimisticAlreadyVisible) {
+                    payloadsToMerge.push(optimisticPayload);
+                    payloadsToMerge.sort((a, b) => a.ts - b.ts);
+                    Logger.info('Sync: Using optimistic local snapshot until push propagates', {
+                        ts: optimisticPayload.ts
+                    });
+                }
+            }
+
             // Progressive merge: start with local state (preserving imageData),
             // apply each remote chronologically. Using exportForBackup() instead
             // of exportForSync() so local imageData is not stripped before merge.
             // The merge dedup keeps local versions, so images we already have
             // won't be lost when the remote version lacks imageData.
-            let merged = secureStorage.exportForBackup();
-            for (const payload of decrypted) {
-                merged = this.mergeState(merged, payload.data);
-            }
+            const mergeStartedAt = getNow();
+            const merged = await syncWorkerClient.mergePayloads(
+                secureStorage.exportForBackup(),
+                payloadsToMerge.map(payload => payload.data),
+                CONFIG.dm.maxSentMessages
+            );
+            const mergeCompletedAt = getNow();
 
             // Apply final merged state
+            const importStartedAt = getNow();
             const channelsUpdated = await secureStorage.importFromSync(merged);
+            const importCompletedAt = getNow();
 
             // Reload channelManager if channels were updated
             if (channelsUpdated) {
@@ -273,12 +355,19 @@ class SyncManager {
             // Reload username in identity manager
             identityManager.loadUsername();
 
-            const latestTs = decrypted[decrypted.length - 1].ts;
+            const latestTs = payloadsToMerge[payloadsToMerge.length - 1].ts;
             this.lastSyncTs = latestTs;
 
             Logger.info('Sync: Merged remote state', {
-                payloads: decrypted.length,
+                payloads: payloadsToMerge.length,
                 latestTs: new Date(latestTs).toISOString()
+            });
+            Logger.info('Sync: Pull timings', {
+                fetchMs: roundDuration(fetchCompletedAt - pullStartedAt),
+                decryptMs: roundDuration(decryptCompletedAt - decryptStartedAt),
+                mergeMs: roundDuration(mergeCompletedAt - mergeStartedAt),
+                importMs: roundDuration(importCompletedAt - importStartedAt),
+                totalMs: roundDuration(importCompletedAt - pullStartedAt)
             });
 
             this.notifyHandlers('sync_pulled', { ts: latestTs });
@@ -299,54 +388,7 @@ class SyncManager {
      * @returns {Object} - Merged state
      */
     mergeState(base, incoming) {
-        const merged = {};
-
-        // Sent Messages: merge per conversation, dedupe by message ID
-        merged.sentMessages = this.mergeSentMessages(
-            base.sentMessages || {},
-            incoming.sentMessages || {}
-        );
-
-        // Sent Reactions: incoming wins per messageId, local-only preserved
-        merged.sentReactions = this.mergeSentReactions(
-            base.sentReactions || {},
-            incoming.sentReactions || {}
-        );
-
-        // Channels: latest state wins (incoming replaces base)
-        merged.channels = incoming.channels !== undefined
-            ? incoming.channels
-            : (base.channels || []);
-
-        // Blocked Peers: latest state wins (incoming replaces base)
-        merged.blockedPeers = incoming.blockedPeers !== undefined
-            ? incoming.blockedPeers
-            : (base.blockedPeers || []);
-
-        // DM Left At: latest state wins (incoming replaces base)
-        merged.dmLeftAt = incoming.dmLeftAt !== undefined
-            ? incoming.dmLeftAt
-            : (base.dmLeftAt || {});
-
-        // Trusted Contacts: union, incoming values take precedence
-        merged.trustedContacts = {
-            ...base.trustedContacts,
-            ...incoming.trustedContacts
-        };
-
-        // ENS Cache: union
-        merged.ensCache = {
-            ...base.ensCache,
-            ...incoming.ensCache
-        };
-
-        // Username: prefer incoming if set
-        merged.username = incoming.username || base.username;
-
-        // Graph API Key: prefer incoming if set
-        merged.graphApiKey = incoming.graphApiKey || base.graphApiKey;
-
-        return merged;
+        return mergeSyncState(base, incoming, CONFIG.dm.maxSentMessages);
     }
 
     /**
@@ -357,37 +399,7 @@ class SyncManager {
      * @returns {Object} - Merged sentMessages
      */
     mergeSentMessages(local, remote) {
-        // Defensive copy — never mutate caller's arrays or message objects
-        const result = {};
-        for (const [k, v] of Object.entries(local)) {
-            result[k] = v.map(m => ({ ...m }));
-        }
-
-        for (const [streamId, remoteMessages] of Object.entries(remote)) {
-            if (!result[streamId]) {
-                result[streamId] = remoteMessages.map(m => ({ ...m }));
-            } else {
-                // Merge by message ID, preserving imageData from either side
-                const localById = new Map(result[streamId].map(m => [m.id, m]));
-                for (const msg of remoteMessages) {
-                    const existing = localById.get(msg.id);
-                    if (!existing) {
-                        result[streamId].push({ ...msg });
-                    } else if (msg.type === 'image' && msg.imageData && !existing.imageData) {
-                        // Remote has imageData that local lost — adopt it
-                        existing.imageData = msg.imageData;
-                    }
-                }
-                // Sort by timestamp
-                result[streamId].sort((a, b) => a.timestamp - b.timestamp);
-                // Trim to max
-                if (result[streamId].length > CONFIG.dm.maxSentMessages) {
-                    result[streamId] = result[streamId].slice(-CONFIG.dm.maxSentMessages);
-                }
-            }
-        }
-
-        return result;
+        return mergeSyncSentMessages(local, remote, CONFIG.dm.maxSentMessages);
     }
 
     /**
@@ -399,42 +411,7 @@ class SyncManager {
      * @returns {Object} - Merged sentReactions
      */
     mergeSentReactions(local, remote) {
-        const result = {};
-
-        // Collect all streamIds from both
-        const allStreamIds = new Set([...Object.keys(local), ...Object.keys(remote)]);
-
-        for (const streamId of allStreamIds) {
-            const localStream = local[streamId] || {};
-            const remoteStream = remote[streamId] || {};
-            result[streamId] = {};
-
-            const allMessageIds = new Set([...Object.keys(localStream), ...Object.keys(remoteStream)]);
-
-            for (const messageId of allMessageIds) {
-                const inLocal = messageId in localStream;
-                const inRemote = messageId in remoteStream;
-
-                if (inRemote) {
-                    // Remote state wins (handles both additions and removals)
-                    const remoteReactions = remoteStream[messageId];
-                    if (Object.keys(remoteReactions).length > 0) {
-                        result[streamId][messageId] = remoteReactions;
-                    }
-                    // If remote has empty reactions for this message, it was fully removed — skip it
-                } else {
-                    // Only in local (new, not yet synced) — preserve
-                    result[streamId][messageId] = localStream[messageId];
-                }
-            }
-
-            // Clean up empty streamId entries
-            if (Object.keys(result[streamId]).length === 0) {
-                delete result[streamId];
-            }
-        }
-
-        return result;
+        return mergeSyncSentReactions(local, remote);
     }
 
     /**
@@ -583,14 +560,16 @@ class SyncManager {
 
         try {
             // Push state (partition 1)
-            await this.pushSync();
+            const optimisticPayload = await this.pushSync();
             result.pushed = true;
 
             // Push image blobs (partition 2) — incremental, non-blocking
             await this.pushImageBlobs();
 
             // Pull state (partition 1)
-            const pullResult = await this.pullSync();
+            const pullResult = await this.pullSync(
+                optimisticPayload ? { optimisticPayload } : undefined
+            );
             result.pulled = pullResult !== null;
 
             // Pull image blobs (partition 2)

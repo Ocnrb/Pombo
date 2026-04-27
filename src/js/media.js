@@ -523,6 +523,56 @@ class MediaController {
     }
 
     /**
+     * Center-crop image to square and re-encode at fixed size.
+     * Preserves transparency for source formats that support alpha
+     * (PNG / WebP / GIF) by emitting PNG; opaque sources (JPEG) are
+     * re-encoded as JPEG for smaller payloads.
+     *
+     * @param {File} file - Source image file (jpg/png/gif/webp)
+     * @param {number} [size=512] - Output side length in px
+     * @param {number} [quality=0.85] - JPEG quality 0..1 (ignored for PNG)
+     * @returns {Promise<string>} - data:image/(jpeg|png);base64,... URL
+     */
+    cropAndResizeSquare(file, size = 512, quality = 0.85) {
+        return new Promise((resolve, reject) => {
+            if (!CONFIG.ALLOWED_IMAGE_TYPES.includes(file.type)) {
+                reject(new Error(`Invalid image type. Allowed: ${CONFIG.ALLOWED_IMAGE_TYPES.join(', ')}`));
+                return;
+            }
+            // Preserve alpha for formats that support it; JPEG sources
+            // get re-encoded as JPEG (no alpha → smaller files).
+            const preserveAlpha = file.type !== 'image/jpeg' && file.type !== 'image/jpg';
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    const side = Math.min(img.width, img.height);
+                    const sx = Math.floor((img.width - side) / 2);
+                    const sy = Math.floor((img.height - side) / 2);
+                    const canvas = document.createElement('canvas');
+                    canvas.width = size;
+                    canvas.height = size;
+                    const ctx = canvas.getContext('2d');
+                    if (!preserveAlpha) {
+                        // JPEG output: paint white baseline so any source
+                        // alpha doesn't bleed through as black.
+                        ctx.fillStyle = '#ffffff';
+                        ctx.fillRect(0, 0, size, size);
+                    }
+                    ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
+                    resolve(preserveAlpha
+                        ? canvas.toDataURL('image/png')
+                        : canvas.toDataURL('image/jpeg', quality));
+                };
+                img.onerror = () => reject(new Error('Failed to load image'));
+                img.src = e.target.result;
+            };
+            reader.onerror = () => reject(new Error('Failed to read file'));
+            reader.readAsDataURL(file);
+        });
+    }
+
+    /**
      * Handle incoming image data
      * @param {Object} data - Image data message
      */

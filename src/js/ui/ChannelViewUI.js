@@ -103,6 +103,7 @@ class ChannelViewUI {
         this.elements.currentChannelName.textContent = channel.name;
         this.elements.currentChannelInfo.innerHTML = headerUI.getChannelTypeLabel(channel.type, channel.readOnly);
         this.elements.currentChannelInfo.parentElement.classList.remove('hidden');
+        headerUI.updateChannelThumb(channel);
         this.elements.messageInputContainer.classList.remove('hidden');
         
         // Restore padding and clear content
@@ -251,6 +252,7 @@ class ChannelViewUI {
         }
         this.elements.currentChannelInfo.textContent = '';
         this.elements.currentChannelInfo.parentElement?.classList.add('hidden');
+        headerUI.clearChannelThumb();
         
         // Hide channel buttons
         this.elements.inviteUsersBtn?.classList.add('hidden');
@@ -294,6 +296,7 @@ class ChannelViewUI {
         this.elements.currentChannelName.textContent = 'Explore Channels';
         this.elements.currentChannelInfo.textContent = '';
         this.elements.currentChannelInfo.parentElement?.classList.add('hidden');
+        headerUI.clearChannelThumb();
         this.elements.messageInputContainer?.classList.add('hidden');
         
         // Hide all channel buttons

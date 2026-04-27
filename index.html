@@ -73,7 +73,6 @@
                 <span class="text-[17px] font-extrabold text-white tracking-tight leading-tight">Pombo</span>
             </div>
         </div>
-        
         <!-- Right side: Wallet controls -->
         <div class="flex items-center gap-3">
             <!-- Guest label (shown alongside Connect button when in guest mode) -->
@@ -91,6 +90,10 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.5v15m7.5-7.5h-15"/>
                 </svg>
             </button>
+            <div id="global-sync-indicator" class="global-sync-indicator hidden" aria-live="polite" aria-hidden="true">
+                <span class="global-sync-spinner" aria-hidden="true"></span>
+                <span id="global-sync-text" class="global-sync-text">Syncing your data</span>
+            </div>
             <!-- Desktop: Unified account dropdown (hidden on mobile) -->
             <div id="desktop-account-wrapper" class="hidden md:relative">
                 <button id="desktop-account-btn" class="bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] text-white/70 hover:text-white px-3 py-1.5 rounded-xl text-sm font-medium transition-all duration-200 flex items-center gap-2">
@@ -348,6 +351,8 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.75 19.5L8.25 12l7.5-7.5"/>
                     </svg>
                 </button>
+                <!-- Channel thumbnail (between back button and name) -->
+                <div id="current-channel-thumb" class="hidden flex-shrink-0 mr-2 ml-1"></div>
                 <!-- Left: Channel name -->
                 <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2">
@@ -1440,32 +1445,48 @@
                     <!-- Info Panel -->
                     <div id="channel-panel-info" class="channel-settings-panel hidden space-y-6">
                         <div class="space-y-6">
-                            <!-- Channel Name -->
+                            <!-- Channel Name + Image (image on the right, like Settings/Account) -->
                             <div id="channel-name-section" class="hidden">
-                                <div class="flex items-center justify-between mb-2">
-                                    <label class="block text-xs font-medium text-white/30 uppercase tracking-wider">Name</label>
-                                    <!-- Mobile notification bell chip (hidden on desktop, managed by JS) -->
+                                <!-- Mobile notification bell chip (managed by JS) — sits above the row on mobile, left-aligned -->
+                                <div class="flex justify-start mb-3">
                                     <button id="mobile-notif-chip" class="hidden items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition border" aria-label="Toggle notifications">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0"/></svg>
                                         <span id="mobile-notif-chip-label">Notifications Off</span>
                                     </button>
                                 </div>
-                                <div class="flex items-center gap-2">
-                                    <div id="channel-settings-name" class="text-sm text-white/80 font-medium"></div>
-                                    <button id="edit-channel-name-btn" class="hidden p-1 hover:bg-white/5 rounded transition" title="Edit name">
-                                        <svg class="w-3.5 h-3.5 text-white/40 hover:text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10"/></svg>
-                                    </button>
-                                </div>
-                                <!-- Edit input (hidden by default) -->
-                                <div id="channel-name-edit-container" class="hidden mt-2">
-                                    <div class="flex items-center gap-2">
-                                        <input type="text" id="channel-settings-name-input" class="flex-1 bg-white/5 border border-white/10 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-white/30 transition" placeholder="Enter name">
-                                        <button id="save-channel-name-btn" class="p-2 bg-[#F6851B] hover:bg-[#F6851B]/80 rounded-lg transition" title="Save">
-                                            <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                                        </button>
-                                        <button id="cancel-channel-name-btn" class="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition" title="Cancel">
-                                            <svg class="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                                        </button>
+                                <div class="flex items-center gap-4">
+                                    <div class="flex-1 min-w-0">
+                                        <div class="flex items-center gap-2">
+                                            <div id="channel-settings-name" class="text-base text-white/90 font-medium truncate"></div>
+                                            <button id="edit-channel-name-btn" class="hidden p-1 hover:bg-white/5 rounded transition flex-shrink-0" title="Edit name">
+                                                <svg class="w-3.5 h-3.5 text-white/40 hover:text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10"/></svg>
+                                            </button>
+                                        </div>
+                                        <!-- Edit input (hidden by default) -->
+                                        <div id="channel-name-edit-container" class="hidden mt-2">
+                                            <div class="flex items-center gap-2">
+                                                <input type="text" id="channel-settings-name-input" class="flex-1 bg-white/5 border border-white/10 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-white/30 transition" placeholder="Enter name">
+                                                <button id="save-channel-name-btn" class="p-2 bg-[#F6851B] hover:bg-[#F6851B]/80 rounded-lg transition" title="Save">
+                                                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                                </button>
+                                                <button id="cancel-channel-name-btn" class="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition" title="Cancel">
+                                                    <svg class="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <!-- Channel Image (right side) -->
+                                    <div id="channel-image-section" class="hidden flex-shrink-0 flex flex-col items-center">
+                                        <div class="flex items-center gap-1.5">
+                                            <div id="channel-image-preview" class="w-20 h-20 rounded-2xl overflow-hidden border border-white/[0.08] bg-white/[0.04] flex-shrink-0 flex items-center justify-center"></div>
+                                            <div id="channel-image-controls" class="hidden">
+                                                <input type="file" id="channel-image-input" accept="image/jpeg,image/png,image/gif,image/webp" class="hidden" />
+                                                <button id="channel-image-upload-btn" type="button" class="p-1.5 text-white/50 hover:text-white transition" title="Upload image" aria-label="Upload image">
+                                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 7.5m0 0L7.5 12M12 7.5V21"/></svg>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <p id="channel-image-status" class="text-[11px] mt-2 hidden text-center"></p>
                                     </div>
                                 </div>
                             </div>
@@ -2463,6 +2484,31 @@
         
         <!-- Video container -->
         <video id="lightbox-video" class="hidden max-w-[90vw] max-h-[90vh] rounded-lg" controls></video>
+    </div>
+
+    <!-- Modal: Channel Image Confirm -->
+    <div id="channel-image-confirm-modal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+        <div class="bg-[#111113] rounded-2xl p-5 w-[360px] max-w-full mx-4 border border-white/[0.06]">
+            <h3 class="text-base font-medium mb-4 text-white">Update channel image</h3>
+            <div class="bg-white/[0.05] rounded-xl p-4 border border-white/[0.08] mb-4 flex items-center gap-3">
+                <div id="channel-image-confirm-preview" class="w-16 h-16 rounded-xl overflow-hidden bg-white/[0.06] border border-white/[0.06] flex-shrink-0 flex items-center justify-center"></div>
+                <div class="flex-1 min-w-0">
+                    <p class="text-[11px] text-white/50 leading-relaxed">JPEG / PNG / WebP. Auto cropped to a square (512×512).</p>
+                </div>
+            </div>
+            <label id="channel-image-encrypt-row" class="hidden items-center gap-2 text-xs text-white/60 cursor-pointer select-none mb-4">
+                <input type="checkbox" id="channel-image-encrypt" class="w-4 h-4 rounded border border-white/20 bg-white/5" />
+                <span>Encrypt with channel password</span>
+            </label>
+            <div class="flex gap-3">
+                <button id="cancel-channel-image-btn" class="flex-1 bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] text-white/50 hover:text-white px-4 py-2 rounded-xl text-sm font-medium transition">
+                    Cancel
+                </button>
+                <button id="confirm-channel-image-btn" class="flex-1 bg-white hover:bg-[#f0f0f0] text-black px-4 py-2 rounded-xl text-sm font-medium transition">
+                    Upload
+                </button>
+            </div>
+        </div>
     </div>
 
     <!-- Modal: File Confirm -->

@@ -22,6 +22,8 @@ class SecureStorage {
         this.cache = null;            // Decrypted data cache
         this.isGuestMode = false;     // Guest mode - no persistence
         this.PBKDF2_ITERATIONS = CONFIG.crypto.pbkdf2Iterations;
+        // Encrypted state store (IndexedDB)
+        this.stateDB = null;          // IDBDatabase for PomboStateStore
         // Image ledger (IndexedDB)
         this.imageDB = null;          // IDBDatabase for PomboImageStore
         this.imageBlobCache = null;   // Map<imageId, imageData> in-memory LRU
@@ -88,6 +90,9 @@ class SecureStorage {
         try {
             // Derive encryption key from wallet signature
             this.storageKey = await this.deriveStorageKey(signer, address);
+
+            // Initialize persistent encrypted state backend first so load can use IDB.
+            await this.initStateStore();
             
             // Load existing encrypted data or initialize empty
             await this.loadFromStorage();
@@ -128,7 +133,18 @@ class SecureStorage {
         this.storageKey = null; // No encryption needed for in-memory only
         
         // Initialize empty cache in memory (never persisted)
-        this.cache = {
+        this.cache = this.createEmptyCache();
+        
+        Logger.info('🔓 Guest storage initialized (memory only):', this.address.slice(0, 8) + '...');
+        return true;
+    }
+
+    /**
+     * Create a fresh empty cache object.
+     * @returns {Object}
+     */
+    createEmptyCache() {
+        return {
             channels: [],
             trustedContacts: {},
             ensCache: {},
@@ -142,9 +158,6 @@ class SecureStorage {
             dmLeftAt: {},
             version: 2
         };
-        
-        Logger.info('🔓 Guest storage initialized (memory only):', this.address.slice(0, 8) + '...');
-        return true;
     }
 
     /**
@@ -152,6 +165,103 @@ class SecureStorage {
      */
     getStorageKey() {
         return CONFIG.storageKeys.secure(this.address);
+    }
+
+    /**
+     * Open (or create) the PomboStateStore IndexedDB.
+     * Schema: { storageKey (PK), encryptedData, updatedAt }
+     */
+    async initStateStore() {
+        if (this.isGuestMode || this.stateDB || typeof indexedDB === 'undefined') return;
+
+        return new Promise((resolve) => {
+            const request = indexedDB.open('PomboStateStore', 1);
+
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+                if (!db.objectStoreNames.contains('state')) {
+                    db.createObjectStore('state', { keyPath: 'storageKey' });
+                }
+            };
+
+            request.onsuccess = (event) => {
+                this.stateDB = event.target.result;
+                Logger.info('📦 PomboStateStore opened');
+                resolve();
+            };
+
+            request.onerror = (event) => {
+                Logger.error('Failed to open PomboStateStore:', event.target.error);
+                resolve();
+            };
+        });
+    }
+
+    /**
+     * Read encrypted state from the IndexedDB state store.
+     * @param {string} storageKey
+     * @returns {Promise<Object|null>}
+     */
+    async readStateRecord(storageKey) {
+        if (!this.stateDB) return null;
+
+        return new Promise((resolve, reject) => {
+            const tx = this.stateDB.transaction('state', 'readonly');
+            const req = tx.objectStore('state').get(storageKey);
+            req.onsuccess = () => resolve(req.result || null);
+            req.onerror = () => reject(req.error);
+        });
+    }
+
+    /**
+     * Persist encrypted state to the IndexedDB state store.
+     * @param {string} storageKey
+     * @param {Object} encryptedData
+     * @returns {Promise<void>}
+     */
+    async writeStateRecord(storageKey, encryptedData) {
+        if (!this.stateDB) return;
+
+        return new Promise((resolve, reject) => {
+            const tx = this.stateDB.transaction('state', 'readwrite');
+            tx.objectStore('state').put({
+                storageKey,
+                encryptedData,
+                updatedAt: Date.now()
+            });
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    }
+
+    /**
+     * Delete encrypted state for an account from both legacy localStorage and IDB.
+     * @param {string} address
+     */
+    async deletePersistentState(address) {
+        const normalizedAddress = address?.toLowerCase?.() || address;
+        if (!normalizedAddress) return;
+
+        const storageKey = CONFIG.storageKeys.secure(normalizedAddress);
+        localStorage.removeItem(storageKey);
+
+        if (!this.stateDB && typeof indexedDB !== 'undefined' && !this.isGuestMode) {
+            await this.initStateStore();
+        }
+
+        if (!this.stateDB) return;
+
+        try {
+            await new Promise((resolve, reject) => {
+                const tx = this.stateDB.transaction('state', 'readwrite');
+                tx.objectStore('state').delete(storageKey);
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+            Logger.info('🗑️ Deleted encrypted state for:', normalizedAddress.slice(0, 8) + '...');
+        } catch (error) {
+            Logger.error('Failed to delete encrypted state:', error);
+        }
     }
 
     /**
@@ -202,28 +312,30 @@ class SecureStorage {
     }
 
     /**
-     * Load and decrypt data from localStorage
+     * Load and decrypt data from persistent storage.
+     * Prefers IndexedDB state storage and falls back to legacy localStorage.
      */
     async loadFromStorage() {
         const storageKey = this.getStorageKey();
+
+        if (this.stateDB) {
+            try {
+                const record = await this.readStateRecord(storageKey);
+                if (record?.encryptedData) {
+                    this.cache = await this.decrypt(record.encryptedData);
+                    Logger.info('📦 Loaded and decrypted data from IndexedDB state store');
+                    return;
+                }
+            } catch (error) {
+                Logger.warn('Failed to read IndexedDB state, falling back to localStorage:', error);
+            }
+        }
+
         const stored = localStorage.getItem(storageKey);
         
         if (!stored) {
             // No existing data - initialize empty cache
-            this.cache = {
-                channels: [],
-                trustedContacts: {},
-                ensCache: {},
-                username: null,
-                graphApiKey: null,
-                sessionData: null,
-                channelLastAccess: {}, // streamId -> timestamp
-                channelOrder: [], // Array of streamIds in user-defined order
-                lastOpenedChannel: null, // streamId of last opened channel (for session restore)
-                blockedPeers: [],
-                dmLeftAt: {},
-                version: 2
-            };
+            this.cache = this.createEmptyCache();
             Logger.info('📦 Initialized empty secure storage');
             return;
         }
@@ -231,7 +343,18 @@ class SecureStorage {
         try {
             const encryptedData = JSON.parse(stored);
             this.cache = await this.decrypt(encryptedData);
-            Logger.info('📦 Loaded and decrypted data from storage');
+
+            if (this.stateDB) {
+                try {
+                    await this.writeStateRecord(storageKey, encryptedData);
+                    localStorage.removeItem(storageKey);
+                    Logger.info('📦 Migrated encrypted state from localStorage to IndexedDB');
+                } catch (migrationError) {
+                    Logger.warn('Failed to migrate encrypted state to IndexedDB:', migrationError);
+                }
+            }
+
+            Logger.info('📦 Loaded and decrypted data from legacy storage');
         } catch (error) {
             Logger.error('Failed to decrypt storage - may be corrupted or from different key');
             throw new StorageError(
@@ -256,6 +379,19 @@ class SecureStorage {
         if (!this.isUnlocked || !this.cache) {
             Logger.warn('Cannot save - storage not unlocked');
             return;
+        }
+
+        if (this.stateDB) {
+            try {
+                const encrypted = await this.encrypt(this.cache);
+                await this.writeStateRecord(this.getStorageKey(), encrypted);
+                // Remove any legacy localStorage payload once IDB is the source of truth.
+                localStorage.removeItem(this.getStorageKey());
+                Logger.debug('💾 Saved encrypted data to IndexedDB state store');
+                return;
+            } catch (error) {
+                Logger.warn('Failed to save to IndexedDB state store, falling back to localStorage:', error);
+            }
         }
         
         try {
@@ -1256,6 +1392,10 @@ class SecureStorage {
         this.isUnlocked = false;
         this.address = null;
         this.isGuestMode = false;
+        if (this.stateDB) {
+            this.stateDB.close();
+            this.stateDB = null;
+        }
         if (this.imageDB) {
             this.imageDB.close();
             this.imageDB = null;
@@ -1348,30 +1488,64 @@ class SecureStorage {
             throw new Error('Storage not unlocked');
         }
 
+        const isEqual = (currentValue, nextValue) => JSON.stringify(currentValue) === JSON.stringify(nextValue);
         let channelsUpdated = false;
+        let hasChanges = false;
 
-        if (data.sentMessages !== undefined) this.cache.sentMessages = data.sentMessages;
-        if (data.sentReactions !== undefined) this.cache.sentReactions = data.sentReactions;
-        if (data.channels !== undefined) {
-            this.cache.channels = data.channels;
-            channelsUpdated = true;
+        if (data.sentMessages !== undefined && !isEqual(this.cache.sentMessages, data.sentMessages)) {
+            this.cache.sentMessages = data.sentMessages;
+            hasChanges = true;
         }
-        if (data.blockedPeers !== undefined) this.cache.blockedPeers = data.blockedPeers;
-        if (data.dmLeftAt !== undefined) this.cache.dmLeftAt = data.dmLeftAt;
-        if (data.trustedContacts !== undefined) this.cache.trustedContacts = data.trustedContacts;
-        if (data.ensCache !== undefined) this.cache.ensCache = data.ensCache;
+        if (data.sentReactions !== undefined && !isEqual(this.cache.sentReactions, data.sentReactions)) {
+            this.cache.sentReactions = data.sentReactions;
+            hasChanges = true;
+        }
+        if (data.channels !== undefined) {
+            if (!isEqual(this.cache.channels, data.channels)) {
+                this.cache.channels = data.channels;
+                channelsUpdated = true;
+                hasChanges = true;
+            }
+        }
+        if (data.blockedPeers !== undefined && !isEqual(this.cache.blockedPeers, data.blockedPeers)) {
+            this.cache.blockedPeers = data.blockedPeers;
+            hasChanges = true;
+        }
+        if (data.dmLeftAt !== undefined && !isEqual(this.cache.dmLeftAt, data.dmLeftAt)) {
+            this.cache.dmLeftAt = data.dmLeftAt;
+            hasChanges = true;
+        }
+        if (data.trustedContacts !== undefined && !isEqual(this.cache.trustedContacts, data.trustedContacts)) {
+            this.cache.trustedContacts = data.trustedContacts;
+            hasChanges = true;
+        }
+        if (data.ensCache !== undefined && !isEqual(this.cache.ensCache, data.ensCache)) {
+            this.cache.ensCache = data.ensCache;
+            hasChanges = true;
+        }
         if (data.username !== undefined) {
-            this.cache.username = data.username;
-            // Also store in plain localStorage for pre-unlock display (unlock modal)
-            if (this.address) {
-                if (data.username) {
-                    localStorage.setItem(CONFIG.storageKeys.username(this.address), data.username);
-                } else {
-                    localStorage.removeItem(CONFIG.storageKeys.username(this.address));
+            if (this.cache.username !== data.username) {
+                this.cache.username = data.username;
+                hasChanges = true;
+                // Also store in plain localStorage for pre-unlock display (unlock modal)
+                if (this.address) {
+                    if (data.username) {
+                        localStorage.setItem(CONFIG.storageKeys.username(this.address), data.username);
+                    } else {
+                        localStorage.removeItem(CONFIG.storageKeys.username(this.address));
+                    }
                 }
             }
         }
-        if (data.graphApiKey !== undefined) this.cache.graphApiKey = data.graphApiKey;
+        if (data.graphApiKey !== undefined && this.cache.graphApiKey !== data.graphApiKey) {
+            this.cache.graphApiKey = data.graphApiKey;
+            hasChanges = true;
+        }
+
+        if (!hasChanges) {
+            Logger.debug('📥 Sync import skipped - no state changes detected');
+            return false;
+        }
 
         await this.saveToStorage();
         // Flush any imageData present in imported messages to IDB ledger

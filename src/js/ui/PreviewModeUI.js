@@ -242,6 +242,7 @@ class PreviewModeUI {
         elements.currentChannelName.textContent = this.previewChannel.name;
         elements.currentChannelInfo.innerHTML = headerUI.getChannelTypeLabel(this.previewChannel.type, this.previewChannel.readOnly);
         elements.currentChannelInfo.parentElement.classList.remove('hidden');
+        headerUI.updateChannelThumb(this.previewChannel);
 
         // Show message input (full functionality in preview)
         elements.messageInputContainer.classList.remove('hidden');
