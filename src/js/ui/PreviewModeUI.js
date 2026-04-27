@@ -10,6 +10,14 @@ class PreviewModeUI {
     constructor() {
         // Preview channel state
         this.previewChannel = null;
+
+        // Switch fence — incremented on every preview enter/exit so async
+        // work captured during a previous preview can detect that it has
+        // been superseded and bail before mutating state, mirroring
+        // channelManager.switchGeneration for joined channels. Prevents
+        // cross-channel message leaks when the user clicks rapidly through
+        // multiple Explore items.
+        this.previewGeneration = 0;
         
         // Dependencies (set via setDependencies)
         this.deps = null;
@@ -90,13 +98,22 @@ class PreviewModeUI {
         const { channelManager, subscriptionManager, graphAPI, notificationUI, historyManager, headerUI, reactionManager } = this.deps;
         const elements = this.ui.elements;
 
+        // Claim this switch. Any previous preview's in-flight async work
+        // (verify, admin resend, subscribe) will see gen !== previewGeneration
+        // after their awaits and bail out without touching UI/state.
+        const gen = ++this.previewGeneration;
+
         // No longer in explore view
         document.body.classList.remove('explore-open');
 
         try {
-            // Exit any existing preview first (only one preview at a time)
+            // Exit any existing preview first (only one preview at a time).
+            // Use the internal teardown so it does NOT bump generation again
+            // — we already claimed `gen` for this enter call.
             if (this.previewChannel) {
-                await this.exitPreviewMode(false);
+                this.cancelPendingPreviewVerifications(this.previewChannel);
+                await this._teardownPreview(false);
+                if (gen !== this.previewGeneration) return;
             }
 
             // Clear current channel selection (preview is not a "real" selection)
@@ -114,6 +131,7 @@ class PreviewModeUI {
                 } catch (e) {
                     Logger.warn('Could not get channel info from Graph:', e.message);
                 }
+                if (gen !== this.previewGeneration) return;
             }
 
             // Store preview state
@@ -142,22 +160,29 @@ class PreviewModeUI {
                 initialLoadInProgress: true
             };
 
+            // Capture the just-created preview as the "owner" closure for
+            // the onHistoryComplete callback so a stale callback fired by
+            // an old subscription cannot mutate a newer preview's state.
+            const ownerChannel = this.previewChannel;
+
             // Subscribe to channel stream temporarily (without persisting)
             await subscriptionManager.setPreviewChannel(streamId, () => {
-                // onHistoryComplete: apply pending overrides, filter deleted, render
-                if (!this.previewChannel) return;
+                // ownerChannel identity check is sufficient: every code path
+                // that replaces `previewChannel` also bumps previewGeneration.
+                if (this.previewChannel !== ownerChannel) return;
                 this._applyPreviewOverrides();
-                this.previewChannel.messages = this.previewChannel.messages.filter(m => !m._deleted);
-                this.previewChannel.initialLoadInProgress = false;
+                ownerChannel.messages = ownerChannel.messages.filter(m => !m._deleted);
+                ownerChannel.initialLoadInProgress = false;
                 const { chatAreaUI, mediaHandler } = this.deps;
-                chatAreaUI.renderMessages(this.previewChannel.messages, () => {
+                chatAreaUI.renderMessages(ownerChannel.messages, () => {
                     this.ui.attachReactionListeners();
                     mediaHandler.attachLightboxListeners();
                 });
             });
+            if (this.previewChannel !== ownerChannel) return;
 
             // Update UI for preview mode
-            this._showPreviewUI();
+            this._showPreviewUI(ownerChannel);
             
             // Check actual publish permission via SDK and update header accordingly
             this._checkAndUpdateReadOnlyState();
@@ -177,7 +202,12 @@ class PreviewModeUI {
 
             Logger.info('Entered preview mode for:', streamId);
         } catch (error) {
-            this.previewChannel = null;
+            // Only clear state if we are still the active switch — otherwise
+            // a newer enter call already owns `previewChannel` and we must
+            // not touch it.
+            if (gen === this.previewGeneration) {
+                this.previewChannel = null;
+            }
             Logger.error('Failed to enter preview mode:', error);
             this.ui.showNotification('Failed to load channel: ' + error.message, 'error');
         } finally {
@@ -206,9 +236,12 @@ class PreviewModeUI {
 
     /**
      * Update UI to show preview mode state
+     * @param {Object} [ownerChannel] - Preview channel snapshot owning this UI update.
+     *   Used by the deferred empty-state setTimeout to detect rapid switches
+     *   and skip the DOM mutation if a different preview now owns the area.
      * @private
      */
-    _showPreviewUI() {
+    _showPreviewUI(ownerChannel = this.previewChannel) {
         if (!this.previewChannel) return;
 
         const elements = this.ui.elements;
@@ -228,8 +261,13 @@ class PreviewModeUI {
         
         // After a short delay, if still no messages, show empty state
         setTimeout(() => {
-            if (this.previewChannel && this.previewChannel.isLoading && this.previewChannel.messages.length === 0) {
-                this.previewChannel.isLoading = false;
+            // Bail if a different preview now owns the UI (rapid switch
+            // between Explore items would otherwise stomp the new
+            // channel's messages area with the previous channel's empty
+            // state placeholder).
+            if (this.previewChannel !== ownerChannel) return;
+            if (ownerChannel.isLoading && ownerChannel.messages.length === 0) {
+                ownerChannel.isLoading = false;
                 elements.messagesArea.innerHTML = `
                     <div class="flex items-center justify-center h-full text-white/40">
                         No messages yet. Start the conversation!
@@ -289,10 +327,17 @@ class PreviewModeUI {
         
         const { streamrController, headerUI } = this.deps;
         const elements = this.ui.elements;
+        // Capture the owner snapshot up-front so a switch during the
+        // permission RPC cannot apply state to a different channel.
+        const ownerChannel = this.previewChannel;
         
         try {
-            const result = await streamrController.hasPublishPermission(this.previewChannel.streamId, true);
+            const result = await streamrController.hasPublishPermission(ownerChannel.streamId, true);
             
+            // Bail if a rapid switch invalidated this preview while the
+            // permission check was in flight.
+            if (this.previewChannel !== ownerChannel) return;
+
             // Handle RPC error - don't mark as read-only when we can't verify
             if (result.rpcError) {
                 Logger.warn('RPC error checking permissions, keeping optimistic state');
@@ -424,6 +469,44 @@ class PreviewModeUI {
      */
     async exitPreviewMode(navigateToExplore = true) {
         if (!this.previewChannel) return;
+        // Bump generation so any in-flight async work for this preview
+        // (verifyMessage, _checkAndUpdateReadOnlyState, deferred timeouts)
+        // detects it has been superseded after their awaits and bails.
+        this.previewGeneration++;
+        this.cancelPendingPreviewVerifications(this.previewChannel);
+        return this._teardownPreview(navigateToExplore);
+    }
+
+    /**
+     * Cancel pending in-flight verifications for a preview channel.
+     * Mirrors channelManager.cancelPendingVerifications: the actual async
+     * verifyMessage promises remain in flight (we cannot abort them) but
+     * downstream consumers gate on `_processingIds` and the previewGeneration
+     * fence, so clearing the set + bumping the generation invalidates them.
+     * Logs the discarded count for parity with the joined-channel path.
+     * @param {Object} channel - Preview channel to cancel verifications for
+     */
+    cancelPendingPreviewVerifications(channel) {
+        if (!channel?._processingIds) return;
+        const discarded = channel._processingIds.size;
+        channel._processingIds.clear();
+        if (discarded > 0) {
+            Logger.debug(`Cancelled ${discarded} pending preview verifications for`,
+                String(channel.streamId || '').slice(-20));
+        }
+    }
+
+    /**
+     * Internal teardown of preview state without bumping the generation.
+     * Used both by `exitPreviewMode` (which bumps externally) and by
+     * `_enterPreviewCore` when transitioning from one preview to another
+     * (the enter call has already claimed the new generation; teardown
+     * must not invalidate the new switch).
+     * @param {boolean} navigateToExplore
+     * @private
+     */
+    async _teardownPreview(navigateToExplore = true) {
+        if (!this.previewChannel) return;
 
         const { subscriptionManager, reactionManager } = this.deps;
 
@@ -538,13 +621,22 @@ class PreviewModeUI {
             Logger.debug('Preview: Message already exists, skipping:', message.id);
             return;
         }
-        this.previewChannel._processingIds.add(message.id);
+
+        // Snapshot owner channel: rapid-switch protection. Without this,
+        // a stale message from a previous Explore preview could be pushed
+        // into the new preview's array after the async verify completes —
+        // exactly the cross-channel leak that
+        // channelManager.cancelPendingVerifications guards against for
+        // joined channels. Identity check is sufficient because every
+        // path that replaces `previewChannel` also bumps generation.
+        const ownerChannel = this.previewChannel;
+        ownerChannel._processingIds.add(message.id);
 
         try {
             Logger.debug('Preview message received:', message.id, message.text?.slice(0, 30));
 
             // Verify message signature (same as channel mode)
-            const streamId = this.previewChannel.streamId;
+            const streamId = ownerChannel.streamId;
             const isRecentMessage = Date.now() - message.timestamp < 30000;
             
             try {
@@ -562,33 +654,35 @@ class PreviewModeUI {
                 message.verified = { valid: false, error: error.message, trustLevel: -1 };
             }
 
-            // Check if preview channel still exists (may have been cleared during async verification)
-            if (!this.previewChannel) {
-                Logger.debug('Preview: Channel cleared during verification, skipping message');
+            // Bail if a rapid switch invalidated this preview while the
+            // signature verification was in flight. Identity check covers
+            // both "channel cleared" and "channel replaced" cases.
+            if (this.previewChannel !== ownerChannel) {
+                Logger.debug('Preview: Channel changed during verification, skipping message');
                 return;
             }
 
             // Re-check dedup after async verify: defence-in-depth in case the
             // _processingIds set was somehow bypassed (e.g. preview channel
             // recreated mid-flight).
-            if (this.previewChannel.messages.some(m => m.id === message.id)) {
+            if (ownerChannel.messages.some(m => m.id === message.id)) {
                 Logger.debug('Preview: Message raced in during verify, skipping:', message.id);
                 return;
             }
 
             // Mark as no longer loading (we got at least one message)
-            this.previewChannel.isLoading = false;
+            ownerChannel.isLoading = false;
 
             // Track oldest timestamp for pagination (scroll-to-top load-more)
-            if (!this.previewChannel.oldestTimestamp || message.timestamp < this.previewChannel.oldestTimestamp) {
-                this.previewChannel.oldestTimestamp = message.timestamp;
+            if (!ownerChannel.oldestTimestamp || message.timestamp < ownerChannel.oldestTimestamp) {
+                ownerChannel.oldestTimestamp = message.timestamp;
             }
 
             // Add message to preview channel
-            this.previewChannel.messages.push(message);
+            ownerChannel.messages.push(message);
 
             // Sort by timestamp to ensure correct order
-            this.previewChannel.messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+            ownerChannel.messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
             // Apply any override (edit/delete) that arrived BEFORE this
             // message and was queued in `_pendingOverrides`. Race-safe by
@@ -606,7 +700,7 @@ class PreviewModeUI {
             // if the SDK resend iterator never signals `done` (observed with some
             // legacy streams), which would otherwise leave `initialLoadInProgress`
             // stuck at true and suppress the final onHistoryComplete render.
-            chatAreaUI.renderMessages(this.previewChannel.messages, () => {
+            chatAreaUI.renderMessages(ownerChannel.messages, () => {
                 this.ui.attachReactionListeners();
                 mediaHandler.attachLightboxListeners();
             });
@@ -617,8 +711,9 @@ class PreviewModeUI {
             }
         } finally {
             // Always release the in-flight id, whether the message was added,
-            // rejected, or an error was thrown during verification.
-            this.previewChannel?._processingIds?.delete(message.id);
+            // rejected, or an error was thrown during verification. Use the
+            // captured ownerChannel so we never delete from a newer preview.
+            ownerChannel?._processingIds?.delete(message.id);
         }
     }
 

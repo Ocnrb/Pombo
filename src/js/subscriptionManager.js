@@ -28,6 +28,24 @@ class SubscriptionManager {
         // Preview channel state (temporary subscription, not persisted)
         this.previewChannelId = null;  // messageStreamId of channel being previewed
         this.previewPresenceInterval = null;  // Interval for presence broadcasting in preview
+
+        // Switch fence for preview subscription work. Bumped on every
+        // setPreviewChannel and clearPreviewChannel call so async work
+        // captured during a previous preview (admin resend,
+        // subscribeToDualStream) can detect it has been superseded after
+        // its awaits and either bail out or undo (unsubscribe) without
+        // leaking an orphan subscription/presence interval. Mirrors
+        // channelManager.switchGeneration for joined channels.
+        this.previewSwitchGeneration = 0;
+
+        // Tracks preview message-stream ids whose subscribeToDualStream
+        // has been started but is no longer the active preview. Two
+        // sources: (a) the user clicked a different Explore item before
+        // the prior subscribe await returned, (b) handlers fired for a
+        // streamId that mismatches `previewChannelId`. We fire a single
+        // unsubscribe per orphan and rely on the streamId-bound handler
+        // closures to drop messages until the unsubscribe takes effect.
+        this._orphanPreviewSubs = new Set();
         
         // Background activity tracking (keyed by messageStreamId)
         this.backgroundPoller = null;
@@ -189,7 +207,15 @@ class SubscriptionManager {
 
         Logger.info('Setting preview channel:', messageStreamId);
 
-        // Clear any existing preview first
+        // Claim this preview switch. Any older in-flight setPreviewChannel
+        // call (rapid clicks in Explore) will see gen !== previewSwitchGeneration
+        // after its awaits and either return without subscribing or undo a
+        // subscription that completed too late.
+        const gen = ++this.previewSwitchGeneration;
+
+        // Clear any existing preview first. clearPreviewChannel intentionally
+        // does NOT bump the generation, so our claimed `gen` survives the
+        // await — see clearPreviewChannel for rationale.
         if (this.previewChannelId) {
             await this.clearPreviewChannel();
         }
@@ -198,14 +224,19 @@ class SubscriptionManager {
         if (this.activeChannelId) {
             await this.downgradeToBackground(this.activeChannelId);
             this.activeChannelId = null;
+            if (gen !== this.previewSwitchGeneration) {
+                Logger.debug('setPreviewChannel: superseded during active downgrade:', messageStreamId);
+                return;
+            }
         }
 
         this.previewChannelId = messageStreamId;
 
         // Subscribe to both streams with proper handler object format
         // Using streamrController directly since channel is not in channelManager yet
+        let ephemeralStreamId = null;
         try {
-            const ephemeralStreamId = deriveEphemeralId(messageStreamId);
+            ephemeralStreamId = deriveEphemeralId(messageStreamId);
             const adminStreamId = deriveAdminId(messageStreamId);
 
             // Step 1: Bootstrap admin state via a one-shot resend of -3/P0
@@ -220,12 +251,18 @@ class SubscriptionManager {
                         historyCount: STREAM_CONFIG.ADMIN_HISTORY_COUNT,
                         password: null
                     });
+                    // Drop the snapshot if a newer preview has taken over.
+                    if (gen !== this.previewSwitchGeneration) {
+                        Logger.debug('setPreviewChannel: superseded after admin resend:', messageStreamId);
+                        return;
+                    }
                     if (latest && this.onPreviewAdmin) {
                         try { this.onPreviewAdmin(messageStreamId, latest); }
                         catch (e) { Logger.warn('onPreviewAdmin error (initial):', e.message); }
                     }
                 } catch (e) {
                     Logger.warn('Preview admin bootstrap resend failed (continuing without moderation):', e.message);
+                    if (gen !== this.previewSwitchGeneration) return;
                 }
             }
 
@@ -254,22 +291,51 @@ class SubscriptionManager {
                 messageStreamId,
                 ephemeralStreamId,
                 {
-                    onMessage: (msg) => this._handlePreviewMessage(msg),
-                    onOverride: (msg) => this._handlePreviewOverride(msg),
-                    onControl: (ephMsg) => this._handlePreviewEphemeral(ephMsg),
+                    // Bind messageStreamId to each handler closure so
+                    // history messages delivered while a newer preview has
+                    // already taken over `previewChannelId` are routed by
+                    // the stream that actually produced them — not by
+                    // whatever preview happens to be active right now.
+                    // Mismatch ⇒ drop and schedule orphan cleanup.
+                    onMessage: (msg) => this._handlePreviewMessage(messageStreamId, msg),
+                    onOverride: (msg) => this._handlePreviewOverride(messageStreamId, msg),
+                    onControl: (ephMsg) => this._handlePreviewEphemeral(messageStreamId, ephMsg),
                     onMedia: (mediaMsg, senderId) => this._handlePreviewMedia(messageStreamId, mediaMsg, senderId)
                 },
                 null, // password
                 STREAM_CONFIG.INITIAL_MESSAGES, // historyCount - load recent messages
                 onHistoryComplete // callback when history is fully loaded
             );
+
+            // If a newer preview has claimed the slot while we were
+            // subscribing, undo this subscription so it doesn't leak
+            // (handlers would still fire and route into the wrong
+            // previewChannelId, plus presence/poller would never stop).
+            if (gen !== this.previewSwitchGeneration) {
+                Logger.warn('setPreviewChannel: superseded after subscribe, unsubscribing orphan:', messageStreamId);
+                try {
+                    await streamrController.unsubscribeFromDualStream(messageStreamId, ephemeralStreamId);
+                } catch (e) {
+                    Logger.warn('Failed to unsubscribe orphan preview:', e.message);
+                }
+                try {
+                    if (adminStatePoller.getStreamId() === messageStreamId) {
+                        adminStatePoller.stop();
+                    }
+                } catch (e) { /* ignore */ }
+                return;
+            }
             Logger.info('Preview subscription active:', messageStreamId);
             
             // Start presence broadcasting for preview channel
             this._startPreviewPresence(messageStreamId, ephemeralStreamId);
         } catch (error) {
             Logger.error('Failed to subscribe to preview channel:', error);
-            this.previewChannelId = null;
+            // Only clear our claim if still current — a newer setPreviewChannel
+            // may have already taken ownership of previewChannelId.
+            if (gen === this.previewSwitchGeneration && this.previewChannelId === messageStreamId) {
+                this.previewChannelId = null;
+            }
             throw error;
         }
     }
@@ -277,14 +343,31 @@ class SubscriptionManager {
     /**
      * Handle message received on preview channel (-1/P0 content).
      * After promote, forwards to channelManager if channel exists there.
+     * @param {string} sourceStreamId - Stream id whose subscription produced
+     *   this message (captured in closure when subscribing). Must match
+     *   `previewChannelId` for the message to be considered current; any
+     *   mismatch indicates a stale/orphan subscription created by a rapid
+     *   Explore switch and the message is dropped.
      * @private
      */
-    _handlePreviewMessage(msg) {
+    _handlePreviewMessage(sourceStreamId, msg) {
+        // Drop messages from stale subscriptions (rapid Explore switch).
+        // Without this, the SDK keeps delivering A's history after the
+        // user moved on to B, and `this.previewChannelId === B` would
+        // misroute A's messages into B's preview state — exactly the
+        // cross-channel leak this guard prevents. Once promoted to a
+        // joined channel, channelManager owns routing by streamId so we
+        // still allow forwarding below.
+        if (sourceStreamId !== this.previewChannelId
+            && sourceStreamId !== this.activeChannelId
+            && !channelManager.getChannel(sourceStreamId)) {
+            this._scheduleOrphanPreviewUnsub(sourceStreamId);
+            return;
+        }
+
         // If channel was promoted to channelManager, forward there instead
-        const streamId = this.previewChannelId || this.activeChannelId;
-        if (streamId && channelManager.getChannel(streamId)) {
-            // Channel exists in manager - use proper handler
-            channelManager.handleTextMessage(streamId, msg);
+        if (channelManager.getChannel(sourceStreamId)) {
+            channelManager.handleTextMessage(sourceStreamId, msg);
             return;
         }
         
@@ -313,10 +396,16 @@ class SubscriptionManager {
      * fires the granular `message_edited` / `message_deleted` events.
      * @private
      */
-    _handlePreviewOverride(msg) {
-        const streamId = this.previewChannelId || this.activeChannelId;
-        if (streamId && channelManager.getChannel(streamId)) {
-            channelManager.handleOverrideMessage(streamId, msg);
+    _handlePreviewOverride(sourceStreamId, msg) {
+        // Same orphan-detection rationale as _handlePreviewMessage.
+        if (sourceStreamId !== this.previewChannelId
+            && sourceStreamId !== this.activeChannelId
+            && !channelManager.getChannel(sourceStreamId)) {
+            this._scheduleOrphanPreviewUnsub(sourceStreamId);
+            return;
+        }
+        if (channelManager.getChannel(sourceStreamId)) {
+            channelManager.handleOverrideMessage(sourceStreamId, msg);
             return;
         }
         Logger.debug('Preview override callback:', msg?.type, '→', msg?.targetId);
@@ -335,9 +424,17 @@ class SubscriptionManager {
      * After promote, continues to work because channelManager handles these
      * @private
      */
-    _handlePreviewEphemeral(msg) {
-        const streamId = this.previewChannelId || this.activeChannelId;
-        if (!streamId) return;
+    _handlePreviewEphemeral(sourceStreamId, msg) {
+        // Drop ephemerals (typing/presence/admin_invalidate) from stale
+        // preview subscriptions; otherwise an orphan sub from channel A
+        // could pollute channel B's online users list and admin state.
+        if (sourceStreamId !== this.previewChannelId
+            && sourceStreamId !== this.activeChannelId
+            && !channelManager.getChannel(sourceStreamId)) {
+            this._scheduleOrphanPreviewUnsub(sourceStreamId);
+            return;
+        }
+        const streamId = sourceStreamId;
         
         Logger.debug('Preview ephemeral:', msg.type);
         
@@ -379,12 +476,53 @@ class SubscriptionManager {
      */
     _handlePreviewMedia(messageStreamId, msg, senderId) {
         if (!msg?.type && !(msg instanceof Uint8Array)) return;
-        
+
+        // Drop media from stale preview subscriptions.
+        if (messageStreamId !== this.previewChannelId
+            && messageStreamId !== this.activeChannelId
+            && !channelManager.getChannel(messageStreamId)) {
+            this._scheduleOrphanPreviewUnsub(messageStreamId);
+            return;
+        }
+
         Logger.debug('Preview media:', msg instanceof Uint8Array ? 'binary' : msg.type);
         
         // Forward to mediaController for processing
         // This enables piece_request handling, file_piece reception, etc.
         mediaController.handleMediaMessage(messageStreamId, msg, senderId);
+    }
+
+    /**
+     * Schedule an unsubscribe for an orphan preview subscription detected
+     * inside one of the streamId-bound handler closures. Deduped via
+     * `_orphanPreviewSubs` so we issue at most one unsubscribe per
+     * orphan even if it keeps producing history messages between
+     * detection and the unsubscribe taking effect. Fire-and-forget —
+     * errors are logged at debug since the sub is already orphan.
+     * @param {string} messageStreamId
+     * @private
+     */
+    _scheduleOrphanPreviewUnsub(messageStreamId) {
+        if (!messageStreamId) return;
+        if (this._orphanPreviewSubs.has(messageStreamId)) return;
+        this._orphanPreviewSubs.add(messageStreamId);
+        const ephemeralStreamId = (() => {
+            try { return deriveEphemeralId(messageStreamId); } catch (_) { return null; }
+        })();
+        Logger.warn('Detected orphan preview subscription, unsubscribing:', messageStreamId);
+        Promise.resolve().then(async () => {
+            try {
+                if (ephemeralStreamId) {
+                    await streamrController.unsubscribeFromDualStream(messageStreamId, ephemeralStreamId);
+                } else {
+                    await streamrController.unsubscribe(messageStreamId);
+                }
+            } catch (e) {
+                Logger.debug('Orphan preview unsubscribe failed:', e?.message || e);
+            } finally {
+                this._orphanPreviewSubs.delete(messageStreamId);
+            }
+        });
     }
 
     /**
@@ -459,6 +597,14 @@ class SubscriptionManager {
 
         const streamId = this.previewChannelId;
         Logger.info('Clearing preview channel:', streamId);
+
+        // NOTE: do NOT bump previewSwitchGeneration here. setPreviewChannel
+        // calls clearPreviewChannel() before its awaits and would otherwise
+        // self-invalidate (its own gen would mismatch after the clear).
+        // Concurrent in-flight setPreviewChannel calls are handled by:
+        //   1. The streamId-bound handler closures (drop stale messages).
+        //   2. The post-subscribe gen check (orphan unsubscribe).
+        //   3. setPreviewChannel claiming a new gen at entry.
 
         // Stop presence broadcasting
         this._stopPreviewPresence();
