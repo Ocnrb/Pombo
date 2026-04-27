@@ -2366,6 +2366,15 @@ class ChannelManager {
         // Sort to maintain chronological order (in case of out-of-order delivery)
         this.sortMessagesByTimestamp(channel);
 
+        // Apply any override (edit/delete) that arrived BEFORE this message
+        // and was queued in `_pendingOverrides`. The SDK delivers P0
+        // (content) and P1 (overrides) independently, and async verification
+        // means a delete can be queued before its target lands here.
+        // Without this, the override would only flush on
+        // `initial_history_complete` / batch flush — both unreliable for
+        // streams whose resend iterator never signals `done`.
+        this.applyPendingOverrides(channel);
+
         // Notify handlers
         this.notifyHandlers('message', { streamId, message: data });
     }

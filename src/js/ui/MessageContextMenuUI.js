@@ -196,42 +196,56 @@ class MessageContextMenuUI {
         if (blockBtn) blockBtn.classList.toggle('hidden', !isDM);
         if (blockDivider) blockDivider.classList.toggle('hidden', !isDM);
 
-        // Edit / Delete (own messages)
+        // Determine admin status once — used both for routing the delete
+        // action and for the admin moderation block below.
+        const { channelManager: cm } = this.deps;
+        const isDMChannel = currentChannel?.type === 'dm';
+        const isPreview = currentChannel?.isPreview === true;
+        let isAdminUser = false;
+        if (currentChannel && !isDMChannel && !isPreview && cm?.getCachedDeletePermission) {
+            const cached = cm.getCachedDeletePermission(currentChannel.streamId);
+            isAdminUser = !!cached?.canDelete;
+        }
+
+        // Edit / Delete (own messages). Admins on their OWN messages are
+        // routed through the admin stream (`hideMessage`) instead of the
+        // owner -1/P1 override path so the moderation surface is the
+        // single source of truth: receivers apply via `applyAdminState`
+        // which is consolidated, replayed deterministically on join, and
+        // propagated via the `admin_invalidate` snapshot signal. The
+        // owner -1/P1 path is reserved for non-admin authors.
         const editBtn = document.getElementById('context-menu-edit-btn');
         const deleteBtn = document.getElementById('context-menu-delete-btn');
         const editDivider = document.getElementById('context-menu-edit-divider');
         const showEdit = isSelf && messageDiv.dataset.type === 'text';
-        const showDelete = isSelf;
+        // Hide owner-delete when the user is admin — the admin-delete
+        // button (rendered by _toggleAdminItems) handles deletion via
+        // the admin stream for both own and others' messages.
+        const showDelete = isSelf && !isAdminUser;
         if (editBtn) editBtn.classList.toggle('hidden', !showEdit);
         if (deleteBtn) deleteBtn.classList.toggle('hidden', !showDelete);
         if (editDivider) editDivider.classList.toggle('hidden', !showEdit && !showDelete);
 
         // Admin moderation: Pin / Unpin / Admin Delete / Ban
-        this._toggleAdminItems(currentChannel, senderAddress, isSelf);
+        this._toggleAdminItems(currentChannel, senderAddress, isSelf, isAdminUser);
 
         this.showContextMenu(clientX, clientY);
     }
 
     /**
      * Compute and apply visibility for the admin moderation buttons.
+     * @param {Object} currentChannel
+     * @param {string} senderAddress  — message author address
+     * @param {boolean} isSelf        — message authored by current user
+     * @param {boolean} isAdminUser   — current user is the channel admin
      * @private
      */
-    _toggleAdminItems(currentChannel, senderAddress, isSelf) {
+    _toggleAdminItems(currentChannel, senderAddress, isSelf, isAdminUser) {
         const adminDivider = document.getElementById('context-menu-admin-divider');
         const pinBtn = document.getElementById('context-menu-pin-btn');
         const unpinBtn = document.getElementById('context-menu-unpin-btn');
         const adminDeleteBtn = document.getElementById('context-menu-admin-delete-btn');
         const banBtn = document.getElementById('context-menu-ban-btn');
-
-        const { channelManager } = this.deps;
-        const isDMChannel = currentChannel?.type === 'dm';
-        const isPreview = currentChannel?.isPreview === true;
-
-        let isAdminUser = false;
-        if (currentChannel && !isDMChannel && !isPreview && channelManager?.getCachedDeletePermission) {
-            const cached = channelManager.getCachedDeletePermission(currentChannel.streamId);
-            isAdminUser = !!cached?.canDelete;
-        }
 
         const msgId = this.contextMenuTarget?.msgId;
         const isAlreadyPinned = !!(currentChannel?.adminState?.pins?.some?.(p => p.targetId === msgId));
@@ -241,8 +255,9 @@ class MessageContextMenuUI {
         const showPin = isAdminUser && !!msgId && !isAlreadyPinned;
         const showUnpin = isAdminUser && !!msgId && isAlreadyPinned;
         // Admin delete hides the message for everyone via the admin stream.
-        // Skip on own messages where the regular delete already exists.
-        const showAdminDelete = isAdminUser && !isSelf && !!msgId;
+        // Shown for ANY message (including the admin's own) so deletion is
+        // always routed through the admin moderation surface for admins.
+        const showAdminDelete = isAdminUser && !!msgId;
         // Cannot ban yourself or the channel admin.
         const showBan = isAdminUser && !isSelf && !isCreator;
 

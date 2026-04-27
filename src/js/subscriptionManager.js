@@ -39,6 +39,14 @@ class SubscriptionManager {
         // Preview message callback (set by ui.js to avoid circular dependency)
         this.onPreviewMessage = null;
 
+        // Preview override callback — invoked for -1/P1 edit/delete
+        // messages so PreviewModeUI can apply or queue them. Distinct from
+        // onPreviewMessage so previews mirror the channel-mode dual-handler
+        // pipeline (text vs override) and overrides cannot be lost when the
+        // preview is later promoted to active. Set by ui.js to avoid a
+        // circular dependency.
+        this.onPreviewOverride = null;
+
         // Preview admin-state callback — invoked once after an on-open
         // resend of -3/P0 (and on each subsequent poll/invalidate refresh)
         // so PreviewModeUI can apply moderation (banned, hidden, pins) and
@@ -247,7 +255,7 @@ class SubscriptionManager {
                 ephemeralStreamId,
                 {
                     onMessage: (msg) => this._handlePreviewMessage(msg),
-                    onOverride: (msg) => this._handlePreviewMessage(msg),
+                    onOverride: (msg) => this._handlePreviewOverride(msg),
                     onControl: (ephMsg) => this._handlePreviewEphemeral(ephMsg),
                     onMedia: (mediaMsg, senderId) => this._handlePreviewMedia(messageStreamId, mediaMsg, senderId)
                 },
@@ -267,8 +275,8 @@ class SubscriptionManager {
     }
 
     /**
-     * Handle message received on preview channel
-     * After promote, forwards to channelManager if channel exists there
+     * Handle message received on preview channel (-1/P0 content).
+     * After promote, forwards to channelManager if channel exists there.
      * @private
      */
     _handlePreviewMessage(msg) {
@@ -286,6 +294,39 @@ class SubscriptionManager {
             this.onPreviewMessage(msg);
         } else {
             Logger.warn('subscriptionManager.onPreviewMessage not configured');
+        }
+    }
+
+    /**
+     * Handle override (edit/delete) on preview channel (-1/P1 control).
+     * Routed through a dedicated callback so overrides bypass the text
+     * validation path — mirroring the channel-mode dual-handler design
+     * (handleTextMessage vs handleOverrideMessage). Without this, after
+     * `promotePreviewToActive` the single text-path callback would treat
+     * deletes/edits as malformed text messages and drop them silently.
+     *
+     * Pre-promote: forwarded to ui.js via `onPreviewOverride` so
+     * PreviewModeUI applies the override (or queues it if the target
+     * hasn't been ingested yet).
+     * Post-promote: routed to channelManager.handleOverrideMessage so the
+     * canonical `_pendingOverrides` map is used and `notifyHandlers`
+     * fires the granular `message_edited` / `message_deleted` events.
+     * @private
+     */
+    _handlePreviewOverride(msg) {
+        const streamId = this.previewChannelId || this.activeChannelId;
+        if (streamId && channelManager.getChannel(streamId)) {
+            channelManager.handleOverrideMessage(streamId, msg);
+            return;
+        }
+        Logger.debug('Preview override callback:', msg?.type, '→', msg?.targetId);
+        if (this.onPreviewOverride) {
+            this.onPreviewOverride(msg);
+        } else if (this.onPreviewMessage) {
+            // Backwards fallback: route through message handler so existing
+            // type-based branch in PreviewModeUI.handlePreviewMessage still
+            // applies the override.
+            this.onPreviewMessage(msg);
         }
     }
 

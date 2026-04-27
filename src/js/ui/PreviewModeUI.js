@@ -511,19 +511,6 @@ class PreviewModeUI {
             return;
         }
 
-        // Handle edit/delete overrides in preview mode
-        if (message?.type === 'edit' || message?.type === 'delete') {
-            this._applyOrQueuePreviewOverride(message);
-            // Always re-render — the SDK resend iterator may never signal `done`
-            // for some streams (e.g. legacy native channels), which would leave
-            // `initialLoadInProgress` stuck at true and hide override results.
-            chatAreaUI.renderMessages(this.previewChannel.messages, () => {
-                this.ui.attachReactionListeners();
-                mediaHandler.attachLightboxListeners();
-            });
-            return;
-        }
-
         // Validate message has required properties
         const isTextMessage = message?.text;
         const isImageMessage = message?.type === 'image' && message?.imageId;
@@ -603,6 +590,17 @@ class PreviewModeUI {
             // Sort by timestamp to ensure correct order
             this.previewChannel.messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
+            // Apply any override (edit/delete) that arrived BEFORE this
+            // message and was queued in `_pendingOverrides`. Race-safe by
+            // design: the SDK delivers P0 (content) and P1 (overrides)
+            // independently and async verification means a delete can be
+            // queued before its target lands here. Without this, the
+            // override would only be flushed in `onHistoryComplete` —
+            // which is unreliable for streams whose resend iterator never
+            // signals `done`. ChatAreaUI.renderMessages already filters
+            // `_deleted` and `type:'edit'|'delete'`, so flagging is enough.
+            this._applyPreviewOverrides();
+
             // Always render — ChatAreaUI gates to spinner only when there are no
             // cached messages. This safety net ensures messages become visible even
             // if the SDK resend iterator never signals `done` (observed with some
@@ -625,11 +623,42 @@ class PreviewModeUI {
     }
 
     /**
+     * Handle a -1/P1 override (edit/delete) received in preview mode.
+     * Applies immediately when the target is already loaded, otherwise
+     * queues the override in `_pendingOverrides` so it is applied as
+     * soon as the target arrives via `handlePreviewMessage`. Re-renders
+     * the timeline so the message disappears (delete) or updates (edit)
+     * without waiting for `onHistoryComplete` — the SDK resend iterator
+     * is unreliable on some streams and may never signal `done`.
+     * @param {Object} override - { type:'edit'|'delete', targetId, senderId, text?, timestamp }
+     */
+    handlePreviewOverride(override) {
+        if (!this.previewChannel) return;
+        if (!override || (override.type !== 'edit' && override.type !== 'delete')) return;
+        const { chatAreaUI, mediaHandler } = this.deps;
+
+        this._applyOrQueuePreviewOverride(override);
+
+        if (chatAreaUI?.renderMessages) {
+            chatAreaUI.renderMessages(this.previewChannel.messages, () => {
+                this.ui?.attachReactionListeners?.();
+                mediaHandler?.attachLightboxListeners?.();
+            });
+        }
+    }
+
+    /**
      * Apply pending edit/delete overrides to preview channel messages
      * @private
      */
     _applyPreviewOverrides() {
         if (!this.previewChannel?._pendingOverrides?.size) return;
+        // Only delete entries that were actually applied. Targets whose
+        // P0 content message hasn't landed yet (e.g. its async signature
+        // verification is still in flight when onHistoryComplete fires)
+        // must remain queued so the override applies as soon as the
+        // message is pushed via handlePreviewMessage.
+        const applied = [];
         for (const [targetId, override] of this.previewChannel._pendingOverrides) {
             const msg = this.previewChannel.messages.find(m => m.id === targetId);
             if (!msg) continue;
@@ -640,8 +669,11 @@ class PreviewModeUI {
             } else if (override.type === 'delete') {
                 msg._deleted = true;
             }
+            applied.push(targetId);
         }
-        this.previewChannel._pendingOverrides.clear();
+        for (const id of applied) {
+            this.previewChannel._pendingOverrides.delete(id);
+        }
     }
 
     /**

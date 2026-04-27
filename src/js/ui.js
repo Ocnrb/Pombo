@@ -630,6 +630,12 @@ class UIController {
     setupActivityHandler() {
         // Wire preview message callback (avoids circular dependency with subscriptionManager)
         subscriptionManager.onPreviewMessage = (msg) => this.handlePreviewMessage(msg);
+        // Wire preview override callback so -1/P1 edits/deletes apply during preview.
+        // Mirrors channel-mode where text and override are dispatched through
+        // separate handlers; without this, overrides would only flow via the
+        // text-message branch (which gates on `id`/`text`/`sender` and would
+        // drop the delete payload).
+        subscriptionManager.onPreviewOverride = (msg) => previewModeUI.handlePreviewOverride(msg);
         // Wire preview admin-state callback so moderation is applied during preview
         subscriptionManager.onPreviewAdmin = (streamId, adminMsg) => previewModeUI.handlePreviewAdmin(streamId, adminMsg);
         
