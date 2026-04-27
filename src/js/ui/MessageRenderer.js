@@ -365,6 +365,37 @@ class MessageRenderer {
     }
 
     /**
+     * Build HTML for the opening of a message group wrapper.
+     * The group contains a single sticky avatar rail + a stack of message entries.
+     * Pair with buildMessageGroupCloseHTML().
+     * @param {Object} group - { sender, isOwn, ensAvatarUrl, displayName }
+     * @returns {string} - HTML for group open
+     */
+    buildMessageGroupOpenHTML({ sender, isOwn, ensAvatarUrl, spacingClass = '' }) {
+        const avatarContent = getAvatarHtml(sender, 46, 0.5, ensAvatarUrl);
+        const senderAttr = escapeAttr(sender || '');
+        const sideClass = isOwn ? 'own-message-group' : 'other-message-group';
+        return `
+            <div class="message-group ${sideClass} ${spacingClass}" data-group-sender="${senderAttr}">
+                <div class="message-group-avatar-rail">
+                    <div class="message-avatar">${avatarContent}</div>
+                </div>
+                <div class="message-group-stack">
+        `;
+    }
+
+    /**
+     * Build HTML for closing a message group wrapper.
+     * @returns {string}
+     */
+    buildMessageGroupCloseHTML() {
+        return `
+                </div>
+            </div>
+        `;
+    }
+
+    /**
      * Build HTML for a single message
      * @param {Object} msg - Message object
      * @param {boolean} isOwn - Whether message is own
@@ -374,7 +405,7 @@ class MessageRenderer {
      * @param {string} groupClass - CSS class for group position (optional)
      * @param {string} groupPosition - Group position enum value (optional)
      * @param {string} spacingClass - CSS class for spacing (optional)
-     * @param {string|null} ensAvatarUrl - ENS avatar URL (optional)
+     * @param {string|null} ensAvatarUrl - ENS avatar URL (kept for signature compatibility, unused since avatar is at group level)
      * @returns {string} - HTML for message
      */
     buildMessageHTML(msg, isOwn, time, badge, displayName, groupClass = 'msg-group-single', groupPosition = GroupPosition.SINGLE, spacingClass = '', ensAvatarUrl = null) {
@@ -387,28 +418,18 @@ class MessageRenderer {
         const emojiOnly = msgType === 'text' ? this.isEmojiOnly(msg.text) : false;
         const emojiAttr = emojiOnly ? ` data-emoji-only="${emojiOnly}"` : '';
         
-        // Only show sender row for first/single messages in group
-        const showSender = shouldShowSenderName(groupPosition);
+        // Sender-row is always emitted; CSS hides it for msg-group-middle/msg-group-last.
+        // This lets removeMessage flip group classes without rebuilding HTML.
         const senderColor = addressToColor(msg.sender);
-        // Defense-in-depth: sanitize network-provided displayName
         const truncatedName = displayName.length > 18 ? displayName.substring(0, 18) + '...' : displayName;
-        const senderRowHtml = showSender ? `
+        const senderRowHtml = `
                     <div class="message-sender-row flex items-center gap-1 mb-0">
                         ${badge.html}
                         <span class="text-[13px] font-medium" style="color: ${senderColor}">${escapeHtml(sanitizeText(truncatedName))}</span>
-                    </div>` : '';
-        
-        // Avatar visible only on last/single messages in group, but placeholder for alignment
-        const showAvatar = groupPosition === GroupPosition.LAST || groupPosition === GroupPosition.SINGLE;
-        const avatarContent = getAvatarHtml(msg.sender, 46, 0.22, ensAvatarUrl);
-        const avatarClass = showAvatar ? 'message-avatar' : 'message-avatar message-avatar-hidden';
-        const avatarHtml = `<div class="${avatarClass}">${avatarContent}</div>`;
-
-
+                    </div>`;
 
         return `
             <div class="message-entry ${isOwn ? 'own-message' : 'other-message'} ${groupClass} ${spacingClass}" data-msg-id="${escapeAttr(msgId)}" data-sender="${escapeAttr(msg.sender || '')}" data-type="${escapeAttr(msgType)}"${emojiAttr}>
-                ${!isOwn ? avatarHtml : ''}
                 <div class="message-bubble">
                     ${senderRowHtml}
                     ${replyPreviewHtml}
@@ -422,7 +443,6 @@ class MessageRenderer {
                     <span class="reply-trigger reply-btn" data-msg-id="${escapeAttr(msgId)}" title="Reply"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17l-5-5 5-5"/><path d="M4 12h11a4 4 0 0 1 4 4v4"/></svg></span>
                     <span class="react-trigger react-btn" data-msg-id="${escapeAttr(msgId)}" title="React"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></span>
                 </div>
-                ${isOwn ? avatarHtml : ''}
             </div>
         `;
     }

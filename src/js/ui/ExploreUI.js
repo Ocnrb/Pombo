@@ -330,11 +330,11 @@ class ExploreUI {
             if (!this._exploreResolvedImages) this._exploreResolvedImages = new Set();
             let thumb;
             if (cachedImage?.dataUrl) {
-                thumb = `<img class="w-12 h-12 rounded-xl object-cover flex-shrink-0" alt="" src="${escapeAttr(cachedImage.dataUrl)}" data-channel-thumb="${escapeAttr(adminStreamId)}" />`;
+                thumb = `<img class="rounded-full object-cover flex-shrink-0" alt="" src="${escapeAttr(cachedImage.dataUrl)}" data-channel-thumb="${escapeAttr(adminStreamId)}" style="width:52px;height:52px" />`;
             } else if (adminStreamId && !this._exploreResolvedImages.has(adminStreamId)) {
-                thumb = `<div class="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 bg-white/[0.04]" data-channel-thumb="${escapeAttr(adminStreamId)}"><div class="thumb-spinner" style="width:20px;height:20px"></div></div>`;
+                thumb = `<div class="rounded-full flex items-center justify-center flex-shrink-0 bg-white/[0.04]" data-channel-thumb="${escapeAttr(adminStreamId)}" style="width:52px;height:52px"><div class="thumb-spinner" style="width:20px;height:20px"></div></div>`;
             } else {
-                thumb = `<div class="w-12 h-12 rounded-xl overflow-hidden flex-shrink-0" data-channel-thumb="${escapeAttr(adminStreamId || '')}">${getAvatarHtml(ch.streamId, 48, 0.25, null)}</div>`;
+                thumb = `<div class="rounded-full overflow-hidden flex-shrink-0" data-channel-thumb="${escapeAttr(adminStreamId || '')}" style="width:52px;height:52px">${getAvatarHtml(ch.streamId, 52, 0.5, null)}</div>`;
             }
 
             return `
@@ -375,7 +375,7 @@ class ExploreUI {
                     if (!entry?.dataUrl) return;
                     const slot = listEl.querySelector(`[data-channel-thumb="${CSS.escape(adminStreamId)}"]`);
                     if (slot && !(slot.tagName === 'IMG')) {
-                        slot.outerHTML = `<img class="w-12 h-12 rounded-xl object-cover flex-shrink-0" alt="" src="${escapeAttr(entry.dataUrl)}" data-channel-thumb="${escapeAttr(adminStreamId)}" />`;
+                        slot.outerHTML = `<img class="rounded-full object-cover flex-shrink-0" alt="" src="${escapeAttr(entry.dataUrl)}" data-channel-thumb="${escapeAttr(adminStreamId)}" style="width:52px;height:52px" />`;
                     } else if (slot && slot.tagName === 'IMG') {
                         slot.src = entry.dataUrl;
                     }
@@ -387,7 +387,7 @@ class ExploreUI {
                     // swap to deterministic fallback avatar.
                     const slot = listEl.querySelector(`[data-channel-thumb="${CSS.escape(adminStreamId)}"]`);
                     if (slot && slot.tagName !== 'IMG' && !channelImageManager.getCached(adminStreamId)?.dataUrl) {
-                        slot.outerHTML = `<div class="w-12 h-12 rounded-xl overflow-hidden flex-shrink-0" data-channel-thumb="${escapeAttr(adminStreamId)}">${getAvatarHtml(ch.streamId, 48, 0.25, null)}</div>`;
+                        slot.outerHTML = `<div class="rounded-full overflow-hidden flex-shrink-0" data-channel-thumb="${escapeAttr(adminStreamId)}" style="width:52px;height:52px">${getAvatarHtml(ch.streamId, 52, 0.5, null)}</div>`;
                     }
                 });
         }

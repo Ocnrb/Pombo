@@ -523,6 +523,145 @@ class MediaController {
     }
 
     /**
+     * Load an image file into an HTMLImageElement for cropping / preview.
+     * Preserves the original alpha-capability decision so callers can render
+     * previews and final uploads with the same output format.
+     *
+     * @param {File} file - Source image file (jpg/png/gif/webp)
+     * @returns {Promise<{ image: HTMLImageElement, preserveAlpha: boolean, src: string }>}
+     */
+    loadImageForCrop(file) {
+        return new Promise((resolve, reject) => {
+            if (!CONFIG.ALLOWED_IMAGE_TYPES.includes(file.type)) {
+                reject(new Error(`Invalid image type. Allowed: ${CONFIG.ALLOWED_IMAGE_TYPES.join(', ')}`));
+                return;
+            }
+
+            const preserveAlpha = file.type !== 'image/jpeg' && file.type !== 'image/jpg';
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const src = e.target?.result;
+                const img = new Image();
+                img.onload = () => resolve({ image: img, preserveAlpha, src });
+                img.onerror = () => reject(new Error('Failed to load image'));
+                img.src = src;
+            };
+            reader.onerror = () => reject(new Error('Failed to read file'));
+            reader.readAsDataURL(file);
+        });
+    }
+
+    /**
+     * Calculate the square crop framing for a given image size, viewport,
+     * zoom factor, and crop center. Used by both the interactive preview and
+     * the final encoded upload so they stay pixel-accurate.
+     *
+     * @param {number} imageWidth - Source image width in px
+     * @param {number} imageHeight - Source image height in px
+     * @param {number} viewportSize - Square viewport/output size in px
+     * @param {number} [zoom=1] - Zoom multiplier, where 1 is the minimum cover fit
+     * @param {number|null} [centerX=null] - Crop center X in source-image pixels
+     * @param {number|null} [centerY=null] - Crop center Y in source-image pixels
+     * @returns {{
+     *   zoom: number,
+     *   scale: number,
+     *   centerX: number,
+     *   centerY: number,
+     *   minCenterX: number,
+     *   maxCenterX: number,
+     *   minCenterY: number,
+     *   maxCenterY: number,
+     *   drawWidth: number,
+     *   drawHeight: number,
+     *   offsetX: number,
+     *   offsetY: number
+     * }}
+     */
+    getSquareCropFrame(imageWidth, imageHeight, viewportSize, zoom = 1, centerX = null, centerY = null) {
+        const safeWidth = Number(imageWidth) || 0;
+        const safeHeight = Number(imageHeight) || 0;
+        const safeViewport = Number(viewportSize) || 0;
+        if (!safeWidth || !safeHeight || !safeViewport) {
+            throw new Error('Invalid crop frame dimensions');
+        }
+
+        const safeZoom = Math.max(0.5, Number.isFinite(zoom) ? zoom : 1);
+        const baseScale = safeViewport / Math.min(safeWidth, safeHeight);
+        const scale = baseScale * safeZoom;
+        const halfViewportInImage = safeViewport / (2 * scale);
+
+        const minCenterX = Math.min(halfViewportInImage, safeWidth - halfViewportInImage);
+        const maxCenterX = Math.max(halfViewportInImage, safeWidth - halfViewportInImage);
+        const minCenterY = Math.min(halfViewportInImage, safeHeight - halfViewportInImage);
+        const maxCenterY = Math.max(halfViewportInImage, safeHeight - halfViewportInImage);
+
+        const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+        const resolvedCenterX = clamp(centerX ?? safeWidth / 2, minCenterX, maxCenterX);
+        const resolvedCenterY = clamp(centerY ?? safeHeight / 2, minCenterY, maxCenterY);
+        const drawWidth = safeWidth * scale;
+        const drawHeight = safeHeight * scale;
+        const offsetX = (safeViewport / 2) - (resolvedCenterX * scale);
+        const offsetY = (safeViewport / 2) - (resolvedCenterY * scale);
+
+        return {
+            zoom: safeZoom,
+            scale,
+            centerX: resolvedCenterX,
+            centerY: resolvedCenterY,
+            minCenterX,
+            maxCenterX,
+            minCenterY,
+            maxCenterY,
+            drawWidth,
+            drawHeight,
+            offsetX,
+            offsetY
+        };
+    }
+
+    /**
+     * Render an image into a square crop output using an optional zoom/center.
+     *
+     * @param {HTMLImageElement|HTMLCanvasElement|ImageBitmap} image - Source image
+     * @param {Object} [options]
+     * @param {number} [options.size=512] - Output side length in px
+     * @param {number} [options.quality=0.85] - JPEG quality 0..1 (ignored for PNG)
+     * @param {number} [options.zoom=1] - Zoom multiplier, where 1 is minimum cover fit
+     * @param {number|null} [options.centerX=null] - Crop center X in source pixels
+     * @param {number|null} [options.centerY=null] - Crop center Y in source pixels
+     * @param {boolean} [options.preserveAlpha=false] - Whether to emit PNG instead of JPEG
+     * @returns {string} - data:image/(jpeg|png);base64,... URL
+     */
+    renderSquareCrop(image, {
+        size = 512,
+        quality = 0.85,
+        zoom = 1,
+        centerX = null,
+        centerY = null,
+        preserveAlpha = false
+    } = {}) {
+        const width = image?.naturalWidth || image?.videoWidth || image?.width;
+        const height = image?.naturalHeight || image?.videoHeight || image?.height;
+        const frame = this.getSquareCropFrame(width, height, size, zoom, centerX, centerY);
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+
+        if (!preserveAlpha) {
+            // JPEG output: paint white baseline so any source alpha doesn't
+            // bleed through as black.
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, size, size);
+        }
+
+        ctx.drawImage(image, frame.offsetX, frame.offsetY, frame.drawWidth, frame.drawHeight);
+        return preserveAlpha
+            ? canvas.toDataURL('image/png')
+            : canvas.toDataURL('image/jpeg', quality);
+    }
+
+    /**
      * Center-crop image to square and re-encode at fixed size.
      * Preserves transparency for source formats that support alpha
      * (PNG / WebP / GIF) by emitting PNG; opaque sources (JPEG) are
@@ -534,42 +673,12 @@ class MediaController {
      * @returns {Promise<string>} - data:image/(jpeg|png);base64,... URL
      */
     cropAndResizeSquare(file, size = 512, quality = 0.85) {
-        return new Promise((resolve, reject) => {
-            if (!CONFIG.ALLOWED_IMAGE_TYPES.includes(file.type)) {
-                reject(new Error(`Invalid image type. Allowed: ${CONFIG.ALLOWED_IMAGE_TYPES.join(', ')}`));
-                return;
-            }
-            // Preserve alpha for formats that support it; JPEG sources
-            // get re-encoded as JPEG (no alpha → smaller files).
-            const preserveAlpha = file.type !== 'image/jpeg' && file.type !== 'image/jpg';
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                const img = new Image();
-                img.onload = () => {
-                    const side = Math.min(img.width, img.height);
-                    const sx = Math.floor((img.width - side) / 2);
-                    const sy = Math.floor((img.height - side) / 2);
-                    const canvas = document.createElement('canvas');
-                    canvas.width = size;
-                    canvas.height = size;
-                    const ctx = canvas.getContext('2d');
-                    if (!preserveAlpha) {
-                        // JPEG output: paint white baseline so any source
-                        // alpha doesn't bleed through as black.
-                        ctx.fillStyle = '#ffffff';
-                        ctx.fillRect(0, 0, size, size);
-                    }
-                    ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
-                    resolve(preserveAlpha
-                        ? canvas.toDataURL('image/png')
-                        : canvas.toDataURL('image/jpeg', quality));
-                };
-                img.onerror = () => reject(new Error('Failed to load image'));
-                img.src = e.target.result;
-            };
-            reader.onerror = () => reject(new Error('Failed to read file'));
-            reader.readAsDataURL(file);
-        });
+        return this.loadImageForCrop(file)
+            .then(({ image, preserveAlpha }) => this.renderSquareCrop(image, {
+                size,
+                quality,
+                preserveAlpha
+            }));
     }
 
     /**

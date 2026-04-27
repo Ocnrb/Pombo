@@ -201,7 +201,7 @@ class WalletFlows {
                     <div class="px-5 pb-4">
                         <div class="bg-white/[0.05] rounded-xl p-3 border border-white/[0.08]">
                             <div class="flex items-center gap-3">
-                                <div class="w-14 h-14 rounded-lg overflow-hidden flex-shrink-0">${getAvatarHtml(wallet.address, 56, 0.2, getENSAvatarUrl(wallet))}</div>
+                                <div class="w-14 h-14 rounded-full overflow-hidden flex-shrink-0">${getAvatarHtml(wallet.address, 56, 0.5, getENSAvatarUrl(wallet))}</div>
                                 <div class="flex-1 min-w-0">
                                     <div class="text-[13px] font-medium text-white truncate flex items-center gap-1.5">${hasENS(wallet) ? '<svg class="flex-shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#4ade80" stroke-width="2" fill="none"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>' : ''}${escapeAttr(getDisplayName(wallet, 0))}</div>
                                     <div class="text-[11px] text-white/50 font-mono">${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}</div>
@@ -216,7 +216,7 @@ class WalletFlows {
                             ${wallets.map((w, i) => `
                                 <button class="wallet-item w-full bg-white/[0.05] hover:bg-white/[0.08] rounded-xl p-3 border border-white/[0.08] hover:border-white/[0.12] transition-all text-left ${i === 0 ? 'selected border-white/[0.12]' : ''}" data-address="${escapeAttr(w.address)}" data-name="${escapeAttr(w.name)}">
                                     <div class="flex items-center gap-3">
-                                        <div class="w-14 h-14 rounded-lg overflow-hidden flex-shrink-0">${getAvatarHtml(w.address, 56, 0.2, getENSAvatarUrl(w))}</div>
+                                        <div class="w-14 h-14 rounded-full overflow-hidden flex-shrink-0">${getAvatarHtml(w.address, 56, 0.5, getENSAvatarUrl(w))}</div>
                                         <div class="flex-1 min-w-0">
                                             <div class="text-[13px] font-medium text-white truncate flex items-center gap-1">${hasENS(w) ? '<svg class="flex-shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#4ade80" stroke-width="2" fill="none"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>' : ''}${escapeAttr(getDisplayName(w, i))}</div>
                                             <div class="text-[11px] text-white/50 font-mono">${w.address.slice(0, 6)}...${w.address.slice(-4)}</div>
@@ -775,7 +775,7 @@ class WalletFlows {
                             <div id="avatar-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:0.625rem">
                                 ${wallets.map((w, i) => `
                                     <button class="avatar-option group relative rounded-xl border-2 transition-all duration-150 ${i === 0 ? 'border-white/40 bg-white/[0.08]' : 'border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/[0.12]'}" data-index="${i}" style="aspect-ratio:1;padding:10px">
-                                        <div class="rounded-xl overflow-hidden" style="width:100%;height:100%">${generateAvatar(w.address, 64, 0.2)}</div>
+                                        <div class="rounded-full overflow-hidden" style="width:100%;height:100%">${generateAvatar(w.address, 64, 0.5)}</div>
                                         <div class="avatar-check absolute w-5 h-5 rounded-full bg-white flex items-center justify-center ${i === 0 ? '' : 'hidden'}" style="top:6px;right:6px">
                                             <svg class="w-3 h-3 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4.5 12.75l6 6 9-13.5"/>
@@ -805,7 +805,7 @@ class WalletFlows {
                         <!-- Header (fixed) -->
                         <div class="flex items-center border-b border-white/5 flex-shrink-0" style="padding:16px 20px">
                             <div class="flex items-center gap-3">
-                                <div id="selected-avatar-preview" class="rounded-xl overflow-hidden flex-shrink-0" style="width:36px;height:36px"></div>
+                                <div id="selected-avatar-preview" class="rounded-full overflow-hidden flex-shrink-0" style="width:38px;height:38px"></div>
                                 <div>
                                     <h3 class="font-medium text-white/90" style="font-size:1.1rem">Set Up Account</h3>
                                     <p class="text-xs text-white/40">Secure your account with a password</p>
@@ -980,7 +980,7 @@ class WalletFlows {
             const updateAvatarGrid = () => {
                 avatarGrid.innerHTML = wallets.map((w, i) => `
                     <button class="avatar-option group relative rounded-xl border-2 transition-all duration-150 ${i === selectedIndex ? 'border-white/40 bg-white/[0.08]' : 'border-white/[0.06] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/[0.12]'}" data-index="${i}" style="aspect-ratio:1;padding:10px">
-                        <div class="rounded-xl overflow-hidden" style="width:100%;height:100%">${generateAvatar(w.address, 64, 0.2)}</div>
+                        <div class="rounded-full overflow-hidden" style="width:100%;height:100%">${generateAvatar(w.address, 64, 0.5)}</div>
                         <div class="avatar-check absolute w-5 h-5 rounded-full bg-white flex items-center justify-center ${i === selectedIndex ? '' : 'hidden'}" style="top:6px;right:6px">
                             <svg class="w-3 h-3 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4.5 12.75l6 6 9-13.5"/>
@@ -1026,7 +1026,7 @@ class WalletFlows {
                 hideStep(stepAvatar);
                 showStep(stepDetails);
                 // Show selected avatar in header
-                selectedAvatarPreview.innerHTML = generateAvatar(chosen.address, 36, 0.2);
+                selectedAvatarPreview.innerHTML = generateAvatar(chosen.address, 38, 0.5);
                 // Populate address and private key
                 addressDisplay.textContent = chosen.address;
                 pkRevealed.textContent = chosen.privateKey;
@@ -1596,7 +1596,7 @@ class WalletFlows {
                             ${wallets.map((w, i) => `
                                 <button class="account-option w-full bg-white/[0.05] hover:bg-white/[0.08] rounded-xl p-3 border border-white/[0.08] hover:border-white/[0.12] transition-all text-left" data-address="${escapeAttr(w.address)}">
                                     <div class="flex items-center gap-3">
-                                        <div class="w-14 h-14 rounded-lg overflow-hidden flex-shrink-0">${getAvatarHtml(w.address, 56, 0.2, getENSAvatarUrl(w))}</div>
+                                        <div class="w-14 h-14 rounded-full overflow-hidden flex-shrink-0">${getAvatarHtml(w.address, 56, 0.5, getENSAvatarUrl(w))}</div>
                                         <div class="flex-1 min-w-0">
                                             <div class="text-[13px] font-medium text-white truncate flex items-center gap-1.5">${hasENS(w) ? '<svg class="flex-shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="#4ade80" stroke-width="2" fill="none"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>' : ''}${escapeAttr(getDisplayName(w, i))}</div>
                                             <div class="text-[11px] text-white/50 font-mono">${w.address.slice(0, 6)}...${w.address.slice(-4)}</div>

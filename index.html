@@ -97,7 +97,7 @@
             <!-- Desktop: Unified account dropdown (hidden on mobile) -->
             <div id="desktop-account-wrapper" class="hidden md:relative">
                 <button id="desktop-account-btn" class="bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] text-white/70 hover:text-white px-3 py-1.5 rounded-xl text-sm font-medium transition-all duration-200 flex items-center gap-2">
-                    <div id="desktop-account-avatar" class="w-8 h-8 rounded-lg overflow-hidden flex-shrink-0"></div>
+                    <div id="desktop-account-avatar" class="rounded-full overflow-hidden flex-shrink-0" style="width:38px;height:38px"></div>
                     <span id="desktop-account-name" class="max-w-[140px] truncate font-mono text-[14px]">Not Connected</span>
                     <svg class="w-3 h-3 text-white/30 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
@@ -1478,7 +1478,7 @@
                                     <!-- Channel Image (right side) -->
                                     <div id="channel-image-section" class="hidden flex-shrink-0 flex flex-col items-center">
                                         <div class="flex items-center gap-1.5">
-                                            <div id="channel-image-preview" class="w-20 h-20 rounded-2xl overflow-hidden border border-white/[0.08] bg-white/[0.04] flex-shrink-0 flex items-center justify-center"></div>
+                                            <div id="channel-image-preview" class="w-20 h-20 rounded-full overflow-hidden border border-white/[0.08] bg-white/[0.04] flex-shrink-0 flex items-center justify-center"></div>
                                             <div id="channel-image-controls" class="hidden">
                                                 <input type="file" id="channel-image-input" accept="image/jpeg,image/png,image/gif,image/webp" class="hidden" />
                                                 <button id="channel-image-upload-btn" type="button" class="p-1.5 text-white/50 hover:text-white transition" title="Upload image" aria-label="Upload image">
@@ -2488,12 +2488,22 @@
 
     <!-- Modal: Channel Image Confirm -->
     <div id="channel-image-confirm-modal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
-        <div class="bg-[#111113] rounded-2xl p-5 w-[360px] max-w-full mx-4 border border-white/[0.06]">
+        <div class="bg-[#111113] rounded-2xl p-5 w-[420px] max-w-full mx-4 border border-white/[0.06]">
             <h3 class="text-base font-medium mb-4 text-white">Update channel image</h3>
-            <div class="bg-white/[0.05] rounded-xl p-4 border border-white/[0.08] mb-4 flex items-center gap-3">
-                <div id="channel-image-confirm-preview" class="w-16 h-16 rounded-xl overflow-hidden bg-white/[0.06] border border-white/[0.06] flex-shrink-0 flex items-center justify-center"></div>
-                <div class="flex-1 min-w-0">
-                    <p class="text-[11px] text-white/50 leading-relaxed">JPEG / PNG / WebP. Auto cropped to a square (512×512).</p>
+            <div class="bg-white/[0.05] rounded-xl p-4 border border-white/[0.08] mb-4 space-y-4">
+                <div id="channel-image-crop-stage" class="relative w-full max-w-[280px] aspect-square mx-auto rounded-full overflow-hidden bg-white/[0.06] border border-white/[0.06] flex items-center justify-center" style="touch-action:none;">
+                    <canvas id="channel-image-confirm-preview" width="280" height="280" class="block w-full h-full"></canvas>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                    <p class="text-[11px] text-white/50 leading-relaxed flex-1 min-w-0">Drag to choose the framing and use zoom to control how tightly the image is cropped. Upload stays square at 512×512.</p>
+                    <button type="button" id="channel-image-crop-reset-btn" class="shrink-0 bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] text-white/50 hover:text-white px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition">
+                        Reset
+                    </button>
+                </div>
+                <div class="flex items-center gap-3">
+                    <span class="text-[11px] text-white/40">Zoom</span>
+                    <input type="range" id="channel-image-zoom" min="-100" max="100" value="0" class="centered-storage-slider flex-1 h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer" />
+                    <span id="channel-image-zoom-value" class="text-[11px] text-white/50 w-10 text-right">0%</span>
                 </div>
             </div>
             <label id="channel-image-encrypt-row" class="hidden items-center gap-2 text-xs text-white/60 cursor-pointer select-none mb-4">

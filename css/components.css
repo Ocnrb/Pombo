@@ -48,6 +48,57 @@
     background: transparent;
 }
 
+/* ----- Centered Storage Slider ----- */
+.centered-storage-slider {
+    background: linear-gradient(
+        to right,
+        rgba(255,255,255,0.1) 0%,
+        rgba(255,255,255,0.1) var(--slider-fill-start, 50%),
+        #F6851B var(--slider-fill-start, 50%),
+        #F6851B var(--slider-fill-end, 50%),
+        rgba(255,255,255,0.1) var(--slider-fill-end, 50%),
+        rgba(255,255,255,0.1) 100%
+    );
+}
+
+.centered-storage-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #F6851B;
+    cursor: pointer;
+    border: 2px solid #09090b;
+    box-shadow: 0 2px 6px rgba(246, 133, 27, 0.4);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.centered-storage-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.15);
+    box-shadow: 0 2px 10px rgba(246, 133, 27, 0.6);
+}
+
+.centered-storage-slider::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #F6851B;
+    cursor: pointer;
+    border: 2px solid #09090b;
+    box-shadow: 0 2px 6px rgba(246, 133, 27, 0.4);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.centered-storage-slider::-moz-range-thumb:hover {
+    transform: scale(1.15);
+    box-shadow: 0 2px 10px rgba(246, 133, 27, 0.6);
+}
+
+.centered-storage-slider::-moz-range-track {
+    background: transparent;
+}
+
 /* ----- Base Layout ----- */
 html {
     background-color: #000000;
@@ -195,13 +246,82 @@ body {
 /* ----- Message Styles ----- */
 .message-entry {
     animation: fadeIn 0.3s ease-in-out;
-    max-width: 60%;
     display: flex;
     flex-direction: row;
     align-items: flex-end;
     gap: 8px;
     position: relative;
     width: fit-content;
+    max-width: 100%;
+}
+
+/* When inside a .message-group wrapper the group already constrains horizontal
+   width and side alignment — neutralize legacy auto margins on the entry. */
+.message-group .message-entry {
+    margin-left: 0;
+    margin-right: 0;
+}
+
+/* Standalone entries (legacy callers without group wrapper) keep 60% cap. */
+.message-entry:not(.message-group .message-entry) {
+    max-width: 60%;
+}
+
+/* ----- Message Group Wrapper (sticky avatar rail) ----- */
+.message-group {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch; /* stack defines height; rail uses align-self: flex-end */
+    gap: 8px;
+    max-width: 60%;
+    width: fit-content;
+    position: relative;
+}
+
+.message-group.own-message-group {
+    margin-left: auto;
+    flex-direction: row-reverse; /* avatar on the right (mobile own) */
+}
+
+.message-group.other-message-group {
+    margin-right: auto;
+}
+
+.message-group-avatar-rail {
+    flex-shrink: 0;
+    align-self: flex-end; /* sit at bottom of group; sticky follows when group scrolls out the top */
+    width: 46px;
+    height: 46px;
+    margin-bottom: -12px; /* classic overhang: avatar visually extends 12px below the last bubble */
+    position: sticky;
+    bottom: 0; /* when sticky, avatar bottom flushes with viewport bottom */
+}
+
+/* Avatar inside the rail no longer uses the old overhang trick */
+.message-group-avatar-rail .message-avatar {
+    top: auto;
+    margin-top: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.message-group-stack {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+.message-group.own-message-group .message-group-stack {
+    align-items: flex-end;
+}
+
+/* Safety: first entry in a group must sit flush with the group's top so the
+   sticky avatar's upper bound aligns with the first bubble's top, never above.
+   Spacing relative to the previous group lives on the .message-group wrapper. */
+.message-group-stack > .message-entry:first-child {
+    margin-top: 0;
 }
 
 /* Only last/single messages get margin for avatar overhang (margin collapses with spacing system) */
@@ -321,6 +441,17 @@ body {
     .own-message .message-avatar {
         order: -1;
     }
+
+    /* Own-message group: align left like other-message group, avatar on the left */
+    .message-group.own-message-group {
+        margin-left: 0;
+        margin-right: auto;
+        flex-direction: row;
+    }
+
+    .message-group.own-message-group .message-group-stack {
+        align-items: flex-start;
+    }
     
     /* Flip bubble corners to left-anchor style */
     .own-message.msg-group-single .message-bubble {
@@ -418,7 +549,7 @@ body {
     height: 46px;
     flex-shrink: 0;
     align-self: flex-end;
-    border-radius: 10px;
+    border-radius: 9999px;
     overflow: hidden;
     position: relative;
     top: 12px; /* Avatar hangs below the bubble ~50% */
@@ -1893,7 +2024,7 @@ body {
     .pill-profile-avatar {
         width: 2.375rem;
         height: 2.375rem;
-        border-radius: 10px;
+        border-radius: 9999px;
         background: rgba(255, 255, 255, 0.08);
         border: 1.5px solid rgba(255, 255, 255, 0.12);
         display: flex;
@@ -1912,7 +2043,7 @@ body {
         width: 100%;
         height: 100%;
         object-fit: cover;
-        border-radius: 10px;
+        border-radius: 9999px;
     }
 
     /* ----- PROFILE DROPDOWN ----- */
@@ -2076,12 +2207,23 @@ body {
     .message-entry {
         max-width: 85%;
     }
+    .message-group {
+        max-width: 85%;
+    }
     
     /* Smaller message avatars */
     .message-avatar {
         width: 36px;
         height: 36px;
         margin-top: -36px;
+    }
+    .message-group-avatar-rail {
+        width: 36px;
+        height: 36px;
+        margin-bottom: -10px;
+    }
+    .message-group-avatar-rail .message-avatar {
+        margin-top: 0;
     }
     
     /* Message input area - flush at bottom */
@@ -2512,12 +2654,23 @@ body {
     .message-entry {
         max-width: 90%;
     }
+    .message-group {
+        max-width: 90%;
+    }
     
     /* Smaller avatars */
     .message-avatar {
         width: 32px;
         height: 32px;
         margin-top: -32px;
+    }
+    .message-group-avatar-rail {
+        width: 32px;
+        height: 32px;
+        margin-bottom: -8px;
+    }
+    .message-group-avatar-rail .message-avatar {
+        margin-top: 0;
     }
     
     /* Channel list items compact */

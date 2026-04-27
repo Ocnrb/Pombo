@@ -135,12 +135,12 @@ class ContactsUI {
 
         this.elements.contactsList.innerHTML = contacts.map(contact => {
             const avatarUrl = identityManager.getCachedENSAvatar(contact.address);
-            const avatarHtml = getAvatarHtml(contact.address, 32, 0.22, avatarUrl);
+            const avatarHtml = getAvatarHtml(contact.address, 36, 0.5, avatarUrl);
             // Defense-in-depth: sanitize user-provided nickname
             return `
                 <div class="flex items-center justify-between p-3 bg-white/[0.05] border border-white/[0.08] rounded-xl">
                     <div class="flex items-center gap-3 flex-1 min-w-0">
-                        <div class="flex-shrink-0" style="width:32px;height:32px;border-radius:6px;overflow:hidden;">${avatarHtml}</div>
+                        <div class="flex-shrink-0" style="width:36px;height:36px;border-radius:9999px;overflow:hidden;">${avatarHtml}</div>
                         <div class="flex-1 min-w-0">
                             <span class="text-[13px] font-medium text-white truncate block">${escapeHtml(sanitizeText(contact.nickname))}</span>
                             <div class="text-[10px] text-white/30 font-mono truncate mt-0.5">${escapeHtml(contact.address)}</div>

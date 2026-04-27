@@ -869,7 +869,7 @@ class SettingsUI {
             const avatarContainer = document.getElementById('settings-avatar-container');
             if (avatarContainer && address) {
                 const ensAvatar = this.identityManager.getCachedENSAvatar(address);
-                avatarContainer.innerHTML = `<div class="w-14 h-14 rounded-lg overflow-hidden border border-white/[0.08]">${getAvatarHtml(address, 56, 0.2, ensAvatar)}</div>`;
+                avatarContainer.innerHTML = `<div class="w-14 h-14 rounded-full overflow-hidden border border-white/[0.08]">${getAvatarHtml(address, 56, 0.5, ensAvatar)}</div>`;
             }
 
             if (this.elements.settingsUsername) {

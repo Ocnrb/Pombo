@@ -133,7 +133,7 @@ class HeaderUI {
                 pill.guestLabel?.classList.remove('hidden');
                 // Update profile avatar in pill (guest address)
                 if (pill.profileBtn) {
-                    pill.profileBtn.innerHTML = generateAvatar(address, 32, 0.2);
+                    pill.profileBtn.innerHTML = generateAvatar(address, 32, 0.5);
                 }
                 if (pill.profileAddress) {
                     pill.profileAddress.textContent = `${address.slice(0, 6)}...${address.slice(-4)}`;
@@ -152,7 +152,7 @@ class HeaderUI {
                 // Update desktop dropdown button
                 if (desktopAccountAvatar) {
                     const ensAvatar = identityManager.getCachedENSAvatar(address);
-                    desktopAccountAvatar.innerHTML = getAvatarHtml(address, 32, 0.2, ensAvatar);
+                    desktopAccountAvatar.innerHTML = getAvatarHtml(address, 38, 0.5, ensAvatar);
                 }
                 if (desktopAccountName) {
                     desktopAccountName.textContent = displayText;
@@ -175,7 +175,7 @@ class HeaderUI {
                 // Update profile avatar in pill
                 if (pill.profileBtn) {
                     const ensAvatar = identityManager.getCachedENSAvatar(address);
-                    pill.profileBtn.innerHTML = getAvatarHtml(address, 38, 0.2, ensAvatar);
+                    pill.profileBtn.innerHTML = getAvatarHtml(address, 38, 0.5, ensAvatar);
                 }
                 // Update profile address in dropdown (always show address)
                 if (pill.profileAddress) {
@@ -368,12 +368,12 @@ class HeaderUI {
             return;
         }
 
-        const sizePx = 36;
-        const sizeCls = 'w-9 h-9';
-        const radiusCls = 'rounded-lg';
-        const spinnerHtml = `<div class="${sizeCls} ${radiusCls} flex items-center justify-center bg-white/[0.04]"><div class="thumb-spinner" style="width:18px;height:18px"></div></div>`;
-        const fallbackHtml = (seed) => `<div class="${sizeCls} ${radiusCls} overflow-hidden">${getAvatarHtml(seed, sizePx, 0.25, null)}</div>`;
-        const imgHtml = (url) => `<img class="${sizeCls} ${radiusCls} object-cover" alt="" src="${escapeAttr(url)}" />`;
+        const sizePx = 38;
+        const sizeStyle = 'width:38px;height:38px';
+        const radiusCls = 'rounded-full';
+        const spinnerHtml = `<div class="${radiusCls} flex items-center justify-center bg-white/[0.04]" style="${sizeStyle}"><div class="thumb-spinner" style="width:18px;height:18px"></div></div>`;
+        const fallbackHtml = (seed) => `<div class="${radiusCls} overflow-hidden" style="${sizeStyle}">${getAvatarHtml(seed, sizePx, 0.5, null)}</div>`;
+        const imgHtml = (url) => `<img class="${radiusCls} object-cover" alt="" src="${escapeAttr(url)}" style="${sizeStyle}" />`;
 
         const renderDM = () => {
             const peer = channel.peerAddress;

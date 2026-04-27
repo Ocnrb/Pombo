@@ -128,13 +128,13 @@ class ChannelListUI {
         if (!slot) return;
         const dataUrl = this._getCachedImageDataUrl(adminStreamId);
         if (dataUrl) {
-            slot.innerHTML = `<img class="channel-item-image w-10 h-10 rounded-md object-cover" alt="" src="${escapeAttr(dataUrl)}" draggable="true" />`;
-            slot.classList.remove('w-5', 'w-7', 'w-9');
-            slot.classList.add('w-10');
+            slot.style.width = '44px';
+            slot.innerHTML = `<img class="channel-item-image rounded-full object-cover" alt="" src="${escapeAttr(dataUrl)}" draggable="true" style="width:44px;height:44px" />`;
         } else if (this._resolvedImages.has(adminStreamId)) {
             // Resolution finished without a remote image — swap spinner
             // placeholder for the deterministic fallback avatar.
-            slot.innerHTML = `<div class="w-10 h-10 rounded-md overflow-hidden">${getAvatarHtml(streamId, 40, 0.2, null)}</div>`;
+            slot.style.width = '44px';
+            slot.innerHTML = `<div class="rounded-full overflow-hidden" style="width:44px;height:44px">${getAvatarHtml(streamId, 44, 0.5, null)}</div>`;
         }
         // Bump signature so next reconcile doesn't replace this row
         const cached = channelImageManager.getCached(adminStreamId);
@@ -464,25 +464,25 @@ class ChannelListUI {
         // Render image / avatar / spinner. We show a spinner whenever the
         // remote lookup is still pending so the deterministic fallback
         // doesn't flash before the real image / ENS avatar arrives.
-        const spinnerSlot = `<div class="w-10 h-10 rounded-md flex items-center justify-center bg-white/[0.04]"><div class="thumb-spinner" style="width:16px;height:16px"></div></div>`;
+        const spinnerSlot = `<div class="rounded-full flex items-center justify-center bg-white/[0.04]" style="width:44px;height:44px"><div class="thumb-spinner" style="width:16px;height:16px"></div></div>`;
         let iconSlot = '';
         if (channelViewModel.type === 'dm') {
             const seed = channelViewModel.peerAddress || channelViewModel.streamId;
             if (channelViewModel.peerEnsAvatar) {
-                iconSlot = `<img class="channel-item-image w-10 h-10 rounded-md object-cover" alt="" src="${escapeAttr(channelViewModel.peerEnsAvatar)}" draggable="true" />`;
+                iconSlot = `<img class="channel-item-image rounded-full object-cover" alt="" src="${escapeAttr(channelViewModel.peerEnsAvatar)}" draggable="true" style="width:44px;height:44px" />`;
             } else if (channelViewModel.peerAddress && !this._resolvedDMPeers.has(channelViewModel.peerAddress)) {
                 iconSlot = spinnerSlot;
             } else {
-                iconSlot = `<div class="w-10 h-10 rounded-md overflow-hidden">${getAvatarHtml(seed, 40, 0.2, null)}</div>`;
+                iconSlot = `<div class="rounded-full overflow-hidden" style="width:44px;height:44px">${getAvatarHtml(seed, 44, 0.5, null)}</div>`;
             }
         } else {
             const dataUrl = this._getCachedImageDataUrl(channelViewModel.adminStreamId);
             if (dataUrl) {
-                iconSlot = `<img class="channel-item-image w-10 h-10 rounded-md object-cover" alt="" src="${escapeAttr(dataUrl)}" draggable="true" />`;
+                iconSlot = `<img class="channel-item-image rounded-full object-cover" alt="" src="${escapeAttr(dataUrl)}" draggable="true" style="width:44px;height:44px" />`;
             } else if (channelViewModel.adminStreamId && !this._resolvedImages.has(channelViewModel.adminStreamId)) {
                 iconSlot = spinnerSlot;
             } else {
-                iconSlot = `<div class="w-10 h-10 rounded-md overflow-hidden">${getAvatarHtml(channelViewModel.streamId, 40, 0.2, null)}</div>`;
+                iconSlot = `<div class="rounded-full overflow-hidden" style="width:44px;height:44px">${getAvatarHtml(channelViewModel.streamId, 44, 0.5, null)}</div>`;
             }
         }
 
@@ -495,7 +495,7 @@ class ChannelListUI {
             >
                 <div class="channel-item-body flex items-center">
                     <!-- Icon / avatar slot -->
-                    <div class="channel-icon-slot w-10 flex-shrink-0 flex items-center justify-center">
+                    <div class="channel-icon-slot flex-shrink-0 flex items-center justify-center" style="width:44px">
                         ${iconSlot}
                     </div>
                     <!-- Channel name + type icons -->

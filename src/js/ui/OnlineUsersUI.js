@@ -85,12 +85,12 @@ class OnlineUsersUI {
                     }
                     
                     const avatarUrl = avatarMap.get(address?.toLowerCase()) || null;
-                    const avatarHtml = getAvatarHtml(address, 28, 0.22, avatarUrl);
+                    const avatarHtml = getAvatarHtml(address, 32, 0.5, avatarUrl);
                     
                     return `
                         <div class="user-item-wrapper" data-user-address="${escapeAttr(address)}">
                             <div class="user-item cursor-pointer hover:bg-white/[0.06] rounded-lg px-2 py-1.5 -mx-2">
-                                <div class="user-avatar-small flex-shrink-0" style="width:28px;height:28px;border-radius:6px;overflow:hidden;">${avatarHtml}</div>
+                                <div class="user-avatar-small flex-shrink-0" style="width:32px;height:32px;border-radius:9999px;overflow:hidden;">${avatarHtml}</div>
                                 <div class="flex flex-col min-w-0 flex-1">
                                     <span class="text-white/70 truncate text-sm ${isMe ? 'font-semibold' : ''}">${ensBadge} ${displayName}</span>
                                     ${subtitle ? `<span class="text-white/40 text-xs truncate">${subtitle}</span>` : ''}

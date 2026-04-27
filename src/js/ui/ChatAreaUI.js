@@ -10,7 +10,7 @@ import { reactionManager } from './ReactionManager.js';
 import { mediaHandler } from './MediaHandler.js';
 import { previewModeUI } from './PreviewModeUI.js';
 import { pinnedBannerUI } from './PinnedBannerUI.js';
-import { analyzeMessageGroups, getGroupPositionClass, analyzeSpacing, getSpacingClass } from './MessageGrouper.js';
+import { analyzeMessageGroups, getGroupPositionClass, analyzeSpacing, getSpacingClass, shouldGroup } from './MessageGrouper.js';
 import { escapeHtml, formatAddress } from './utils.js';
 import { identityManager } from '../identity.js';
 import { CONFIG } from '../config.js';
@@ -383,8 +383,7 @@ class ChatAreaUI {
         }
 
         const currentAddress = authManager?.getAddress();
-        let lastDateStr = null;
-        
+
         let historyStartIndicator = '';
         if (!hasMoreHistory) {
             historyStartIndicator = `
@@ -401,34 +400,73 @@ class ChatAreaUI {
         // Analyze spacing for 3-level margin system
         const spacingTypes = analyzeSpacing(messagesForRender, currentAddress);
 
-        // Build all HTML in a single pass (single innerHTML assignment — avoids double reflow)
-        const messagesHtml = messagesForRender.map((msg, index) => {
+        // Build all HTML in a single pass, wrapping consecutive grouped messages
+        // (same sender, same day, within 2-min window) in a .message-group with
+        // a single sticky avatar rail. Group boundaries always coincide with
+        // shouldGroup() boundaries — date separators sit between groups.
+        let messagesHtml = '';
+        let inGroup = false;
+        let lastDateStr = null;
+
+        for (let index = 0; index < messagesForRender.length; index++) {
+            const msg = messagesForRender[index];
+            const prev = index > 0 ? messagesForRender[index - 1] : null;
             const isOwn = msg.sender?.toLowerCase() === currentAddress?.toLowerCase();
             const msgDate = new Date(msg.timestamp);
             const time = msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            
+
             const dateStr = msgDate.toDateString();
             let dateSeparator = '';
             if (dateStr !== lastDateStr) {
                 lastDateStr = dateStr;
                 dateSeparator = messageRenderer.renderDateSeparator(msgDate);
             }
-            
+
             const badge = this.getVerificationBadge(msg, isOwn);
             let displayName = msg.verified?.ensName || msg.senderName;
             if (!displayName) {
                 displayName = formatAddress(msg.sender);
             }
-            
-            // Get group position class for Stack Effect
+
             const groupClass = getGroupPositionClass(groupPositions[index]);
-            // Get spacing class for margin
             const spacingClass = getSpacingClass(spacingTypes[index]);
-            // Get ENS avatar URL from cache (sync, no network call)
             const ensAvatarUrl = identityManager.getCachedENSAvatar(msg.sender);
-            
-            return dateSeparator + messageRenderer.buildMessageHTML(msg, isOwn, time, badge, displayName, groupClass, groupPositions[index], spacingClass, ensAvatarUrl);
-        }).join('');
+
+            // Decide whether this msg starts a new group
+            const startNewGroup = !shouldGroup(prev, msg);
+            if (startNewGroup) {
+                if (inGroup) {
+                    messagesHtml += messageRenderer.buildMessageGroupCloseHTML();
+                    inGroup = false;
+                }
+                if (dateSeparator) {
+                    messagesHtml += dateSeparator;
+                }
+                // The first message of a group carries the spacing relative to
+                // the previous group/message — apply that on the group wrapper
+                // (not the entry) so the first bubble is flush with the group's
+                // top edge. This ensures the sticky avatar's upper bound aligns
+                // with the top of the first bubble, never above it.
+                messagesHtml += messageRenderer.buildMessageGroupOpenHTML({
+                    sender: msg.sender,
+                    isOwn,
+                    ensAvatarUrl,
+                    spacingClass,
+                });
+                inGroup = true;
+            }
+
+            // Spacing class only applies to non-first entries within a group;
+            // for the first entry it lives on the group wrapper.
+            const entrySpacingClass = startNewGroup ? '' : spacingClass;
+            messagesHtml += messageRenderer.buildMessageHTML(
+                msg, isOwn, time, badge, displayName,
+                groupClass, groupPositions[index], entrySpacingClass, ensAvatarUrl
+            );
+        }
+        if (inGroup) {
+            messagesHtml += messageRenderer.buildMessageGroupCloseHTML();
+        }
 
         this.messagesArea.innerHTML = historyStartIndicator + messagesHtml;
 
@@ -556,6 +594,13 @@ class ChatAreaUI {
     /**
      * Remove a single message entry from the DOM (used when a message is deleted).
      * Avoids the cost of re-rendering the entire conversation.
+     *
+     * Maintains the .message-group wrapper invariants: when a message is removed
+     * from a group, the remaining entries' msg-group-{first|middle|last|single}
+     * classes are recomputed (sender-row visibility flips automatically via CSS).
+     * If the removed entry was alone in its group, the entire group wrapper is
+     * dropped (which also removes the sticky avatar).
+     *
      * @param {string} msgId - Message ID to remove
      * @returns {boolean} - true if the node was found and removed
      */
@@ -564,8 +609,41 @@ class ChatAreaUI {
         const selector = `.message-entry[data-msg-id="${CSS.escape(String(msgId))}"]`;
         const existing = this.messagesArea.querySelector(selector);
         if (!existing) return false;
+
+        const groupWrapper = existing.closest('.message-group');
         existing.remove();
+
+        if (groupWrapper) {
+            const remaining = groupWrapper.querySelectorAll(':scope > .message-group-stack > .message-entry');
+            if (remaining.length === 0) {
+                groupWrapper.remove();
+            } else {
+                this._recomputeGroupPositions(remaining);
+            }
+        }
         return true;
+    }
+
+    /**
+     * Recompute msg-group-{first|middle|last|single} classes on a NodeList of
+     * .message-entry siblings within a single group. Used after removeMessage.
+     * Bubble corner radius and sender-row visibility update reactively via CSS.
+     * @private
+     * @param {NodeListOf<Element>|Element[]} entries
+     */
+    _recomputeGroupPositions(entries) {
+        const total = entries.length;
+        const groupClasses = ['msg-group-single', 'msg-group-first', 'msg-group-middle', 'msg-group-last'];
+        for (let i = 0; i < total; i++) {
+            const el = entries[i];
+            el.classList.remove(...groupClasses);
+            let cls;
+            if (total === 1) cls = 'msg-group-single';
+            else if (i === 0) cls = 'msg-group-first';
+            else if (i === total - 1) cls = 'msg-group-last';
+            else cls = 'msg-group-middle';
+            el.classList.add(cls);
+        }
     }
 
     /**

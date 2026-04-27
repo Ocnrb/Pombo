@@ -1627,7 +1627,7 @@ class ChannelSettingsUI {
                 previewEl.innerHTML = `<img src="${escapeAttr(entry.dataUrl)}" alt="Channel image" class="w-full h-full object-cover" />`;
             } else {
                 // Fallback: deterministic avatar from streamId
-                previewEl.innerHTML = getAvatarHtml(channel.streamId, 80, 0.25, null);
+                previewEl.innerHTML = getAvatarHtml(channel.streamId, 80, 0.5, null);
             }
         };
 
@@ -1675,30 +1675,149 @@ class ChannelSettingsUI {
         }
     }
 
+    _paintChannelImageCropCanvas(canvas, image, cropState) {
+        if (!canvas || !image || !cropState) return null;
+
+        const viewportSize = canvas.width || 280;
+        const frame = mediaController.getSquareCropFrame(
+            image.naturalWidth || image.width,
+            image.naturalHeight || image.height,
+            viewportSize,
+            cropState.zoom,
+            cropState.centerX,
+            cropState.centerY
+        );
+
+        cropState.zoom = frame.zoom;
+        cropState.centerX = frame.centerX;
+        cropState.centerY = frame.centerY;
+
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, viewportSize, viewportSize);
+        if (!cropState.preserveAlpha) {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, viewportSize, viewportSize);
+        }
+        ctx.drawImage(image, frame.offsetX, frame.offsetY, frame.drawWidth, frame.drawHeight);
+        return frame;
+    }
+
     /**
-     * Show the confirmation modal with the cropped preview, encryption option
-     * (only for password channels) and Upload/Cancel buttons. On confirm,
-     * delegates to _handleChannelImageUpload.
+     * Show the confirmation modal with an interactive square crop preview,
+     * encryption option (only for password channels) and Upload/Cancel
+     * buttons. On confirm, renders the chosen frame and delegates to
+     * _handleChannelImageUpload.
      */
     async _openChannelImageConfirm(channel, file, statusEl, btnEl) {
         const modal = document.getElementById('channel-image-confirm-modal');
-        const previewEl = document.getElementById('channel-image-confirm-preview');
+        const previewCanvas = document.getElementById('channel-image-confirm-preview');
+        const cropStage = document.getElementById('channel-image-crop-stage');
+        const zoomInput = document.getElementById('channel-image-zoom');
+        const zoomValue = document.getElementById('channel-image-zoom-value');
+        const resetBtn = document.getElementById('channel-image-crop-reset-btn');
         const encryptRow = document.getElementById('channel-image-encrypt-row');
         const encryptCb = document.getElementById('channel-image-encrypt');
         const cancelBtn = document.getElementById('cancel-channel-image-btn');
         const confirmBtn = document.getElementById('confirm-channel-image-btn');
         if (!modal || !confirmBtn || !cancelBtn) return;
 
-        // Process the image now so the preview is what will actually be uploaded
-        let dataUrl;
+        let cropImage;
+        let preserveAlpha;
         try {
-            dataUrl = await mediaController.cropAndResizeSquare(file, 512, 0.85);
+            ({ image: cropImage, preserveAlpha } = await mediaController.loadImageForCrop(file));
         } catch (e) {
             this.deps.showNotification?.('Failed to process image: ' + e.message, 'error');
             return;
         }
-        if (previewEl) {
-            previewEl.innerHTML = `<img src="${escapeAttr(dataUrl)}" alt="Preview" class="w-full h-full object-cover" />`;
+
+        const cropState = {
+            zoom: 1,
+            centerX: (cropImage.naturalWidth || cropImage.width) / 2,
+            centerY: (cropImage.naturalHeight || cropImage.height) / 2,
+            preserveAlpha
+        };
+
+        const sliderPercentToZoom = (percent) => Math.pow(2, percent / 100);
+        const zoomToSliderPercent = (zoom) => Math.round(Math.log2(zoom) * 100);
+
+        const renderCropPreview = () => {
+            if (!previewCanvas) return null;
+            const frame = this._paintChannelImageCropCanvas(previewCanvas, cropImage, cropState);
+            if (zoomInput) {
+                const sliderValue = zoomToSliderPercent(cropState.zoom);
+                const sliderMin = Number(zoomInput.min || -100);
+                const sliderMax = Number(zoomInput.max || 100);
+                const thumbPercent = ((sliderValue - sliderMin) / (sliderMax - sliderMin)) * 100;
+                zoomInput.value = String(sliderValue);
+                zoomInput.style.setProperty('--slider-fill-start', `${Math.min(thumbPercent, 50)}%`);
+                zoomInput.style.setProperty('--slider-fill-end', `${Math.max(thumbPercent, 50)}%`);
+            }
+            if (zoomValue) {
+                const sliderValue = zoomToSliderPercent(cropState.zoom);
+                zoomValue.textContent = `${sliderValue > 0 ? '+' : ''}${sliderValue}%`;
+            }
+            return frame;
+        };
+
+        if (previewCanvas) {
+            previewCanvas.width = 280;
+            previewCanvas.height = 280;
+            renderCropPreview();
+        }
+
+        if (zoomInput) {
+            zoomInput.value = '0';
+            zoomInput.oninput = () => {
+                cropState.zoom = sliderPercentToZoom(Number(zoomInput.value || 0));
+                renderCropPreview();
+            };
+        }
+
+        if (resetBtn) {
+            resetBtn.onclick = () => {
+                cropState.zoom = 1;
+                cropState.centerX = (cropImage.naturalWidth || cropImage.width) / 2;
+                cropState.centerY = (cropImage.naturalHeight || cropImage.height) / 2;
+                renderCropPreview();
+            };
+        }
+
+        if (cropStage) {
+            let dragState = null;
+            const stopDragging = () => {
+                dragState = null;
+                cropStage.style.cursor = 'grab';
+            };
+
+            cropStage.style.cursor = 'grab';
+            cropStage.onpointerdown = (ev) => {
+                dragState = { pointerId: ev.pointerId, x: ev.clientX, y: ev.clientY };
+                cropStage.setPointerCapture?.(ev.pointerId);
+                cropStage.style.cursor = 'grabbing';
+            };
+            cropStage.onpointermove = (ev) => {
+                if (!dragState || dragState.pointerId !== ev.pointerId) return;
+                const frame = mediaController.getSquareCropFrame(
+                    cropImage.naturalWidth || cropImage.width,
+                    cropImage.naturalHeight || cropImage.height,
+                    previewCanvas?.width || 280,
+                    cropState.zoom,
+                    cropState.centerX,
+                    cropState.centerY
+                );
+                const deltaX = ev.clientX - dragState.x;
+                const deltaY = ev.clientY - dragState.y;
+                const displayedWidth = cropStage.getBoundingClientRect().width || (previewCanvas?.width || 280);
+                const canvasToScreenRatio = (previewCanvas?.width || 280) / displayedWidth;
+                dragState.x = ev.clientX;
+                dragState.y = ev.clientY;
+                cropState.centerX -= (deltaX * canvasToScreenRatio) / frame.scale;
+                cropState.centerY -= (deltaY * canvasToScreenRatio) / frame.scale;
+                renderCropPreview();
+            };
+            cropStage.onpointerup = stopDragging;
+            cropStage.onpointercancel = stopDragging;
+            cropStage.onlostpointercapture = stopDragging;
         }
 
         // Encrypt option only for password channels
@@ -1721,13 +1840,20 @@ class ChannelSettingsUI {
         newCancel.addEventListener('click', close);
 
         // Backdrop click to dismiss
-        const onBackdrop = (ev) => {
+        modal.onclick = (ev) => {
             if (ev.target === modal) close();
         };
-        modal.addEventListener('click', onBackdrop, { once: true });
 
         newConfirm.addEventListener('click', async () => {
             const encrypt = !!document.getElementById('channel-image-encrypt')?.checked;
+            const dataUrl = mediaController.renderSquareCrop(cropImage, {
+                size: 512,
+                quality: 0.85,
+                zoom: cropState.zoom,
+                centerX: cropState.centerX,
+                centerY: cropState.centerY,
+                preserveAlpha: cropState.preserveAlpha
+            });
             close();
             await this._handleChannelImageUpload(channel, dataUrl, encrypt, statusEl, btnEl);
         });

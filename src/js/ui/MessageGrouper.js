@@ -28,7 +28,7 @@ const GROUP_TIME_THRESHOLD = 2 * 60 * 1000; // 2 minutes
  * @param {Object} msg2 - Second message
  * @returns {boolean} - Whether messages should be grouped
  */
-function shouldGroup(msg1, msg2) {
+export function shouldGroup(msg1, msg2) {
     if (!msg1 || !msg2) return false;
     
     // Different senders = different groups
