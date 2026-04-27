@@ -1473,6 +1473,36 @@ describe('StreamrController Core', () => {
             const retryCallNames = executeWithRetry.mock.calls.map(c => c[0]);
             expect(retryCallNames.some(name => name.includes('message'))).toBe(true);
         });
+
+        it('should delete all three streams (message -1, ephemeral -2, admin -3)', async () => {
+            await streamrController.deleteStream('owner/stream-1');
+            const deletedIds = mockClient.deleteStream.mock.calls.map(c => c[0]);
+            expect(deletedIds).toContain('owner/stream-1');
+            expect(deletedIds).toContain('owner/stream-2');
+            expect(deletedIds).toContain('owner/stream-3');
+            expect(mockClient.deleteStream).toHaveBeenCalledTimes(3);
+        });
+
+        it('should treat streamDoesNotExist as idempotent success (no throw)', async () => {
+            // All three deletes report the stream is already gone
+            mockClient.deleteStream.mockRejectedValue(
+                Object.assign(new Error('error_streamDoesNotExist'), { reason: 'error_streamDoesNotExist' })
+            );
+            await expect(streamrController.deleteStream('owner/stream-1')).resolves.toBeUndefined();
+        });
+
+        it('should not throw when admin stream (-3) does not exist (legacy channels)', async () => {
+            // Only -3 fails with streamDoesNotExist; -1 and -2 succeed
+            mockClient.deleteStream.mockImplementation(async (sid) => {
+                if (sid.endsWith('-3')) {
+                    const err = new Error('error_streamDoesNotExist');
+                    err.reason = 'error_streamDoesNotExist';
+                    throw err;
+                }
+                return undefined;
+            });
+            await expect(streamrController.deleteStream('owner/stream-1')).resolves.toBeUndefined();
+        });
     });
 
     // ==================== createStream() ====================
