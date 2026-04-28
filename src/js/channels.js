@@ -1575,6 +1575,21 @@ class ChannelManager {
             dmManager.unsubscribeDMEphemeral();
         }
         
+        // Gate the initial-history-complete event AS EARLY AS POSSIBLE so the
+        // empty-channel render that just happened in setActiveChannel cannot
+        // trigger `_autoLoadIfContentShort` → `loadMoreHistory` concurrently
+        // with the subscribe path. Without this guard, two storage resends run
+        // in parallel and — under CPU/network pressure — the older-history
+        // resend's iterator can be cut short by storage WebSocket
+        // disconnects, leaving `allMessages` populated with the OLDEST
+        // messages instead of the most recent. `slice(-50)` then returns a
+        // batch of stale messages and `oldestTimestamp` jumps far back,
+        // causing a permanent gap between the batch and the live history.
+        // Cleared in `onHistoryComplete` (and on any error path below).
+        if (channel && !channel.writeOnly && channel.type !== 'dm') {
+            channel.initialLoadInProgress = true;
+        }
+
         // Skip network subscription for write-only channels (no subscribe permission)
         // Instead, load locally persisted sent messages and reactions
         if (channel?.writeOnly) {
