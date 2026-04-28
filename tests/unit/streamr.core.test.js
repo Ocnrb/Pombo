@@ -1153,7 +1153,7 @@ describe('StreamrController Core', () => {
                 partition: 0
             }, {
                 from: { timestamp: 0 },
-                to: { timestamp: 4999 }
+                to: { timestamp: 5000 }
             });
         });
 
