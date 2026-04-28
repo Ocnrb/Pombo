@@ -590,6 +590,14 @@ class ChannelManager {
             const previewMessages = Array.isArray(previewInfo.messages) ? previewInfo.messages : [];
             const previewReactions = previewInfo.reactions || {};
 
+            // Carry over preview's pending P1 overrides (edit/delete whose
+            // target P0 message hasn't landed yet) so late-arriving content
+            // delivered through the reused subscription post-promote still
+            // gets the correct override applied via applyPendingOverrides.
+            const previewPendingOverrides = previewInfo.pendingOverrides instanceof Map
+                ? new Map(previewInfo.pendingOverrides)
+                : new Map();
+
             const channel = {
                 messageStreamId: messageStreamId,
                 ephemeralStreamId: ephemeralStreamId,
@@ -602,6 +610,7 @@ class ChannelManager {
                 password: null, // Preview doesn't support password channels yet
                 members: [],
                 messages: previewMessages,  // Transfer messages from preview
+                _pendingOverrides: previewPendingOverrides,
                 reactions: previewReactions, // Transfer reactions from preview
                 // Admin moderation state (-3/P0). Carry over whatever the
                 // preview already collected so pins / bans / hidden ids stay
@@ -629,7 +638,15 @@ class ChannelManager {
 
             // Add to channels map
             this.channels.set(messageStreamId, channel);
-            
+
+            // Apply any carried-over pending overrides immediately and prune
+            // _deleted entries so the first render after Join already reflects
+            // the moderation state preview computed.
+            if (previewPendingOverrides.size > 0) {
+                this.applyPendingOverrides(channel);
+            }
+            channel.messages = channel.messages.filter(m => !m._deleted);
+
             // Save to storage (parallel)
             await Promise.all([
                 this.saveChannels(),

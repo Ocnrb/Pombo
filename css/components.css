@@ -2220,7 +2220,6 @@ body {
     .message-group-avatar-rail {
         width: 36px;
         height: 36px;
-        margin-bottom: -10px;
     }
     .message-group-avatar-rail .message-avatar {
         margin-top: 0;
@@ -2667,7 +2666,6 @@ body {
     .message-group-avatar-rail {
         width: 32px;
         height: 32px;
-        margin-bottom: -8px;
     }
     .message-group-avatar-rail .message-avatar {
         margin-top: 0;

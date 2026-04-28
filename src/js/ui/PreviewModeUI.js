@@ -398,6 +398,15 @@ class PreviewModeUI {
 
         try {
             const { streamId, channelInfo, name, type, readOnly, messages, adminState, adminRev, adminTs, adminLoaded } = this.previewChannel;
+            // Capture pending overrides so any P1 edit/delete that arrived
+            // in preview but whose target P0 message hasn't been ingested
+            // yet (slow network: verify in flight or message still pending)
+            // is preserved across the promote. Without this transfer, late
+            // P0 messages routed via the reused subscription would land in
+            // channelManager without their override and reappear on screen.
+            const pendingOverrides = this.previewChannel._pendingOverrides instanceof Map
+                ? this.previewChannel._pendingOverrides
+                : null;
 
             notificationUI.showLoadingToast('Joining channel...', 'Saving channel...');
 
@@ -415,7 +424,8 @@ class PreviewModeUI {
                 adminState,
                 adminRev,
                 adminTs,
-                adminLoaded
+                adminLoaded,
+                pendingOverrides
             });
 
             // Clear preview state
