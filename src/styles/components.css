@@ -646,8 +646,14 @@ body {
 .message-content {
     font-size: 0.95rem;
     line-height: 1.4rem;
-    word-wrap: break-word;
-    overflow-wrap: break-word;
+    /* `anywhere` (not `break-word`) is required so that soft-wrap opportunities
+       count toward min-content intrinsic sizing. Without this, an unbroken
+       string of 30+ chars (e.g. "dddddddddddddddd") forces the bubble's
+       min-content width to span the entire string, which combined with
+       .message-bubble { min-width: min-content } overflows the group's
+       max-width and produces horizontal scroll. */
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 /* Inline emojis - slightly larger than text */
