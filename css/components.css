@@ -1826,6 +1826,14 @@ body {
         background-color: #000000 !important;
     }
 
+    /* Reserve scroll room under the floating pill nav so the last channel
+       card can fully clear the pill (bottom: 2rem + ~52px pill height + safe
+       area + small breathing gap). Without this, on tall viewports the last
+       item stays partially hidden even at max scroll. */
+    body.explore-open #explore-channels-list {
+        padding-bottom: calc(7rem + env(safe-area-inset-bottom, 0px));
+    }
+
     /* Modal containers on mobile */
     #new-channel-modal > div,
     #settings-modal > div,
