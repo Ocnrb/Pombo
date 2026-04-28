@@ -115,6 +115,12 @@ function createIndexedDBMock() {
             Promise.resolve().then(() => this._resolve(req, val));
             return req;
         }
+        getAll() {
+            const req = { result: null, onsuccess: null, onerror: null };
+            const all = Array.from(this.data.values()).map(v => structuredClone(v));
+            Promise.resolve().then(() => this._resolve(req, all));
+            return req;
+        }
         count(key) {
             const req = { result: 0, onsuccess: null, onerror: null };
             const c = key !== undefined ? (this.data.has(key) ? 1 : 0) : this.data.size;

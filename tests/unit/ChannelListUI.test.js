@@ -131,6 +131,7 @@ describe('ChannelListUI', () => {
             createChannel({
                 streamId: 'alpha',
                 name: 'Alpha',
+                readOnly: true,
                 messages: [{ id: 'm1', timestamp: 10, type: 'message' }]
             })
         ]);
@@ -139,19 +140,36 @@ describe('ChannelListUI', () => {
 
         const row = channelList.querySelector('[data-stream-id="alpha"]');
         const main = row.querySelector('.channel-item-main');
-        const typeIcons = row.querySelector('.channel-item-type-icons');
+        const readOnlyIcon = row.querySelector('.channel-item-readonly-icon');
         const actions = row.querySelector('.channel-item-actions');
         const counter = row.querySelector('.channel-msg-count');
 
         expect(row.className).not.toContain('px-3');
         expect(row.className).not.toContain('py-2');
         expect(main.className).not.toContain('ml-3');
-        expect(typeIcons.className).not.toContain('ml-3');
-        expect(typeIcons.className).not.toContain('gap-1');
+        expect(readOnlyIcon.className).not.toContain('ml-3');
+        expect(readOnlyIcon.className).not.toContain('gap-1');
         expect(actions.className).not.toContain('ml-2');
         expect(actions.className).not.toContain('gap-1.5');
         expect(counter.className).not.toContain('px-1.5');
         expect(counter.className).not.toContain('py-0.5');
+    });
+
+    it('renders only the read-only megaphone in the sidebar and no other type icons', () => {
+        channelManager.getAllChannels.mockReturnValue([
+            createChannel({ streamId: 'alpha', name: 'Alpha', type: 'password', readOnly: true }),
+            createChannel({ streamId: 'beta', name: 'Beta', type: 'public', readOnly: false })
+        ]);
+
+        channelListUI.render();
+
+        const alphaIcon = channelList.querySelector('[data-stream-id="alpha"] .channel-item-readonly-icon');
+        const betaIcon = channelList.querySelector('[data-stream-id="beta"] .channel-item-readonly-icon');
+
+        expect(alphaIcon).not.toBeNull();
+        expect(alphaIcon.querySelector('svg')).not.toBeNull();
+        expect(betaIcon).toBeNull();
+        expect(channelList.querySelector('.channel-item-type-icons')).toBeNull();
     });
 
     it('keeps channel avatar images draggable while suppressing native context menus', () => {

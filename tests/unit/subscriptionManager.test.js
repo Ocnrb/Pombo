@@ -50,6 +50,12 @@ vi.mock('../../src/js/adminStatePoller.js', () => ({
     }
 }));
 
+vi.mock('../../src/js/channelLatestMessageManager.js', () => ({
+    channelLatestMessageManager: {
+        setFromLocal: vi.fn()
+    }
+}));
+
 vi.mock('../../src/js/channels.js', () => ({
     channelManager: {
         getChannel: vi.fn(),
@@ -95,6 +101,7 @@ vi.mock('../../src/js/media.js', () => ({
 // Import after mocks
 import { subscriptionManager } from '../../src/js/subscriptionManager.js';
 import { channelManager } from '../../src/js/channels.js';
+import { channelLatestMessageManager } from '../../src/js/channelLatestMessageManager.js';
 import { streamrController, STREAM_CONFIG } from '../../src/js/streamr.js';
 import { secureStorage } from '../../src/js/secureStorage.js';
 import { mediaController } from '../../src/js/media.js';
@@ -874,6 +881,42 @@ describe('SubscriptionManager', () => {
             await subscriptionManager.checkChannelActivity({ messageStreamId: 'stream1' });
             
             expect(handler).toHaveBeenCalledWith('stream1', expect.objectContaining({ unreadCount: 1 }));
+        });
+
+        it('should push the newest previewable message into channelLatestMessageManager', async () => {
+            const now = Date.now();
+            streamrController.fetchOlderHistory.mockResolvedValue({
+                messages: [
+                    { id: 'm1', type: 'text', text: 'older', senderId: '0x1', senderName: 'Alice', timestamp: now - 500 },
+                    { id: 'm2', type: 'reaction', emoji: '🔥', senderId: '0x2', timestamp: now - 300 },
+                    { id: 'm3', type: 'text', text: 'newest', senderId: '0x3', senderName: 'Bob', timestamp: now - 100 }
+                ]
+            });
+            subscriptionManager.channelActivity.set('stream1', { lastMessageTime: now - 1000, unreadCount: 0, lastChecked: 0 });
+
+            await subscriptionManager.checkChannelActivity({ messageStreamId: 'stream1' });
+
+            expect(channelLatestMessageManager.setFromLocal).toHaveBeenCalledWith('stream1', expect.objectContaining({
+                id: 'm3',
+                text: 'newest',
+                sender: '0x3',
+                senderName: 'Bob',
+                timestamp: now - 100
+            }));
+        });
+
+        it('should not update the preview when only reactions are newer', async () => {
+            const now = Date.now();
+            streamrController.fetchOlderHistory.mockResolvedValue({
+                messages: [
+                    { id: 'm1', type: 'reaction', emoji: '🔥', senderId: '0x1', timestamp: now - 100 }
+                ]
+            });
+            subscriptionManager.channelActivity.set('stream1', { lastMessageTime: now - 1000, unreadCount: 0, lastChecked: 0 });
+
+            await subscriptionManager.checkChannelActivity({ messageStreamId: 'stream1' });
+
+            expect(channelLatestMessageManager.setFromLocal).not.toHaveBeenCalled();
         });
 
         it('should not notify if no new messages', async () => {
