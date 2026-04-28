@@ -3231,3 +3231,9 @@ select option {
     line-height: 1.75rem;
   }
 }
+
+@media (min-width: 1024px) {
+  .lg\:w-\[380px\] {
+    width: 380px;
+  }
+}
