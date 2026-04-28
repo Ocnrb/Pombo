@@ -723,6 +723,27 @@ class IdentityManager {
     // ==================== DISPLAY HELPERS ====================
 
     /**
+     * Synchronous display-name resolver for hot UI paths (sidebar / Explore
+     * preview lines). Falls back without making network calls:
+     *   1. Cached ENS name (if positive entry, regardless of TTL — preview
+     *      doesn't need to be authoritative).
+     *   2. Trusted contact nickname.
+     *   3. Shortened address `0x12…ab`.
+     *
+     * @param {string} address
+     * @returns {string}
+     */
+    getCachedDisplayName(address) {
+        if (!address || typeof address !== 'string') return '';
+        const norm = address.toLowerCase();
+        const cached = this.ensCache.get(norm);
+        if (cached && cached.name) return cached.name;
+        const contact = this.getTrustedContact(address);
+        if (contact && contact.nickname) return contact.nickname;
+        return `${address.slice(0, 6)}…${address.slice(-4)}`;
+    }
+
+    /**
      * Get display name for an address (ENS > Nickname > Short address)
      * @param {string} address - Ethereum address
      * @returns {Promise<string>} - Display name

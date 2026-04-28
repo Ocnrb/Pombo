@@ -7,9 +7,11 @@ import { Logger } from '../logger.js';
 import { escapeHtml, escapeAttr } from './utils.js';
 import { sanitizeText } from './sanitizer.js';
 import { channelImageManager } from '../channelImageManager.js';
+import { channelLatestMessageManager } from '../channelLatestMessageManager.js';
 import { deriveAdminId } from '../streamConstants.js';
 import { getAvatarHtml } from './AvatarGenerator.js';
 import { identityManager } from '../identity.js';
+import { formatPreviewLine } from './channelPreviewFormatter.js';
 
 class ChannelListUI {
     constructor() {
@@ -32,6 +34,10 @@ class ChannelListUI {
         // mid-resolution.
         this._resolvedImages = new Set();
         this._resolvedDMPeers = new Set();
+        // Tracks streams whose latest-message preview lookup has settled
+        // (success or empty). Drives the spinner-vs-blank decision on the
+        // second row of each channel item.
+        this._resolvedPreviews = new Set();
     }
 
     /**
@@ -47,6 +53,10 @@ class ChannelListUI {
         // The manager emits per adminStreamId; we update only matching DOM nodes.
         if (!this._channelImageGlobalUnsub) {
             this._channelImageGlobalUnsub = this._installChannelImageListener();
+        }
+        // Same idea for the per-channel "latest message" preview line.
+        if (!this._channelPreviewGlobalUnsub) {
+            this._channelPreviewGlobalUnsub = this._subscribeAllPreviews();
         }
     }
 
@@ -149,6 +159,116 @@ class ChannelListUI {
     }
 
     /**
+     * @private — re-subscribe to all known channels' latest-message previews.
+     * Triggers a background fetch for streams without a cached entry so the
+     * sidebar can render previews for channels the user hasn't opened yet
+     * (mirrors `_subscribeAllImages`). DMs are excluded — preview comes
+     * exclusively from local `channel.messages` via the channelManager hook.
+     */
+    _subscribeAllPreviews() {
+        if (this._previewSubs) {
+            for (const u of this._previewSubs.values()) { try { u(); } catch {} }
+        }
+        this._previewSubs = new Map();
+        const subscribe = (streamId, password) => {
+            if (!streamId || this._previewSubs.has(streamId)) return;
+            const unsub = channelLatestMessageManager.subscribe(streamId, () => {
+                this._refreshSinglePreview(streamId);
+            });
+            this._previewSubs.set(streamId, unsub);
+            if (channelLatestMessageManager.getCached(streamId)) {
+                this._resolvedPreviews.add(streamId);
+            } else {
+                channelLatestMessageManager.get(streamId, { password: password || null })
+                    .catch(() => {})
+                    .finally(() => {
+                        this._resolvedPreviews.add(streamId);
+                        this._refreshSinglePreview(streamId);
+                    });
+            }
+        };
+        try {
+            const all = this.channelManager?.getAllChannels?.();
+            if (Array.isArray(all)) {
+                for (const ch of all) {
+                    if (!ch) continue;
+                    if (ch.type === 'dm') {
+                        // DMs never hit the resend path — only live messages
+                        // populate the preview. Subscribe so the row patches
+                        // when a message arrives, but do NOT mark resolved
+                        // (would cause a render-signature flip on the next
+                        // render). The slot stays as a spinner placeholder
+                        // until the first message lands.
+                        if (!this._previewSubs.has(ch.streamId)) {
+                            const unsub = channelLatestMessageManager.subscribe(ch.streamId, () => {
+                                this._refreshSinglePreview(ch.streamId);
+                            });
+                            this._previewSubs.set(ch.streamId, unsub);
+                        }
+                        continue;
+                    }
+                    subscribe(ch.streamId, ch.password);
+                }
+            }
+        } catch {
+            // Defensive: tests may inject minimal mocks
+        }
+        return () => {
+            for (const u of this._previewSubs.values()) { try { u(); } catch {} }
+            this._previewSubs?.clear();
+        };
+    }
+
+    /**
+     * @private — patch the second row of a single channel item in place.
+     */
+    _refreshSinglePreview(streamId) {
+        if (!this.elements?.channelList) return;
+        const row = this.elements.channelList.querySelector(`.channel-item[data-stream-id="${CSS.escape(streamId)}"]`);
+        if (!row) return;
+        const slot = row.querySelector('.channel-preview-slot');
+        if (!slot) return;
+        const entry = channelLatestMessageManager.getCached(streamId);
+        const channelType = this.channelManager?.getChannel?.(streamId)?.type || null;
+        slot.innerHTML = this._renderPreviewSlotInner(streamId, entry, channelType);
+        // Bump signature so reconcile doesn't replace this row
+        const sig = row.dataset.renderSignature;
+        if (sig) {
+            try {
+                const arr = JSON.parse(sig);
+                arr[8] = this._previewSignature(entry);
+                row.dataset.renderSignature = JSON.stringify(arr);
+            } catch {}
+        }
+    }
+
+    /** @private */
+    _previewSignature(entry) {
+        if (!entry) return '';
+        // id+type+ts is enough to detect updates
+        return `${entry.type}:${entry.id || ''}:${entry.ts || 0}:${entry.action || ''}:${entry.emoji || ''}`;
+    }
+
+    /** @private */
+    _renderPreviewSlotInner(streamId, entry, channelType = null) {
+        if (entry) {
+            // DMs only have two participants \u2014 the sender prefix is
+            // redundant and adds visual noise. Drop it for DM rows.
+            const omitSender = channelType === 'dm';
+            // `.channel-preview-line` controls color / truncation /
+            // wrapping uniformly. Sender, separator, address, ENS and
+            // nickname all inherit the same muted gray.
+            return `<span class="channel-preview-line block">${formatPreviewLine(entry, { omitSender })}</span>`;
+        }
+        // Unresolved — show a small spinner placeholder for both regular
+        // channels (waiting on resend) and DMs (waiting on first live msg).
+        if (!this._resolvedPreviews.has(streamId)) {
+            return `<span class="inline-flex items-center"><span class="thumb-spinner" style="width:10px;height:10px"></span></span>`;
+        }
+        return '';
+    }
+
+    /**
      * Kick off ENS avatar resolution for any DM rows whose peer avatar is
      * not yet cached. Resolution is deduped & cached by identityManager;
      * once it lands, the next render() picks it up via the signature change.
@@ -179,6 +299,55 @@ class ChannelListUI {
                 this._resolvedDMPeers.add(peer);
             }
         }
+    }
+
+    /**
+     * Kick off ENS resolution for the senders of all cached preview
+     * entries that don't carry a payload `senderName` and haven't been
+     * resolved yet. identityManager.resolveENS dedupes inflight + caches
+     * 24h, so this is cheap to call on every render. When ENS lands the
+     * row's `_refreshSinglePreview` re-renders via the existing
+     * subscribe() hook (we manually trigger after the resolve settles).
+     * @private
+     */
+    _resolvePreviewSenders() {
+        const seen = new Set();
+        // Collect addresses from every cached preview entry.
+        try {
+            const all = this.channelManager?.getAllChannels?.() || [];
+            for (const ch of all) {
+                if (!ch?.streamId) continue;
+                const entry = channelLatestMessageManager.getCached(ch.streamId);
+                if (!entry || !entry.sender) continue;
+                if (entry.senderName) continue; // payload already wins
+                const addr = entry.sender;
+                const normalizedAddr = typeof addr === 'string' ? addr.toLowerCase() : addr;
+                if (seen.has(normalizedAddr)) continue;
+                seen.add(normalizedAddr);
+                // Skip only positive cache hits. Null / startup misses must
+                // stay retryable so previews recover once identity init or a
+                // provider comes back.
+                const cached = normalizedAddr ? identityManager.ensCache?.get(normalizedAddr) : null;
+                if (cached && cached.name) continue;
+                identityManager.resolveENS?.(addr)
+                    ?.then(name => {
+                        if (!name) return;
+                        // Refresh every row whose sender matches.
+                        try {
+                            const list = this.channelManager?.getAllChannels?.() || [];
+                            for (const c of list) {
+                                if (!c?.streamId) continue;
+                                const e = channelLatestMessageManager.getCached(c.streamId);
+                                const sender = typeof e?.sender === 'string' ? e.sender.toLowerCase() : e?.sender;
+                                if (sender === normalizedAddr) {
+                                    this._refreshSinglePreview(c.streamId);
+                                }
+                            }
+                        } catch {}
+                    })
+                    ?.catch(() => {});
+            }
+        } catch {}
     }
 
     /**
@@ -242,12 +411,20 @@ class ChannelListUI {
 
         // Refresh per-channel image listeners (idempotent for unchanged set)
         this._channelImageGlobalUnsub = this._subscribeAllImages();
+        // Same for the latest-message preview line.
+        this._channelPreviewGlobalUnsub = this._subscribeAllPreviews();
 
         // Lazy-resolve ENS avatars for DM peers (off-chain HTTP).
         // resolveENSAvatar dedups in-flight lookups; once resolved it
         // caches in localStorage, so the next render sees it via
         // getCachedENSAvatar and the row signature changes → re-render.
         this._resolveDMAvatars(channelViewModels);
+
+        // Lazy-resolve ENS for the senders of cached preview entries
+        // that don't carry a payload `senderName`. Same pattern as
+        // `OnlineUsersUI` / `_resolveDMAvatars` — fire-and-forget,
+        // dedupe in identityManager, refresh on settle.
+        this._resolvePreviewSenders();
 
         // Attach delegated event listeners once
         this._attachClickListeners();
@@ -324,7 +501,9 @@ class ChannelListUI {
             peerAddress: channel.peerAddress || null,
             peerEnsAvatar: channel.peerAddress
                 ? (identityManager.getCachedENSAvatar?.(channel.peerAddress) || null)
-                : null
+                : null,
+            // Latest-message preview entry (may be null while loading)
+            previewEntry: channelLatestMessageManager.getCached(channel.streamId)
         };
     }
 
@@ -388,6 +567,11 @@ class ChannelListUI {
         const isResolved = channelViewModel.type === 'dm'
             ? (!!channelViewModel.peerEnsAvatar || (channelViewModel.peerAddress ? this._resolvedDMPeers.has(channelViewModel.peerAddress) : true))
             : (!!channelViewModel.imageHash || (channelViewModel.adminStreamId ? this._resolvedImages.has(channelViewModel.adminStreamId) : true));
+        // Preview-resolved is uniform across channel types: the slot
+        // shows a spinner until either the resend (regular channels) or
+        // the first live message (DMs) settles the entry.
+        const previewResolved = !!channelViewModel.previewEntry
+            || this._resolvedPreviews.has(channelViewModel.streamId);
         return JSON.stringify([
             channelViewModel.name,
             channelViewModel.type,
@@ -396,7 +580,11 @@ class ChannelListUI {
             channelViewModel.imageHash || '',
             channelViewModel.peerEnsAvatar || '',
             channelViewModel.readOnly ? 1 : 0,
-            isResolved ? 1 : 0
+            isResolved ? 1 : 0,
+            // Index 8: preview signature (kept in sync by `_refreshSinglePreview`)
+            this._previewSignature(channelViewModel.previewEntry),
+            // Index 9: preview-resolved flag — drives spinner placeholder.
+            previewResolved ? 1 : 0
         ]);
     }
 
@@ -413,34 +601,15 @@ class ChannelListUI {
     }
 
     /**
-     * Render type-indicator icons that appear after the channel name in
-     * the sidebar. Mirrors the iconography used in the chat header
-     * (HeaderUI.getChannelTypeLabel) for visual consistency.
-     *
-     * Mapping:
-     *   - dm                                          → envelope
-     *   - native                                      → ethereum diamond
-     *   - public  many-to-many  (readOnly = false)    → eye
-     *   - public  one-to-many   (readOnly = true)     → megaphone
-     *   - password many-to-many (readOnly = false)    → lock
-     *   - password one-to-many  (readOnly = true)     → megaphone + lock
-     *
+     * Render the only permission indicator still shown in the sidebar:
+     * the read-only megaphone. All other type/permission icons were
+     * removed because the ChatHeader already exposes that metadata.
      * @private
      */
-    _renderChannelTypeIcons(type, readOnly = false) {
+    _renderReadOnlyIcon(readOnly = false) {
+        if (!readOnly) return '';
         const cls = 'w-3.5 h-3.5 text-white/40 flex-shrink-0';
-        const envelope = `<svg class="${cls}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>`;
-        const eye = `<svg class="${cls}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>`;
-        const lock = `<svg class="${cls}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>`;
-        const megaphone = `<svg class="${cls}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"/></svg>`;
-        const ethereum = `<svg class="${cls}" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1.5l-8 13.5 8 4.5 8-4.5-8-13.5zm0 18l-8-4.5 8 9 8-9-8 4.5z"/></svg>`;
-        switch (type) {
-            case 'dm': return envelope;
-            case 'native': return ethereum;
-            case 'password': return readOnly ? (megaphone + lock) : lock;
-            case 'public':   return readOnly ? megaphone : eye;
-            default: return '';
-        }
+        return `<svg class="${cls}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"/></svg>`;
     }
 
     /**
@@ -485,6 +654,7 @@ class ChannelListUI {
                 iconSlot = `<div class="rounded-full overflow-hidden" style="width:44px;height:44px">${getAvatarHtml(channelViewModel.streamId, 44, 0.5, null)}</div>`;
             }
         }
+        const readOnlyIcon = this._renderReadOnlyIcon(channelViewModel.readOnly);
 
         return `
             <div
@@ -498,16 +668,17 @@ class ChannelListUI {
                     <div class="channel-icon-slot flex-shrink-0 flex items-center justify-center" style="width:44px">
                         ${iconSlot}
                     </div>
-                    <!-- Channel name + type icons -->
+                    <!-- Two stacked rows: name + read-only icon | preview line -->
                     <div class="channel-item-main flex-1 min-w-0">
                         <div class="flex items-center min-w-0">
                             <h3 class="text-sm font-medium text-white/90 truncate">${escapeHtml(sanitizeText(channelViewModel.name))}</h3>
-                            <div class="channel-item-type-icons flex items-center flex-shrink-0">
-                                ${this._renderChannelTypeIcons(channelViewModel.type, channelViewModel.readOnly)}
-                            </div>
+                            ${readOnlyIcon ? `<div class="channel-item-readonly-icon flex items-center flex-shrink-0">${readOnlyIcon}</div>` : ''}
+                        </div>
+                        <div class="channel-preview-slot">
+                            ${this._renderPreviewSlotInner(channelViewModel.streamId, channelViewModel.previewEntry, channelViewModel.type)}
                         </div>
                     </div>
-                    <!-- Right side: drag handle + counter + arrow -->
+                    <!-- Right side: drag handle + counter (vertically centered between the 2 rows by the body's items-center) -->
                     <div class="channel-item-actions flex items-center flex-shrink-0">
                         <!-- Drag handle (6 dots) - visible on hover -->
                         <div class="drag-handle cursor-grab opacity-0 group-hover:opacity-100 transition-opacity text-white/20 hover:text-white/40" title="Drag to reorder">
@@ -524,9 +695,6 @@ class ChannelListUI {
                             ? `<span class="channel-msg-count text-[10px] ${countClass} rounded-md" data-channel-count="${escapeAttr(channelViewModel.streamId)}">${channelViewModel.displayCount}</span>` 
                             : `<span class="channel-msg-count text-[10px] text-white/30 bg-white/[0.04] rounded-md hidden" data-channel-count="${escapeAttr(channelViewModel.streamId)}">0</span>`
                         }
-                        <svg class="w-3.5 h-3.5 text-white/15 group-hover:text-white/30 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.25 4.5l7.5 7.5-7.5 7.5"></path>
-                        </svg>
                     </div>
                 </div>
             </div>

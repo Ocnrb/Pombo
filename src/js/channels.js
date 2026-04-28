@@ -23,6 +23,7 @@ import { StorageError } from './utils/errors.js';
 import { mediaController } from './media.js';
 import { adminStatePoller } from './adminStatePoller.js';
 import { channelImageManager } from './channelImageManager.js';
+import { channelLatestMessageManager } from './channelLatestMessageManager.js';
 
 class ChannelManager {
     constructor() {
@@ -1663,6 +1664,13 @@ class ChannelManager {
             }
         }
 
+        // Fire-and-forget: pull latest-message preview (-1/P0). Sidebar
+        // and Explore consume the cache via channelLatestMessageManager.
+        // Skipped for DMs (E2EE — handled exclusively from the local path).
+        if (channel && channel.type !== 'dm') {
+            channelLatestMessageManager.get(messageStreamId, { password: pwd }).catch(() => {});
+        }
+
         // Detect whether this stream supports dedicated control partition (P1)
         let hasControlPartition = true;
         try {
@@ -2239,7 +2247,14 @@ class ChannelManager {
                 messageId: data.messageId,
                 emoji: data.emoji,
                 user: reactionUser,
-                action: data.action || 'add'
+                senderName: data.senderName || null,
+                action: data.action || 'add',
+                // Propagate the reaction's own timestamp (set when published).
+                // Without this, _updateLatestPreview falls back to Date.now()
+                // and an OLD reaction replayed during history backfill would
+                // appear "newer" than the actual latest message and clobber
+                // it via the cache stale-guard.
+                timestamp: data.timestamp || null
             });
         } else if (data.type === 'member_update') {
             const channel = this.channels.get(streamId);
@@ -3109,6 +3124,7 @@ class ChannelManager {
                 action: action,
                 messageId: messageId,
                 emoji: emoji,
+                senderName: identityManager.getUsername?.() || null,
                 timestamp: Date.now()
             };
 
@@ -3391,12 +3407,86 @@ class ChannelManager {
      * @param {Object} data - Event data
      */
     notifyHandlers(event, data) {
+        // Side-effect: keep `channelLatestMessageManager` in sync so the
+        // sidebar/Explore preview reflects new content / edits / deletes
+        // without each UI subscribing to the channel itself.
+        try {
+            this._updateLatestPreview(event, data);
+        } catch (e) {
+            Logger.debug('latest preview update error:', e?.message);
+        }
+
         for (const handler of this.messageHandlers) {
             try {
                 handler(event, data);
             } catch (error) {
                 Logger.error('Handler error:', error);
             }
+        }
+    }
+
+    /**
+     * @private
+     * Update the latest-message preview cache from notifyHandlers events.
+     * - 'message'         → straight setFromLocal with the incoming payload.
+     * - 'reaction'        → synthesize a reaction-shape entry.
+     * - 'message_edited'  → re-feed the (now mutated) message from
+     *                       channel.messages so the cache picks up the new text.
+     * - 'message_deleted' → walk channel.messages backwards for the next
+     *                       visible (non-deleted, non-override) message and
+     *                       feed that; if none, clear the cache.
+     */
+    _updateLatestPreview(event, data) {
+        if (!data || !data.streamId) return;
+        const streamId = data.streamId;
+        const channel = this.channels.get(streamId);
+        if (!channel) return;
+
+        if (event === 'message' && data.message) {
+            channelLatestMessageManager.setFromLocal(streamId, data.message);
+            return;
+        }
+        if (event === 'reaction') {
+            // data: { streamId, messageId, emoji, user, action, senderName?, timestamp? }
+            // The reaction's real timestamp is required \u2014 without it an
+            // OLD reaction replayed during history backfill would appear
+            // "newer" than the actual latest message. Drop the event when
+            // it's missing rather than masking the bug with Date.now().
+            if (!data.timestamp) return;
+            channelLatestMessageManager.setFromLocal(streamId, {
+                type: 'reaction',
+                emoji: data.emoji,
+                action: data.action || 'add',
+                messageId: data.messageId,
+                sender: data.user,
+                senderName: data.senderName || null,
+                timestamp: data.timestamp
+            });
+            return;
+        }
+        if (event === 'message_edited' && data.targetId) {
+            const msg = (channel.messages || []).find(m => m.id === data.targetId);
+            if (msg) channelLatestMessageManager.setFromLocal(streamId, msg);
+            return;
+        }
+        if (event === 'message_deleted' && data.targetId) {
+            const cached = channelLatestMessageManager.getCached(streamId);
+            // Only react if the deleted message is currently the preview
+            if (!cached || cached.id !== data.targetId) return;
+            // Walk backwards for the next visible message
+            const list = channel.messages || [];
+            for (let i = list.length - 1; i >= 0; i--) {
+                const m = list[i];
+                if (!m) continue;
+                if (m._deleted) continue;
+                if (m.type === 'edit' || m.type === 'delete') continue;
+                if (m.type === 'text' || m.type === 'image' || m.type === 'video_announce' || m.type === 'reaction') {
+                    channelLatestMessageManager.setFromLocal(streamId, m);
+                    return;
+                }
+            }
+            // Nothing left → clear
+            channelLatestMessageManager.clear(streamId);
         }
     }
 

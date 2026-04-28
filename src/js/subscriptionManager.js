@@ -12,6 +12,7 @@
 
 import { streamrController, STREAM_CONFIG, deriveEphemeralId, deriveAdminId } from './streamr.js';
 import { channelManager } from './channels.js';
+import { channelLatestMessageManager } from './channelLatestMessageManager.js';
 import { adminStatePoller } from './adminStatePoller.js';
 import { secureStorage } from './secureStorage.js';
 import { authManager } from './auth.js';
@@ -859,19 +860,24 @@ class SubscriptionManager {
 
             let newCount = 0;
             let latestTime = currentActivity.lastMessageTime;
+            let latestPreviewCandidate = null;
 
             for (const msg of messages) {
-                if (!msg?.timestamp || msg.timestamp <= currentActivity.lastMessageTime) {
+                const msgTimestamp = Number(msg?.timestamp || msg?._timestamp || 0) || 0;
+                if (!msgTimestamp || msgTimestamp <= currentActivity.lastMessageTime) {
                     continue;
                 }
 
                 // Advance watermark for any newer observed item to avoid reprocessing loops.
-                if (msg.timestamp > latestTime) {
-                    latestTime = msg.timestamp;
+                if (msgTimestamp > latestTime) {
+                    latestTime = msgTimestamp;
                 }
 
                 if (isContentMessage(msg)) {
                     newCount++;
+                    if (!latestPreviewCandidate || msgTimestamp > (Number(latestPreviewCandidate.timestamp || latestPreviewCandidate._timestamp || 0) || 0)) {
+                        latestPreviewCandidate = msg;
+                    }
                 }
             }
 
@@ -885,6 +891,18 @@ class SubscriptionManager {
 
             // Notify handlers if new messages detected
             if (newCount > 0) {
+                if (latestPreviewCandidate) {
+                    channelLatestMessageManager.setFromLocal(messageStreamId, {
+                        ...latestPreviewCandidate,
+                        sender: latestPreviewCandidate.sender
+                            || latestPreviewCandidate.senderId
+                            || latestPreviewCandidate._publisherId
+                            || null,
+                        timestamp: latestPreviewCandidate.timestamp
+                            || latestPreviewCandidate._timestamp
+                            || latestTime
+                    });
+                }
                 Logger.debug('New activity detected:', messageStreamId, newCount, 'messages');
                 this.notifyActivityHandlers(messageStreamId, newActivity);
             }

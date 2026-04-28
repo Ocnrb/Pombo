@@ -142,7 +142,8 @@ export const CONFIG = {
         retryDelayMs: 2000,            // Delay between retries
         batchWindowMs: 100,            // Window to collect messages for batch verification
         batchMaxSize: 50,              // Maximum batch size before flushing
-        accessHeartbeatMs: 15000       // Interval for persisting channel access (lastAccess)
+        accessHeartbeatMs: 15000,      // Interval for persisting channel access (lastAccess)
+        latestMessageFetchLast: 10 // Latest-message preview window (P0 holds messages + reactions; need a margin to find a non-reaction entry)
     },
 
     // Identity & ENS
@@ -208,7 +209,7 @@ export const CONFIG = {
         ],
         tagBytes: 1,                   // K-anonymity tag size (256 possible tags)
         powDifficulty: 4,              // PoW leading zeros required
-        powMaxTimeMs: 30000,           // Max PoW computation time
+        powMaxTimeMs: 15000,           // Max PoW computation time
         powYieldInterval: 10000,       // Yield to UI every N iterations
         reRegistrationIntervalMs: 6 * 60 * 60 * 1000  // 6h token refresh
     },

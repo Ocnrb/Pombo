@@ -1664,8 +1664,9 @@ body {
     --channel-item-padding-bottom: 0.5rem;
     --channel-item-padding-left: 0.75rem;
     --channel-item-main-offset: 0.75rem;
-    --channel-item-type-offset: 0.75rem;
-    --channel-item-type-gap: 0.25rem;
+    /* Sidebar now shows only the read-only megaphone next to the name. */
+    --channel-item-readonly-offset: 0.75rem;
+    --channel-item-readonly-gap: 0.25rem;
     --channel-item-actions-offset: 0.5rem;
     --channel-item-actions-gap: 0.375rem;
     --channel-item-badge-padding-y: 0.125rem;
@@ -1690,9 +1691,9 @@ body {
     margin-left: var(--channel-item-main-offset);
 }
 
-#channel-list .channel-item-type-icons {
-    gap: var(--channel-item-type-gap);
-    margin-left: var(--channel-item-type-offset);
+#channel-list .channel-item-readonly-icon {
+    gap: var(--channel-item-readonly-gap);
+    margin-left: var(--channel-item-readonly-offset);
 }
 
 #channel-list .channel-item-actions {
@@ -1702,6 +1703,155 @@ body {
 
 #channel-list .channel-msg-count {
     padding: var(--channel-item-badge-padding-y) var(--channel-item-badge-padding-x);
+}
+
+#channel-list .channel-preview-slot {
+    margin-top: 0.25rem;
+    line-height: 1.2;
+}
+
+/* ===========================================
+   Latest-message preview line (sidebar + Explore)
+   Single source of typography + color so sender,
+   ENS, nicknames and addresses all render uniformly.
+   =========================================== */
+.channel-preview-line {
+    font-size: 0.75rem;        /* text-xs */
+    line-height: 1.25;
+    color: rgba(255, 255, 255, 0.50);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    word-break: break-word;
+}
+.channel-preview-line .preview-sep {
+    /* match sender color so address/ENS/nickname/colon are visually one unit */
+    color: inherit;
+}
+.channel-preview-line .preview-mute {
+    /* lighter media tags ([image] / [video] / "reacted with") */
+    color: rgba(255, 255, 255, 0.40);
+    font-style: normal;
+}
+
+/* Explore card variant: allow wrapping so users can scan more of
+   the message on mobile. Desktop keeps it concise (2 lines max). */
+.explore-preview-line {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    line-clamp: 2;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+@media (max-width: 767px) {
+    .explore-preview-line {
+        line-clamp: 3;
+        -webkit-line-clamp: 3;
+    }
+}
+
+/* Explore filter chips: keep the expand button out of the chip flow on
+   wider screens and stack it below on narrower widths so it never covers
+   the last visible chip. */
+.explore-category-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 0.5rem;
+}
+
+.explore-category-rail {
+    position: relative;
+    min-width: 0;
+}
+
+.explore-category-rail::before,
+.explore-category-rail::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1.5rem;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 160ms ease;
+    z-index: 1;
+}
+
+.explore-category-rail::before {
+    left: 0;
+    background: linear-gradient(to right, #0f0f12 0%, rgba(15, 15, 18, 0) 100%);
+}
+
+.explore-category-rail::after {
+    right: 0;
+    background: linear-gradient(to left, #0f0f12 0%, rgba(15, 15, 18, 0) 100%);
+}
+
+.explore-category-rail[data-overflow="true"][data-scroll-start="false"]::before,
+.explore-category-rail[data-overflow="true"][data-scroll-end="false"]::after {
+    opacity: 1;
+}
+
+.explore-category-chips {
+    min-width: 0;
+    align-content: flex-start;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    scroll-snap-type: x proximity;
+    touch-action: pan-x;
+    padding-bottom: 0.125rem;
+}
+
+.explore-category-chips::-webkit-scrollbar {
+    display: none;
+}
+
+.explore-category-chips[data-expanded="true"] {
+    flex-wrap: wrap;
+    overflow: visible;
+    scroll-snap-type: none;
+    padding-bottom: 0;
+}
+
+.explore-category-chips > button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    scroll-snap-align: start;
+}
+
+#explore-toggle-categories-btn {
+    position: static;
+    min-width: 2rem;
+    min-height: 1.625rem;
+    padding: 0 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.5rem;
+    background: rgba(255, 255, 255, 0.04);
+    flex-shrink: 0;
+    align-self: start;
+    justify-self: end;
+}
+
+@media (max-width: 479px) {
+    .explore-category-controls {
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 0.375rem;
+    }
+
+    #explore-toggle-categories-btn {
+        min-width: 1.75rem;
+        padding: 0 0.375rem;
+        justify-self: end;
+    }
 }
 
 /* ===========================================
@@ -1847,14 +1997,15 @@ body {
     /* Explore view */
     .explore-view {
         background-color: #000000 !important;
+            min-height: 0;
     }
 
-    /* Reserve scroll room under the floating pill nav so the last channel
-       card can fully clear the pill (bottom: 2rem + ~52px pill height + safe
-       area + small breathing gap). Without this, on tall viewports the last
-       item stays partially hidden even at max scroll. */
+        /* Reserve extra scroll room under the floating pill nav so the last
+           channel card can fully clear the pill on taller mobile viewports.
+           min-height: 0 keeps the inner list as the effective flex scroller. */
     body.explore-open #explore-channels-list {
-        padding-bottom: calc(7rem + env(safe-area-inset-bottom, 0px));
+            min-height: 0;
+              padding-bottom: calc(10rem + env(safe-area-inset-bottom, 0px));
     }
 
     /* Modal containers on mobile */

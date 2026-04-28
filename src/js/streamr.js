@@ -2203,6 +2203,121 @@ class StreamrController {
     }
 
     /**
+     * Resend the most-recent N entries from MESSAGE STREAM partition 0
+     * (content) for a "latest message preview" lookup.
+     *
+     * Returns entries newest-first. Entries are returned ONLY if they map to
+     * a renderable preview type:
+     *   - text
+     *   - image
+     *   - video_announce
+     *   - reaction 
+     *
+     *
+     * Each returned entry has the publisher injected as `_publisherId` so
+     * callers can attribute reactions (which carry no `sender` field).
+     *
+     * @param {string} messageStreamId - Message Stream ID (ends with -1)
+     * @param {Object} [options]
+     * @param {number} [options.last=CONFIG.channels.latestMessageFetchLast] - How many to fetch
+     * @param {string|null} [options.password=null]
+     * @returns {Promise<Array<Object>>} - Newest-first array of preview-eligible entries
+     */
+    async resendLatestContentMessages(messageStreamId, { last = null, password = null } = {}) {
+        if (!this.client) {
+            throw new Error('Streamr client not initialized');
+        }
+        if (!isMessageStream(messageStreamId)) {
+            Logger.warn('Invalid messageStreamId (should end with -1):', messageStreamId);
+        }
+
+        const fetchLast = Math.max(1, last || CONFIG.channels?.latestMessageFetchLast || 2);
+        const partition = STREAM_CONFIG.MESSAGE_STREAM.MESSAGES;
+        const entries = [];
+
+        try {
+            const resend = await this.client.resend(
+                { streamId: messageStreamId, partition },
+                { last: fetchLast }
+            );
+
+            const iterator = resend[Symbol.asyncIterator]();
+            let iteratorDone = false;
+
+            while (!iteratorDone) {
+                let message;
+                try {
+                    const result = await iterator.next();
+                    iteratorDone = result.done;
+                    if (iteratorDone) break;
+                    message = result.value;
+                } catch (iterError) {
+                    if (iterError.code === 'DECRYPT_ERROR' || iterError.message?.includes('encryption key')) {
+                        continue;
+                    }
+                    Logger.warn('resendLatestContentMessages iteration error:', iterError.message);
+                    continue;
+                }
+
+                try {
+                    let content = message.content || message;
+                    // Encrypted entries arrive as base64/JSON string when password channel
+                    if (typeof content === 'string') {
+                        if (!password) continue;
+                        try {
+                            content = await cryptoManager.decryptJSON(content, password);
+                        } catch {
+                            continue;
+                        }
+                    }
+                    if (!content || typeof content !== 'object') continue;
+                    const t = content.type;
+                    // Skip overrides for the preview path
+                    if (t === 'edit' || t === 'delete') continue;
+                    // Only accept known preview-renderable types
+                    if (t !== 'text' && t !== 'image' && t !== 'video_announce' && t !== 'reaction') {
+                        continue;
+                    }
+
+                    let publisherId = null;
+                    if (typeof message.getPublisherId === 'function') {
+                        publisherId = message.getPublisherId() || null;
+                    }
+                    let timestamp = null;
+                    if (typeof message.getTimestamp === 'function') {
+                        timestamp = message.getTimestamp();
+                    } else {
+                        timestamp = message.timestamp || content.timestamp || null;
+                    }
+
+                    entries.push({
+                        ...content,
+                        _publisherId: publisherId,
+                        _timestamp: timestamp
+                    });
+                } catch (e) {
+                    Logger.debug('resendLatestContentMessages entry processing error:', e.message);
+                    continue;
+                }
+            }
+        } catch (error) {
+            Logger.warn('resendLatestContentMessages error:', error.message);
+            return [];
+        }
+
+        // Resend yields oldest-first within the requested window — sort
+        // newest-first defensively before returning.
+        entries.sort((a, b) => (b._timestamp || 0) - (a._timestamp || 0));
+
+        Logger.debug('resendLatestContentMessages result:', {
+            messageStreamId: String(messageStreamId).slice(-30),
+            count: entries.length,
+            top: entries[0]?.type
+        });
+        return entries;
+    }
+
+    /**
      * Unsubscribe from a stream
      * @param {string} streamId - Stream ID
      */
@@ -2781,8 +2896,19 @@ class StreamrController {
                         const publisherId = typeof message.getPublisherId === 'function'
                             ? message.getPublisherId()
                             : message.publisherId;
+                        const messageTimestamp = typeof message.getTimestamp === 'function'
+                            ? message.getTimestamp()
+                            : message.timestamp;
                         if (publisherId) {
                             content.senderId = publisherId;
+                            if (!content.sender) content.sender = publisherId;
+                            content._publisherId = publisherId;
+                        }
+                        if (!content.timestamp && messageTimestamp) {
+                            content.timestamp = messageTimestamp;
+                        }
+                        if (messageTimestamp) {
+                            content._timestamp = messageTimestamp;
                         }
                     }
                     

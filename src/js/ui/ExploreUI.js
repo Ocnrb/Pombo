@@ -7,8 +7,11 @@ import { escapeHtml, escapeAttr } from './utils.js';
 import { sanitizeText } from './sanitizer.js';
 import { loadCurationManifest, applyCuration } from '../exploreCuration.js';
 import { channelImageManager } from '../channelImageManager.js';
+import { channelLatestMessageManager } from '../channelLatestMessageManager.js';
 import { deriveAdminId } from '../streamConstants.js';
 import { getAvatarHtml } from './AvatarGenerator.js';
+import { formatPreviewLine } from './channelPreviewFormatter.js';
+import { identityManager } from '../identity.js';
 
 class ExploreUI {
     constructor() {
@@ -19,6 +22,12 @@ class ExploreUI {
         
         // Cached channels
         this.cachedPublicChannels = null;
+        this._handleCategoryViewportChange = () => {
+            this.checkCategoriesOverflow();
+        };
+        this._handleCategoryRailScroll = () => {
+            this._syncCategoryCarouselHints();
+        };
         
         this.deps = {};
     }
@@ -37,9 +46,33 @@ class ExploreUI {
      * @returns {string} HTML template
      */
     getTemplate(nsfwEnabled = false) {
-        const nsfwChips = nsfwEnabled 
-            ? '<button type="button" data-category="nsfw" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">NSFW</button><button type="button" data-category="adult" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">Adult</button>' 
-            : '';
+        const chipClass = 'explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80';
+        const orderedCategoryChips = [
+            { category: '', label: 'All', active: true },
+            { category: 'general', label: 'General' },
+            { category: 'news', label: 'News' },
+            { category: 'crypto', label: 'Crypto' },
+            { category: 'finance', label: 'Finance' },
+            { category: 'politics', label: 'Politics' },
+            { category: 'science', label: 'Science' },
+            { category: 'gaming', label: 'Gaming' },
+            { category: 'sports', label: 'Sports' },
+            { category: 'health', label: 'Health' },
+            { category: 'tech', label: 'Tech & AI' },
+            { category: 'entertainment', label: 'Entertainment' },
+            { category: 'education', label: 'Education' },
+            { category: 'comedy', label: 'Comedy' },
+            ...(nsfwEnabled
+                ? [
+                    { category: 'nsfw', label: 'NSFW' },
+                    { category: 'adult', label: 'Adult' }
+                ]
+                : []),
+        ];
+        const categoryChips = orderedCategoryChips.map(chip => {
+            const classes = chip.active ? 'explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white text-black' : chipClass;
+            return `<button type="button" data-category="${chip.category}" class="${classes}">${chip.label}</button>`;
+        }).join('');
 
         return `
             <div class="explore-view flex flex-col h-full bg-[#0f0f12]">
@@ -81,29 +114,17 @@ class ExploreUI {
                     </div>
 
                     <!-- Category Chips (collapsible) -->
-                    <div class="relative">
-                        <div id="explore-category-chips" class="flex flex-wrap gap-1.5 overflow-hidden max-h-[26px] transition-all duration-200" data-expanded="false">
-                            <button type="button" data-category="" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white text-black">All</button>
-                            <button type="button" data-category="general" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">General</button>
-                            <button type="button" data-category="politics" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">Politics</button>
-                            <button type="button" data-category="news" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">News</button>
-                            <button type="button" data-category="tech" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">Tech & AI</button>
-                            <button type="button" data-category="crypto" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">Crypto</button>
-                            <button type="button" data-category="finance" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">Finance</button>
-                            <button type="button" data-category="science" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">Science</button>
-                            <button type="button" data-category="gaming" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">Gaming</button>
-                            <button type="button" data-category="entertainment" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">Entertainment</button>
-                            <button type="button" data-category="sports" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">Sports</button>
-                            <button type="button" data-category="health" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">Health</button>
-                            <button type="button" data-category="education" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">Education</button>
-                            <button type="button" data-category="comedy" class="explore-category-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80">Comedy</button>
-                            <button type="button" id="explore-private-chip" class="explore-private-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80 flex items-center gap-1">
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>
-                                Private
-                            </button>
-                            ${nsfwChips}
+                    <div class="explore-category-controls">
+                        <div class="explore-category-rail" data-overflow="false" data-scroll-start="true" data-scroll-end="true">
+                            <div id="explore-category-chips" class="explore-category-chips flex gap-1.5 transition-all duration-200" data-expanded="false">
+                                ${categoryChips}
+                                <button type="button" id="explore-private-chip" class="explore-private-chip px-2.5 py-1 rounded-md text-xs font-medium transition bg-white/5 text-white/60 hover:bg-white/10 hover:text-white/80 flex items-center gap-1">
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>
+                                    Private
+                                </button>
+                            </div>
                         </div>
-                        <button id="explore-toggle-categories-btn" type="button" class="hidden absolute right-0 top-0 h-[26px] px-2 items-center bg-gradient-to-l from-[#0f0f12] via-[#0f0f12] to-transparent pl-6 text-white/40 hover:text-white/60 transition">
+                        <button id="explore-toggle-categories-btn" type="button" aria-controls="explore-category-chips" aria-expanded="false" class="explore-toggle-categories-btn hidden items-center justify-center text-white/40 hover:text-white/60 transition">
                             <svg id="explore-toggle-categories-icon" class="w-4 h-4 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 9l-7 7-7-7"/>
                             </svg>
@@ -140,6 +161,10 @@ class ExploreUI {
         privateChip?.addEventListener('click', () => {
             const isActive = this.browseTypeFilter === 'password';
             this.browseTypeFilter = isActive ? 'public' : 'password';
+            if (!isActive) {
+                this.browseCategoryFilter = '';
+                this.updateCategoryChips();
+            }
             this.updatePrivateChip();
             this.filterChannels(searchInput?.value || '');
         });
@@ -157,6 +182,10 @@ class ExploreUI {
         document.getElementById('explore-toggle-categories-btn')?.addEventListener('click', () => {
             this.toggleCategoriesExpand();
         });
+        document.getElementById('explore-category-chips')?.addEventListener('scroll', this._handleCategoryRailScroll, { passive: true });
+
+        window.removeEventListener('resize', this._handleCategoryViewportChange);
+        window.addEventListener('resize', this._handleCategoryViewportChange);
         
         // Check if categories need expand button
         this.checkCategoriesOverflow();
@@ -194,6 +223,12 @@ class ExploreUI {
     async loadChannels() {
         const listEl = document.getElementById('explore-channels-list');
         if (!listEl) return;
+
+        // New Explore session: revalidate visible previews once even when
+        // a cached entry already exists, but avoid re-fetching again on
+        // every filter/search rerender within the same open view.
+        this._explorePreviewResolved = new Set();
+        this._explorePreviewRefreshStarted = new Set();
 
         listEl.innerHTML = `
             <div class="flex flex-col items-center justify-center py-12 text-white/40">
@@ -321,6 +356,25 @@ class ExploreUI {
                 ? `<p class="text-xs text-white/40 mt-1 line-clamp-2">${escapeHtml(sanitizeText(ch.description))}</p>` 
                 : '';
 
+            // Latest message preview (sidebar/Explore share the same source).
+            // Cached read first; lazy-fetch dispatched after innerHTML below.
+            if (!this._explorePreviewResolved) this._explorePreviewResolved = new Set();
+            const previewEntry = channelLatestMessageManager.getCached(ch.streamId);
+            // `.channel-preview-line.explore-preview-line` controls color
+            // (uniform muted gray) and wrapping (clamp 2 lines desktop /
+            // 3 lines mobile). Drop the explicit `truncate` class — the
+            // CSS rule handles overflow with multi-line clamping.
+            let previewLine;
+            if (previewEntry) {
+                previewLine = `<p class="channel-preview-line explore-preview-line mt-2" data-channel-preview="${escapeAttr(ch.streamId)}">${formatPreviewLine(previewEntry)}</p>`;
+            } else if (!this._explorePreviewResolved.has(ch.streamId)) {
+                previewLine = `<p class="channel-preview-line explore-preview-line mt-2" data-channel-preview="${escapeAttr(ch.streamId)}"><span class="thumb-spinner inline-block align-middle" style="width:10px;height:10px"></span></p>`;
+            } else {
+                // Resolved without a usable entry → leave the slot empty
+                // (avoids a permanent dead spinner on dormant channels).
+                previewLine = `<p class="channel-preview-line explore-preview-line mt-2" data-channel-preview="${escapeAttr(ch.streamId)}"></p>`;
+            }
+
             // Channel thumbnail: cached if available, else spinner placeholder
             // (or deterministic fallback once lookup has settled).
             // We always pass through the manager so the same fetch is
@@ -348,6 +402,7 @@ class ExploreUI {
                                 <h4 class="text-sm font-medium text-white/90 truncate">${escapeHtml(sanitizeText(ch.name || ch.displayName || 'Unknown'))}</h4>
                             </div>
                             ${description}
+                            ${previewLine}
                         </div>
                     </div>
                     <svg class="w-4 h-4 text-white/15 group-hover:text-white/30 flex-shrink-0 mt-0.5 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -392,6 +447,54 @@ class ExploreUI {
                 });
         }
 
+        // Lazy-fetch missing latest-message previews (sidebar shares cache).
+        // Public/password channels: -1/P0 is publicly readable, so this
+        // works even before joining. Encrypted (password) channels return
+        // entries we can't decrypt without the password and are silently
+        // skipped — the slot will fall back to "empty" once resolved.
+        // Also (re-)subscribe so a later re-emit (e.g. when ENS resolves
+        // for the sender) patches the slot in place.
+        if (this._explorePreviewSubs) {
+            for (const u of this._explorePreviewSubs.values()) { try { u(); } catch {} }
+        }
+        this._explorePreviewSubs = new Map();
+        if (!this._explorePreviewRefreshStarted) this._explorePreviewRefreshStarted = new Set();
+        for (const ch of channels) {
+            if (!ch.streamId) continue;
+            if (!this._explorePreviewSubs.has(ch.streamId)) {
+                const unsub = channelLatestMessageManager.subscribe(ch.streamId, (entry) => {
+                    const slot = listEl.querySelector(`[data-channel-preview="${CSS.escape(ch.streamId)}"]`);
+                    if (!slot) return;
+                    slot.innerHTML = entry ? formatPreviewLine(entry) : '';
+                    if (entry) this._resolveExplorePreviewSender(listEl, channels, entry);
+                });
+                this._explorePreviewSubs.set(ch.streamId, unsub);
+            }
+            if (this._explorePreviewRefreshStarted.has(ch.streamId)) continue;
+            this._explorePreviewRefreshStarted.add(ch.streamId);
+            channelLatestMessageManager.get(ch.streamId, { password: null })
+                .then(entry => {
+                    const slot = listEl.querySelector(`[data-channel-preview="${CSS.escape(ch.streamId)}"]`);
+                    if (slot) slot.innerHTML = entry ? formatPreviewLine(entry) : '';
+                    if (entry) this._resolveExplorePreviewSender(listEl, channels, entry);
+                })
+                .catch(() => {})
+                .finally(() => {
+                    this._explorePreviewResolved.add(ch.streamId);
+                    // If still showing spinner placeholder (no entry), clear it
+                    const slot = listEl.querySelector(`[data-channel-preview="${CSS.escape(ch.streamId)}"]`);
+                    if (slot && !channelLatestMessageManager.getCached(ch.streamId)) {
+                        slot.innerHTML = '';
+                    }
+                });
+        }
+
+        // Lazy-resolve ENS for the senders of cached/resolved preview
+        // entries that don't carry a payload `senderName`. Same pattern
+        // as `OnlineUsersUI`: dedupe in identityManager, refresh the
+        // matching slots when the lookup settles.
+        this._resolveExplorePreviewSenders(listEl, channels);
+
         // Add click listeners
         listEl.querySelectorAll('.explore-channel-item').forEach(item => {
             item.addEventListener('click', async () => {
@@ -415,6 +518,52 @@ class ExploreUI {
                 }
             });
         });
+    }
+
+    /**
+     * Lazy-resolve ENS for the senders of every preview entry rendered
+     * in the Explore list. Mirrors the pattern used by OnlineUsersUI /
+     * ChannelListUI: identityManager dedupes inflight lookups + caches
+     * 24h, so calling this on every render is cheap. When ENS lands we
+     * patch only the slots whose sender matches.
+     * @private
+     */
+    _resolveExplorePreviewSenders(listEl, channels) {
+        const runPass = () => {
+            for (const ch of channels) {
+                if (!ch?.streamId) continue;
+                const entry = channelLatestMessageManager.getCached(ch.streamId);
+                this._resolveExplorePreviewSender(listEl, channels, entry);
+            }
+        };
+        runPass();
+        // Retry once shortly after render so startup races between
+        // preview hydration and identityManager.init() still settle
+        // without requiring the user to navigate into the channel.
+        setTimeout(runPass, 1500);
+    }
+
+    /** @private */
+    _resolveExplorePreviewSender(listEl, channels, entry) {
+        if (!entry?.sender || entry.senderName) return;
+        const addr = entry.sender;
+        const normalizedAddr = typeof addr === 'string' ? addr.toLowerCase() : addr;
+        const cached = normalizedAddr ? identityManager.ensCache?.get(normalizedAddr) : null;
+        if (cached && cached.name) return;
+        identityManager.resolveENS?.(addr)
+            ?.then(name => {
+                if (!name) return;
+                for (const ch of channels) {
+                    if (!ch?.streamId) continue;
+                    const e = channelLatestMessageManager.getCached(ch.streamId);
+                    if (!e?.sender) continue;
+                    const sender = typeof e.sender === 'string' ? e.sender.toLowerCase() : e.sender;
+                    if (sender !== normalizedAddr) continue;
+                    const slot = listEl.querySelector(`[data-channel-preview="${CSS.escape(ch.streamId)}"]`);
+                    if (slot) slot.innerHTML = formatPreviewLine(e);
+                }
+            })
+            ?.catch(() => {});
     }
 
     /**
@@ -449,31 +598,72 @@ class ExploreUI {
         });
     }
 
+    /** @private */
+    _measureCollapsedCategoriesOverflow(container) {
+        if (!container) return false;
+        const wasExpanded = container.dataset.expanded === 'true';
+        if (wasExpanded) container.dataset.expanded = 'false';
+        const hasOverflow = container.scrollWidth > (container.clientWidth + 1);
+        if (wasExpanded) container.dataset.expanded = 'true';
+        return hasOverflow;
+    }
+
+    /** @private */
+    _syncCategoryCarouselHints() {
+        const rail = document.querySelector('.explore-category-rail');
+        const container = document.getElementById('explore-category-chips');
+
+        if (!rail || !container) return;
+
+        const isExpanded = container.dataset.expanded === 'true';
+        const hasOverflow = isExpanded
+            ? this._measureCollapsedCategoriesOverflow(container)
+            : container.scrollWidth > (container.clientWidth + 1);
+
+        if (isExpanded || !hasOverflow) {
+            rail.dataset.overflow = 'false';
+            rail.dataset.scrollStart = 'true';
+            rail.dataset.scrollEnd = 'true';
+            return;
+        }
+
+        const maxScrollLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+        const currentScrollLeft = Math.max(0, container.scrollLeft || 0);
+        const threshold = 2;
+
+        rail.dataset.overflow = 'true';
+        rail.dataset.scrollStart = currentScrollLeft <= threshold ? 'true' : 'false';
+        rail.dataset.scrollEnd = currentScrollLeft >= (maxScrollLeft - threshold) ? 'true' : 'false';
+    }
+
+    /** @private */
+    _setCategoriesExpanded(expanded) {
+        const container = document.getElementById('explore-category-chips');
+        const icon = document.getElementById('explore-toggle-categories-icon');
+        const btn = document.getElementById('explore-toggle-categories-btn');
+
+        if (!container) return;
+
+        container.dataset.expanded = expanded ? 'true' : 'false';
+        if (!expanded) {
+            container.scrollLeft = 0;
+        }
+        icon?.classList.toggle('rotate-180', !!expanded);
+        btn?.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        this._syncCategoryCarouselHints();
+    }
+
     /**
      * Toggle categories expand/collapse
      */
     toggleCategoriesExpand() {
         const container = document.getElementById('explore-category-chips');
-        const icon = document.getElementById('explore-toggle-categories-icon');
-        const btn = document.getElementById('explore-toggle-categories-btn');
         
         if (!container) return;
         
         const isExpanded = container.dataset.expanded === 'true';
-        
-        if (isExpanded) {
-            container.classList.add('max-h-[26px]');
-            container.classList.remove('max-h-[200px]');
-            container.dataset.expanded = 'false';
-            icon?.classList.remove('rotate-180');
-            btn?.classList.remove('bg-transparent');
-        } else {
-            container.classList.remove('max-h-[26px]');
-            container.classList.add('max-h-[200px]');
-            container.dataset.expanded = 'true';
-            icon?.classList.add('rotate-180');
-            btn?.classList.add('bg-transparent');
-        }
+
+        this._setCategoriesExpanded(!isExpanded);
     }
 
     /**
@@ -484,12 +674,14 @@ class ExploreUI {
         const btn = document.getElementById('explore-toggle-categories-btn');
         
         if (!container || !btn) return;
-        
-        // Check if content overflows (scrollHeight > clientHeight means overflow)
-        if (container.scrollHeight > container.clientHeight) {
+
+        const hasOverflow = this._measureCollapsedCategoriesOverflow(container);
+        if (hasOverflow) {
             btn.classList.remove('hidden');
             btn.classList.add('flex');
+            this._syncCategoryCarouselHints();
         } else {
+            this._setCategoriesExpanded(false);
             btn.classList.add('hidden');
             btn.classList.remove('flex');
         }
