@@ -307,7 +307,10 @@ body {
 
 .message-group-stack {
     flex: 1;
-    min-width: 0;
+    /* min-content (not 0) so the group's fit-content sizing respects the
+       intrinsic minimum width of bubbles. Otherwise the stack collapses
+       below "Hello world!" forcing premature wrapping on mobile. */
+    min-width: min-content;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
@@ -341,7 +344,18 @@ body {
 .message-bubble {
     padding: 0.20rem 0.7rem;
     position: relative;
-    min-width: 0;
+    /* Bubble must never shrink below its sender row width (badge + name).
+       Using min-content lets text still wrap, but the bubble grows to fit
+       the sender-row (which uses max-content below) so the name never
+       overflows the bubble outline. */
+    min-width: min-content;
+}
+
+/* Sender row imposes its natural width as a lower bound on the bubble.
+   Combined with .message-bubble { min-width: min-content }, this guarantees
+   bubbles are always at least as wide as the sender's name + verification badge. */
+.message-sender-row {
+    min-width: max-content;
 }
 
 /* ----- Bubble Tail ----- */
