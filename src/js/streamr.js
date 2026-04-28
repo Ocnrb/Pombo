@@ -2812,8 +2812,6 @@ class StreamrController {
             throw new Error('Client not initialized');
         }
         
-        const messages = [];
-        
         // Ephemeral message types that should NEVER be loaded from history
         const EPHEMERAL_TYPES = ['presence', 'typing'];
         
@@ -2839,17 +2837,21 @@ class StreamrController {
         try {
             Logger.debug(`Fetching ${count} older messages before ${new Date(beforeTimestamp).toISOString()}`);
             
-            // Streamr SDK resend with range: from epoch to beforeTimestamp
-            // We request more than needed to account for filtered messages
+            // Streamr SDK resend with range: from epoch to beforeTimestamp (inclusive).
+            // We use an INCLUSIVE upper bound and rely on caller-side dedup by msg.id to drop
+            // the boundary message we already loaded. Using `beforeTimestamp - 1` here would
+            // permanently skip any sibling messages that share the exact same millisecond
+            // timestamp as the boundary message but were dropped by the slice() below — a
+            // deterministic gap in the middle of the loaded history.
             const resend = await this.client.resend(
                 { streamId: messageStreamId, partition: partition },
                 {
                     from: { timestamp: 0 },
-                    to: { timestamp: beforeTimestamp - 1 } // -1 to exclude the boundary message
+                    to: { timestamp: beforeTimestamp }
                 }
             );
             
-            // Collect all messages in range, then take the last N
+            // Collect all messages in range; ordering is enforced explicitly after the loop.
             const allMessages = [];
             
             // Manual iteration to catch decrypt errors per-message
@@ -2937,14 +2939,26 @@ class StreamrController {
                 Logger.debug(`fetchOlderHistory: skipped ${decryptErrors} messages (decrypt error)`);
             }
             
-            // Take the last N messages (most recent before the timestamp)
+            // Sort by timestamp ASC explicitly. The Streamr SDK resend iterator order
+            // is not guaranteed (in practice, range queries can deliver newest-first),
+            // so we MUST NOT assume `allMessages` is already oldest-first. Without this
+            // sort, `slice(length - count)` would keep the wrong half of the range —
+            // dropping a deterministic block of messages in the middle of the history
+            // (the messages immediately below the cursor) while keeping the oldest ones.
+            const getTs = (m) => m._timestamp || m.timestamp || 0;
+            allMessages.sort((a, b) => getTs(a) - getTs(b));
+            
+            // Take the most recent N messages (largest timestamps still below cursor).
+            // These are the messages adjacent to the current view — the next page going back.
             const startIndex = Math.max(0, allMessages.length - count);
             const resultMessages = allMessages.slice(startIndex);
             
             // hasMore is true if there were more messages than we're returning
             const hasMore = allMessages.length > count;
             
-            Logger.info(`Loaded ${resultMessages.length} older messages (hasMore: ${hasMore})`);
+            // Caller (channels.loadMoreHistory) emits the canonical user-facing log with
+            // P0/P1 breakdown — keep this one at debug level to avoid duplicate noise.
+            Logger.debug(`fetchOlderHistory partition ${partition}: ${resultMessages.length} messages (hasMore: ${hasMore})`);
             
             return {
                 messages: resultMessages,
