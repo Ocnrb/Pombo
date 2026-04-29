@@ -1313,7 +1313,13 @@ describe('secureStorage', () => {
                     channels: [{ messageStreamId: 'ch1' }]
                 });
                 
-                expect(result).toBe(true);
+                expect(result).toEqual({
+                    hasChanges: true,
+                    channelsUpdated: true,
+                    contactsUpdated: false,
+                    blockedPeersUpdated: false,
+                    usernameUpdated: false
+                });
             });
 
             it('should return false when channels are not updated', async () => {
@@ -1323,7 +1329,13 @@ describe('secureStorage', () => {
                     username: 'test'
                 });
                 
-                expect(result).toBe(false);
+                expect(result).toEqual({
+                    hasChanges: true,
+                    channelsUpdated: false,
+                    contactsUpdated: false,
+                    blockedPeersUpdated: false,
+                    usernameUpdated: true
+                });
             });
 
             it('should only update provided fields', async () => {
@@ -1360,7 +1372,13 @@ describe('secureStorage', () => {
                     channels: [{ messageStreamId: 'same-ch' }]
                 });
 
-                expect(result).toBe(false);
+                expect(result).toEqual({
+                    hasChanges: false,
+                    channelsUpdated: false,
+                    contactsUpdated: false,
+                    blockedPeersUpdated: false,
+                    usernameUpdated: false
+                });
                 expect(saveSpy).not.toHaveBeenCalled();
             });
         });

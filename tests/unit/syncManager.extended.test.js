@@ -41,7 +41,13 @@ vi.mock('../../src/js/secureStorage.js', () => ({
             blockedPeers: [], dmLeftAt: {}, trustedContacts: {},
             ensCache: {}, username: null, graphApiKey: null
         }),
-        importFromSync: vi.fn().mockResolvedValue(false),
+        importFromSync: vi.fn().mockResolvedValue({
+            hasChanges: false,
+            channelsUpdated: false,
+            contactsUpdated: false,
+            blockedPeersUpdated: false,
+            usernameUpdated: false
+        }),
         getUnsyncedImages: vi.fn().mockReturnValue({ [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }) }),
         decryptBlob: vi.fn().mockResolvedValue('base64data'),
         markImageSynced: vi.fn().mockResolvedValue(undefined),
@@ -68,11 +74,17 @@ vi.mock('../../src/js/dmCrypto.js', () => ({
 }));
 
 vi.mock('../../src/js/channels.js', () => ({
-    channelManager: { loadChannels: vi.fn() }
+    channelManager: {
+        reloadChannelsFromSync: vi.fn().mockReturnValue({
+            currentChannelRemoved: false,
+            totalChannels: 0
+        })
+    }
 }));
 
 vi.mock('../../src/js/identity.js', () => ({
     identityManager: {
+        loadTrustedContacts: vi.fn(),
         loadUsername: vi.fn()
     }
 }));

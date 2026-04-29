@@ -262,11 +262,11 @@ describe('IdentityManager', () => {
                 expect(identityManager.trustedContacts.has('0xabcdef')).toBe(true);
             });
             
-            it('should generate default nickname', async () => {
+            it('should store null nickname when none is provided', async () => {
                 await identityManager.addTrustedContact('0x123456789');
                 
                 const contact = identityManager.trustedContacts.get('0x123456789');
-                expect(contact.nickname).toBe('Contact 0x123456');
+                expect(contact.nickname).toBe(null);
             });
             
             it('should record addedAt timestamp', async () => {
@@ -312,6 +312,35 @@ describe('IdentityManager', () => {
                 
                 await identityManager.removeTrustedContact('0xSAVE2');
                 expect(secureStorage.setTrustedContacts).toHaveBeenCalled();
+            });
+        });
+
+        describe('updateTrustedContact()', () => {
+            it('should update an existing nickname', async () => {
+                await identityManager.addTrustedContact('0xEDIT', 'Before');
+
+                await identityManager.updateTrustedContact('0xEDIT', 'After');
+
+                expect(identityManager.getTrustedContact('0xedit')?.nickname).toBe('After');
+            });
+
+            it('should clear nickname when edited to empty', async () => {
+                await identityManager.addTrustedContact('0xEDIT2', 'Before');
+
+                await identityManager.updateTrustedContact('0xEDIT2', '   ');
+
+                expect(identityManager.getTrustedContact('0xedit2')?.nickname).toBe(null);
+            });
+
+            it('should preserve addedAt and update updatedAt', async () => {
+                await identityManager.addTrustedContact('0xEDIT3', 'Before');
+                const before = identityManager.getTrustedContact('0xedit3');
+
+                await identityManager.updateTrustedContact('0xEDIT3', 'After');
+
+                const after = identityManager.getTrustedContact('0xedit3');
+                expect(after.addedAt).toBe(before.addedAt);
+                expect(after.updatedAt).toBeGreaterThanOrEqual(before.updatedAt);
             });
         });
 
@@ -383,8 +412,8 @@ describe('IdentityManager', () => {
     describe('loadTrustedContacts()', () => {
         it('should load contacts from storage', () => {
             secureStorage.getTrustedContacts.mockReturnValue({
-                '0xaddr1': { nickname: 'One', addedAt: 1000 },
-                '0xaddr2': { nickname: 'Two', addedAt: 2000 }
+                '0xaddr1': { address: '0xaddr1', nickname: 'One', addedAt: 1000 },
+                '0xaddr2': { address: '0xaddr2', nickname: 'Two', addedAt: 2000 }
             });
             
             identityManager.loadTrustedContacts();
@@ -519,14 +548,26 @@ describe('IdentityManager', () => {
     describe('saveUsername()', () => {
         it('should save username to storage', async () => {
             identityManager.username = 'NewUser';
-            await identityManager.saveUsername();
+            const result = await identityManager.saveUsername();
             expect(secureStorage.setUsername).toHaveBeenCalledWith('NewUser');
+            expect(result).toBe(true);
         });
         
         it('should not save if storage is locked', async () => {
             secureStorage.isStorageUnlocked.mockReturnValue(false);
             identityManager.username = 'Locked';
-            await identityManager.saveUsername();
+            const result = await identityManager.saveUsername();
+            expect(secureStorage.setUsername).not.toHaveBeenCalled();
+            expect(result).toBe(false);
+        });
+
+        it('should still update in-memory username when setUsername is called while locked', async () => {
+            secureStorage.isStorageUnlocked.mockReturnValue(false);
+
+            const result = await identityManager.setUsername('LockedName');
+
+            expect(identityManager.username).toBe('LockedName');
+            expect(result).toBe(false);
             expect(secureStorage.setUsername).not.toHaveBeenCalled();
         });
     });
@@ -582,7 +623,7 @@ describe('IdentityManager', () => {
         it('should load username and contacts on init', async () => {
             secureStorage.getUsername.mockReturnValue('InitUser');
             secureStorage.getTrustedContacts.mockReturnValue({
-                '0xinit': { nickname: 'Init' }
+                '0xinit': { address: '0xinit', nickname: 'Init' }
             });
             
             await identityManager.init();

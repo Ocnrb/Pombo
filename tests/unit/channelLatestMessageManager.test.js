@@ -26,7 +26,7 @@ describe('channelLatestMessageManager', () => {
         resendMock.mockReset();
     });
 
-    it('setFromLocal stores text entries with sender lowercased', () => {
+    it('setFromLocal preserves sender casing for display fallbacks', () => {
         const entry = channelLatestMessageManager.setFromLocal(sid, {
             type: 'text',
             id: 'm1',
@@ -34,7 +34,7 @@ describe('channelLatestMessageManager', () => {
             sender: '0xABCDEF',
             timestamp: 1000
         });
-        expect(entry).toMatchObject({ type: 'text', text: 'Hello', sender: '0xabcdef', id: 'm1' });
+        expect(entry).toMatchObject({ type: 'text', text: 'Hello', sender: '0xABCDEF', id: 'm1' });
         expect(channelLatestMessageManager.getCached(sid)).toEqual(entry);
     });
 
@@ -80,7 +80,7 @@ describe('channelLatestMessageManager', () => {
         const entry = channelLatestMessageManager.setFromLocal(sid, {
             type: 'reaction', emoji: '👍', messageId: 'mX', sender: '0xA', timestamp: 5
         });
-        expect(entry).toMatchObject({ type: 'reaction', emoji: '👍', action: 'add', targetId: 'mX', sender: '0xa' });
+        expect(entry).toMatchObject({ type: 'reaction', emoji: '👍', action: 'add', targetId: 'mX', sender: '0xA' });
     });
 
     it('setFromLocal drops reaction removals (never reach the preview)', () => {
@@ -127,7 +127,7 @@ describe('channelLatestMessageManager', () => {
             }
         ]);
         const entry = await channelLatestMessageManager.get(sid);
-        expect(entry).toMatchObject({ type: 'reaction', emoji: '🔥', sender: '0xpub', targetId: 'm1' });
+        expect(entry).toMatchObject({ type: 'reaction', emoji: '🔥', sender: '0xPUB', targetId: 'm1' });
     });
 
     it('get() prefers a non-reaction entry over a newer reaction in the same window', async () => {

@@ -245,6 +245,91 @@ describe('ChannelManager', () => {
         });
     });
 
+    describe('reloadChannelsFromSync()', () => {
+        it('should replace stale channels and preserve runtime state for survivors', () => {
+            secureStorage.isStorageUnlocked.mockReturnValue(true);
+
+            channelManager.channels.set('stream1', {
+                messageStreamId: 'stream1',
+                streamId: 'stream1',
+                name: 'Old Name',
+                type: 'public',
+                messages: [{ id: 'm1' }],
+                reactions: { m1: { like: ['0x1'] } },
+                historyLoaded: true,
+                hasMoreHistory: false,
+                loadingHistory: true,
+                oldestTimestamp: 123,
+                adminState: { bannedMembers: ['0xban'], hiddenMessageIds: ['x'], pins: ['p1'] },
+                adminRev: 4,
+                adminLoaded: true,
+                adminTs: 999,
+                initialLoadInProgress: true,
+                _publishPermCache: { canPublish: false, timestamp: 1 }
+            });
+            channelManager.channels.set('stale-stream', {
+                messageStreamId: 'stale-stream',
+                streamId: 'stale-stream',
+                name: 'Stale'
+            });
+            channelManager.currentChannel = 'stream1';
+
+            secureStorage.getChannels.mockReturnValue([
+                { messageStreamId: 'stream1', name: 'Fresh Name', type: 'public' },
+                { messageStreamId: 'stream2', name: 'Brand New', type: 'native' }
+            ]);
+
+            const result = channelManager.reloadChannelsFromSync();
+
+            expect(result).toEqual({ currentChannelRemoved: false, totalChannels: 2 });
+            expect(channelManager.channels.has('stale-stream')).toBe(false);
+
+            const surviving = channelManager.channels.get('stream1');
+            expect(surviving.name).toBe('Fresh Name');
+            expect(surviving.messages).toEqual([{ id: 'm1' }]);
+            expect(surviving.reactions).toEqual({ m1: { like: ['0x1'] } });
+            expect(surviving.historyLoaded).toBe(true);
+            expect(surviving.hasMoreHistory).toBe(false);
+            expect(surviving.loadingHistory).toBe(true);
+            expect(surviving.oldestTimestamp).toBe(123);
+            expect(surviving.adminState).toEqual({ bannedMembers: ['0xban'], hiddenMessageIds: ['x'], pins: ['p1'] });
+            expect(surviving.adminRev).toBe(4);
+            expect(surviving.adminLoaded).toBe(true);
+            expect(surviving.adminTs).toBe(999);
+            expect(surviving.initialLoadInProgress).toBe(true);
+            expect(surviving._publishPermCache).toEqual({ canPublish: false, timestamp: 1 });
+
+            const newcomer = channelManager.channels.get('stream2');
+            expect(newcomer.messages).toEqual([]);
+            expect(newcomer.reactions).toEqual({});
+            expect(newcomer.historyLoaded).toBe(false);
+            expect(newcomer.adminLoaded).toBe(false);
+            expect(newcomer.streamId).toBe('stream2');
+        });
+
+        it('should clear the current channel when sync removes it', () => {
+            secureStorage.isStorageUnlocked.mockReturnValue(true);
+
+            channelManager.channels.set('removed-stream', {
+                messageStreamId: 'removed-stream',
+                streamId: 'removed-stream',
+                name: 'Removed'
+            });
+            channelManager.currentChannel = 'removed-stream';
+
+            secureStorage.getChannels.mockReturnValue([
+                { messageStreamId: 'remaining-stream', name: 'Remaining', type: 'public' }
+            ]);
+
+            const result = channelManager.reloadChannelsFromSync();
+
+            expect(result).toEqual({ currentChannelRemoved: true, totalChannels: 1 });
+            expect(channelManager.currentChannel).toBeNull();
+            expect(channelManager.channels.has('removed-stream')).toBe(false);
+            expect(channelManager.channels.has('remaining-stream')).toBe(true);
+        });
+    });
+
     describe('clearChannels()', () => {
         it('should clear all channels', () => {
             channelManager.channels.set('stream1', { name: 'Channel 1' });

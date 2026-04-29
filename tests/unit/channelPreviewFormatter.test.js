@@ -7,7 +7,7 @@ vi.mock('../../src/js/auth.js', () => ({
 vi.mock('../../src/js/identity.js', () => ({
     identityManager: {
         ensCache: new Map(),
-        getCachedDisplayName: vi.fn((addr) => addr ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : '')
+        getTrustedContact: vi.fn(() => null)
     }
 }));
 
@@ -27,6 +27,7 @@ describe('channelPreviewFormatter', () => {
     beforeEach(() => {
         authManager.getAddress.mockReturnValue(null);
         identityManager.ensCache.clear();
+        identityManager.getTrustedContact.mockReturnValue(null);
     });
 
     it('renders text bodies with HTML escaped', () => {
@@ -61,15 +62,15 @@ describe('channelPreviewFormatter', () => {
         expect(formatPreviewSender('0xmyaddress')).toBe('You');
     });
 
-    it('renders cached display name for non-self', () => {
-        identityManager.getCachedDisplayName.mockReturnValueOnce('alice.eth');
-        expect(formatPreviewSender('0xOther')).toBe('alice.eth');
+    it('renders trusted contact nickname for non-self', () => {
+        identityManager.getTrustedContact.mockReturnValueOnce({ nickname: 'Alice' });
+        expect(formatPreviewSender('0xOther')).toBe('Alice');
     });
 
-    it('prefers user-set senderName over the cached display name', () => {
-        // senderName from message payload wins; identity lookup never happens
+    it('prefers user-set senderName over the trusted contact nickname', () => {
+        // senderName from message payload wins; contact lookup never happens.
         expect(formatPreviewSender('0xOther', 'Alice')).toBe('Alice');
-        expect(identityManager.getCachedDisplayName).not.toHaveBeenCalled();
+        expect(identityManager.getTrustedContact).not.toHaveBeenCalled();
     });
 
     it('prefers ENS over senderName (ENS is verified, senderName is self-declared)', () => {
@@ -77,9 +78,8 @@ describe('channelPreviewFormatter', () => {
         expect(formatPreviewSender('0xOther', 'Alice')).toBe('alice.eth');
     });
 
-    it('falls back to cached display name when senderName is empty', () => {
-        identityManager.getCachedDisplayName.mockReturnValueOnce('alice.eth');
-        expect(formatPreviewSender('0xOther', '   ')).toBe('alice.eth');
+    it('falls back to a prefix-only address and preserves casing when senderName is empty', () => {
+        expect(formatPreviewSender('0xDDbb421e', '   ')).toBe('0xDDbb...');
     });
 
     it('still returns "You" for self even if senderName is provided', () => {
@@ -92,16 +92,14 @@ describe('channelPreviewFormatter', () => {
     });
 
     it('combines sender + body in the preview line', () => {
-        identityManager.getCachedDisplayName.mockReturnValueOnce('0xabc…');
         const html = formatPreviewLine({
-            type: 'text', text: 'hi', sender: '0xabc'
+            type: 'text', text: 'hi', sender: '0xABcd421e'
         });
         expect(html).toContain('hi');
-        expect(html).toContain('0xabc');
+        expect(html).toContain('0xABcd...');
     });
 
     it('omits the sender prefix when omitSender is set (DM rows)', () => {
-        identityManager.getCachedDisplayName.mockReturnValue('alice.eth');
         const html = formatPreviewLine({
             type: 'text', text: 'hi', sender: '0xother'
         }, { omitSender: true });

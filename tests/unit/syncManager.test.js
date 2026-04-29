@@ -72,7 +72,13 @@ vi.mock('../../src/js/secureStorage.js', () => ({
             username: null,
             graphApiKey: null
         }),
-        importFromSync: vi.fn().mockResolvedValue(false),
+        importFromSync: vi.fn().mockResolvedValue({
+            hasChanges: false,
+            channelsUpdated: false,
+            contactsUpdated: false,
+            blockedPeersUpdated: false,
+            usernameUpdated: false
+        }),
         getUnsyncedImages: vi.fn().mockReturnValue({ [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }) }),
         decryptBlob: vi.fn().mockResolvedValue('base64data'),
         markImageSynced: vi.fn().mockResolvedValue(undefined),
@@ -100,12 +106,16 @@ vi.mock('../../src/js/dmCrypto.js', () => ({
 
 vi.mock('../../src/js/channels.js', () => ({
     channelManager: {
-        loadChannels: vi.fn()
+        reloadChannelsFromSync: vi.fn().mockReturnValue({
+            currentChannelRemoved: false,
+            totalChannels: 0
+        })
     }
 }));
 
 vi.mock('../../src/js/identity.js', () => ({
     identityManager: {
+        loadTrustedContacts: vi.fn(),
         loadUsername: vi.fn()
     }
 }));
@@ -341,7 +351,13 @@ describe('syncManager', () => {
             
             const syncPayload = { type: 'sync', v: 1, ts: 1000, data: { channels: ['ch1'] } };
             dmCrypto.decrypt.mockResolvedValue(syncPayload);
-            secureStorage.importFromSync.mockResolvedValue(true);
+            secureStorage.importFromSync.mockResolvedValue({
+                hasChanges: true,
+                channelsUpdated: true,
+                contactsUpdated: false,
+                blockedPeersUpdated: false,
+                usernameUpdated: false
+            });
             
             streamrController.fetchPartitionHistory.mockResolvedValue([
                 { content: { ct: 'enc' }, publisherId: '0xABC123', timestamp: 1000 }
@@ -349,7 +365,40 @@ describe('syncManager', () => {
             
             await syncManager.pullSync();
             
-            expect(channelManager.loadChannels).toHaveBeenCalled();
+            expect(channelManager.reloadChannelsFromSync).toHaveBeenCalled();
+        });
+
+        it('should expose currentChannelRemoved in sync_pulled changes', async () => {
+            authManager.wallet = { privateKey: '0x1234' };
+            authManager.getAddress.mockReturnValue('0xabc123');
+
+            const syncPayload = { type: 'sync', v: 1, ts: 1000, data: { channels: ['ch1'] } };
+            const handler = vi.fn();
+            dmCrypto.decrypt.mockResolvedValue(syncPayload);
+            secureStorage.importFromSync.mockResolvedValue({
+                hasChanges: true,
+                channelsUpdated: true,
+                contactsUpdated: false,
+                blockedPeersUpdated: false,
+                usernameUpdated: false
+            });
+            channelManager.reloadChannelsFromSync.mockReturnValue({
+                currentChannelRemoved: true,
+                totalChannels: 0
+            });
+
+            streamrController.fetchPartitionHistory.mockResolvedValue([
+                { content: { ct: 'enc' }, publisherId: '0xABC123', timestamp: 1000 }
+            ]);
+
+            syncManager.on('sync_pulled', handler);
+            await syncManager.pullSync();
+
+            expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+                changes: expect.objectContaining({
+                    currentChannelRemoved: true
+                })
+            }));
         });
 
         it('should reload username after sync', async () => {
@@ -358,7 +407,13 @@ describe('syncManager', () => {
             
             const syncPayload = { type: 'sync', v: 1, ts: 1000, data: { username: 'SyncedName' } };
             dmCrypto.decrypt.mockResolvedValue(syncPayload);
-            secureStorage.importFromSync.mockResolvedValue(false);
+            secureStorage.importFromSync.mockResolvedValue({
+                hasChanges: true,
+                channelsUpdated: false,
+                contactsUpdated: false,
+                blockedPeersUpdated: false,
+                usernameUpdated: true
+            });
             
             streamrController.fetchPartitionHistory.mockResolvedValue([
                 { content: { ct: 'enc' }, publisherId: '0xABC123', timestamp: 1000 }
@@ -367,6 +422,29 @@ describe('syncManager', () => {
             await syncManager.pullSync();
             
             expect(identityManager.loadUsername).toHaveBeenCalled();
+        });
+
+        it('should reload trusted contacts after sync', async () => {
+            authManager.wallet = { privateKey: '0x1234' };
+            authManager.getAddress.mockReturnValue('0xabc123');
+
+            const syncPayload = { type: 'sync', v: 1, ts: 1000, data: { trustedContacts: { '0xpeer': { address: '0xpeer' } } } };
+            dmCrypto.decrypt.mockResolvedValue(syncPayload);
+            secureStorage.importFromSync.mockResolvedValue({
+                hasChanges: true,
+                channelsUpdated: false,
+                contactsUpdated: true,
+                blockedPeersUpdated: false,
+                usernameUpdated: false
+            });
+
+            streamrController.fetchPartitionHistory.mockResolvedValue([
+                { content: { ct: 'enc' }, publisherId: '0xABC123', timestamp: 1000 }
+            ]);
+
+            await syncManager.pullSync();
+
+            expect(identityManager.loadTrustedContacts).toHaveBeenCalled();
         });
 
         it('should preserve an optimistic local channel snapshot when remote history is stale', async () => {
@@ -473,23 +551,22 @@ describe('syncManager', () => {
             expect(result.username).toBe('new');
         });
 
-        it('should keep base username if incoming is empty', () => {
+        it('should clear username if incoming latest snapshot removes it', () => {
             const base = { username: 'old' };
             const incoming = { username: null };
             
             const result = syncManager.mergeState(base, incoming);
             
-            expect(result.username).toBe('old');
+            expect(result.username).toBe(null);
         });
 
-        it('should merge trustedContacts', () => {
+        it('should use latest trustedContacts from incoming', () => {
             const base = { trustedContacts: { '0x1': { level: 1 } } };
             const incoming = { trustedContacts: { '0x2': { level: 2 } } };
             
             const result = syncManager.mergeState(base, incoming);
             
-            expect(result.trustedContacts['0x1']).toBeDefined();
-            expect(result.trustedContacts['0x2']).toBeDefined();
+            expect(result.trustedContacts).toEqual(incoming.trustedContacts);
         });
 
         it('should merge sentReactions with remote-wins strategy', () => {
