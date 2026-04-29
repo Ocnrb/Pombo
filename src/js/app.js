@@ -47,7 +47,14 @@ class App {
             
             // Wire cross-module callbacks (avoids circular dependencies and window globals)
             channelManager.onChannelsSaved = () => syncManager.scheduleAutoPush();
-            settingsUI.setDependencies({ connectWallet: () => walletFlows.connectWallet() });
+            identityManager.onTrustedContactsChanged = () => syncManager.scheduleAutoPush();
+            secureStorage.onBlockedPeersChanged = () => syncManager.scheduleAutoPush();
+            settingsUI.setDependencies({
+                connectWallet: () => walletFlows.connectWallet(),
+                onSyncTransportReconnected: () => this.pullSyncedStateAndBlobs().catch((error) => {
+                    Logger.debug('Sync: Auto-pull after reconnect failed (non-critical):', error.message);
+                })
+            });
 
             // Wire wallet flows with app-level callbacks
             walletFlows.init({
@@ -64,6 +71,12 @@ class App {
             });
             syncManager.on('sync_activity_success', ({ label }) => {
                 headerUI.flashGlobalSyncSuccess(label);
+            });
+            syncManager.on('sync_pulled', ({ changes }) => {
+                if (!changes) return;
+                this.applyPulledSyncChanges(changes).catch((error) => {
+                    Logger.error('Failed to reconcile UI after sync:', error);
+                });
             });
 
             // Set up wallet connection handlers
@@ -167,8 +180,6 @@ class App {
 
                 if (result.noInbox) {
                     uiController.showNotification('Create DM inbox first to enable sync', 'warning');
-                } else if (result.pulled) {
-                    uiController.renderChannelList();
                 }
             } catch (err) {
                 Logger.error('Sync failed:', err);
@@ -198,8 +209,51 @@ class App {
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'hidden') {
                 syncManager.scheduleAutoPush(5000);
+            } else if (document.visibilityState === 'visible') {
+                this.pullSyncedStateAndBlobs().catch((error) => {
+                    Logger.debug('Sync: Auto-pull on foreground failed (non-critical):', error.message);
+                });
             }
         });
+    }
+
+    /**
+     * Pull the latest sync snapshot and any pending image blobs.
+     * @returns {Promise<Object|null>}
+     */
+    async pullSyncedStateAndBlobs() {
+        const pullResult = await syncManager.pullSync();
+        if (pullResult !== null) {
+            try {
+                await syncManager.pullImageBlobs();
+            } catch (error) {
+                Logger.debug('Sync: Image blob pull failed (non-critical):', error.message);
+            }
+        }
+        return pullResult;
+    }
+
+    /**
+     * Apply UI changes after a sync pull has already updated runtime state.
+     * @param {Object} changes - Sync change summary
+     */
+    async applyPulledSyncChanges(changes) {
+        if (!changes) return;
+
+        if (changes.channelsUpdated || changes.contactsUpdated) {
+            uiController.renderChannelList();
+        }
+        if (changes.contactsUpdated) {
+            contactsUI.renderList();
+        }
+        if (changes.blockedPeersUpdated) {
+            settingsUI.renderBlockedPeersList();
+        }
+        if (changes.channelsUpdated) {
+            await uiController.reconcileConnectedStateAfterSync({
+                currentChannelRemoved: !!changes.currentChannelRemoved
+            });
+        }
     }
 
     /**
@@ -344,12 +398,10 @@ class App {
                     });
 
                     syncManager.runForegroundSync('Syncing your data', async () => {
-                        const pullResult = await syncManager.pullSync();
+                        const pullResult = await this.pullSyncedStateAndBlobs();
                         Logger.info('Sync: Initial pull complete');
 
                         if (pullResult !== null) {
-                            uiController.renderChannelList();
-
                             // Update header with synced username or ENS
                             const syncedUsername = identityManager.getUsername();
                             if (syncedUsername) {
@@ -366,14 +418,6 @@ class App {
                                     localStorage.setItem(CONFIG.storageKeys.ens(address), ensName);
                                 }
                             }).catch(() => {});
-                        }
-
-                        // Pull image blobs (partition 2) after state sync
-                        try {
-                            await syncManager.pullImageBlobs();
-                            Logger.info('Sync: Initial image blob pull complete');
-                        } catch (e) {
-                            Logger.debug('Sync: Image blob pull failed (non-critical):', e.message);
                         }
                     }).catch(e => {
                         Logger.debug('Sync: Initial pull failed (non-critical):', e.message);

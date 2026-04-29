@@ -7,15 +7,20 @@
  */
 
 import { modalManager } from './ModalManager.js';
-import { escapeHtml, escapeAttr } from './utils.js';
+import { dropdownManager } from './DropdownManager.js';
+import { escapeHtml, escapeAttr, formatAddress } from './utils.js';
 import { getAvatarHtml } from './AvatarGenerator.js';
 import { sanitizeText } from './sanitizer.js';
-import { identityManager } from '../identity.js';
 
 class ContactsUI {
     constructor() {
         this.deps = null;
         this.elements = null;
+        this.initialized = false;
+        this._pendingContactAddress = null;
+        this._pendingEditContactAddress = null;
+        this._pendingRemoveContactAddress = null;
+        this._onRemoveContactCallback = null;
     }
 
     /**
@@ -36,6 +41,8 @@ class ContactsUI {
      * Initialize contacts UI elements and listeners
      */
     init() {
+        this.elements ??= {};
+
         // Cache additional elements
         this.elements.contactsModal = document.getElementById('contacts-modal');
         this.elements.contactsList = document.getElementById('contacts-list');
@@ -43,6 +50,10 @@ class ContactsUI {
         this.elements.addContactAddress = document.getElementById('add-contact-address');
         this.elements.addContactNickname = document.getElementById('add-contact-nickname');
         this.elements.closeContactsBtn = document.getElementById('close-contacts-btn');
+
+        if (this.initialized) {
+            return;
+        }
 
         // Contacts modal listeners
         if (this.elements.addContactBtn) {
@@ -54,14 +65,26 @@ class ContactsUI {
 
         // Register onHide callback for back button and programmatic hide
         modalManager.registerOnHide('contacts-modal', () => this._cleanupOnHide());
+        this.initialized = true;
+    }
+
+    /**
+     * Ensure DOM elements are available before rendering
+     * @returns {boolean}
+     */
+    ensureElements() {
+        if (!this.elements || !this.elements.contactsList || !this.elements.contactsModal) {
+            this.init();
+        }
+        return Boolean(this.elements?.contactsList);
     }
 
     /**
      * Show contacts modal
      */
     show() {
-        if (!this.elements.contactsModal) {
-            this.init();
+        if (!this.ensureElements()) {
+            return;
         }
         this.renderList();
         // Add contacts-open class for mobile
@@ -123,7 +146,15 @@ class ContactsUI {
      * Render contacts list
      */
     renderList() {
+        if (!this.ensureElements()) {
+            return;
+        }
+
         const { identityManager } = this.deps;
+        if (!identityManager || !this.elements.contactsList) {
+            return;
+        }
+
         const contacts = identityManager.getAllTrustedContacts();
         
         if (contacts.length === 0) {
@@ -136,35 +167,46 @@ class ContactsUI {
         this.elements.contactsList.innerHTML = contacts.map(contact => {
             const avatarUrl = identityManager.getCachedENSAvatar(contact.address);
             const avatarHtml = getAvatarHtml(contact.address, 36, 0.5, avatarUrl);
-            // Defense-in-depth: sanitize user-provided nickname
+            const displayName = sanitizeText(contact.nickname) || formatAddress(contact.address);
+
             return `
                 <div class="flex items-center justify-between p-3 bg-white/[0.05] border border-white/[0.08] rounded-xl">
                     <div class="flex items-center gap-3 flex-1 min-w-0">
                         <div class="flex-shrink-0" style="width:36px;height:36px;border-radius:9999px;overflow:hidden;">${avatarHtml}</div>
                         <div class="flex-1 min-w-0">
-                            <span class="text-[13px] font-medium text-white truncate block">${escapeHtml(sanitizeText(contact.nickname))}</span>
+                            <span class="text-[13px] font-medium text-white truncate block">${escapeHtml(displayName)}</span>
                             <div class="text-[10px] text-white/30 font-mono truncate mt-0.5">${escapeHtml(contact.address)}</div>
                         </div>
                     </div>
                     <button 
-                        class="remove-contact-btn ml-2 text-white/25 hover:text-red-400 p-1.5 transition"
+                        class="contact-menu-btn ml-2 text-white/25 hover:text-white/70 hover:bg-white/5 p-1.5 rounded-lg transition"
                         data-address="${escapeAttr(contact.address)}"
-                        title="Remove contact"
+                        title="Contact options"
                     >
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12"/>
+                        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z"/>
                         </svg>
                     </button>
                 </div>
             `;
         }).join('');
 
-        // Add remove handlers
-        this.elements.contactsList.querySelectorAll('.remove-contact-btn').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
+        this.elements.contactsList.querySelectorAll('.contact-menu-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
                 const address = e.currentTarget.dataset.address;
-                this.showRemoveModal(address, () => {
-                    this.renderList();
+                const contact = identityManager.getTrustedContact(address);
+                if (!contact) return;
+
+                dropdownManager.showContactDropdown(e, e.currentTarget, contact, async (action) => {
+                    if (action === 'edit-contact') {
+                        this.showEditModal(contact.address);
+                        return;
+                    }
+
+                    if (action === 'remove-contact') {
+                        this.showRemoveModal(contact.address);
+                    }
                 });
             });
         });
@@ -208,6 +250,7 @@ class ContactsUI {
 
             await identityManager.addTrustedContact(address, nickname || null);
             this.renderList();
+            this.deps.renderChannelList?.();
             showNotification('Contact added!', 'success');
 
             // Clear inputs
@@ -253,8 +296,48 @@ class ContactsUI {
         if (!address) return;
         
         await identityManager.addTrustedContact(address, nickname);
+        this.renderList();
+        this.deps.renderChannelList?.();
         showNotification('Contact added!', 'success');
         this.hideAddModal();
+    }
+
+    /**
+     * Show edit contact modal
+     * @param {string} address - Contact address to edit
+     */
+    showEditModal(address) {
+        const contact = this.deps?.identityManager?.getTrustedContact(address);
+        if (!contact) return;
+
+        dropdownManager.closeContactDropdown();
+        modalManager.showEditContactModal(contact.address, contact.nickname || '');
+        this._pendingEditContactAddress = contact.address;
+    }
+
+    /**
+     * Hide edit contact modal
+     */
+    hideEditModal() {
+        modalManager.hideEditContactModal();
+        this._pendingEditContactAddress = null;
+    }
+
+    /**
+     * Confirm editing contact from modal
+     */
+    async confirmEdit() {
+        const { identityManager, showNotification } = this.deps;
+        const nicknameInput = document.getElementById('edit-contact-modal-nickname');
+        const address = this._pendingEditContactAddress || modalManager.getPendingData('editContactAddress');
+
+        if (!address) return;
+
+        await identityManager.updateTrustedContact(address, nicknameInput?.value ?? '');
+        this.renderList();
+        this.deps.renderChannelList?.();
+        showNotification('Contact updated', 'success');
+        this.hideEditModal();
     }
 
     /**
@@ -263,6 +346,7 @@ class ContactsUI {
      * @param {Function} onRemoveCallback - Optional callback after removal
      */
     showRemoveModal(address, onRemoveCallback = null) {
+        dropdownManager.closeContactDropdown();
         modalManager.showRemoveContactModal(address, onRemoveCallback);
         this._pendingRemoveContactAddress = address;
         this._onRemoveContactCallback = onRemoveCallback;
@@ -282,12 +366,14 @@ class ContactsUI {
      */
     async confirmRemove() {
         const { identityManager, showNotification } = this.deps;
-        const address = this._pendingRemoveContactAddress;
+        const address = this._pendingRemoveContactAddress || modalManager.getPendingData('removeContactAddress');
         const callback = this._onRemoveContactCallback;
         
         if (!address) return;
         
         await identityManager.removeTrustedContact(address);
+        this.renderList();
+        this.deps.renderChannelList?.();
         showNotification('Contact removed', 'info');
         this.hideRemoveModal();
         

@@ -21,6 +21,7 @@ class SecureStorage {
         this.isUnlocked = false;      // Whether storage is decrypted
         this.cache = null;            // Decrypted data cache
         this.isGuestMode = false;     // Guest mode - no persistence
+        this.onBlockedPeersChanged = null;
         this.PBKDF2_ITERATIONS = CONFIG.crypto.pbkdf2Iterations;
         // Encrypted state store (IndexedDB)
         this.stateDB = null;          // IDBDatabase for PomboStateStore
@@ -967,6 +968,7 @@ class SecureStorage {
         if (!this.cache.blockedPeers.includes(normalized)) {
             this.cache.blockedPeers.push(normalized);
             await this.saveToStorage();
+            this.onBlockedPeersChanged?.({ type: 'add', address: normalized });
         }
     }
 
@@ -982,6 +984,7 @@ class SecureStorage {
         if (idx >= 0) {
             this.cache.blockedPeers.splice(idx, 1);
             await this.saveToStorage();
+            this.onBlockedPeersChanged?.({ type: 'remove', address: normalized });
         }
     }
 
@@ -1481,7 +1484,7 @@ class SecureStorage {
      * Import merged state from sync.
      * Replaces local state with merged data from sync process.
      * @param {Object} data - Merged state from syncManager
-     * @returns {Promise<boolean>} - True if channels were updated (caller should reload UI)
+     * @returns {Promise<Object>} - Change summary for imported state slices
      */
     async importFromSync(data) {
         if (!this.isUnlocked || !this.cache) {
@@ -1489,44 +1492,52 @@ class SecureStorage {
         }
 
         const isEqual = (currentValue, nextValue) => JSON.stringify(currentValue) === JSON.stringify(nextValue);
-        let channelsUpdated = false;
-        let hasChanges = false;
+        const changes = {
+            hasChanges: false,
+            channelsUpdated: false,
+            contactsUpdated: false,
+            blockedPeersUpdated: false,
+            usernameUpdated: false
+        };
 
         if (data.sentMessages !== undefined && !isEqual(this.cache.sentMessages, data.sentMessages)) {
             this.cache.sentMessages = data.sentMessages;
-            hasChanges = true;
+            changes.hasChanges = true;
         }
         if (data.sentReactions !== undefined && !isEqual(this.cache.sentReactions, data.sentReactions)) {
             this.cache.sentReactions = data.sentReactions;
-            hasChanges = true;
+            changes.hasChanges = true;
         }
         if (data.channels !== undefined) {
             if (!isEqual(this.cache.channels, data.channels)) {
                 this.cache.channels = data.channels;
-                channelsUpdated = true;
-                hasChanges = true;
+                changes.channelsUpdated = true;
+                changes.hasChanges = true;
             }
         }
         if (data.blockedPeers !== undefined && !isEqual(this.cache.blockedPeers, data.blockedPeers)) {
             this.cache.blockedPeers = data.blockedPeers;
-            hasChanges = true;
+            changes.blockedPeersUpdated = true;
+            changes.hasChanges = true;
         }
         if (data.dmLeftAt !== undefined && !isEqual(this.cache.dmLeftAt, data.dmLeftAt)) {
             this.cache.dmLeftAt = data.dmLeftAt;
-            hasChanges = true;
+            changes.hasChanges = true;
         }
         if (data.trustedContacts !== undefined && !isEqual(this.cache.trustedContacts, data.trustedContacts)) {
             this.cache.trustedContacts = data.trustedContacts;
-            hasChanges = true;
+            changes.contactsUpdated = true;
+            changes.hasChanges = true;
         }
         if (data.ensCache !== undefined && !isEqual(this.cache.ensCache, data.ensCache)) {
             this.cache.ensCache = data.ensCache;
-            hasChanges = true;
+            changes.hasChanges = true;
         }
         if (data.username !== undefined) {
             if (this.cache.username !== data.username) {
                 this.cache.username = data.username;
-                hasChanges = true;
+                changes.usernameUpdated = true;
+                changes.hasChanges = true;
                 // Also store in plain localStorage for pre-unlock display (unlock modal)
                 if (this.address) {
                     if (data.username) {
@@ -1539,12 +1550,12 @@ class SecureStorage {
         }
         if (data.graphApiKey !== undefined && this.cache.graphApiKey !== data.graphApiKey) {
             this.cache.graphApiKey = data.graphApiKey;
-            hasChanges = true;
+            changes.hasChanges = true;
         }
 
-        if (!hasChanges) {
+        if (!changes.hasChanges) {
             Logger.debug('📥 Sync import skipped - no state changes detected');
-            return false;
+            return changes;
         }
 
         await this.saveToStorage();
@@ -1553,7 +1564,7 @@ class SecureStorage {
         await this._flushCachedImagesToLedger();
         Logger.info('📥 Imported sync data');
         
-        return channelsUpdated;
+        return changes;
     }
 
     // ==================== Account Backup with Scrypt ====================

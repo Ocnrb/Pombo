@@ -264,7 +264,7 @@ class ChannelLatestMessageManager {
         const ts = Number(raw._timestamp || raw.timestamp || 0) || Date.now();
         // Reactions carry no `sender`; use the publisher injected by streamr.js
         const sender = (raw.sender || raw._publisherId || null);
-        const senderLc = sender ? String(sender).toLowerCase() : null;
+        const senderText = sender ? String(sender) : null;
         // User-set display name carried in the message payload (set by
         // identityManager when publishing). Highest-priority preview label.
         const senderName = typeof raw.senderName === 'string' && raw.senderName.trim()
@@ -276,7 +276,7 @@ class ChannelLatestMessageManager {
                 id: raw.id || null,
                 ts,
                 type: 'text',
-                sender: senderLc,
+                sender: senderText,
                 senderName,
                 text: typeof raw.text === 'string' ? raw.text : ''
             };
@@ -286,7 +286,7 @@ class ChannelLatestMessageManager {
                 id: raw.id || null,
                 ts,
                 type: 'image',
-                sender: senderLc,
+                sender: senderText,
                 senderName
             };
         }
@@ -295,7 +295,7 @@ class ChannelLatestMessageManager {
                 id: raw.id || null,
                 ts,
                 type: 'video_announce',
-                sender: senderLc,
+                sender: senderText,
                 senderName
             };
         }
@@ -307,7 +307,7 @@ class ChannelLatestMessageManager {
                 id: null,                   // reactions don't have a stable preview id
                 ts,
                 type: 'reaction',
-                sender: senderLc,
+                sender: senderText,
                 senderName,
                 emoji: typeof raw.emoji === 'string' ? raw.emoji : '',
                 action: 'add',
@@ -345,7 +345,7 @@ class ChannelLatestMessageManager {
         if (t === 'reaction' && message.action === 'remove') return null;
         const ts = Number(message.timestamp || message._timestamp || Date.now()) || Date.now();
         const sender = message.sender || message._publisherId || null;
-        const senderLc = sender ? String(sender).toLowerCase() : null;
+        const senderText = sender ? String(sender) : null;
         const senderName = typeof message.senderName === 'string' && message.senderName.trim()
             ? message.senderName.trim()
             : null;
@@ -356,20 +356,20 @@ class ChannelLatestMessageManager {
                 id: message.id || null,
                 ts,
                 type: 'text',
-                sender: senderLc,
+                sender: senderText,
                 senderName,
                 text: typeof message.text === 'string' ? message.text : ''
             };
         } else if (t === 'image') {
-            entry = { id: message.id || null, ts, type: 'image', sender: senderLc, senderName };
+            entry = { id: message.id || null, ts, type: 'image', sender: senderText, senderName };
         } else if (t === 'video_announce') {
-            entry = { id: message.id || null, ts, type: 'video_announce', sender: senderLc, senderName };
+            entry = { id: message.id || null, ts, type: 'video_announce', sender: senderText, senderName };
         } else {
             entry = {
                 id: null,
                 ts,
                 type: 'reaction',
-                sender: senderLc,
+                sender: senderText,
                 senderName,
                 emoji: typeof message.emoji === 'string' ? message.emoji : '',
                 action: 'add',

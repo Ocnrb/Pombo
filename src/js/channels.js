@@ -73,6 +73,76 @@ class ChannelManager {
     }
 
     /**
+     * Create the default admin state shape for a channel.
+     * @returns {{bannedMembers: Array, hiddenMessageIds: Array, pins: Array}}
+     * @private
+     */
+    _createEmptyAdminState() {
+        return { bannedMembers: [], hiddenMessageIds: [], pins: [] };
+    }
+
+    /**
+     * Apply persisted channel metadata onto an existing runtime channel object,
+     * preserving in-memory state that should survive storage reloads.
+     * @param {Object} channelData - Persisted channel metadata
+     * @param {Object|null} existing - Existing runtime channel, if any
+     * @returns {Object}
+     * @private
+     */
+    _hydrateStoredChannel(channelData, existing = null) {
+        const target = existing || {};
+        const preserved = existing ? {
+            messages: Array.isArray(existing.messages) ? existing.messages : [],
+            reactions: existing.reactions && typeof existing.reactions === 'object' ? existing.reactions : {},
+            historyLoaded: existing.historyLoaded === true,
+            hasMoreHistory: existing.hasMoreHistory !== undefined ? existing.hasMoreHistory : true,
+            loadingHistory: existing.loadingHistory === true,
+            oldestTimestamp: existing.oldestTimestamp ?? null,
+            adminState: existing.adminState && typeof existing.adminState === 'object'
+                ? existing.adminState
+                : this._createEmptyAdminState(),
+            adminRev: Number.isFinite(existing.adminRev) ? existing.adminRev : 0,
+            adminLoaded: existing.adminLoaded === true,
+            adminTs: Number.isFinite(existing.adminTs) ? existing.adminTs : 0,
+            initialLoadInProgress: existing.initialLoadInProgress === true,
+            _publishPermCache: existing._publishPermCache || null
+        } : {
+            messages: [],
+            reactions: {},
+            historyLoaded: false,
+            hasMoreHistory: true,
+            loadingHistory: false,
+            oldestTimestamp: null,
+            adminState: this._createEmptyAdminState(),
+            adminRev: 0,
+            adminLoaded: false,
+            adminTs: 0,
+            initialLoadInProgress: false,
+            _publishPermCache: null
+        };
+
+        Object.assign(target, channelData);
+        target.messages = preserved.messages;
+        target.reactions = preserved.reactions;
+        target.historyLoaded = preserved.historyLoaded;
+        target.hasMoreHistory = preserved.hasMoreHistory;
+        target.loadingHistory = preserved.loadingHistory;
+        target.oldestTimestamp = preserved.oldestTimestamp;
+        target.streamId = target.messageStreamId;
+        if (!target.adminStreamId) {
+            target.adminStreamId = deriveAdminId(target.messageStreamId);
+        }
+        target.adminState = preserved.adminState;
+        target.adminRev = preserved.adminRev;
+        target.adminLoaded = preserved.adminLoaded;
+        target.adminTs = preserved.adminTs;
+        target.initialLoadInProgress = preserved.initialLoadInProgress;
+        target._publishPermCache = preserved._publishPermCache;
+
+        return target;
+    }
+
+    /**
      * Load channels from secure storage (encrypted)
      */
     loadChannels() {
@@ -86,37 +156,11 @@ class ChannelManager {
 
         if (channelsData && channelsData.length > 0) {
             for (const channel of channelsData) {
-                const existing = this.channels.get(channel.messageStreamId);
-                
-                if (existing) {
-                    // Channel already in memory — update metadata only,
-                    // preserve in-memory state (messages, reactions, history flags)
-                    const preserve = ['messages', 'reactions', 'historyLoaded', 'hasMoreHistory',
-                        'loadingHistory', 'oldestTimestamp', 'streamId'];
-                    for (const [key, value] of Object.entries(channel)) {
-                        if (!preserve.includes(key)) {
-                            existing[key] = value;
-                        }
-                    }
-                } else {
-                    // New channel — initialize empty runtime state
-                    channel.messages = [];
-                    channel.reactions = {};
-                    channel.historyLoaded = false;
-                    channel.hasMoreHistory = true;
-                    channel.loadingHistory = false;
-                    channel.oldestTimestamp = null;
-                    channel.streamId = channel.messageStreamId;
-                    // Backfill adminStreamId for channels persisted before -3 existed
-                    if (!channel.adminStreamId) {
-                        channel.adminStreamId = deriveAdminId(channel.messageStreamId);
-                    }
-                    // Admin moderation state (rebuilt on subscribe)
-                    channel.adminState = { bannedMembers: [], hiddenMessageIds: [], pins: [] };
-                    channel.adminRev = 0;
-                    channel.adminLoaded = false;
-                    this.channels.set(channel.messageStreamId, channel);
-                }
+                const hydrated = this._hydrateStoredChannel(
+                    channel,
+                    this.channels.get(channel.messageStreamId) || null
+                );
+                this.channels.set(hydrated.messageStreamId, hydrated);
             }
 
             Logger.debug(`Loaded ${channelsData.length} channels from secure storage (metadata only)`);
@@ -124,6 +168,56 @@ class ChannelManager {
         } else {
             Logger.debug('No saved channels found');
         }
+    }
+
+    /**
+     * Reload channels authoritatively from the latest synced storage snapshot.
+     * Preserves runtime state only for channels that still exist in the snapshot.
+     * @returns {{currentChannelRemoved: boolean, totalChannels: number}}
+     */
+    reloadChannelsFromSync() {
+        if (!secureStorage.isStorageUnlocked()) {
+            Logger.warn('Secure storage not unlocked - cannot reload synced channels');
+            return {
+                currentChannelRemoved: false,
+                totalChannels: this.channels.size
+            };
+        }
+
+        const channelsData = secureStorage.getChannels() || [];
+        const nextChannels = new Map();
+
+        for (const channel of channelsData) {
+            const hydrated = this._hydrateStoredChannel(
+                channel,
+                this.channels.get(channel.messageStreamId) || null
+            );
+            nextChannels.set(hydrated.messageStreamId, hydrated);
+        }
+
+        const previousCurrentChannel = this.currentChannel;
+        const removedStreamIds = Array.from(this.channels.keys()).filter(
+            streamId => !nextChannels.has(streamId)
+        );
+        const currentChannelRemoved = !!previousCurrentChannel && !nextChannels.has(previousCurrentChannel);
+
+        if (currentChannelRemoved) {
+            this.setCurrentChannel(null);
+        }
+
+        for (const streamId of removedStreamIds) {
+            this.clearStreamTransientState(streamId);
+            this.onlineUsers.delete(streamId);
+        }
+
+        this.channels = nextChannels;
+
+        Logger.debug(`Reloaded ${channelsData.length} channels from sync snapshot (authoritative)`);
+
+        return {
+            currentChannelRemoved,
+            totalChannels: nextChannels.size
+        };
     }
 
     /**

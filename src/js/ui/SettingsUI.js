@@ -776,13 +776,17 @@ class SettingsUI {
         // Username change
         if (this.elements.settingsUsername) {
             this.elements.settingsUsername.addEventListener('change', async (e) => {
+                const isSettingsVisible = this.elements.settingsModal && !this.elements.settingsModal.classList.contains('hidden');
+                if (!isSettingsVisible) return;
+
                 // Block local name changes when ENS is active
                 if (e.target.disabled) return;
                 const newName = e.target.value;
                 try {
                     await this.identityManager.setUsername(newName);
-                    this.authManager.updateWalletName(newName || null);
-                    this.deps.updateDisplayName?.(newName || null);
+                    const updatedUsername = this.identityManager.getUsername();
+
+                    this.deps.updateDisplayName?.(updatedUsername);
                     this.showNotification('Username updated!', 'success');
                 } catch (err) {
                     this.showNotification('Failed to update username', 'error');
@@ -1927,6 +1931,7 @@ class SettingsUI {
             this.showNotification('Reconnecting with new RPC...', 'info');
             const success = await this.streamrController.reconnect();
             if (success) {
+                await this.deps.onSyncTransportReconnected?.();
                 this.showNotification('RPC updated successfully', 'success');
             } else {
                 this.showNotification('RPC saved. Reload page to apply.', 'warning');

@@ -1908,6 +1908,9 @@
                                         id="settings-username"
                                         placeholder="Enter your name"
                                         maxlength="18"
+                                        autocomplete="off"
+                                        autocapitalize="off"
+                                        spellcheck="false"
                                         class="w-full bg-white/5 border border-white/10 text-white px-3 py-2 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20"
                                     />
                                     <p class="text-xs text-white/30 mt-2">Visible to other users</p>
@@ -2366,6 +2369,39 @@
                 </button>
                 <button id="confirm-add-contact-btn" class="flex-1 bg-white hover:bg-[#f0f0f0] text-black text-sm font-medium px-3 py-2.5 rounded-xl transition">
                     Add Contact
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Edit Contact -->
+    <div id="edit-contact-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[60]">
+        <div class="bg-[#111113] rounded-2xl p-5 w-[340px] max-w-full mx-4 border border-white/[0.06]">
+            <h3 class="text-base font-medium mb-4 text-white">Edit Contact</h3>
+
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-sm text-white/30 mb-1.5 uppercase tracking-wide">Address</label>
+                    <div id="edit-contact-modal-address" class="bg-white/[0.05] border border-white/[0.08] text-white/50 px-3 py-2 rounded-xl text-sm font-mono truncate"></div>
+                </div>
+
+                <div>
+                    <label class="block text-sm text-white/30 mb-1.5 uppercase tracking-wide">Nickname <span class="text-white/25 normal-case">(optional)</span></label>
+                    <input
+                        type="text"
+                        id="edit-contact-modal-nickname"
+                        placeholder="Update nickname"
+                        class="w-full bg-white/[0.05] border border-white/[0.08] text-white px-3 py-2 rounded-xl text-sm focus:outline-none focus:border-white/[0.15] transition"
+                    />
+                </div>
+            </div>
+
+            <div class="flex gap-2 mt-5">
+                <button id="cancel-edit-contact-btn" class="flex-1 bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] text-white/50 text-sm font-medium px-3 py-2.5 rounded-xl transition">
+                    Cancel
+                </button>
+                <button id="confirm-edit-contact-btn" class="flex-1 bg-white hover:bg-[#f0f0f0] text-black text-sm font-medium px-3 py-2.5 rounded-xl transition">
+                    Save Changes
                 </button>
             </div>
         </div>

@@ -343,17 +343,26 @@ class SyncManager {
 
             // Apply final merged state
             const importStartedAt = getNow();
-            const channelsUpdated = await secureStorage.importFromSync(merged);
+            const importResult = await secureStorage.importFromSync(merged);
             const importCompletedAt = getNow();
+            importResult.currentChannelRemoved = false;
 
             // Reload channelManager if channels were updated
-            if (channelsUpdated) {
-                channelManager.loadChannels();
-                Logger.info('Sync: Reloaded channel list');
+            if (importResult.channelsUpdated) {
+                const reloadResult = channelManager.reloadChannelsFromSync();
+                importResult.currentChannelRemoved = !!reloadResult.currentChannelRemoved;
+                Logger.info('Sync: Reloaded channel list from sync snapshot', reloadResult);
+            }
+
+            if (importResult.contactsUpdated) {
+                identityManager.loadTrustedContacts();
+                Logger.info('Sync: Reloaded trusted contacts');
             }
 
             // Reload username in identity manager
-            identityManager.loadUsername();
+            if (importResult.usernameUpdated) {
+                identityManager.loadUsername();
+            }
 
             const latestTs = payloadsToMerge[payloadsToMerge.length - 1].ts;
             this.lastSyncTs = latestTs;
@@ -370,7 +379,7 @@ class SyncManager {
                 totalMs: roundDuration(importCompletedAt - pullStartedAt)
             });
 
-            this.notifyHandlers('sync_pulled', { ts: latestTs });
+            this.notifyHandlers('sync_pulled', { ts: latestTs, changes: importResult });
 
             return merged;
         } finally {
@@ -380,9 +389,9 @@ class SyncManager {
 
     /**
      * Merge two states together.
-     * Strategy: channels, blockedPeers and dmLeftAt use latest-wins (incoming replaces base);
-     * sentMessages/sentReactions merge per-key with dedup;
-     * trustedContacts/ensCache use union with incoming precedence.
+    * Strategy: channels, blockedPeers, dmLeftAt and trustedContacts use latest-wins snapshots
+    * (incoming replaces base); sentMessages/sentReactions merge per-key with dedup;
+    * ensCache uses union with incoming precedence.
      * @param {Object} base - Base state (local or accumulated)
      * @param {Object} incoming - Incoming state to merge
      * @returns {Object} - Merged state

@@ -35,6 +35,7 @@ class IdentityManager {
         this.ensCache = new Map();
         this.ensAvatarCache = new Map(); // address -> { url: string|null, timestamp: number }
         this.trustedContacts = new Map();
+        this.onTrustedContactsChanged = null;
         this.ensProviders = [];
         this.providerHealth = new Map(); // url -> { failedAt: timestamp }
         this.pendingENSLookups = new Map(); // address -> Promise (in-flight dedup)
@@ -105,7 +106,7 @@ class IdentityManager {
     async setUsername(name) {
         const trimmed = name ? name.trim() : null;
         this.username = trimmed ? trimmed.substring(0, 18) : null;
-        await this.saveUsername();
+        return this.saveUsername();
     }
 
     /**
@@ -113,10 +114,10 @@ class IdentityManager {
      */
     async saveUsername() {
         if (!secureStorage.isStorageUnlocked()) {
-            Logger.warn('Cannot save username - secure storage not unlocked');
-            return;
+            return false;
         }
         await secureStorage.setUsername(this.username);
+        return true;
     }
 
     /**
@@ -561,17 +562,45 @@ class IdentityManager {
      */
     async addTrustedContact(address, nickname = null, notes = null) {
         const normalizedAddress = address.toLowerCase();
+        const existing = this.trustedContacts.get(normalizedAddress);
+        const timestamp = Date.now();
         
         this.trustedContacts.set(normalizedAddress, {
             address: address,
-            nickname: nickname || `Contact ${address.slice(0, 8)}`,
-            notes: notes,
-            addedAt: Date.now(),
-            addedBy: authManager.getAddress()
+            nickname: this.normalizeTrustedContactNickname(nickname),
+            notes: notes ?? existing?.notes ?? null,
+            addedAt: existing?.addedAt ?? timestamp,
+            addedBy: existing?.addedBy ?? authManager.getAddress(),
+            updatedAt: timestamp
         });
         
         await this.saveTrustedContacts();
+        this.onTrustedContactsChanged?.({ type: 'add', address: normalizedAddress });
         Logger.info('Added trusted contact:', address);
+    }
+
+    /**
+     * Update a trusted contact nickname.
+     * Empty values clear the nickname and fall back to ENS / short address.
+     * @param {string} address - Ethereum address
+     * @param {string|null} nickname - Updated nickname
+     */
+    async updateTrustedContact(address, nickname = null) {
+        const normalizedAddress = address.toLowerCase();
+        const existing = this.trustedContacts.get(normalizedAddress);
+        if (!existing) {
+            throw new Error('Contact not found');
+        }
+
+        this.trustedContacts.set(normalizedAddress, {
+            ...existing,
+            nickname: this.normalizeTrustedContactNickname(nickname),
+            updatedAt: Date.now()
+        });
+
+        await this.saveTrustedContacts();
+        this.onTrustedContactsChanged?.({ type: 'update', address: normalizedAddress });
+        Logger.info('Updated trusted contact:', address);
     }
 
     /**
@@ -582,6 +611,7 @@ class IdentityManager {
         const normalizedAddress = address.toLowerCase();
         this.trustedContacts.delete(normalizedAddress);
         await this.saveTrustedContacts();
+        this.onTrustedContactsChanged?.({ type: 'remove', address: normalizedAddress });
         Logger.info('Removed trusted contact:', address);
     }
 
@@ -659,6 +689,18 @@ class IdentityManager {
         await secureStorage.setTrustedContacts(data);
     }
 
+    /**
+     * Normalize user-entered contact nickname.
+     * Empty values are stored as null so UI falls back automatically.
+     * @param {string|null} nickname
+     * @returns {string|null}
+     */
+    normalizeTrustedContactNickname(nickname) {
+        if (typeof nickname !== 'string') return null;
+        const trimmed = nickname.trim();
+        return trimmed || null;
+    }
+
     loadTrustedContacts() {
         try {
             if (!secureStorage.isStorageUnlocked()) {
@@ -666,7 +708,13 @@ class IdentityManager {
             }
             const data = secureStorage.getTrustedContacts();
             if (data && typeof data === 'object') {
-                this.trustedContacts = new Map(Object.entries(data));
+                this.trustedContacts = new Map(
+                    Object.entries(data).filter(([, contact]) => (
+                        contact
+                        && typeof contact === 'object'
+                        && typeof contact.address === 'string'
+                    ))
+                );
             }
         } catch (error) {
             Logger.error('Failed to load trusted contacts:', error);

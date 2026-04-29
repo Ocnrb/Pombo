@@ -81,15 +81,16 @@ export function mergeState(base, incoming, maxSentMessages = CONFIG.dm.maxSentMe
         dmLeftAt: incoming?.dmLeftAt !== undefined
             ? incoming.dmLeftAt
             : (base?.dmLeftAt || {}),
-        trustedContacts: {
-            ...(base?.trustedContacts || {}),
-            ...(incoming?.trustedContacts || {})
-        },
+        trustedContacts: incoming?.trustedContacts !== undefined
+            ? incoming.trustedContacts
+            : (base?.trustedContacts || {}),
         ensCache: {
             ...(base?.ensCache || {}),
             ...(incoming?.ensCache || {})
         },
-        username: incoming?.username || base?.username,
+        username: incoming?.username !== undefined
+            ? (incoming.username || null)
+            : (base?.username || null),
         graphApiKey: incoming?.graphApiKey || base?.graphApiKey
     };
 }

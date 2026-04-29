@@ -23,13 +23,18 @@
  *   - ENS name (identityManager.ensCache, if resolved)
  *   - `entry.senderName` (user-set display name carried in payload)
  *   - Trusted contact nickname (identityManager.getTrustedContact)
- *   - Short address fallback (`0x12…ab`)
+ *   - Short address fallback (`0x12ab...`)
  */
 
 import { escapeHtml } from './utils.js';
 import { sanitizeText } from './sanitizer.js';
 import { identityManager } from '../identity.js';
 import { authManager } from '../auth.js';
+
+function formatPreviewAddress(address) {
+    if (!address || typeof address !== 'string') return '';
+    return address.length <= 6 ? address : `${address.slice(0, 6)}...`;
+}
 
 /**
  * Resolve a display label for the preview sender.
@@ -59,7 +64,16 @@ export function formatPreviewSender(address, senderName = null) {
         return senderName.trim();
     }
     // 3) Trusted contact nickname → short address fallback.
-    return address ? identityManager.getCachedDisplayName(address) : '';
+    if (address) {
+        try {
+            const contact = identityManager.getTrustedContact?.(address);
+            if (contact && typeof contact.nickname === 'string' && contact.nickname.trim()) {
+                return contact.nickname.trim();
+            }
+        } catch {}
+        return formatPreviewAddress(address);
+    }
+    return '';
 }
 
 /**

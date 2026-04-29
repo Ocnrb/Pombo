@@ -314,6 +314,35 @@ class ModalManager {
     }
 
     /**
+     * Show edit contact modal
+     * @param {string} address - Contact address
+     * @param {string} nickname - Existing nickname
+     */
+    showEditContactModal(address, nickname = '') {
+        const modal = document.getElementById('edit-contact-modal');
+        const addressDisplay = document.getElementById('edit-contact-modal-address');
+        const nicknameInput = document.getElementById('edit-contact-modal-nickname');
+
+        if (!modal || !addressDisplay || !nicknameInput) return;
+
+        this.setPendingData('editContactAddress', address);
+        addressDisplay.textContent = address;
+        nicknameInput.value = nickname || '';
+
+        modal.classList.remove('hidden');
+        nicknameInput.focus();
+        nicknameInput.select();
+    }
+
+    /**
+     * Hide edit contact modal
+     */
+    hideEditContactModal() {
+        this.hide('edit-contact-modal');
+        this.clearPendingData('editContactAddress');
+    }
+
+    /**
      * Show remove contact modal
      * @param {string} address - Contact address
      * @param {Function} callback - Callback after removal

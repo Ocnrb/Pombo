@@ -184,20 +184,11 @@ class UIController {
         // ContactsUI
         contactsUI.setDependencies({
             identityManager,
-            Logger,
             settingsUI,
-            channelManager,
-            secureStorage,
-            dmManager,
-            chatAreaUI,
             showNotification: (msg, type) => this.showNotification(msg, type),
             showLoading: (msg) => this.showLoading(msg),
             hideLoading: () => this.hideLoading(),
-            renderChannelList: () => this.renderChannelList(),
-            selectChannel: (streamId) => this.selectChannel(streamId),
-            showConnectedNoChannelState: () => this.showConnectedNoChannelState(),
-            showAddContactModal: (address, cb) => modalManager.showAddContactModal(address, cb),
-            showRemoveContactModal: (address, cb) => modalManager.showRemoveContactModal(address, cb)
+            renderChannelList: () => this.renderChannelList()
         });
 
         // MessageContextMenuUI — owns the right-click menu on messages
@@ -1160,6 +1151,40 @@ class UIController {
             });
         }
 
+        // Edit contact modal
+        const cancelEditContactBtn = document.getElementById('cancel-edit-contact-btn');
+        const confirmEditContactBtn = document.getElementById('confirm-edit-contact-btn');
+        const editContactModal = document.getElementById('edit-contact-modal');
+        const editContactModalNickname = document.getElementById('edit-contact-modal-nickname');
+
+        if (cancelEditContactBtn) {
+            cancelEditContactBtn.addEventListener('click', () => {
+                this.hideEditContactModal();
+            });
+        }
+
+        if (confirmEditContactBtn) {
+            confirmEditContactBtn.addEventListener('click', () => {
+                this.confirmEditContact();
+            });
+        }
+
+        if (editContactModal) {
+            editContactModal.addEventListener('click', (e) => {
+                if (e.target === editContactModal) {
+                    this.hideEditContactModal();
+                }
+            });
+        }
+
+        if (editContactModalNickname) {
+            editContactModalNickname.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    this.confirmEditContact();
+                }
+            });
+        }
+
         // Remove contact confirmation modal
         const cancelRemoveContactBtn = document.getElementById('cancel-remove-contact-btn');
         const confirmRemoveContactBtn = document.getElementById('confirm-remove-contact-btn');
@@ -1306,6 +1331,85 @@ class UIController {
     }
 
     /**
+     * Show the default connected view for the current device/layout.
+     * @param {Object} options
+     * @param {boolean} options.forceSidebarOnMobile - Close back to the sidebar on mobile after preparing the default view
+     * @private
+     */
+    async _showDefaultConnectedView({ forceSidebarOnMobile = false } = {}) {
+        const hasChannels = channelManager.getAllChannels().length > 0;
+        const hasDMs = (dmManager.getConversations?.() || []).length > 0;
+
+        if (this.isMobileView() && !hasChannels && !hasDMs) {
+            const sidebar = this.elements.sidebar;
+            const chatArea = this.elements.chatArea;
+            sidebar?.style.setProperty('transition', 'none');
+            chatArea?.style.setProperty('transition', 'none');
+
+            channelManager.setCurrentChannel(null);
+            this.openChatView();
+            await this.showExploreView();
+            document.querySelectorAll('.channel-item').forEach(item => {
+                item.classList.remove('bg-white/[0.06]');
+            });
+            headerUI.setActivePillTab?.('explore');
+
+            chatArea?.offsetHeight;
+            requestAnimationFrame(() => {
+                sidebar?.style.removeProperty('transition');
+                chatArea?.style.removeProperty('transition');
+            });
+
+            historyManager.replaceState({ view: 'explore' });
+            return;
+        }
+
+        await this.showExploreView();
+        headerUI.setActivePillTab?.(this.isMobileView() ? 'chats' : 'explore');
+
+        if (this.isMobileView() && forceSidebarOnMobile) {
+            this.closeChatView();
+        }
+
+        historyManager.replaceState({ view: 'explore' });
+    }
+
+    /**
+     * Reconcile the visible connected-state UI after sync has changed local runtime state.
+     * @param {Object} options
+     * @param {boolean} options.currentChannelRemoved - Whether the sync snapshot removed the currently open channel
+     */
+    async reconcileConnectedStateAfterSync({ currentChannelRemoved = false } = {}) {
+        const state = historyManager.getInitialState();
+
+        if ((state?.view === 'channel' || state?.view === 'preview') && state.streamId) {
+            const deepLinkedChannel = channelManager.getChannel(state.streamId);
+            if (deepLinkedChannel) {
+                if (previewModeUI.isInPreviewMode()) {
+                    await previewModeUI.exitPreviewMode(false);
+                }
+                await this._selectChannelWithoutHistory(state.streamId);
+                historyManager.replaceState({ view: 'channel', streamId: state.streamId });
+                return;
+            }
+        }
+
+        if (!currentChannelRemoved && previewModeUI.isInPreviewMode()) {
+            return;
+        }
+
+        if (!currentChannelRemoved && channelManager.getCurrentChannel()) {
+            return;
+        }
+
+        if (previewModeUI.isInPreviewMode()) {
+            await previewModeUI.exitPreviewMode(false);
+        }
+
+        await this._showDefaultConnectedView({ forceSidebarOnMobile: true });
+    }
+
+    /**
      * Open Explore view (unified for mobile/desktop)
      * Mobile: navigates to chat-area with Explore
      * Desktop: shows Explore inline
@@ -1409,48 +1513,7 @@ class UIController {
         const state = historyManager.getInitialState();
         
         if (!state || state.view === 'explore') {
-            // Default view - show explore and set initial history entry.
-            // On mobile, the sidebar (channel list) is the initial view.
-            // If the user has no channels yet, auto-open the Explore view
-            // so first-time users land directly on Explore instead of an
-            // empty channel list.
-            const hasChannels = channelManager.getAllChannels().length > 0;
-            const hasDMs = (dmManager.getConversations?.() || []).length > 0;
-            if (this.isMobileView() && !hasChannels && !hasDMs) {
-                // Open Explore as full-screen mobile view (navigates chat-area).
-                // Suppress slide transition so user doesn't see the chat-list
-                // briefly before Explore animates in on first load.
-                const sidebar = this.elements.sidebar;
-                const chatArea = this.elements.chatArea;
-                sidebar?.style.setProperty('transition', 'none');
-                chatArea?.style.setProperty('transition', 'none');
-
-                channelManager.setCurrentChannel(null);
-                this.openChatView();
-                await this.showExploreView();
-                document.querySelectorAll('.channel-item').forEach(item => {
-                    item.classList.remove('bg-white/[0.06]');
-                });
-                // Sync pill-nav highlight with the Explore view
-                headerUI.setActivePillTab?.('explore');
-
-                // Force reflow then restore transitions on next frame
-                // so subsequent navigations animate normally.
-                // eslint-disable-next-line no-unused-expressions
-                chatArea?.offsetHeight;
-                requestAnimationFrame(() => {
-                    sidebar?.style.removeProperty('transition');
-                    chatArea?.style.removeProperty('transition');
-                });
-
-                historyManager.replaceState({ view: 'explore' });
-            } else {
-                await this.showExploreView();
-                // Mobile default view is the sidebar (chats list); desktop
-                // shows Explore inline. Highlight the correct pill tab.
-                headerUI.setActivePillTab?.(this.isMobileView() ? 'chats' : 'explore');
-                historyManager.replaceState({ view: 'explore' });
-            }
+            await this._showDefaultConnectedView();
             return;
         }
 
@@ -2320,6 +2383,18 @@ class UIController {
 
     async confirmAddContact() {
         return contactsUI.confirmAdd();
+    }
+
+    showEditContactModal(address) {
+        contactsUI.showEditModal(address);
+    }
+
+    hideEditContactModal() {
+        contactsUI.hideEditModal();
+    }
+
+    async confirmEditContact() {
+        return contactsUI.confirmEdit();
     }
 
     showRemoveContactModal(address, onRemoveCallback = null) {
