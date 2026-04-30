@@ -49,6 +49,7 @@ class App {
             channelManager.onChannelsSaved = () => syncManager.scheduleAutoPush();
             identityManager.onTrustedContactsChanged = () => syncManager.scheduleAutoPush();
             secureStorage.onBlockedPeersChanged = () => syncManager.scheduleAutoPush();
+
             settingsUI.setDependencies({
                 connectWallet: () => walletFlows.connectWallet(),
                 onSyncTransportReconnected: () => this.pullSyncedStateAndBlobs().catch((error) => {

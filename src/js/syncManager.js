@@ -425,7 +425,9 @@ class SyncManager {
 
     /**
      * Push unsynced image blobs to Partition 2 (SYNC_BLOBS).
-     * Each image is published as a separate message to avoid payload limits.
+     * Small images travel as a single sync_blob message; larger images are split
+     * across sync_blob_chunk messages followed by a sync_blob_manifest so the
+     * payload always fits the Streamr per-message size limit.
      * Uses async generator to stream images one-at-a-time.
      */
     async pushImageBlobs() {
@@ -446,26 +448,73 @@ class SyncManager {
 
         await streamrController.setDMPublishKey(inboxStreamId);
 
+        // Match the chat-image protocol's raw chunk budget so each encrypted
+        // sync_blob_chunk envelope stays under media.imagePayloadMaxBytes.
+        const chunkChars = Math.max(1024, CONFIG?.media?.imageChunkInitialRawBytes || 150 * 1024);
+
+        const publishPayload = async (payload) => {
+            const encrypted = await dmCrypto.encrypt(payload, aesKey);
+            await streamrController.publish(
+                inboxStreamId,
+                STREAM_CONFIG.MESSAGE_STREAM.SYNC_BLOBS,
+                encrypted
+            );
+        };
+
         let count = 0;
+        let scanned = 0;
         for await (const record of secureStorage.getUnsyncedImages()) {
+            scanned++;
+            let imageData;
             try {
-                const imageData = await secureStorage.decryptBlob(record.encryptedData, record.iv);
+                imageData = await secureStorage.decryptBlob(record.encryptedData, record.iv);
+            } catch (decryptErr) {
+                Logger.warn('Sync: Corrupt local blob, removing from ledger', record.imageId, decryptErr.name || decryptErr.message);
+                await secureStorage._deleteLedgerRecord(record.imageId);
+                continue;
+            }
+            try {
+                if (typeof imageData !== 'string' || imageData.length === 0) {
+                    Logger.warn('Sync: Skipping blob with empty data', record.imageId);
+                    continue;
+                }
 
-                const payload = {
-                    type: 'sync_blob',
-                    v: 2,
-                    ts: Date.now(),
-                    imageId: record.imageId,
-                    streamId: record.streamId,
-                    data: imageData
-                };
-
-                const encrypted = await dmCrypto.encrypt(payload, aesKey);
-                await streamrController.publish(
-                    inboxStreamId,
-                    STREAM_CONFIG.MESSAGE_STREAM.SYNC_BLOBS,
-                    encrypted
-                );
+                if (imageData.length <= chunkChars) {
+                    await publishPayload({
+                        type: 'sync_blob',
+                        v: 2,
+                        ts: Date.now(),
+                        imageId: record.imageId,
+                        streamId: record.streamId,
+                        data: imageData
+                    });
+                    Logger.debug('Sync: Pushed blob (single)', record.imageId, { bytes: imageData.length });
+                } else {
+                    const chunkCount = Math.ceil(imageData.length / chunkChars);
+                    for (let i = 0; i < chunkCount; i++) {
+                        const slice = imageData.slice(i * chunkChars, (i + 1) * chunkChars);
+                        await publishPayload({
+                            type: 'sync_blob_chunk',
+                            v: 2,
+                            ts: Date.now(),
+                            imageId: record.imageId,
+                            streamId: record.streamId,
+                            chunkIndex: i,
+                            chunkCount,
+                            data: slice
+                        });
+                    }
+                    await publishPayload({
+                        type: 'sync_blob_manifest',
+                        v: 2,
+                        ts: Date.now(),
+                        imageId: record.imageId,
+                        streamId: record.streamId,
+                        chunkCount,
+                        totalLength: imageData.length
+                    });
+                    Logger.debug('Sync: Pushed blob (chunked)', record.imageId, { chunkCount, bytes: imageData.length });
+                }
 
                 await secureStorage.markImageSynced(record.imageId);
                 count++;
@@ -474,9 +523,7 @@ class SyncManager {
             }
         }
 
-        if (count > 0) {
-            Logger.info(`Sync: Pushed ${count} image blob(s)`);
-        }
+        Logger.debug(`Sync: pushImageBlobs done — scanned=${scanned} pushed=${count}`);
     }
 
     /**
@@ -512,36 +559,111 @@ class SyncManager {
         const myPubKey = dmCrypto.getMyPublicKey(privateKey);
         const aesKey = await dmCrypto.deriveSharedKey(privateKey, myPubKey);
 
-        let imported = 0;
+        const importBlob = async (imageId, streamId, data) => {
+            const saved = await secureStorage.saveImageToLedger(imageId, data, streamId);
+            await secureStorage.markImageSynced(imageId);
+            if (saved) {
+                this.notifyHandlers('blob_pulled', { imageId, data });
+                return true;
+            }
+            return false;
+        };
+
+        // Decrypt every payload up front. Streamr resend(...) does not guarantee
+        // chronological delivery and chunks/manifest published in rapid succession
+        // can share the same millisecond timestamp, so we cannot rely on ordering.
+        // Two-pass: gather chunks first, then resolve manifests against them.
+        const decoded = [];
         for (const msg of messages) {
             if (msg.publisherId?.toLowerCase() !== myAddress) continue;
             if (!dmCrypto.isEncrypted(msg.content)) continue;
-
             try {
                 const payload = await dmCrypto.decrypt(msg.content, aesKey);
-                if (payload.type !== 'sync_blob' || payload.v !== 2) continue;
+                if (payload && payload.v === 2) decoded.push(payload);
+            } catch (err) {
+                Logger.warn('Sync: Failed to decrypt blob payload', err.message);
+            }
+        }
 
-                const saved = await secureStorage.saveImageToLedger(
-                    payload.imageId,
-                    payload.data,
-                    payload.streamId
-                );
-                // Mark as synced immediately — this image came FROM the network,
-                // so it doesn't need to be pushed back on next sync cycle
-                await secureStorage.markImageSynced(payload.imageId);
-                if (saved) {
+        const pendingChunkedBlobs = new Map();
+        const manifests = [];
+        const singles = [];
+
+        for (const payload of decoded) {
+            if (payload.type === 'sync_blob') {
+                singles.push(payload);
+            } else if (payload.type === 'sync_blob_chunk') {
+                const entry = pendingChunkedBlobs.get(payload.imageId) || {
+                    parts: new Map(),
+                    chunkCount: payload.chunkCount,
+                    streamId: payload.streamId
+                };
+                entry.parts.set(payload.chunkIndex, payload.data);
+                if (Number.isInteger(payload.chunkCount)) entry.chunkCount = payload.chunkCount;
+                if (!entry.streamId && payload.streamId) entry.streamId = payload.streamId;
+                pendingChunkedBlobs.set(payload.imageId, entry);
+            } else if (payload.type === 'sync_blob_manifest') {
+                manifests.push(payload);
+            }
+        }
+
+        const chunkedImageIds = pendingChunkedBlobs.size;
+        let imported = 0;
+
+        for (const payload of singles) {
+            try {
+                if (await importBlob(payload.imageId, payload.streamId, payload.data)) {
                     imported++;
-                    // Notify UI so placeholders get replaced in real-time
-                    this.notifyHandlers('blob_pulled', { imageId: payload.imageId, data: payload.data });
                 }
             } catch (err) {
                 Logger.warn('Sync: Failed to import blob', err.message);
             }
         }
 
-        if (imported > 0) {
-            Logger.info(`Sync: Imported ${imported} image blob(s)`);
+        for (const payload of manifests) {
+            const entry = pendingChunkedBlobs.get(payload.imageId);
+            pendingChunkedBlobs.delete(payload.imageId);
+            if (!entry) {
+                Logger.warn('Sync: blob manifest without chunks', payload.imageId);
+                continue;
+            }
+            const chunkCount = payload.chunkCount;
+            if (entry.parts.size !== chunkCount) {
+                Logger.warn('Sync: blob assembly incomplete', payload.imageId, {
+                    expected: chunkCount,
+                    got: entry.parts.size
+                });
+                continue;
+            }
+            let assembled = '';
+            let ok = true;
+            for (let i = 0; i < chunkCount; i++) {
+                const slice = entry.parts.get(i);
+                if (typeof slice !== 'string') { ok = false; break; }
+                assembled += slice;
+            }
+            if (!ok) {
+                Logger.warn('Sync: blob assembly missing chunk', payload.imageId);
+                continue;
+            }
+            if (Number.isFinite(payload.totalLength) && assembled.length !== payload.totalLength) {
+                Logger.warn('Sync: blob assembly length mismatch', payload.imageId, {
+                    expected: payload.totalLength,
+                    got: assembled.length
+                });
+                continue;
+            }
+            const streamId = payload.streamId || entry.streamId;
+            try {
+                if (await importBlob(payload.imageId, streamId, assembled)) {
+                    imported++;
+                }
+            } catch (err) {
+                Logger.warn('Sync: Failed to import blob', err.message);
+            }
         }
+
+        Logger.debug(`Sync: pullImageBlobs done — fetched=${messages.length} singles=${singles.length} chunkedImageIds=${chunkedImageIds} manifests=${manifests.length} imported=${imported}`);
     }
 
     /**

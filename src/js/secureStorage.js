@@ -1235,21 +1235,51 @@ class SecureStorage {
 
         // 3. IndexedDB
         if (!this.imageDB || !this.storageKey) return null;
+        let record;
         try {
-            const record = await new Promise((resolve, reject) => {
+            record = await new Promise((resolve, reject) => {
                 const tx = this.imageDB.transaction('images', 'readonly');
                 const req = tx.objectStore('images').get(imageId);
                 req.onsuccess = () => resolve(req.result);
                 req.onerror = () => reject(req.error);
             });
-            if (!record) return null;
-            const data = await this.decryptBlob(record.encryptedData, record.iv);
-            // Warm in-memory cache
-            this._warmImageCache(imageId, data);
-            return data;
         } catch (error) {
             Logger.error('getImageBlob IDB read failed:', error);
             return null;
+        }
+        if (!record) return null;
+        try {
+            const data = await this.decryptBlob(record.encryptedData, record.iv);
+            this._warmImageCache(imageId, data);
+            return data;
+        } catch (error) {
+            // Corrupt record (storage key changed, partial write, etc.). Drop it
+            // so the image can be recovered from the network on the next sync.
+            Logger.warn('getImageBlob: corrupt record, removing from ledger', imageId, error.name || error.message);
+            await this._deleteLedgerRecord(imageId);
+            return null;
+        }
+    }
+
+    /**
+     * Delete a single image record from the IndexedDB ledger.
+     * @param {string} imageId
+     */
+    async _deleteLedgerRecord(imageId) {
+        if (!this.imageDB) return;
+        try {
+            await new Promise((resolve, reject) => {
+                const tx = this.imageDB.transaction('images', 'readwrite');
+                tx.objectStore('images').delete(imageId);
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+            if (this.imageBlobCache?.has(imageId)) {
+                this.imageBlobCacheBytes -= (this.imageBlobCache.get(imageId)?.length || 0);
+                this.imageBlobCache.delete(imageId);
+            }
+        } catch (error) {
+            Logger.error('_deleteLedgerRecord failed:', imageId, error);
         }
     }
 
@@ -1345,7 +1375,7 @@ class SecureStorage {
     }
 
     /**
-     * Get all unsynced image records (for blob sync — Fase 2).
+     * Get all unsynced image records (for partition 2 blob sync).
      * Returns an async generator to avoid loading all blobs at once.
      * @yields {{ imageId: string, streamId: string, encryptedData: ArrayBuffer, iv: number[] }}
      */
