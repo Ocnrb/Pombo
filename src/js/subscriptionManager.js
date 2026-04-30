@@ -371,7 +371,28 @@ class SubscriptionManager {
             channelManager.handleTextMessage(sourceStreamId, msg);
             return;
         }
-        
+
+        // Stored chunked-image protocol: chunks carry no id and must be fed
+        // to the assembler — never propagate them to UI. Mirrors the
+        // interception channels.js does for joined channels.
+        if (typeof mediaController?.isStoredImageChunkMessage === 'function'
+            && mediaController.isStoredImageChunkMessage(msg)) {
+            mediaController.registerStoredImageChunk(sourceStreamId, msg).catch(err => {
+                Logger.debug('Preview: stored image chunk register failed:', err?.message);
+            });
+            return;
+        }
+
+        // Stored chunked-image manifest is the actual image message (has id +
+        // type='image'); register it with the assembler so any already-
+        // buffered chunks can complete, then continue normal preview flow.
+        if (typeof mediaController?.isStoredChunkedImageManifest === 'function'
+            && mediaController.isStoredChunkedImageManifest(msg)) {
+            mediaController.registerStoredImageManifest(sourceStreamId, msg).catch(err => {
+                Logger.debug('Preview: stored image manifest register failed:', err?.message);
+            });
+        }
+
         // Still in preview mode - forward to UI via callback
         Logger.debug('Preview message callback:', msg?.id, msg?.type || 'text');
         if (this.onPreviewMessage) {
