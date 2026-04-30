@@ -175,26 +175,33 @@ class MessageContextMenuUI {
 
         // Send DM — hide if self or already in DM with this sender
         const sendDMBtn = document.getElementById('context-menu-send-dm-btn');
+        const contactDivider = document.getElementById('context-menu-contact-divider');
+        let showSendDM = false;
         if (sendDMBtn) {
             const alreadyInDM = currentChannel?.type === 'dm'
                 && currentChannel.peerAddress?.toLowerCase() === senderAddress.toLowerCase();
-            sendDMBtn.classList.toggle('hidden', isSelf || alreadyInDM);
+            showSendDM = !isSelf && !alreadyInDM;
+            sendDMBtn.classList.toggle('hidden', !showSendDM);
         }
 
         // Add/Remove Contact
         const addContactBtn = document.getElementById('context-menu-add-contact-btn');
         const removeContactBtn = document.getElementById('context-menu-remove-contact-btn');
         const isContact = !!identityManager?.getTrustedContact?.(senderAddress);
-        if (addContactBtn) addContactBtn.classList.toggle('hidden', isContact);
-        if (removeContactBtn) removeContactBtn.classList.toggle('hidden', !isContact);
+        const showAddContact = !isSelf && !isContact;
+        const showRemoveContact = !isSelf && isContact;
+        if (addContactBtn) addContactBtn.classList.toggle('hidden', !showAddContact);
+        if (removeContactBtn) removeContactBtn.classList.toggle('hidden', !showRemoveContact);
+        if (contactDivider) {
+            contactDivider.classList.toggle('hidden', !(showSendDM || showAddContact || showRemoveContact));
+        }
 
         // Block User — only inside a DM channel and not for yourself
         const blockBtn = document.getElementById('context-menu-block-btn');
         const blockDivider = document.getElementById('context-menu-block-divider');
-        const isDM = currentChannel?.type === 'dm'
-            && senderAddress.toLowerCase() !== identityManager?.getAddress?.()?.toLowerCase();
-        if (blockBtn) blockBtn.classList.toggle('hidden', !isDM);
-        if (blockDivider) blockDivider.classList.toggle('hidden', !isDM);
+        const showBlock = currentChannel?.type === 'dm' && !isSelf;
+        if (blockBtn) blockBtn.classList.toggle('hidden', !showBlock);
+        if (blockDivider) blockDivider.classList.toggle('hidden', !showBlock);
 
         // Determine admin status once — used both for routing the delete
         // action and for the admin moderation block below.
