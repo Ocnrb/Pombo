@@ -1789,7 +1789,7 @@ class ChannelManager {
         }
 
         // Use dual-stream subscription with onHistoryComplete callback
-        const onHistoryComplete = async () => {
+        const onHistoryComplete = async (stats) => {
             if (!channel || !channel.initialLoadInProgress) return;
             
             // Flush any remaining batch verifications
@@ -1801,7 +1801,22 @@ class ChannelManager {
             // Apply pending overrides and remove deleted messages before first render
             this.applyPendingOverrides(channel);
             channel.messages = channel.messages.filter(m => !m._deleted);
-            
+
+            // Deterministic exhaustion detection: when the storage resend
+            // returned fewer raw messages than requested for the content
+            // partition, no older history exists and `hasMoreHistory` should
+            // flip to `false` BEFORE the UI re-renders. Without this, the
+            // "— beginning of conversation —" marker only appeared after a
+            // user-driven extra paginate (and never on legacy single-partition
+            // channels where the SDK never signals `done`).
+            if (stats
+                && typeof stats.contentLoaded === 'number'
+                && typeof stats.contentRequested === 'number'
+                && stats.contentRequested > 0
+                && stats.contentLoaded < stats.contentRequested) {
+                channel.hasMoreHistory = false;
+            }
+
             channel.initialLoadInProgress = false;
             Logger.debug('Initial history load complete for', messageStreamId.slice(-20));
             

@@ -3140,7 +3140,7 @@ class StreamrController {
             this.fetchHistoryAsync(streamId, partition, historyCount, handler, password, onHistoryComplete, allowOverridesInContentPartition);
         } else if (onHistoryComplete) {
             // No history to fetch, signal completion immediately
-            try { onHistoryComplete(); } catch (e) { Logger.warn('onHistoryComplete error:', e); }
+            try { onHistoryComplete({ loaded: 0, requested: 0 }); } catch (e) { Logger.warn('onHistoryComplete error:', e); }
         }
         
         return subscription;
@@ -3337,9 +3337,15 @@ class StreamrController {
             // CORS errors and other network issues are caught here
             Logger.warn(`History fetch failed for partition ${partition} (may be CORS on localhost):`, error.message);
         } finally {
-            // Signal that initial history fetch is complete (success or failure)
+            // Signal that initial history fetch is complete (success or failure).
+            // Pass `loaded`/`requested` so callers can detect exhaustion (when
+            // fewer raw messages came back than requested → no more history
+            // exists in storage). Used by `channels.onHistoryComplete` to flip
+            // `hasMoreHistory=false` deterministically.
             if (onHistoryComplete) {
-                try { await onHistoryComplete(); } catch (e) { Logger.warn('onHistoryComplete error:', e); }
+                try {
+                    await onHistoryComplete({ loaded: typeof rawCount === 'number' ? rawCount : 0, requested: count });
+                } catch (e) { Logger.warn('onHistoryComplete error:', e); }
             }
         }
     }
@@ -3388,20 +3394,47 @@ class StreamrController {
         let pendingHistoryCompletions = trackedHistoryPartitions.length;
         let historyCompleteSignaled = false;
         const completedHistoryPartitions = new Set();
+        // Aggregate per-partition stats so the final `onHistoryComplete` can
+        // tell callers whether the storage resend was exhaustive (loaded <
+        // requested) — needed to flip `hasMoreHistory=false` deterministically
+        // even when the iterator never signals `done` (e.g. legacy single-
+        // partition channels).
+        const historyStats = {
+            content: { loaded: 0, requested: 0 },
+            control: { loaded: 0, requested: 0 },
+        };
 
         const maybeSignalHistoryComplete = async () => {
             if (historyCompleteSignaled || !onHistoryComplete) return;
             if (pendingHistoryCompletions === 0) {
                 historyCompleteSignaled = true;
-                try { await onHistoryComplete(); } catch (e) { Logger.warn('onHistoryComplete error:', e); }
+                try {
+                    await onHistoryComplete({
+                        contentLoaded: historyStats.content.loaded,
+                        contentRequested: historyStats.content.requested,
+                        controlLoaded: historyStats.control.loaded,
+                        controlRequested: historyStats.control.requested,
+                    });
+                } catch (e) { Logger.warn('onHistoryComplete error:', e); }
             }
         };
 
-        const completeHistoryPartition = async (partition, partitionLabel) => {
+        const completeHistoryPartition = async (partition, partitionLabel, stats) => {
             if (!shouldTrackHistory) return;
             if (completedHistoryPartitions.has(partition)) return;
             completedHistoryPartitions.add(partition);
             pendingHistoryCompletions = Math.max(0, pendingHistoryCompletions - 1);
+            if (stats && partition === STREAM_CONFIG.MESSAGE_STREAM.MESSAGES) {
+                historyStats.content = {
+                    loaded: stats.loaded ?? 0,
+                    requested: stats.requested ?? 0,
+                };
+            } else if (stats && partition === STREAM_CONFIG.MESSAGE_STREAM.CONTROL) {
+                historyStats.control = {
+                    loaded: stats.loaded ?? 0,
+                    requested: stats.requested ?? 0,
+                };
+            }
             Logger.debug(`History complete for ${partitionLabel}. Pending: ${pendingHistoryCompletions}`);
             await maybeSignalHistoryComplete();
         };
@@ -3409,10 +3442,10 @@ class StreamrController {
         const makePartitionHistoryCallback = (partition, partitionLabel) => {
             if (!shouldTrackHistory) return null;
             let called = false;
-            return async () => {
+            return async (stats) => {
                 if (called) return;
                 called = true;
-                await completeHistoryPartition(partition, partitionLabel);
+                await completeHistoryPartition(partition, partitionLabel, stats);
             };
         };
 

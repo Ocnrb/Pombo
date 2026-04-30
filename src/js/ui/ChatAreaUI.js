@@ -15,6 +15,14 @@ import { escapeHtml, formatAddress } from './utils.js';
 import { identityManager } from '../identity.js';
 import { CONFIG } from '../config.js';
 
+/**
+ * Watchdog cap for a single pagination load. If `loadMoreHistory` (network +
+ * verification) takes longer than this, we abandon the in-flight UI op so the
+ * spinner cannot get permanently stuck. The data fetch itself may still
+ * resolve later — only the *UI* state is released.
+ */
+const PAGINATION_WATCHDOG_MS = 15000;
+
 class ChatAreaUI {
     constructor() {
         this.deps = {};
@@ -26,15 +34,123 @@ class ChatAreaUI {
         this.replyToText = null;
         this.messageInput = null;
         
-        // Scroll/loading state
-        this.isLoadingMore = false;
+        /**
+         * Active pagination load operation, or null when idle. Single source of
+         * truth for the "loading older messages" state — replaces the previous
+         * boolean `isLoadingMore`. Owning a token per op lets us:
+         *   - reject UI mutations from a stale op after channel switch
+         *   - tag the DOM indicator with the op token so a stale op can't hide
+         *     a fresh op's spinner (and vice versa)
+         *   - run a watchdog that releases UI even if the network call hangs
+         *
+         * Shape: { id, streamId, mode: 'channel'|'preview', watchdog, indicator }
+         */
+        this._loadOp = null;
+        this._loadOpSeq = 0;
         this._channelSwitching = false; // guard against spurious events during channel transition
+        this._pendingAutoLoadTimer = null;
         
         // Reply state
         this.replyingTo = null;
         
         // Edit state
         this.editingMessage = null;
+    }
+
+    /**
+     * Backwards-compatible boolean view of pagination state. Reads return true
+     * while a load op is active; writing `false` cancels the op (used by
+     * `selectChannel`/`deselectChannel`/preview-exit cleanup paths). Writing
+     * `true` is intentionally a no-op — ops are started by `_beginLoadOp`.
+     */
+    get isLoadingMore() {
+        return this._loadOp !== null;
+    }
+    set isLoadingMore(value) {
+        if (!value) this._cancelLoadOp('external-clear');
+    }
+
+    /**
+     * Allocate a fresh load op token, install the watchdog, and (optionally)
+     * show the loading indicator scoped to this token.
+     * @private
+     */
+    _beginLoadOp({ streamId, mode, showIndicator }) {
+        // Defensive: cancel any prior op (e.g. caller did not clean up).
+        if (this._loadOp) this._cancelLoadOp('begin-overrides-stale');
+
+        const op = {
+            id: ++this._loadOpSeq,
+            streamId: streamId || null,
+            mode,
+            watchdog: null,
+            indicatorShown: false,
+            timedOut: false,
+            cancelled: false,
+        };
+
+        op.watchdog = setTimeout(() => {
+            // Network/verification hung — release UI ownership so the user
+            // is not stuck behind a frozen spinner. The data path may still
+            // settle and trigger a future render.
+            op.timedOut = true;
+            this.deps.Logger?.warn?.(
+                `Pagination watchdog fired for ${mode}:${streamId?.slice?.(-20) || '?'}`
+            );
+            this._cancelLoadOp('watchdog');
+        }, PAGINATION_WATCHDOG_MS);
+
+        this._loadOp = op;
+
+        if (showIndicator) {
+            notificationUI.showLoadingMoreIndicator(this.messagesArea, op.id);
+            op.indicatorShown = true;
+        }
+        return op;
+    }
+
+    /**
+     * @private
+     * @returns {boolean} true if `op` is still the current load op
+     */
+    _isOpCurrent(op) {
+        return !!op && this._loadOp === op && !op.cancelled && !op.timedOut;
+    }
+
+    /**
+     * Tear down the active op (or a specific op if provided) — clears the
+     * watchdog and removes the loading indicator iff the DOM token matches.
+     * @private
+     */
+    _cancelLoadOp(_reason = 'cancel') {
+        const op = this._loadOp;
+        if (!op) return;
+        op.cancelled = true;
+        if (op.watchdog) {
+            clearTimeout(op.watchdog);
+            op.watchdog = null;
+        }
+        if (op.indicatorShown) {
+            notificationUI.hideLoadingMoreIndicator(op.id);
+        }
+        this._loadOp = null;
+    }
+
+    /**
+     * @private
+     * Cleanly finish an op (success path). Like `_cancelLoadOp` but only acts
+     * when `op` is still current — never touches a fresher op.
+     */
+    _endLoadOp(op) {
+        if (!op || this._loadOp !== op) return;
+        if (op.watchdog) {
+            clearTimeout(op.watchdog);
+            op.watchdog = null;
+        }
+        if (op.indicatorShown) {
+            notificationUI.hideLoadingMoreIndicator(op.id);
+        }
+        this._loadOp = null;
     }
 
     /**
@@ -95,7 +211,7 @@ class ChatAreaUI {
         if (this._channelSwitching) return;
         
         // Prevent concurrent loads
-        if (this.isLoadingMore) return;
+        if (this._loadOp) return;
         
         const { channelManager } = this.deps;
         const channel = channelManager?.getCurrentChannel();
@@ -121,24 +237,28 @@ class ChatAreaUI {
      * @private
      */
     async _loadMoreChannelHistory(channel, channelManager) {
-        this.isLoadingMore = true;
         const generationAtStart = channelManager.switchGeneration;
-        
+        const streamId = channel.streamId;
+
         // Only show "Loading More" indicator if there are existing messages
         // (otherwise the central spinner from renderMessages is already showing)
         const showIndicator = channel.messages.length > 0;
-        if (showIndicator) this.showLoadingMoreIndicator();
-        
-        // Remove any existing "search older" banner before loading
+        const op = this._beginLoadOp({ streamId, mode: 'channel', showIndicator });
+
+        // Remove any existing "search older" / "history end" banners before loading
         this._removeSearchOlderBanner();
+        this._removeHistoryEndBanner();
         
         const previousScrollHeight = this.messagesArea.scrollHeight;
         const previousScrollTop = this.messagesArea.scrollTop;
         
         try {
-            const result = await channelManager.loadMoreHistory(channel.streamId);
-            
+            const result = await channelManager.loadMoreHistory(streamId);
+
+            // Guard against (a) channel switch mid-load and (b) watchdog timeout
+            // that already released the UI op.
             if (channelManager.switchGeneration !== generationAtStart) return;
+            if (!this._isOpCurrent(op)) return;
             
             if (result.loaded > 0) {
                 this.renderMessages(channel.messages, () => {
@@ -152,10 +272,17 @@ class ChatAreaUI {
                 // DM pagination: no messages from this peer in the current time window
                 this._showSearchOlderBanner(channel, channelManager);
             } else if (!result.hasMore && result.loaded === 0) {
-                // Reached the beginning — show end-of-history marker for DMs
-                if (channel.type === 'dm') {
-                    this._showBeginningOfConversation();
-                }
+                // Reached the beginning. Force a re-render so the inline
+                // "— beginning of conversation —" marker is emitted by
+                // `renderMessages` for ALL channel types (it conditions on
+                // `hasMoreHistory === false`, which is now true). The marker
+                // is the SINGLE source of truth — no separate icon banner —
+                // so subsequent renders triggered by unrelated events
+                // (initial_history_complete, history_batch_loaded,
+                // admin_state_updated, …) cannot double-stack indicators.
+                this.renderMessages(channel.messages, () => {
+                    this._attachMessageListeners();
+                });
             } else if (channel.messages.length === 0) {
                 // No messages loaded and channel is empty - re-render to update spinner to "no messages"
                 this.renderMessages(channel.messages);
@@ -163,8 +290,7 @@ class ChatAreaUI {
         } catch (error) {
             this.deps.Logger?.error('Failed to load more messages:', error);
         } finally {
-            if (showIndicator) this.hideLoadingMoreIndicator();
-            this.isLoadingMore = false;
+            this._endLoadOp(op);
         }
     }
 
@@ -194,28 +320,7 @@ class ChatAreaUI {
     }
 
     /**
-     * Show "Beginning of conversation" marker at top (DM pagination exhausted)
-     * @private
-     */
-    _showBeginningOfConversation() {
-        this._removeSearchOlderBanner();
-        
-        const marker = document.createElement('div');
-        marker.id = 'dm-search-older-banner';
-        marker.className = 'flex justify-center py-3';
-        marker.innerHTML = `
-            <div class="flex items-center gap-2 text-white/20 text-sm">
-                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 11l7-7 7 7M5 19l7-7 7 7" />
-                </svg>
-                <span>Beginning of conversation</span>
-            </div>
-        `;
-        this.messagesArea?.prepend(marker);
-    }
-
-    /**
-     * Remove the "search older" or "beginning" banner
+     * Remove the "search older" prompt (DM-specific paginated empty window).
      * @private
      */
     _removeSearchOlderBanner() {
@@ -223,24 +328,39 @@ class ChatAreaUI {
     }
 
     /**
+     * Defensive: remove any stale icon-banner end-of-history marker. The app
+     * no longer creates this element (the inline marker rendered inside
+     * `renderMessages` is the single source of truth), but a service-worker
+     * cached page from a previous build could still inject one — best effort
+     * cleanup keeps things consistent.
+     * @private
+     */
+    _removeHistoryEndBanner() {
+        document.getElementById('history-end-banner')?.remove();
+    }
+
+    /**
      * Load more history for a preview channel
      * @private
      */
     async _loadMorePreviewHistory(previewChannel) {
-        this.isLoadingMore = true;
-        
+        const streamId = previewChannel?.streamId || null;
+
         // Only show "Loading More" indicator if there are existing messages
         // (otherwise the central spinner from renderMessages is already showing)
         const showIndicator = previewChannel.messages.length > 0;
-        if (showIndicator) this.showLoadingMoreIndicator();
-        
+        const op = this._beginLoadOp({ streamId, mode: 'preview', showIndicator });
+
+        this._removeHistoryEndBanner();
+
         const previousScrollHeight = this.messagesArea.scrollHeight;
         const previousScrollTop = this.messagesArea.scrollTop;
         
         try {
             const result = await previewModeUI.loadMorePreviewHistory();
-            
+
             if (!previewModeUI.isInPreviewMode()) return;
+            if (!this._isOpCurrent(op)) return;
             
             if (result.loaded > 0) {
                 this.renderMessages(previewChannel.messages, () => {
@@ -250,6 +370,15 @@ class ChatAreaUI {
                 const newScrollHeight = this.messagesArea.scrollHeight;
                 const heightDiff = newScrollHeight - previousScrollHeight;
                 this.messagesArea.scrollTop = previousScrollTop + heightDiff;
+            } else if (!result.hasMore && result.loaded === 0) {
+                // Exhausted preview history — re-render so the inline
+                // "— beginning of conversation —" marker is emitted by
+                // `renderMessages` (gated on `hasMoreHistory === false`).
+                // No separate icon banner: the inline marker is the single
+                // source of truth across every channel type.
+                this.renderMessages(previewChannel.messages, () => {
+                    this._attachMessageListeners();
+                });
             } else if (previewChannel.messages.length === 0) {
                 // No messages loaded and channel is empty - re-render to update spinner to "no messages"
                 this.renderMessages(previewChannel.messages);
@@ -257,23 +386,28 @@ class ChatAreaUI {
         } catch (error) {
             this.deps.Logger?.error('Failed to load more preview messages:', error);
         } finally {
-            if (showIndicator) this.hideLoadingMoreIndicator();
-            this.isLoadingMore = false;
+            this._endLoadOp(op);
         }
     }
 
     /**
-     * Show loading indicator at top of messages
+     * Show loading indicator at top of messages. Re-renders use this on the
+     * `renderMessages` path to re-attach the spinner after `innerHTML=` wipe;
+     * always tagged with the active op token so a stale render cannot inject
+     * a spinner that no live op owns.
      */
     showLoadingMoreIndicator() {
-        notificationUI.showLoadingMoreIndicator(this.messagesArea);
+        const token = this._loadOp?.id ?? null;
+        if (token == null) return;
+        notificationUI.showLoadingMoreIndicator(this.messagesArea, token);
     }
 
     /**
-     * Hide loading indicator
+     * Hide loading indicator only when the DOM-token matches the active op
+     * (or unconditionally if no op is active — used by external cleanup paths).
      */
     hideLoadingMoreIndicator() {
-        notificationUI.hideLoadingMoreIndicator();
+        notificationUI.hideLoadingMoreIndicator(this._loadOp?.id ?? null);
     }
 
     /**
@@ -649,20 +783,41 @@ class ChatAreaUI {
     /**
      * Auto-load more history if content doesn't fill the viewport.
      * Retries up to MAX_AUTO_LOAD_RETRIES times when fetched history is all reactions.
+     *
+     * Tracks the channelManager `switchGeneration` (and preview mode flag) at
+     * scheduling time. Any pending retry whose generation/mode no longer
+     * matches is dropped — fixes the race where a `setTimeout` retry survived
+     * a channel switch and triggered a premature load on the new channel.
      * @private
      * @param {number} retriesLeft - Remaining retries (default: 5)
+     * @param {number} startGeneration - Switch generation when this run started
+     * @param {boolean} startInPreview - Whether preview mode was active at start
      */
-    async _autoLoadIfContentShort(retriesLeft = 5) {
+    async _autoLoadIfContentShort(retriesLeft = 5, startGeneration = null, startInPreview = null) {
         if (!this.messagesArea) return;
+        if (this._channelSwitching) return;
         if (this.isLoadingMore) return;
         if (this.messagesArea.scrollHeight > this.messagesArea.clientHeight) return;
         if (retriesLeft <= 0) return;
-        
-        // Check if there's more history to load
+
         const { channelManager } = this.deps;
+        const inPreview = previewModeUI.isInPreviewMode?.() === true;
+        const generation = channelManager?.switchGeneration ?? 0;
+
+        // Capture context on first invocation; subsequent retries inherit it
+        // and bail if the current state diverged (channel switch, preview
+        // exit/enter, etc.).
+        if (startGeneration === null) {
+            startGeneration = generation;
+            startInPreview = inPreview;
+        } else {
+            if (generation !== startGeneration) return;
+            if (inPreview !== startInPreview) return;
+        }
+
         const channel = channelManager?.getCurrentChannel();
         const previewChannel = previewModeUI.getPreviewChannel();
-        const hasMore = (channel && channel.hasMoreHistory) || 
+        const hasMore = (channel && channel.hasMoreHistory) ||
                         (previewChannel && previewChannel.hasMoreHistory !== false);
         if (!hasMore) return;
         
@@ -672,7 +827,23 @@ class ChatAreaUI {
         // After loading, if content still doesn't fill viewport, retry
         // (handles case where fetched history was all reactions)
         if (this.messagesArea.scrollHeight <= this.messagesArea.clientHeight) {
-            setTimeout(() => this._autoLoadIfContentShort(retriesLeft - 1), 300);
+            this._cancelPendingAutoLoad();
+            this._pendingAutoLoadTimer = setTimeout(() => {
+                this._pendingAutoLoadTimer = null;
+                this._autoLoadIfContentShort(retriesLeft - 1, startGeneration, startInPreview);
+            }, 300);
+        }
+    }
+
+    /**
+     * Cancel any scheduled auto-load retry. Called by the channel switch path
+     * so retries cannot fire against the wrong channel.
+     * @private
+     */
+    _cancelPendingAutoLoad() {
+        if (this._pendingAutoLoadTimer) {
+            clearTimeout(this._pendingAutoLoadTimer);
+            this._pendingAutoLoadTimer = null;
         }
     }
 

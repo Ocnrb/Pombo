@@ -532,7 +532,9 @@ class PreviewModeUI {
             // Reset any stuck loading indicator from preview history loading
             const { chatAreaUI } = this.deps;
             if (chatAreaUI) {
+                // Setter cancels active op (clears watchdog + token-tagged spinner)
                 chatAreaUI.isLoadingMore = false;
+                chatAreaUI._cancelPendingAutoLoad?.();
                 chatAreaUI.hideLoadingMoreIndicator();
             }
 

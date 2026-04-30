@@ -68,7 +68,11 @@ class ChannelViewUI {
         // Clear typing indicator, reply state, and any stuck loading indicator
         chatAreaUI.hideTypingIndicator();
         chatAreaUI.cancelReply();
+        // Cancels any in-flight pagination op (clears watchdog + indicator).
+        // Setting `isLoadingMore = false` invokes the cancellation path on
+        // ChatAreaUI.
         chatAreaUI.isLoadingMore = false;
+        chatAreaUI._cancelPendingAutoLoad?.();
         chatAreaUI.hideLoadingMoreIndicator();
         this.deps.setReplyingTo(null);
         
@@ -156,7 +160,6 @@ class ChannelViewUI {
             this.deps.attachReactionListeners();
             mediaHandler.attachLightboxListeners();
         });
-        
         // Mark channel as read
         await secureStorage.setChannelLastAccess(streamId, Date.now());
         
@@ -187,6 +190,7 @@ class ChannelViewUI {
         chatAreaUI.hideTypingIndicator();
         chatAreaUI.cancelReply();
         chatAreaUI.isLoadingMore = false;
+        chatAreaUI._cancelPendingAutoLoad?.();
         chatAreaUI.hideLoadingMoreIndicator();
         this.deps.setReplyingTo(null);
         

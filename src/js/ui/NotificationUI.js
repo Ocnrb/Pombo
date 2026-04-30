@@ -429,15 +429,21 @@ class NotificationUI {
     }
 
     /**
-     * Show loading indicator at top of messages area
+     * Show loading indicator at top of messages area. Tagged with the caller's
+     * load-op token so a stale `hideLoadingMoreIndicator(staleToken)` from a
+     * previously-cancelled op cannot remove a fresh op's spinner.
      * @param {HTMLElement} messagesArea - The messages container element
+     * @param {string|number|null} token - Owner token (load-op id). When null,
+     *   any pre-existing indicator is replaced unconditionally (legacy behaviour).
      */
-    showLoadingMoreIndicator(messagesArea) {
-        // Remove existing if any
-        this.hideLoadingMoreIndicator();
-        
+    showLoadingMoreIndicator(messagesArea, token = null) {
+        // Always replace any pre-existing indicator: a fresh `show` always wins.
+        const prior = document.getElementById('loading-more-indicator');
+        if (prior) prior.remove();
+
         const indicator = document.createElement('div');
         indicator.id = 'loading-more-indicator';
+        if (token != null) indicator.dataset.loadToken = String(token);
         indicator.className = 'flex justify-center py-3';
         indicator.innerHTML = `
             <div class="flex items-center gap-2 text-white/30 text-sm">
@@ -452,13 +458,19 @@ class NotificationUI {
     }
 
     /**
-     * Hide loading indicator from messages area
+     * Hide the loading indicator. When `token` is provided, the indicator is
+     * only removed if its `data-load-token` matches — preventing a stale op
+     * from clearing the indicator owned by a fresher op.
+     * @param {string|number|null} token - Owner token. Pass null to force-clear.
      */
-    hideLoadingMoreIndicator() {
+    hideLoadingMoreIndicator(token = null) {
         const indicator = document.getElementById('loading-more-indicator');
-        if (indicator) {
-            indicator.remove();
+        if (!indicator) return;
+        if (token != null) {
+            const stored = indicator.dataset.loadToken;
+            if (stored !== undefined && stored !== String(token)) return;
         }
+        indicator.remove();
     }
 }
 
