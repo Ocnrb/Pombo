@@ -618,7 +618,7 @@ describe('ChannelManager', () => {
             global.window = { location: { origin: 'https://pombo.app', pathname: '/' } };
         });
         
-        it('should generate invite link with v2 hash format', async () => {
+        it('should generate invite link with clean hash format', async () => {
             const channel = { 
                 streamId: 'stream1', 
                 name: 'Test Channel', 
@@ -628,7 +628,7 @@ describe('ChannelManager', () => {
             
             const link = await channelManager.generateInviteLink('stream1');
             
-            expect(link).toContain('https://pombo.app/#/invite/v2/');
+            expect(link).toContain('https://pombo.app/#/invite/');
         });
         
         it('should round-trip channel name and type via encrypted token', async () => {
@@ -640,7 +640,7 @@ describe('ChannelManager', () => {
             channelManager.channels.set('stream1', channel);
             
             const link = await channelManager.generateInviteLink('stream1');
-            const token = link.split('#/invite/v2/')[1];
+            const token = link.split('#/invite/')[1];
             const decoded = await channelManager.parseInviteLink(token);
             
             expect(decoded.streamId).toBe('stream1');
@@ -658,7 +658,7 @@ describe('ChannelManager', () => {
             channelManager.channels.set('stream1', channel);
             
             const link = await channelManager.generateInviteLink('stream1');
-            const token = link.split('#/invite/v2/')[1];
+            const token = link.split('#/invite/')[1];
             const decoded = await channelManager.parseInviteLink(token);
             
             expect(decoded.password).toBe('secret123');
@@ -675,7 +675,7 @@ describe('ChannelManager', () => {
             const channel = { streamId: 'stream1', name: 'Test Channel', type: 'public' };
             channelManager.channels.set('stream1', channel);
             const link = await channelManager.generateInviteLink('stream1');
-            const token = link.split('#/invite/v2/')[1];
+            const token = link.split('#/invite/')[1];
             
             const result = await channelManager.parseInviteLink(token);
             
@@ -691,7 +691,7 @@ describe('ChannelManager', () => {
             const channel = { streamId: 'stream1', name: 'Secure', type: 'private', password: 'secret' };
             channelManager.channels.set('stream1', channel);
             const link = await channelManager.generateInviteLink('stream1');
-            const token = link.split('#/invite/v2/')[1];
+            const token = link.split('#/invite/')[1];
             
             const result = await channelManager.parseInviteLink(token);
             

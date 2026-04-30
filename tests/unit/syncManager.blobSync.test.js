@@ -49,7 +49,8 @@ vi.mock('../../src/js/secureStorage.js', () => ({
         }),
         decryptBlob: vi.fn().mockResolvedValue('base64-image-data'),
         markImageSynced: vi.fn().mockResolvedValue(undefined),
-        saveImageToLedger: vi.fn().mockResolvedValue(undefined)
+        saveImageToLedger: vi.fn().mockResolvedValue(undefined),
+        _deleteLedgerRecord: vi.fn().mockResolvedValue(undefined)
     }
 }));
 
@@ -190,6 +191,8 @@ describe('syncManager blob sync', () => {
 
             await syncManager.pushImageBlobs();
 
+            // Corrupt blob should be removed from ledger and not marked synced
+            expect(secureStorage._deleteLedgerRecord).toHaveBeenCalledWith('fail-img');
             // Second blob should still be published
             expect(secureStorage.markImageSynced).toHaveBeenCalledWith('ok-img');
             expect(secureStorage.markImageSynced).not.toHaveBeenCalledWith('fail-img');

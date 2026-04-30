@@ -338,6 +338,113 @@ describe('media.js core', () => {
             });
         });
 
+        describe('compressImageToTarget', () => {
+            const LIMIT = 1 * 1024 * 1024;
+
+            beforeEach(() => {
+                vi.spyOn(mediaController, 'supportsCanvasMime').mockReturnValue(true);
+            });
+
+            it('returns null when the output mime is not supported', async () => {
+                mediaController.supportsCanvasMime.mockReturnValue(false);
+                const encodeSpy = vi.spyOn(mediaController, 'encodeImageToBlob');
+
+                const result = await mediaController.compressImageToTarget({}, 'image/webp', {
+                    initialQuality: 1.0,
+                    minQuality: 0.7
+                });
+
+                expect(result).toBeNull();
+                expect(encodeSpy).not.toHaveBeenCalled();
+            });
+
+            it('returns the maximum quality at full resolution when everything fits', async () => {
+                vi.spyOn(mediaController, 'encodeImageToBlob').mockImplementation(async (_i, _m, _q, scale) => ({
+                    size: 100 * 1024,
+                    type: 'image/webp',
+                    scale
+                }));
+
+                const result = await mediaController.compressImageToTarget({}, 'image/webp', {
+                    initialQuality: 1.0,
+                    minQuality: 0.7
+                });
+
+                expect(result.quality).toBe(1.0);
+                expect(result.blob.scale).toBe(1);
+                expect(result.blob.size).toBeLessThanOrEqual(LIMIT);
+            });
+
+            it('keeps the result under the assembled byte limit', async () => {
+                vi.spyOn(mediaController, 'encodeImageToBlob').mockImplementation(async (_i, _m, q) => ({
+                    size: Math.round(500 * 1024 + q * 600 * 1024),
+                    type: 'image/webp'
+                }));
+
+                const result = await mediaController.compressImageToTarget({}, 'image/webp', {
+                    initialQuality: 1.0,
+                    minQuality: 0.7
+                });
+
+                expect(result).not.toBeNull();
+                expect(result.blob.size).toBeLessThanOrEqual(LIMIT);
+            });
+
+            it('prefers the highest quality that still fits at the largest viable resolution', async () => {
+                vi.spyOn(mediaController, 'encodeImageToBlob').mockImplementation(async (_i, _m, q) => ({
+                    size: Math.round(500 * 1024 + q * 600 * 1024),
+                    type: 'image/webp'
+                }));
+
+                const result = await mediaController.compressImageToTarget({}, 'image/webp', {
+                    initialQuality: 1.0,
+                    minQuality: 0.7
+                });
+
+                expect(result.blob.size).toBeLessThanOrEqual(LIMIT);
+                expect(LIMIT - result.blob.size).toBeLessThan(20 * 1024);
+                expect(result.quality).toBeGreaterThan(0.7);
+                expect(result.quality).toBeLessThan(1.0);
+            });
+
+            it('downscales when no quality fits at full resolution', async () => {
+                const seenScales = new Set();
+                vi.spyOn(mediaController, 'encodeImageToBlob').mockImplementation(async (_i, _m, q, scale) => {
+                    seenScales.add(scale);
+                    const baseSize = scale > 0.6 ? 2.5 * 1024 * 1024 : 700 * 1024;
+                    return {
+                        size: Math.round(baseSize * (0.6 + q * 0.4)),
+                        type: 'image/webp',
+                        scale
+                    };
+                });
+
+                const result = await mediaController.compressImageToTarget({}, 'image/webp', {
+                    initialQuality: 1.0,
+                    minQuality: 0.7
+                });
+
+                expect(result).not.toBeNull();
+                expect(result.blob.size).toBeLessThanOrEqual(LIMIT);
+                expect(result.blob.scale).toBeLessThan(1);
+                expect(seenScales.size).toBeGreaterThan(1);
+            });
+
+            it('returns null when no scale and quality combination fits', async () => {
+                vi.spyOn(mediaController, 'encodeImageToBlob').mockResolvedValue({
+                    size: 5 * 1024 * 1024,
+                    type: 'image/webp'
+                });
+
+                const result = await mediaController.compressImageToTarget({}, 'image/webp', {
+                    initialQuality: 1.0,
+                    minQuality: 0.7
+                });
+
+                expect(result).toBeNull();
+            });
+        });
+
         describe('evictImageCacheIfNeeded', () => {
             it('does nothing if under limit', () => {
                 mediaController.imageCacheBytes = 100;
@@ -1341,7 +1448,7 @@ describe('media.js core', () => {
             const result = await mediaController.sendImage('stream-1', file);
 
             expect(result.imageId).toBeDefined();
-            expect(result.data).toBe('data:image/jpeg;base64,abc');
+            expect(result.data).toBe('data:image/jpeg;base64,aW1n');
             expect(streamrController.publishMessage).toHaveBeenCalled();
             // Verify cache by checking imageCache size increased
             expect(mediaController.imageCache.size).toBeGreaterThan(0);

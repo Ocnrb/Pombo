@@ -134,7 +134,7 @@ describe('inviteHandler.checkInviteLink', () => {
     });
 
     it('should do nothing when invite code is invalid', async () => {
-        window.location.hash = '#/invite/v2/bad-code';
+        window.location.hash = '#/invite/bad-code';
         channelManager.parseInviteLink.mockResolvedValue(null);
 
         await inviteHandler.checkInviteLink();
@@ -144,7 +144,7 @@ describe('inviteHandler.checkInviteLink', () => {
 
     it('should store pending invite when not connected', async () => {
         const inviteData = { name: 'Test', type: 'public', streamId: '0xabc/test-1' };
-        window.location.hash = '#/invite/v2/valid-code';
+        window.location.hash = '#/invite/valid-code';
         channelManager.parseInviteLink.mockResolvedValue(inviteData);
         authManager.isConnected.mockReturnValue(false);
 
