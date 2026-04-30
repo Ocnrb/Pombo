@@ -172,6 +172,81 @@ class IdentityManager {
     }
 
     /**
+     * Create a signed chunked-image manifest payload.
+     * @param {Object} input
+     * @param {string} input.imageId
+     * @param {string} input.channelId
+     * @param {string} input.originalMime
+     * @param {string} input.finalMime
+     * @param {number} input.finalSizeBytes
+     * @param {number} input.chunkCount
+     * @param {string[]} input.chunkHashes
+     * @param {string} input.assembledSha256
+     * @param {boolean} [input.preservedOriginal=false]
+     * @param {string|null} [input.convertedTo=null]
+     * @param {number|null} [input.qualityUsed=null]
+     * @returns {Promise<Object>}
+     */
+    async createSignedImageManifest({
+        imageId,
+        channelId,
+        originalMime,
+        finalMime,
+        finalSizeBytes,
+        chunkCount,
+        chunkHashes,
+        assembledSha256,
+        preservedOriginal = false,
+        convertedTo = null,
+        qualityUsed = null
+    }) {
+        const sender = authManager.getAddress();
+        const timestamp = Date.now();
+        const messageId = this.generateMessageId();
+
+        const messageHash = this.createImageManifestHash({
+            id: messageId,
+            imageId,
+            sender,
+            timestamp,
+            channelId,
+            originalMime,
+            finalMime,
+            finalSizeBytes,
+            chunkCount,
+            chunkHashes,
+            assembledSha256,
+            preservedOriginal,
+            convertedTo,
+            qualityUsed
+        });
+
+        const signature = await authManager.signMessage(messageHash);
+
+        return {
+            type: 'image',
+            transport: 'chunked',
+            v: 2,
+            id: messageId,
+            imageId,
+            sender,
+            senderName: this.username || null,
+            timestamp,
+            channelId,
+            originalMime,
+            finalMime,
+            finalSizeBytes,
+            chunkCount,
+            chunkHashes,
+            assembledSha256,
+            preservedOriginal: !!preservedOriginal,
+            convertedTo: convertedTo || null,
+            qualityUsed: Number.isFinite(qualityUsed) ? qualityUsed : null,
+            signature
+        };
+    }
+
+    /**
      * Create deterministic message hash for signing/verification
      * Uses keccak256 for cryptographic security and collision resistance
      * @param {string} id - Message ID
@@ -193,6 +268,50 @@ class IdentityManager {
             channelId: channelId
         });
         // Use keccak256 for cryptographic hash
+        return ethers.keccak256(ethers.toUtf8Bytes(data));
+    }
+
+    /**
+     * Create deterministic hash for chunked image manifests.
+     * @param {Object} input
+     * @returns {string}
+     */
+    createImageManifestHash({
+        id,
+        imageId,
+        sender,
+        timestamp,
+        channelId,
+        originalMime,
+        finalMime,
+        finalSizeBytes,
+        chunkCount,
+        chunkHashes,
+        assembledSha256,
+        preservedOriginal = false,
+        convertedTo = null,
+        qualityUsed = null
+    }) {
+        const data = JSON.stringify({
+            protocol: 'POMBO',
+            version: 2,
+            type: 'image',
+            transport: 'chunked',
+            id,
+            imageId,
+            sender: sender.toLowerCase(),
+            timestamp,
+            channelId,
+            originalMime,
+            finalMime,
+            finalSizeBytes,
+            chunkCount,
+            chunkHashes,
+            assembledSha256,
+            preservedOriginal: !!preservedOriginal,
+            convertedTo: convertedTo || null,
+            qualityUsed: Number.isFinite(qualityUsed) ? Number(qualityUsed.toFixed(3)) : null
+        });
         return ethers.keccak256(ethers.toUtf8Bytes(data));
     }
 
@@ -259,13 +378,31 @@ class IdentityManager {
             }
 
             // Create message hash (fast, main thread)
-            const messageHash = this.createMessageHash(
-                message.id,
-                message.text,
-                message.sender,
-                message.timestamp,
-                message.channelId
-            );
+            const isChunkedImageManifest = message?.type === 'image' && message?.transport === 'chunked';
+            const messageHash = isChunkedImageManifest
+                ? this.createImageManifestHash({
+                    id: message.id,
+                    imageId: message.imageId,
+                    sender: message.sender,
+                    timestamp: message.timestamp,
+                    channelId: message.channelId,
+                    originalMime: message.originalMime,
+                    finalMime: message.finalMime,
+                    finalSizeBytes: message.finalSizeBytes,
+                    chunkCount: message.chunkCount,
+                    chunkHashes: message.chunkHashes,
+                    assembledSha256: message.assembledSha256,
+                    preservedOriginal: message.preservedOriginal,
+                    convertedTo: message.convertedTo,
+                    qualityUsed: message.qualityUsed
+                })
+                : this.createMessageHash(
+                    message.id,
+                    message.text,
+                    message.sender,
+                    message.timestamp,
+                    message.channelId
+                );
 
             // Verify signature in worker (CPU-intensive ECDSA recovery)
             const verification = await cryptoWorkerPool.execute('VERIFY_SIGNATURE', {

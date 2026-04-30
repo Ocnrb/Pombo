@@ -217,8 +217,13 @@ class InputUI {
             showLoading?.(type === 'image' ? 'Sending image...' : 'Processing video...');
             
             if (type === 'image') {
-                await mediaController.sendImage(currentChannel.streamId, file, currentChannel.password);
-                showNotification?.('Image sent!', 'success');
+                const result = await mediaController.sendImage(currentChannel.streamId, file, currentChannel.password);
+                if (result?.finalMime && result?.originalMime && result.finalMime !== result.originalMime) {
+                    const finalLabel = result.finalMime.replace('image/', '').toUpperCase();
+                    showNotification?.(`Image sent! Converted to ${finalLabel} to fit the 1MB limit.`, 'success');
+                } else {
+                    showNotification?.('Image sent!', 'success');
+                }
             } else if (type === 'video') {
                 await mediaController.sendVideo(currentChannel.streamId, file, currentChannel.password);
                 showNotification?.('Video shared!', 'success');

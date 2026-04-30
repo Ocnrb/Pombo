@@ -2398,6 +2398,13 @@ class ChannelManager {
             Logger.debug('Ignoring override on content handler path:', data?.type);
             return;
         }
+
+        if (typeof mediaController?.isStoredImageChunkMessage === 'function' && mediaController.isStoredImageChunkMessage(data)) {
+            if (typeof mediaController.registerStoredImageChunk === 'function') {
+                await mediaController.registerStoredImageChunk(streamId, data);
+            }
+            return;
+        }
         
         // Validate that this looks like a message (has required properties)
         // Text messages need: id, text, sender, timestamp
@@ -2494,6 +2501,15 @@ class ChannelManager {
         } catch (error) {
             Logger.error('Verification error:', error);
             data.verified = { valid: false, error: error.message, trustLevel: -1 };
+        }
+
+        if (
+            typeof mediaController?.isStoredChunkedImageManifest === 'function'
+            && mediaController.isStoredChunkedImageManifest(data)
+            && data.verified?.valid !== false
+            && typeof mediaController.registerStoredImageManifest === 'function'
+        ) {
+            await mediaController.registerStoredImageManifest(streamId, data);
         }
 
         // Add to channel messages
@@ -2602,6 +2618,15 @@ class ChannelManager {
             }
             if (channel.messages.some(m => m.id === data.id)) {
                 continue;
+            }
+
+            if (
+                typeof mediaController?.isStoredChunkedImageManifest === 'function'
+                && mediaController.isStoredChunkedImageManifest(data)
+                && data.verified?.valid !== false
+                && typeof mediaController.registerStoredImageManifest === 'function'
+            ) {
+                await mediaController.registerStoredImageManifest(streamId, data);
             }
             
             channel.messages.push(data);
@@ -3663,7 +3688,7 @@ class ChannelManager {
             this.bytesToBase64Url(keyBytes)
         ].join('.');
 
-        return `${window.location.origin}${window.location.pathname}#/invite/v2/${token}`;
+            return `${window.location.origin}${window.location.pathname}#/invite/${token}`;
     }
 
     /**

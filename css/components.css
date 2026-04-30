@@ -1165,20 +1165,25 @@ body {
 
 /* ----- Input Buttons ----- */
 .input-button {
-    background-color: rgba(255, 255, 255, 0.06);
+    background-color: transparent;
     color: white;
     width: 2.25rem;
     height: 2.25rem;
-    border-radius: 9999px;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background-color 0.2s;
+    padding: 0;
+    transition: color 0.2s;
     cursor: pointer;
 }
 
+.input-button svg {
+    width: 1.5rem;
+    height: 1.5rem;
+}
+
 .input-button:hover {
-    background-color: rgba(255, 255, 255, 0.12);
+    background-color: transparent;
 }
 
 /* ----- Send Button ----- */
@@ -2091,8 +2096,8 @@ body {
     
     .input-btn-wrapper .input-button svg,
     .input-btn-wrapper.input-button svg {
-        width: 1.125rem;
-        height: 1.125rem;
+        width: 1.375rem;
+        height: 1.375rem;
     }
     
     /* Hide disconnect button text on mobile */

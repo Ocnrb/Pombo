@@ -576,6 +576,13 @@ class DMManager {
             }
         }
 
+        if (typeof mediaController?.isStoredImageChunkMessage === 'function' && mediaController.isStoredImageChunkMessage(data)) {
+            if (typeof mediaController.registerStoredImageChunk === 'function') {
+                await mediaController.registerStoredImageChunk(channel.messageStreamId, data);
+            }
+            return;
+        }
+
         // Route reactions through handleControlMessage (not as text messages)
         if (data.type === 'reaction') {
             data.senderId = senderAddress;
@@ -588,6 +595,14 @@ class DMManager {
             data.senderId = senderAddress;
             channelManager.handleOverrideMessage(channel.messageStreamId, data);
             return;
+        }
+
+        if (
+            typeof mediaController?.isStoredChunkedImageManifest === 'function'
+            && mediaController.isStoredChunkedImageManifest(data)
+            && typeof mediaController.registerStoredImageManifest === 'function'
+        ) {
+            await mediaController.registerStoredImageManifest(channel.messageStreamId, data);
         }
 
         // Deduplicate: check if message already exists

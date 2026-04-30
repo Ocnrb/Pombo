@@ -29,7 +29,7 @@ class InviteHandler {
      */
     async checkInviteLink() {
         const hash = window.location.hash || '';
-        const match = hash.match(/^#\/invite\/v2\/([^?#]+)/);
+        const match = hash.match(/^#\/invite\/([^?#]+)/);
         const inviteCode = match?.[1] || null;
 
         if (inviteCode) {

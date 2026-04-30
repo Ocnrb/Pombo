@@ -2821,6 +2821,7 @@ class StreamrController {
             if (msg?.id && msg?.text && msg?.sender && msg?.timestamp && !msg?.type) return true;
             if (msg?.type === 'reaction') return true;
             if (msg?.type === 'image' && msg?.imageId) return true;
+            if (msg?.type === 'image_chunk' && msg?.imageId && Number.isInteger(msg?.chunkIndex) && typeof msg?.data === 'string') return true;
             if (msg?.type === 'video_announce' && msg?.metadata) return true;
             if (allowOverridesInContentPartition && msg?.type === 'edit' && msg?.targetId) return true;
             if (allowOverridesInContentPartition && msg?.type === 'delete' && msg?.targetId) return true;
@@ -3189,6 +3190,14 @@ class StreamrController {
             
             // Helper to check if message is an image
             const isImageMessage = (msg) => msg?.type === 'image' && msg?.imageId;
+
+            // Helper to check if message is a stored image chunk
+            const isImageChunkMessage = (msg) => {
+                return msg?.type === 'image_chunk'
+                    && msg?.imageId
+                    && Number.isInteger(msg?.chunkIndex)
+                    && typeof msg?.data === 'string';
+            };
             
             // Helper to check if message is a video announcement
             const isVideoMessage = (msg) => msg?.type === 'video_announce' && msg?.metadata;
@@ -3200,7 +3209,12 @@ class StreamrController {
             
             // Valid content message types for message partition 0 (stored content)
             const isValidContentMessage = (msg) => {
-                return isTextMessage(msg) || isReaction(msg) || isImageMessage(msg) || isVideoMessage(msg) || isEncryptedEnvelope(msg);
+                return isTextMessage(msg)
+                    || isReaction(msg)
+                    || isImageMessage(msg)
+                    || isImageChunkMessage(msg)
+                    || isVideoMessage(msg)
+                    || isEncryptedEnvelope(msg);
             };
 
             // Valid override message types for message partition 1 (stored control)

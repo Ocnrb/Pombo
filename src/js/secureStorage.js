@@ -802,6 +802,17 @@ class SecureStorage {
             stored.type = 'image';
             stored.imageId = message.imageId;
             stored.imageData = message.imageData;
+            stored.transport = message.transport || null;
+            stored.v = message.v || null;
+            stored.originalMime = message.originalMime || null;
+            stored.finalMime = message.finalMime || null;
+            stored.finalSizeBytes = Number.isFinite(message.finalSizeBytes) ? message.finalSizeBytes : null;
+            stored.chunkCount = Number.isInteger(message.chunkCount) ? message.chunkCount : null;
+            stored.chunkHashes = Array.isArray(message.chunkHashes) ? [...message.chunkHashes] : null;
+            stored.assembledSha256 = message.assembledSha256 || null;
+            stored.preservedOriginal = typeof message.preservedOriginal === 'boolean' ? message.preservedOriginal : null;
+            stored.convertedTo = message.convertedTo || null;
+            stored.qualityUsed = Number.isFinite(message.qualityUsed) ? message.qualityUsed : null;
         } else if (message.type === 'video_announce') {
             stored.type = 'video_announce';
             stored.metadata = message.metadata;

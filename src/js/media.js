@@ -7,6 +7,7 @@
  */
 
 import { Logger } from './logger.js';
+import { cryptoManager } from './crypto.js';
 import { streamrController, deriveEphemeralId, STREAM_CONFIG } from './streamr.js';
 import { authManager } from './auth.js';
 import { identityManager } from './identity.js';
@@ -22,6 +23,22 @@ const CONFIG = {
     IMAGE_MAX_WIDTH: APP_CONFIG.media.imageMaxWidth,
     IMAGE_MAX_HEIGHT: APP_CONFIG.media.imageMaxHeight,
     IMAGE_QUALITY: APP_CONFIG.media.imageQuality,
+    IMAGE_MAX_ASSEMBLED_BYTES: APP_CONFIG.media.imageMaxAssembledBytes,
+    IMAGE_PAYLOAD_MAX_BYTES: APP_CONFIG.media.imagePayloadMaxBytes,
+    IMAGE_PAYLOAD_SAFETY_MARGIN_BYTES: APP_CONFIG.media.imagePayloadSafetyMarginBytes,
+    IMAGE_CHUNK_INITIAL_RAW_BYTES: APP_CONFIG.media.imageChunkInitialRawBytes,
+    IMAGE_CHUNK_MIN_RAW_BYTES: APP_CONFIG.media.imageChunkMinRawBytes,
+    IMAGE_ASSEMBLY_TTL_MS: APP_CONFIG.media.imageAssemblyTtlMs,
+    JPEG_INITIAL_QUALITY: APP_CONFIG.media.jpegInitialQuality,
+    JPEG_MIN_QUALITY: APP_CONFIG.media.jpegMinQuality,
+    WEBP_INITIAL_QUALITY: APP_CONFIG.media.webpInitialQuality,
+    WEBP_MIN_QUALITY: APP_CONFIG.media.webpMinQuality,
+    IMAGE_RESOLUTION_SCALES: APP_CONFIG.media.imageResolutionScales,
+    ALLOW_JPEG_TO_WEBP_FALLBACK: APP_CONFIG.media.allowJpegToWebpFallback,
+    FORCE_PNG_TO_WEBP_ON_OVERFLOW: APP_CONFIG.media.forcePngToWebpOnOverflow,
+    FAIL_GIF_ON_OVERFLOW: APP_CONFIG.media.failGifOnOverflow,
+    LEGACY_IMAGE_READ_ENABLED: APP_CONFIG.media.legacyImageReadEnabled,
+    LEGACY_INLINE_IMAGE_WRITE_ENABLED: APP_CONFIG.media.legacyInlineImageWriteEnabled,
     ALLOWED_IMAGE_TYPES: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
     
     // Video/File settings
@@ -65,6 +82,38 @@ const CONFIG = {
 const BINARY_MSG_TYPE = {
     FILE_PIECE: 0x01
 };
+
+const STORED_IMAGE_PROTOCOL_VERSION = 2;
+const STORED_IMAGE_TRANSPORT = 'chunked';
+
+function isStoredImageChunkMessage(data) {
+    return !!(
+        data
+        && data.type === 'image_chunk'
+        && data.v === STORED_IMAGE_PROTOCOL_VERSION
+        && typeof data.imageId === 'string'
+        && Number.isInteger(data.chunkIndex)
+        && data.chunkIndex >= 0
+        && typeof data.chunkHash === 'string'
+        && typeof data.data === 'string'
+    );
+}
+
+function isStoredChunkedImageManifest(data) {
+    return !!(
+        data
+        && data.type === 'image'
+        && data.transport === STORED_IMAGE_TRANSPORT
+        && data.v === STORED_IMAGE_PROTOCOL_VERSION
+        && typeof data.imageId === 'string'
+        && Number.isInteger(data.chunkCount)
+        && data.chunkCount > 0
+        && Array.isArray(data.chunkHashes)
+        && data.chunkHashes.length === data.chunkCount
+        && typeof data.finalMime === 'string'
+        && typeof data.assembledSha256 === 'string'
+    );
+}
 
 /**
  * Encode a file_piece as Uint8Array for binary transport.
@@ -121,6 +170,7 @@ class MediaController {
         this.imageCache = new Map();
         this.imageCacheBytes = 0;
         this.MAX_IMAGE_CACHE_BYTES = APP_CONFIG.media.maxImageCacheBytes;
+        this.pendingImageAssemblies = new Map();
         
         // Local files being seeded: fileId -> { file, metadata, streamId }
         this.localFiles = new Map();
@@ -220,6 +270,12 @@ class MediaController {
         // Clear all maps
         this.imageCache.clear();
         this.imageCacheBytes = 0;
+        for (const pending of this.pendingImageAssemblies.values()) {
+            if (pending.timerId) {
+                clearTimeout(pending.timerId);
+            }
+        }
+        this.pendingImageAssemblies.clear();
         this.localFiles.clear();
         this.downloadedUrls.clear();
         this.incomingFiles.clear();
@@ -409,6 +465,106 @@ class MediaController {
      * @returns {Promise<Object>} - Image message info
      */
     async sendImage(messageStreamId, file, password = null) {
+        if (CONFIG.LEGACY_INLINE_IMAGE_WRITE_ENABLED) {
+            return this.sendLegacyInlineImage(messageStreamId, file, password);
+        }
+
+        // Validate file type
+        if (!CONFIG.ALLOWED_IMAGE_TYPES.includes(file.type)) {
+            throw new Error(`Invalid image type. Allowed: ${CONFIG.ALLOWED_IMAGE_TYPES.join(', ')}`);
+        }
+
+        const channel = channelManager.getChannel(messageStreamId);
+        if (!channel) {
+            throw new Error('Channel not found');
+        }
+
+        let dmAesKey = null;
+        if (channel.type === 'dm' && channel.peerAddress) {
+            const privateKey = authManager.wallet?.privateKey;
+            if (!privateKey) {
+                throw new Error('Cannot send DM image: wallet private key not available');
+            }
+            const peerPubKey = await dmManager.getPeerPublicKey(channel.peerAddress);
+            if (!peerPubKey) {
+                throw new Error('Cannot send DM image: peer public key not available');
+            }
+            dmAesKey = await dmCrypto.getSharedKey(privateKey, channel.peerAddress, peerPubKey);
+            if (typeof streamrController.setDMPublishKey === 'function') {
+                await streamrController.setDMPublishKey(messageStreamId);
+            }
+        }
+
+        const prepared = await this.prepareImageForStoredTransport(file);
+        const imageId = crypto.randomUUID();
+        const finalDataUrl = await this.blobToDataURL(prepared.blob);
+        const chunkPayloads = await this.createStoredImageChunkPayloads({
+            imageId,
+            blob: prepared.blob,
+            password,
+            dmAesKey
+        });
+
+        const manifest = await this.createSignedStoredImageManifest({
+            imageId,
+            channelId: messageStreamId,
+            originalMime: prepared.originalMime,
+            finalMime: prepared.finalMime,
+            finalSizeBytes: prepared.blob.size,
+            chunkCount: chunkPayloads.length,
+            chunkHashes: chunkPayloads.map(chunk => chunk.chunkHash),
+            assembledSha256: prepared.sha256,
+            preservedOriginal: prepared.preservedOriginal,
+            convertedTo: prepared.convertedTo,
+            qualityUsed: prepared.qualityUsed
+        });
+
+        await this.assertStoredImagePayloadFits(manifest, password, dmAesKey, 'image manifest');
+
+        for (const chunkPayload of chunkPayloads) {
+            await this.publishStoredImagePayload(messageStreamId, chunkPayload, password, dmAesKey);
+        }
+        await this.publishStoredImagePayload(messageStreamId, manifest, password, dmAesKey);
+
+        this.cacheImage(imageId, finalDataUrl);
+
+        const localMessage = {
+            ...manifest,
+            imageData: finalDataUrl,
+            verified: {
+                valid: true,
+                trustLevel: await identityManager.getTrustLevel(manifest.sender)
+            }
+        };
+
+        channel.messages.push(localMessage);
+        channelManager.notifyHandlers('message', { streamId: messageStreamId, message: localMessage });
+
+        if (channel.type === 'dm' || channel.writeOnly) {
+            await secureStorage.addSentMessage(messageStreamId, localMessage);
+        }
+
+        Logger.debug('Chunked image message sent:', imageId, {
+            chunkCount: manifest.chunkCount,
+            finalMime: manifest.finalMime,
+            originalMime: manifest.originalMime,
+            finalSizeBytes: manifest.finalSizeBytes
+        });
+
+        return {
+            messageId: manifest.id,
+            imageId,
+            data: finalDataUrl,
+            originalMime: manifest.originalMime,
+            finalMime: manifest.finalMime,
+            preservedOriginal: manifest.preservedOriginal,
+            convertedTo: manifest.convertedTo,
+            chunkCount: manifest.chunkCount,
+            finalSizeBytes: manifest.finalSizeBytes
+        };
+    }
+
+    async sendLegacyInlineImage(messageStreamId, file, password = null) {
         // Validate file type
         if (!CONFIG.ALLOWED_IMAGE_TYPES.includes(file.type)) {
             throw new Error(`Invalid image type. Allowed: ${CONFIG.ALLOWED_IMAGE_TYPES.join(', ')}`);
@@ -471,13 +627,501 @@ class MediaController {
             }
         }
         
-        Logger.debug('Image message sent with data:', imageId);
+        Logger.debug('Legacy inline image message sent with data:', imageId);
         
         return { messageId, imageId, data: base64Data };
     }
 
+    isStoredImageChunkMessage(data) {
+        return isStoredImageChunkMessage(data);
+    }
+
+    isStoredChunkedImageManifest(data) {
+        return isStoredChunkedImageManifest(data);
+    }
+
+    async registerStoredImageChunk(messageStreamId, chunk) {
+        if (!isStoredImageChunkMessage(chunk)) {
+            return false;
+        }
+
+        const pending = this.getOrCreatePendingImageAssembly(chunk.imageId, messageStreamId);
+        const existing = pending.chunks.get(chunk.chunkIndex);
+        if (!existing || existing.chunkHash !== chunk.chunkHash) {
+            pending.chunks.set(chunk.chunkIndex, {
+                chunkHash: chunk.chunkHash,
+                data: chunk.data,
+                timestamp: chunk.timestamp || Date.now()
+            });
+        }
+
+        this.tryAssembleStoredImage(chunk.imageId).catch(error => {
+            Logger.debug('Stored image chunk assembly deferred:', error?.message || error);
+        });
+        return true;
+    }
+
+    async registerStoredImageManifest(messageStreamId, manifest) {
+        if (!isStoredChunkedImageManifest(manifest)) {
+            return false;
+        }
+
+        const pending = this.getOrCreatePendingImageAssembly(manifest.imageId, messageStreamId);
+        pending.manifest = manifest;
+        pending.streamId = messageStreamId;
+
+        await this.tryAssembleStoredImage(manifest.imageId);
+        return true;
+    }
+
+    getOrCreatePendingImageAssembly(imageId, streamId = null) {
+        let pending = this.pendingImageAssemblies.get(imageId);
+        if (!pending) {
+            pending = {
+                streamId,
+                manifest: null,
+                chunks: new Map(),
+                timerId: null
+            };
+            this.pendingImageAssemblies.set(imageId, pending);
+        }
+        if (streamId && !pending.streamId) {
+            pending.streamId = streamId;
+        }
+        this.schedulePendingImageAssemblyExpiry(imageId, pending);
+        return pending;
+    }
+
+    schedulePendingImageAssemblyExpiry(imageId, pending) {
+        if (pending.timerId) {
+            clearTimeout(pending.timerId);
+        }
+        pending.timerId = setTimeout(() => {
+            this.clearPendingImageAssembly(imageId);
+        }, CONFIG.IMAGE_ASSEMBLY_TTL_MS);
+    }
+
+    clearPendingImageAssembly(imageId) {
+        const pending = this.pendingImageAssemblies.get(imageId);
+        if (pending?.timerId) {
+            clearTimeout(pending.timerId);
+        }
+        this.pendingImageAssemblies.delete(imageId);
+    }
+
+    async tryAssembleStoredImage(imageId) {
+        const pending = this.pendingImageAssemblies.get(imageId);
+        if (!pending?.manifest) {
+            return false;
+        }
+        if (this.imageCache.has(imageId)) {
+            this.clearPendingImageAssembly(imageId);
+            return true;
+        }
+
+        const { manifest, chunks, streamId } = pending;
+        if (chunks.size < manifest.chunkCount) {
+            return false;
+        }
+
+        const chunkBuffers = [];
+        let totalBytes = 0;
+
+        for (let chunkIndex = 0; chunkIndex < manifest.chunkCount; chunkIndex++) {
+            const expectedHash = manifest.chunkHashes[chunkIndex];
+            const chunk = chunks.get(chunkIndex);
+            if (!chunk || chunk.chunkHash !== expectedHash) {
+                return false;
+            }
+
+            const chunkBuffer = this.base64ToArrayBuffer(chunk.data);
+            if (!chunkBuffer) {
+                Logger.warn('Stored image chunk decode failed:', imageId, chunkIndex);
+                return false;
+            }
+
+            const actualHash = await this.sha256(chunkBuffer);
+            if (actualHash !== expectedHash) {
+                Logger.warn('Stored image chunk hash mismatch:', imageId, chunkIndex);
+                chunks.delete(chunkIndex);
+                return false;
+            }
+
+            const chunkBytes = new Uint8Array(chunkBuffer);
+            chunkBuffers.push(chunkBytes);
+            totalBytes += chunkBytes.byteLength;
+        }
+
+        if (totalBytes !== manifest.finalSizeBytes || totalBytes > CONFIG.IMAGE_MAX_ASSEMBLED_BYTES) {
+            Logger.warn('Stored image assembled size mismatch:', imageId, totalBytes, manifest.finalSizeBytes);
+            return false;
+        }
+
+        const assembledBytes = new Uint8Array(totalBytes);
+        let offset = 0;
+        for (const chunkBytes of chunkBuffers) {
+            assembledBytes.set(chunkBytes, offset);
+            offset += chunkBytes.byteLength;
+        }
+
+        const assembledHash = await this.sha256(assembledBytes.buffer);
+        if (assembledHash !== manifest.assembledSha256) {
+            Logger.warn('Stored image assembled hash mismatch:', imageId);
+            return false;
+        }
+
+        const dataUrl = await this.bytesToDataURL(assembledBytes, manifest.finalMime);
+        this.handleImageData({ type: 'image_data', imageId, data: dataUrl });
+
+        if (streamId) {
+            try {
+                await secureStorage.saveImageToLedger(imageId, dataUrl, streamId);
+            } catch (error) {
+                Logger.debug('Stored image ledger save skipped:', error?.message || error);
+            }
+        }
+
+        this.clearPendingImageAssembly(imageId);
+        return true;
+    }
+
+    async prepareImageForStoredTransport(file) {
+        const originalMime = String(file.type || '').toLowerCase();
+        if (!originalMime) {
+            throw new Error('Image MIME type is required');
+        }
+
+        if (file.size <= CONFIG.IMAGE_MAX_ASSEMBLED_BYTES) {
+            const originalBytes = await this.blobToArrayBuffer(file);
+            return {
+                blob: file,
+                originalMime,
+                finalMime: originalMime,
+                preservedOriginal: true,
+                convertedTo: null,
+                qualityUsed: null,
+                sha256: await this.sha256(originalBytes)
+            };
+        }
+
+        if (originalMime === 'image/gif' && CONFIG.FAIL_GIF_ON_OVERFLOW) {
+            throw new Error('GIF image exceeds 1MB and cannot be compressed without losing animation');
+        }
+
+        const image = await this.loadImageFromBlob(file);
+        let encoded = null;
+
+        if (originalMime === 'image/jpeg' || originalMime === 'image/jpg') {
+            encoded = await this.compressImageToTarget(image, 'image/jpeg', {
+                initialQuality: CONFIG.JPEG_INITIAL_QUALITY,
+                minQuality: CONFIG.JPEG_MIN_QUALITY
+            });
+
+            if (!encoded && CONFIG.ALLOW_JPEG_TO_WEBP_FALLBACK) {
+                encoded = await this.compressImageToTarget(image, 'image/webp', {
+                    initialQuality: CONFIG.WEBP_INITIAL_QUALITY,
+                    minQuality: CONFIG.WEBP_MIN_QUALITY
+                });
+            }
+        } else if (originalMime === 'image/webp') {
+            encoded = await this.compressImageToTarget(image, 'image/webp', {
+                initialQuality: CONFIG.WEBP_INITIAL_QUALITY,
+                minQuality: CONFIG.WEBP_MIN_QUALITY
+            });
+        } else if (originalMime === 'image/png' && CONFIG.FORCE_PNG_TO_WEBP_ON_OVERFLOW) {
+            encoded = await this.compressImageToTarget(image, 'image/webp', {
+                initialQuality: CONFIG.WEBP_INITIAL_QUALITY,
+                minQuality: CONFIG.WEBP_MIN_QUALITY
+            });
+        }
+
+        if (!encoded) {
+            throw new Error(`Failed to fit ${originalMime} image under 1MB`);
+        }
+
+        const encodedBytes = await this.blobToArrayBuffer(encoded.blob);
+        return {
+            blob: encoded.blob,
+            originalMime,
+            finalMime: encoded.mime,
+            preservedOriginal: false,
+            convertedTo: encoded.mime !== originalMime ? encoded.mime : null,
+            qualityUsed: encoded.quality,
+            sha256: await this.sha256(encodedBytes)
+        };
+    }
+
+    async compressImageToTarget(image, outputMime, { initialQuality, minQuality }) {
+        if (!this.supportsCanvasMime(outputMime)) {
+            return null;
+        }
+
+        const limit = CONFIG.IMAGE_MAX_ASSEMBLED_BYTES;
+        const maxQuality = Number(Math.min(1, Math.max(initialQuality, minQuality)).toFixed(3));
+        const minQ = Number(minQuality.toFixed(3));
+
+        for (const scale of CONFIG.IMAGE_RESOLUTION_SCALES) {
+            const minBlob = await this.encodeImageToBlob(image, outputMime, minQ, scale);
+            if (minBlob.size > limit) {
+                continue;
+            }
+
+            const maxBlob = await this.encodeImageToBlob(image, outputMime, maxQuality, scale);
+            if (maxBlob.size <= limit) {
+                return { blob: maxBlob, mime: outputMime, quality: maxQuality };
+            }
+
+            let lo = minQ;
+            let hi = maxQuality;
+            let best = { blob: minBlob, quality: minQ };
+            for (let i = 0; i < 6; i += 1) {
+                const mid = Number(((lo + hi) / 2).toFixed(3));
+                if (mid <= lo || mid >= hi) {
+                    break;
+                }
+                const blob = await this.encodeImageToBlob(image, outputMime, mid, scale);
+                if (blob.size <= limit) {
+                    if (blob.size > best.blob.size) {
+                        best = { blob, quality: mid };
+                    }
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            return { blob: best.blob, mime: outputMime, quality: best.quality };
+        }
+
+        return null;
+    }
+
+    async encodeImageToBlob(image, outputMime, quality = null, scale = 1) {
+        const sourceWidth = image?.naturalWidth || image?.width;
+        const sourceHeight = image?.naturalHeight || image?.height;
+        if (!sourceWidth || !sourceHeight) {
+            throw new Error('Image dimensions unavailable');
+        }
+
+        const width = Math.max(1, Math.round(sourceWidth * scale));
+        const height = Math.max(1, Math.round(sourceHeight * scale));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+            throw new Error('Canvas 2D context unavailable');
+        }
+
+        if (outputMime === 'image/jpeg') {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, width, height);
+        }
+        ctx.drawImage(image, 0, 0, width, height);
+
+        return new Promise((resolve, reject) => {
+            canvas.toBlob((blob) => {
+                if (!blob) {
+                    reject(new Error(`Failed to encode image as ${outputMime}`));
+                    return;
+                }
+                if (blob.type !== outputMime) {
+                    reject(new Error(`${outputMime} encoding is not supported in this browser`));
+                    return;
+                }
+                resolve(blob);
+            }, outputMime, quality ?? undefined);
+        });
+    }
+
+    supportsCanvasMime(mime) {
+        const canvas = document.createElement('canvas');
+        return canvas.toDataURL(mime).startsWith(`data:${mime}`);
+    }
+
+    loadImageFromBlob(blob) {
+        return new Promise((resolve, reject) => {
+            const objectUrl = URL.createObjectURL(blob);
+            const image = new Image();
+            image.onload = () => {
+                URL.revokeObjectURL(objectUrl);
+                resolve(image);
+            };
+            image.onerror = () => {
+                URL.revokeObjectURL(objectUrl);
+                reject(new Error('Failed to decode image'));
+            };
+            image.src = objectUrl;
+        });
+    }
+
+    async createStoredImageChunkPayloads({ imageId, blob, password = null, dmAesKey = null }) {
+        const sourceBytes = new Uint8Array(await this.blobToArrayBuffer(blob));
+        const payloadLimit = Math.max(
+            1024,
+            CONFIG.IMAGE_PAYLOAD_MAX_BYTES - CONFIG.IMAGE_PAYLOAD_SAFETY_MARGIN_BYTES
+        );
+        const chunkPayloads = [];
+        let offset = 0;
+        let chunkIndex = 0;
+
+        while (offset < sourceBytes.byteLength) {
+            const remainingBytes = sourceBytes.byteLength - offset;
+            const minRawChunkBytes = Math.min(CONFIG.IMAGE_CHUNK_MIN_RAW_BYTES, remainingBytes);
+            let rawChunkBytes = Math.min(CONFIG.IMAGE_CHUNK_INITIAL_RAW_BYTES, remainingBytes);
+            let payload = null;
+
+            while (rawChunkBytes >= minRawChunkBytes) {
+                const chunkBytes = sourceBytes.slice(offset, offset + rawChunkBytes);
+                const candidate = {
+                    type: 'image_chunk',
+                    v: STORED_IMAGE_PROTOCOL_VERSION,
+                    imageId,
+                    chunkIndex,
+                    timestamp: Date.now(),
+                    chunkHash: await this.sha256(chunkBytes.buffer),
+                    data: this.arrayBufferToBase64(chunkBytes)
+                };
+
+                const payloadBytes = await this.measureStoredImagePayloadBytes(candidate, password, dmAesKey);
+                if (payloadBytes <= payloadLimit) {
+                    payload = candidate;
+                    offset += rawChunkBytes;
+                    break;
+                }
+
+                const nextChunkBytes = Math.max(
+                    minRawChunkBytes,
+                    Math.floor(rawChunkBytes * 0.85)
+                );
+                if (nextChunkBytes === rawChunkBytes) {
+                    if (rawChunkBytes === minRawChunkBytes) {
+                        break;
+                    }
+                    rawChunkBytes -= 1;
+                } else {
+                    rawChunkBytes = nextChunkBytes;
+                }
+            }
+
+            if (!payload) {
+                throw new Error('Failed to fit image chunk inside 220KB payload limit');
+            }
+
+            chunkPayloads.push(payload);
+            chunkIndex++;
+        }
+
+        return chunkPayloads;
+    }
+
+    async measureStoredImagePayloadBytes(payload, password = null, dmAesKey = null) {
+        if (dmAesKey) {
+            const encryptedPayload = await dmCrypto.encrypt(payload, dmAesKey);
+            return new TextEncoder().encode(JSON.stringify(encryptedPayload)).length;
+        }
+
+        if (password) {
+            const encryptedPayload = await cryptoManager.encryptJSON(payload, password);
+            return new TextEncoder().encode(encryptedPayload).length;
+        }
+
+        return new TextEncoder().encode(JSON.stringify(payload)).length;
+    }
+
+    async assertStoredImagePayloadFits(payload, password = null, dmAesKey = null, label = 'image payload') {
+        const payloadBytes = await this.measureStoredImagePayloadBytes(payload, password, dmAesKey);
+        if (payloadBytes > CONFIG.IMAGE_PAYLOAD_MAX_BYTES) {
+            throw new Error(`${label} exceeds ${Math.round(CONFIG.IMAGE_PAYLOAD_MAX_BYTES / 1024)}KB payload limit`);
+        }
+        return payloadBytes;
+    }
+
+    async publishStoredImagePayload(messageStreamId, payload, password = null, dmAesKey = null) {
+        await this.assertStoredImagePayloadFits(payload, password, dmAesKey);
+
+        if (dmAesKey) {
+            const encryptedPayload = await dmCrypto.encrypt(payload, dmAesKey);
+            await streamrController.publishMessage(messageStreamId, encryptedPayload, null);
+            return;
+        }
+
+        await streamrController.publishMessage(messageStreamId, payload, password);
+    }
+
+    blobToDataURL(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error('Failed to read blob as data URL'));
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    async blobToArrayBuffer(blob) {
+        if (blob?.arrayBuffer instanceof Function) {
+            const result = await blob.arrayBuffer();
+            if (result instanceof ArrayBuffer) {
+                return result;
+            }
+            if (ArrayBuffer.isView(result)) {
+                return result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength);
+            }
+        }
+
+        if (typeof Response === 'function') {
+            try {
+                return await new Response(blob).arrayBuffer();
+            } catch {
+                // Fall through to FileReader.
+            }
+        }
+
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                if (reader.result instanceof ArrayBuffer) {
+                    resolve(reader.result);
+                    return;
+                }
+                reject(new Error('Failed to read blob as ArrayBuffer'));
+            };
+            reader.onerror = () => reject(new Error('Failed to read blob as ArrayBuffer'));
+            reader.readAsArrayBuffer(blob);
+        });
+    }
+
+    async createSignedStoredImageManifest(input) {
+        if (typeof identityManager.createSignedImageManifest === 'function') {
+            return identityManager.createSignedImageManifest(input);
+        }
+
+        Logger.warn('identityManager.createSignedImageManifest missing; falling back to legacy message signing');
+        const manifest = await identityManager.createSignedMessage('', input.channelId);
+        manifest.type = 'image';
+        manifest.transport = STORED_IMAGE_TRANSPORT;
+        manifest.v = STORED_IMAGE_PROTOCOL_VERSION;
+        manifest.imageId = input.imageId;
+        manifest.originalMime = input.originalMime;
+        manifest.finalMime = input.finalMime;
+        manifest.finalSizeBytes = input.finalSizeBytes;
+        manifest.chunkCount = input.chunkCount;
+        manifest.chunkHashes = input.chunkHashes;
+        manifest.assembledSha256 = input.assembledSha256;
+        manifest.preservedOriginal = !!input.preservedOriginal;
+        manifest.convertedTo = input.convertedTo || null;
+        manifest.qualityUsed = Number.isFinite(input.qualityUsed) ? input.qualityUsed : null;
+        return manifest;
+    }
+
+    async bytesToDataURL(bytes, mime) {
+        const blob = new Blob([bytes], { type: mime });
+        return this.blobToDataURL(blob);
+    }
+
     /**
-     * Resize image to max dimensions
+     * Legacy inline image resize helper
      * @param {File} file - Image file
      * @returns {Promise<string>} - Base64 data URL
      */
@@ -2093,7 +2737,33 @@ class MediaController {
     }
 
     async sha256(buffer) {
-        const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+        let normalized = buffer;
+
+        if (typeof normalized === 'string') {
+            normalized = new TextEncoder().encode(normalized);
+        } else if (normalized?.arrayBuffer instanceof Function) {
+            normalized = new Uint8Array(await normalized.arrayBuffer());
+        }
+
+        if (ArrayBuffer.isView(normalized)) {
+            normalized = new Uint8Array(
+                normalized.buffer.slice(
+                    normalized.byteOffset,
+                    normalized.byteOffset + normalized.byteLength
+                )
+            );
+        } else if (
+            Object.prototype.toString.call(normalized) === '[object ArrayBuffer]' ||
+            Object.prototype.toString.call(normalized) === '[object SharedArrayBuffer]'
+        ) {
+            normalized = new Uint8Array(normalized);
+        } else if (normalized && typeof normalized.byteLength === 'number') {
+            normalized = new Uint8Array(normalized);
+        } else if (Array.isArray(normalized)) {
+            normalized = Uint8Array.from(normalized);
+        }
+
+        const hashBuffer = await crypto.subtle.digest('SHA-256', normalized);
         const hashArray = Array.from(new Uint8Array(hashBuffer));
         return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     }

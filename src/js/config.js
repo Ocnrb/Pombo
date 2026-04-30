@@ -162,6 +162,22 @@ export const CONFIG = {
         imageMaxWidth: 1280,
         imageMaxHeight: 720,
         imageQuality: 0.92,
+        imageMaxAssembledBytes: 1 * 1024 * 1024,          // 1MB max mounted chat image payload
+        imagePayloadMaxBytes: 220 * 1024,                 // Max per stored image manifest/chunk payload
+        imagePayloadSafetyMarginBytes: 1024,              // Headroom while sizing JSON payload chunks
+        imageChunkInitialRawBytes: 150 * 1024,            // Starting raw chunk size before payload measurement
+        imageChunkMinRawBytes: 16 * 1024,                 // Smallest raw chunk size before failing
+        imageAssemblyTtlMs: 10 * 60 * 1000,               // Keep partial image chunk assemblies for 10 minutes
+        jpegInitialQuality: 1.0,
+        jpegMinQuality: 0.68,
+        webpInitialQuality: 1.0,
+        webpMinQuality: 0.68,
+        imageResolutionScales: [1, 0.85, 0.72, 0.6, 0.5, 0.4],
+        allowJpegToWebpFallback: true,
+        forcePngToWebpOnOverflow: true,
+        failGifOnOverflow: true,
+        legacyImageReadEnabled: true,
+        legacyInlineImageWriteEnabled: false,
         pieceSize: 220 * 1024,                  // 220KB chunks
         pieceSendDelayMs: 5,                    // 5ms delay between piece sends
         maxConcurrentRequests: 8,

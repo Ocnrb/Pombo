@@ -150,6 +150,10 @@ class MessageRenderer {
      * @returns {string} - HTML for image
      */
     renderImageContent(msg) {
+        if (msg?.transport === 'chunked' && msg?.verified?.valid === false) {
+            return `<div class="text-red-400 text-sm">Image failed verification</div>`;
+        }
+
         let imageData = this.deps.getImage?.(msg.imageId);
         
         // If not in cache but embedded in message (from LogStore), use that and cache it
