@@ -356,6 +356,39 @@ describe('NotificationUI', () => {
             // Should not throw
             notificationUI.hideLoadingMoreIndicator();
         });
+
+        it('tags the indicator with the owner load token', () => {
+            const messagesArea = document.createElement('div');
+            document.body.appendChild(messagesArea);
+
+            notificationUI.showLoadingMoreIndicator(messagesArea, 42);
+            const el = document.getElementById('loading-more-indicator');
+            expect(el?.dataset.loadToken).toBe('42');
+        });
+
+        it('hide with mismatched token leaves indicator in place', () => {
+            const messagesArea = document.createElement('div');
+            document.body.appendChild(messagesArea);
+
+            notificationUI.showLoadingMoreIndicator(messagesArea, 7);
+            // Stale op tries to hide a fresh op's indicator
+            notificationUI.hideLoadingMoreIndicator(3);
+
+            expect(document.getElementById('loading-more-indicator')).not.toBeNull();
+
+            notificationUI.hideLoadingMoreIndicator(7);
+            expect(document.getElementById('loading-more-indicator')).toBeNull();
+        });
+
+        it('hide with null token force-clears regardless of stored token', () => {
+            const messagesArea = document.createElement('div');
+            document.body.appendChild(messagesArea);
+
+            notificationUI.showLoadingMoreIndicator(messagesArea, 99);
+            notificationUI.hideLoadingMoreIndicator(null);
+
+            expect(document.getElementById('loading-more-indicator')).toBeNull();
+        });
     });
 
     describe('integration scenarios', () => {

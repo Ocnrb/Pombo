@@ -436,10 +436,14 @@ describe('ChatAreaUI', () => {
             channel.type = 'dm';
             channelManager.loadMoreHistory.mockResolvedValue({ loaded: 0, hasMore: false });
 
-            const beginSpy = vi.spyOn(chatAreaUI, '_showBeginningOfConversation');
+            // The end-of-history indicator is the inline marker rendered by
+            // `renderMessages` (gated on `hasMoreHistory === false`). The
+            // legacy icon banner was removed because it caused duplicate
+            // indicators when other render-triggering events fired afterwards.
+            const renderSpy = vi.spyOn(chatAreaUI, 'renderMessages');
             await chatAreaUI._loadMoreChannelHistory(channel, channelManager);
 
-            expect(beginSpy).toHaveBeenCalled();
+            expect(renderSpy).toHaveBeenCalled();
         });
 
         it('should show search-older banner when no results in window', async () => {
@@ -451,6 +455,109 @@ describe('ChatAreaUI', () => {
             await chatAreaUI._loadMoreChannelHistory(channel, channelManager);
 
             expect(bannerSpy).toHaveBeenCalledWith(channel, channelManager);
+        });
+    });
+
+    // ==================== Pagination state ownership (race conditions) ====================
+    describe('pagination ownership and watchdog', () => {
+        let channel, channelManager;
+
+        beforeEach(() => {
+            channel = {
+                streamId: 'stream-A',
+                hasMoreHistory: true,
+                messages: [{ id: 'm1', text: 'one', sender: '0xa', timestamp: 1 }],
+                type: 'public'
+            };
+            channelManager = {
+                switchGeneration: 1,
+                loadMoreHistory: vi.fn()
+            };
+            chatAreaUI.setDependencies({ channelManager, Logger: { error: vi.fn(), warn: vi.fn() } });
+        });
+
+        it('exposes isLoadingMore as a derived getter (true while op active)', async () => {
+            let resolveLoad;
+            channelManager.loadMoreHistory.mockReturnValue(new Promise((r) => { resolveLoad = r; }));
+
+            const promise = chatAreaUI._loadMoreChannelHistory(channel, channelManager);
+
+            expect(chatAreaUI.isLoadingMore).toBe(true);
+
+            resolveLoad({ loaded: 0, hasMore: true });
+            await promise;
+
+            expect(chatAreaUI.isLoadingMore).toBe(false);
+        });
+
+        it('cancelling via isLoadingMore = false clears the spinner and discards a stale resolve', async () => {
+            const { notificationUI } = await import('../../src/js/ui/NotificationUI.js');
+
+            let resolveLoad;
+            channelManager.loadMoreHistory.mockReturnValue(new Promise((r) => { resolveLoad = r; }));
+
+            const promise = chatAreaUI._loadMoreChannelHistory(channel, channelManager);
+
+            // Caller (e.g. selectChannel) cancels the op mid-flight
+            chatAreaUI.isLoadingMore = false;
+            expect(chatAreaUI.isLoadingMore).toBe(false);
+
+            const renderSpy = vi.spyOn(chatAreaUI, 'renderMessages');
+
+            // Late resolve from the abandoned op should NOT touch UI
+            resolveLoad({ loaded: 5, hasMore: true });
+            await promise;
+
+            expect(renderSpy).not.toHaveBeenCalled();
+            // Indicator was hidden when the op was cancelled (token-matched)
+            expect(notificationUI.hideLoadingMoreIndicator).toHaveBeenCalled();
+        });
+
+        it('a stale hide call cannot remove a fresh op spinner (token-aware indicator)', async () => {
+            const { notificationUI } = await import('../../src/js/ui/NotificationUI.js');
+
+            // Op #1 starts and is cancelled before resolve
+            let resolveA;
+            channelManager.loadMoreHistory.mockReturnValueOnce(new Promise((r) => { resolveA = r; }));
+            const promiseA = chatAreaUI._loadMoreChannelHistory(channel, channelManager);
+            const tokenA = chatAreaUI._loadOp.id;
+            chatAreaUI.isLoadingMore = false; // cancels op A
+
+            // Op #2 starts (fresh token)
+            let resolveB;
+            channelManager.loadMoreHistory.mockReturnValueOnce(new Promise((r) => { resolveB = r; }));
+            const promiseB = chatAreaUI._loadMoreChannelHistory(channel, channelManager);
+            const tokenB = chatAreaUI._loadOp.id;
+            expect(tokenB).not.toBe(tokenA);
+
+            // Late resolve of op A must not affect op B's indicator
+            resolveA({ loaded: 0, hasMore: true });
+            await promiseA;
+
+            expect(chatAreaUI.isLoadingMore).toBe(true); // op B still active
+
+            resolveB({ loaded: 0, hasMore: true });
+            await promiseB;
+
+            expect(chatAreaUI.isLoadingMore).toBe(false);
+
+            // The mock notificationUI.hideLoadingMoreIndicator should have been
+            // called with both tokens — implementation passes its own op token.
+            const hideCalls = notificationUI.hideLoadingMoreIndicator.mock.calls;
+            expect(hideCalls.some(args => args[0] === tokenA || args[0] === tokenB)).toBe(true);
+        });
+
+        it('renders the inline beginning-of-conversation marker for a non-DM channel reaching exhaustion', async () => {
+            channel.type = 'public';
+            channelManager.loadMoreHistory.mockResolvedValue({ loaded: 0, hasMore: false });
+
+            const renderSpy = vi.spyOn(chatAreaUI, 'renderMessages');
+            await chatAreaUI._loadMoreChannelHistory(channel, channelManager);
+
+            // Critical: previously this branch did NOT re-render for non-DM
+            // channels, so the inline "— beginning of conversation —" marker
+            // never appeared. Force-rendering ensures it does.
+            expect(renderSpy).toHaveBeenCalled();
         });
     });
 
