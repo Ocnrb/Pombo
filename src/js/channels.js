@@ -1726,10 +1726,17 @@ class ChannelManager {
             if (channel.messages.length > 0) {
                 const oldest = channel.messages.reduce((min, m) => m.timestamp < min ? m.timestamp : min, channel.messages[0].timestamp);
                 channel.oldestTimestamp = oldest;
-                channel.hasMoreHistory = true;
-            } else {
-                channel.hasMoreHistory = false;
             }
+            // DMs ALWAYS start optimistic about pagination. `loadDMTimeline`
+            // only seeds from the local cache + a small recent inbox window,
+            // so it can't truthfully claim exhaustion. The real determination
+            // happens inside `fetchOlderDMMessages`, which uses
+            // `fetchOlderHistoryWindowed` and reports `hasMore = windowStart > 0`
+            // — i.e. only flips to `false` once we've scanned back to t=0.
+            // Without this, an empty/sparse cache would mark the channel
+            // exhausted on open, suppressing both the IntersectionObserver
+            // sentinel and the "Search older messages" banner forever.
+            channel.hasMoreHistory = true;
             // Subscribe to DM-2 ephemeral on-demand (typing/presence)
             dmManager.subscribeDMEphemeral();
             // Clear gate and notify UI to re-render with ENS data

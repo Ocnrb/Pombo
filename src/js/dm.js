@@ -1191,6 +1191,12 @@ class DMManager {
 
             if (addedCount > 0) {
                 channel.messages.sort((a, b) => a.timestamp - b.timestamp);
+            } else if (result.hasMore && typeof result.windowStart === 'number') {
+                // Empty window but stream still has older data: advance the
+                // pagination cursor past this window so the next call (e.g.
+                // user clicks "Search older messages") scans the PREVIOUS
+                // window instead of re-scanning the same empty one forever.
+                channel.oldestTimestamp = result.windowStart;
             }
 
             // Update hasMore based on whether the stream has older data

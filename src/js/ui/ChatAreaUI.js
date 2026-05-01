@@ -255,10 +255,18 @@ class ChatAreaUI {
         try {
             const result = await channelManager.loadMoreHistory(streamId);
 
-            // Guard against (a) channel switch mid-load and (b) watchdog timeout
-            // that already released the UI op.
+            // Guard against channel-switch mid-load (results are stale).
             if (channelManager.switchGeneration !== generationAtStart) return;
-            if (!this._isOpCurrent(op)) return;
+            // Guard against explicit cancellation (user navigated away,
+            // op was superseded). NOTE: we deliberately DO NOT bail on
+            // `op.timedOut` — the watchdog only releases the visual loading
+            // indicator after 15s; if the actual fetch resolves later (slow
+            // DM inbox windows often take 20-40s), the result is still
+            // valid and the user-visible UI (banner / inline marker /
+            // rendered messages) MUST be applied. Otherwise the banner
+            // never appears in this cycle and the user waits even longer
+            // for an auto-load retry.
+            if (op.cancelled) return;
             
             if (result.loaded > 0) {
                 this.renderMessages(channel.messages, () => {
@@ -300,10 +308,28 @@ class ChatAreaUI {
      */
     _showSearchOlderBanner(channel, channelManager) {
         this._removeSearchOlderBanner();
-        
+        if (!this.messagesArea) return;
+
+        // If the area is currently in the empty/spinner placeholder state
+        // (no rendered messages — e.g. an empty DM that just finished its
+        // first windowed scan), replace the placeholder so the banner becomes
+        // the SOLE visible affordance. Also kill the 20s
+        // `_loadingTimeoutId` so it can't later wipe the banner with
+        // "No messages yet".
+        const messageCount = (channel?.messages?.length ?? 0);
+        if (messageCount === 0) {
+            if (this._loadingTimeoutId) {
+                clearTimeout(this._loadingTimeoutId);
+                this._loadingTimeoutId = null;
+            }
+            this.messagesArea.innerHTML = '';
+        }
+
         const banner = document.createElement('div');
         banner.id = 'dm-search-older-banner';
-        banner.className = 'flex justify-center py-3 cursor-pointer group';
+        banner.className = messageCount === 0
+            ? 'flex h-full items-center justify-center cursor-pointer group'
+            : 'flex justify-center py-3 cursor-pointer group';
         banner.innerHTML = `
             <div class="flex items-center gap-2 text-white/30 text-sm group-hover:text-white/60 transition-colors">
                 <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -316,7 +342,7 @@ class ChatAreaUI {
             banner.remove();
             await this._loadMoreChannelHistory(channel, channelManager);
         });
-        this.messagesArea?.prepend(banner);
+        this.messagesArea.prepend(banner);
     }
 
     /**
@@ -489,18 +515,30 @@ class ChatAreaUI {
                         <span class="text-sm">Loading messages...</span>
                     </div>
                 `;
-                // 20s timeout fallback - if loading never completes, show empty state
+                // Fallback: if loading never resolves, show the empty state.
+                // Suppressed when ANY of:
+                //   (a) a UI pagination op is still in flight (`_loadOp`)
+                //   (b) the channel-level pagination flag is still set
+                //       (`channel.loadingHistory`) — outlives the UI watchdog,
+                //       so a slow `fetchOlderDMMessages` (7-day inbox window)
+                //       can't get blasted by "No messages yet" mid-flight
+                //   (c) a "Search older messages" banner was already rendered
+                // Without (b) the watchdog at 15s clears `_loadOp`; the 20s
+                // timer then races ahead of the actual fetch result and
+                // briefly flashes "No messages yet" before the banner.
                 const channelId = channel?.streamId;
                 this._loadingTimeoutId = setTimeout(() => {
                     const currentChannel = getActiveChannel ? getActiveChannel() : channelManager?.getCurrentChannel();
-                    // Only update if still on same channel and still empty
-                    if (currentChannel?.streamId === channelId && currentChannel?.messages?.length === 0) {
-                        this.messagesArea.innerHTML = `
-                            <div class="flex items-center justify-center h-full text-white/40">
-                                No messages yet. Start the conversation!
-                            </div>
-                        `;
-                    }
+                    if (currentChannel?.streamId !== channelId) return;
+                    if ((currentChannel?.messages?.length ?? 0) !== 0) return;
+                    if (this._loadOp) return;
+                    if (currentChannel?.loadingHistory) return;
+                    if (document.getElementById('dm-search-older-banner')) return;
+                    this.messagesArea.innerHTML = `
+                        <div class="flex items-center justify-center h-full text-white/40">
+                            No messages yet. Start the conversation!
+                        </div>
+                    `;
                 }, 20000);
             } else {
                 this.messagesArea.innerHTML = `
@@ -824,6 +862,14 @@ class ChatAreaUI {
         // Content fits without scrolling - try to load more
         await this.handleMessagesScroll();
         
+        // If a "Search older messages" banner is now visible, the previous
+        // fetch hit an empty time window. Stop auto-retrying — silently
+        // scanning further empty windows backward would (a) hide the banner
+        // affordance from the user and (b) generate a chain of slow resend
+        // calls they did not request. The banner click handler is the
+        // explicit user opt-in to keep searching older.
+        if (document.getElementById('dm-search-older-banner')) return;
+
         // After loading, if content still doesn't fill viewport, retry
         // (handles case where fetched history was all reactions)
         if (this.messagesArea.scrollHeight <= this.messagesArea.clientHeight) {
