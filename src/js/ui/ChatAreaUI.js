@@ -421,11 +421,19 @@ class ChatAreaUI {
      * `renderMessages` path to re-attach the spinner after `innerHTML=` wipe;
      * always tagged with the active op token so a stale render cannot inject
      * a spinner that no live op owns.
+     *
+     * Must mark `op.indicatorShown = true` so that the eventual
+     * `_endLoadOp`/`_cancelLoadOp` actually removes the spinner. Without this,
+     * an op that started with `showIndicator:false` (e.g. preview auto-load
+     * with empty `messages`) but later had the spinner re-attached by a
+     * concurrent `renderMessages` (realtime message arriving mid-fetch) would
+     * leave the spinner orphaned in the DOM after the op ends.
      */
     showLoadingMoreIndicator() {
-        const token = this._loadOp?.id ?? null;
-        if (token == null) return;
-        notificationUI.showLoadingMoreIndicator(this.messagesArea, token);
+        const op = this._loadOp;
+        if (!op) return;
+        notificationUI.showLoadingMoreIndicator(this.messagesArea, op.id);
+        op.indicatorShown = true;
     }
 
     /**
