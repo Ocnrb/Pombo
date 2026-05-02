@@ -105,9 +105,7 @@ export const CONFIG = {
 
     // Storage Providers
     storage: {
-        // LogStore Virtual Storage Node
-        logstoreNode: '0x17f98084757a75add72bf6c5b5a6f69008c28a57',
-        // Default provider: 'streamr' or 'logstore'
+        // Default provider: 'streamr' or 'custom'
         defaultProvider: 'streamr',
         // Default retention days for Streamr storage
         defaultRetentionDays: 180

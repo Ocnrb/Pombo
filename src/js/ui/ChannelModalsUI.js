@@ -5,6 +5,7 @@
 
 import { GasEstimator } from './GasEstimator.js';
 import { authManager } from '../auth.js';
+import { streamrController } from '../streamr.js';
 
 class ChannelModalsUI {
     constructor() {
@@ -15,6 +16,7 @@ class ChannelModalsUI {
         this.joinClassification = 'personal';
         this.currentReadOnly = false;
         this.currentStorageProvider = 'streamr';
+        this.currentCustomStorageAddress = '';
     }
 
     /**
@@ -78,7 +80,12 @@ class ChannelModalsUI {
         this.setReadOnly(false);
         // Reset storage provider to Streamr (default)
         this.selectStorageProvider('streamr');
-        
+
+        const customAddrInput = document.getElementById('custom-storage-address');
+        if (customAddrInput) customAddrInput.value = '';
+        this.currentCustomStorageAddress = '';
+        this.clearCustomAddressError();
+
         const storageDaysSlider = document.getElementById('storage-days-input');
         if (storageDaysSlider) {
             storageDaysSlider.value = '180';
@@ -300,11 +307,11 @@ class ChannelModalsUI {
     }
 
     /**
-     * Select storage provider (streamr or logstore)
+     * Select storage provider ('streamr' or 'custom')
      */
     selectStorageProvider(provider) {
         this.currentStorageProvider = provider;
-        
+
         document.querySelectorAll('.storage-provider-tab').forEach(tab => {
             if (tab.dataset.storage === provider) {
                 tab.classList.remove('bg-white/5', 'text-white/50', 'border-white/5');
@@ -314,17 +321,51 @@ class ChannelModalsUI {
                 tab.classList.add('bg-white/5', 'text-white/50', 'border-white/5');
             }
         });
-        
-        const storageDaysSection = document.getElementById('storage-days-section');
-        const logstoreInfo = document.getElementById('logstore-info');
-        
+
+        const streamrAddressDisplay = document.getElementById('streamr-address-display');
+        const customAddressSection = document.getElementById('custom-address-section');
+
         if (provider === 'streamr') {
-            storageDaysSection?.classList.remove('hidden');
-            logstoreInfo?.classList.add('hidden');
+            streamrAddressDisplay?.classList.remove('hidden');
+            customAddressSection?.classList.add('hidden');
+            this.refreshStreamrAddress();
         } else {
-            storageDaysSection?.classList.add('hidden');
-            logstoreInfo?.classList.remove('hidden');
+            streamrAddressDisplay?.classList.add('hidden');
+            customAddressSection?.classList.remove('hidden');
+            this.clearCustomAddressError();
         }
+    }
+
+    /**
+     * Populate the Streamr storage node address (read from the SDK).
+     */
+    refreshStreamrAddress() {
+        const target = document.getElementById('streamr-address-value');
+        if (!target) return;
+        const addr = window.STREAMR_STORAGE_NODE_ADDRESS;
+        target.textContent = addr || 'Unavailable';
+        target.classList.toggle('text-red-400', !addr);
+        target.classList.toggle('text-white/50', !!addr);
+    }
+
+    /**
+     * Show inline error for the custom storage address input.
+     */
+    showCustomAddressError(message) {
+        const errorEl = document.getElementById('custom-storage-address-error');
+        const inputEl = document.getElementById('custom-storage-address');
+        if (errorEl) {
+            errorEl.textContent = message;
+            errorEl.classList.remove('hidden');
+        }
+        inputEl?.classList.add('border-red-500/50');
+    }
+
+    clearCustomAddressError() {
+        const errorEl = document.getElementById('custom-storage-address-error');
+        const inputEl = document.getElementById('custom-storage-address');
+        errorEl?.classList.add('hidden');
+        inputEl?.classList.remove('border-red-500/50');
     }
 
     /**
@@ -491,9 +532,28 @@ class ChannelModalsUI {
 
         // Storage provider selection
         const storageProvider = this.currentStorageProvider || 'streamr';
-        const storageDays = storageProvider === 'streamr' 
-            ? parseInt(document.getElementById('storage-days-input')?.value || '180', 10)
-            : null;
+        const storageDays = parseInt(document.getElementById('storage-days-input')?.value || '180', 10);
+        let customStorageAddress = null;
+
+        if (storageProvider === 'custom') {
+            customStorageAddress = (document.getElementById('custom-storage-address')?.value || '').trim();
+            if (!/^0x[a-fA-F0-9]{40}$/.test(customStorageAddress)) {
+                this.showCustomAddressError('Enter a valid EVM address (0x followed by 40 hex characters).');
+                return;
+            }
+
+            try {
+                await streamrController.validateCustomStorageNodeAddress(customStorageAddress);
+            } catch (error) {
+                this.showCustomAddressError(error.message || 'Custom storage node is not compatible with Pombo web.');
+                return;
+            }
+
+            this.clearCustomAddressError();
+        } else if (!window.STREAMR_STORAGE_NODE_ADDRESS) {
+            this.showNotification('Streamr storage node is unavailable. Try again or use a custom node.', 'error');
+            return;
+        }
 
         if (!name) {
             this.showNotification('Please enter a channel name', 'warning');
@@ -517,6 +577,7 @@ class ChannelModalsUI {
             classification,
             readOnly: this.currentReadOnly || false,
             storageProvider,
+            customStorageAddress,
             storageDays
         };
 
@@ -574,10 +635,8 @@ class ChannelModalsUI {
 
         try {
             // Total on-chain steps:
-            //   3× createStream + 3× setPermissions + 2× addToStorageNode (= 8)
-            //   + 2× setStorageDayCount when provider supports TTL (Streamr) -> 10 total
-            // Logstore has no setStorageDayCount, so 8.
-            const totalSteps = storageProvider === 'streamr' ? 10 : 8;
+            //   3× createStream + 3× setPermissions + 2× addToStorageNode + 2× setStorageDayCount = 10
+            const totalSteps = 10;
             this.notificationUI?.showLoadingToast(
                 'Creating channel...',
                 'This may take a minute',

@@ -721,6 +721,12 @@ class UIController {
             channelModalsUI.updateStorageDaysDisplay(storageDaysSlider.value);
         });
 
+        // Custom storage address input — clear error on edit
+        const customStorageAddrInput = document.getElementById('custom-storage-address');
+        customStorageAddrInput?.addEventListener('input', () => {
+            channelModalsUI.clearCustomAddressError?.();
+        });
+
         // Online users dropdown toggle
         this.elements.onlineHeader?.addEventListener('click', () => {
             this.elements.onlineUsersList?.classList.toggle('hidden');

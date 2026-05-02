@@ -9,7 +9,6 @@ import { escapeHtml, escapeAttr } from './utils.js';
 import { sanitizeText } from './sanitizer.js';
 import { relayManager } from '../relayManager.js';
 import { graphAPI } from '../graph.js';
-import { CONFIG } from '../config.js';
 import { mediaController } from '../media.js';
 import { channelImageManager } from '../channelImageManager.js';
 import { deriveAdminId } from '../streamConstants.js';
@@ -227,9 +226,8 @@ class ChannelSettingsUI {
     async populateStorageInfo(channel) {
         const { streamrController } = this.deps;
 
-        // Known storage node addresses for identification
-        const LOGSTORE_NODE = CONFIG.storage.logstoreNode;
-        
+        const STREAMR_OFFICIAL_NODE = window.STREAMR_STORAGE_NODE_ADDRESS || null;
+
         // Show loading state
         if (this.elements.channelStorageProvider) {
             this.elements.channelStorageProvider.textContent = 'Loading...';
@@ -240,60 +238,47 @@ class ChannelSettingsUI {
         if (this.elements.channelStorageRetention) {
             this.elements.channelStorageRetention.textContent = 'Loading...';
         }
-        
+
         try {
-            // Fetch storage info from Streamr SDK
             const storageInfo = await streamrController.getStreamStorageInfo(channel.streamId);
-            
             const { enabled, nodes, storageDays } = storageInfo;
-            
-            // Determine provider based on node address
+
             let providerName = 'Unknown';
             let nodeAddress = '-';
-            let isLogStore = false;
-            
+
             if (enabled && nodes.length > 0) {
-                nodeAddress = nodes[0]; // Use first node
-                
-                // Check if it's LogStore
-                if (nodeAddress.toLowerCase() === LOGSTORE_NODE.toLowerCase()) {
-                    providerName = 'LogStore';
-                    isLogStore = true;
-                } else {
+                nodeAddress = nodes[0];
+                if (STREAMR_OFFICIAL_NODE && nodeAddress.toLowerCase() === STREAMR_OFFICIAL_NODE.toLowerCase()) {
                     providerName = 'Streamr Official';
+                } else {
+                    providerName = 'Custom Storage Node';
                 }
             }
-            
-            // Update provider name
+
             if (this.elements.channelStorageProvider) {
                 this.elements.channelStorageProvider.textContent = enabled ? providerName : '-';
             }
-            
-            // Update node address
+
             if (this.elements.channelStorageNode) {
                 this.elements.channelStorageNode.textContent = enabled ? nodeAddress : '-';
             }
-            
-            // Update retention period
+
             if (this.elements.channelStorageRetention) {
                 if (!enabled) {
                     this.elements.channelStorageRetention.textContent = '-';
-                } else if (isLogStore) {
-                    this.elements.channelStorageRetention.textContent = 'Permanent';
                 } else if (storageDays !== null && storageDays !== undefined && typeof storageDays === 'number') {
                     this.elements.channelStorageRetention.textContent = `${storageDays} days`;
                 } else {
                     this.elements.channelStorageRetention.textContent = 'Not set';
                 }
             }
-            
-            // Show/hide "no storage" warning
+
             if (this.elements.channelStorageNoStorage) {
                 this.elements.channelStorageNoStorage.classList.toggle('hidden', enabled);
             }
         } catch (error) {
             Logger.error('Failed to fetch storage info:', error);
-            
+
             // Show error state
             if (this.elements.channelStorageProvider) {
                 this.elements.channelStorageProvider.textContent = 'Error';

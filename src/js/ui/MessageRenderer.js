@@ -156,7 +156,7 @@ class MessageRenderer {
 
         let imageData = this.deps.getImage?.(msg.imageId);
         
-        // If not in cache but embedded in message (from LogStore), use that and cache it
+        // If not in cache but embedded in message, use that and cache it
         if (!imageData && msg.imageData) {
             imageData = msg.imageData;
             this.deps.cacheImage?.(msg.imageId, imageData);

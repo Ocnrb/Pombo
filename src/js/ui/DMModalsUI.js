@@ -5,6 +5,7 @@
 
 import { GasEstimator } from './GasEstimator.js';
 import { authManager } from '../auth.js';
+import { streamrController } from '../streamr.js';
 
 class DMModalsUI {
     constructor() {
@@ -112,6 +113,12 @@ class DMModalsUI {
             });
         }
 
+        // Custom storage address input — clear error on edit
+        const customStorageAddrInput = document.getElementById('dm-custom-storage-address');
+        customStorageAddrInput?.addEventListener('input', () => {
+            this.clearCustomAddressError();
+        });
+
         // Learn more buttons - open storage info modal
         const learnMoreBtns = modal.querySelectorAll('.dm-storage-learn-more-btn');
         learnMoreBtns.forEach(btn => {
@@ -126,7 +133,7 @@ class DMModalsUI {
      */
     selectStorageProvider(provider) {
         this.selectedStorageProvider = provider;
-        
+
         const tabs = document.querySelectorAll('.dm-storage-provider-tab');
         tabs.forEach(tab => {
             const isActive = tab.dataset.dmStorage === provider;
@@ -138,17 +145,44 @@ class DMModalsUI {
             tab.classList.toggle('border-white/5', !isActive);
         });
 
-        // Show/hide storage days section based on provider
-        const storageDaysSection = document.getElementById('dm-storage-days-section');
-        const logstoreInfo = document.getElementById('dm-logstore-info');
-        
+        const streamrAddressDisplay = document.getElementById('dm-streamr-address-display');
+        const customAddressSection = document.getElementById('dm-custom-address-section');
+
         if (provider === 'streamr') {
-            storageDaysSection?.classList.remove('hidden');
-            logstoreInfo?.classList.add('hidden');
+            streamrAddressDisplay?.classList.remove('hidden');
+            customAddressSection?.classList.add('hidden');
+            this.refreshStreamrAddress();
         } else {
-            storageDaysSection?.classList.add('hidden');
-            logstoreInfo?.classList.remove('hidden');
+            streamrAddressDisplay?.classList.add('hidden');
+            customAddressSection?.classList.remove('hidden');
+            this.clearCustomAddressError();
         }
+    }
+
+    refreshStreamrAddress() {
+        const target = document.getElementById('dm-streamr-address-value');
+        if (!target) return;
+        const addr = window.STREAMR_STORAGE_NODE_ADDRESS;
+        target.textContent = addr || 'Unavailable';
+        target.classList.toggle('text-red-400', !addr);
+        target.classList.toggle('text-white/50', !!addr);
+    }
+
+    showCustomAddressError(message) {
+        const errorEl = document.getElementById('dm-custom-storage-address-error');
+        const inputEl = document.getElementById('dm-custom-storage-address');
+        if (errorEl) {
+            errorEl.textContent = message;
+            errorEl.classList.remove('hidden');
+        }
+        inputEl?.classList.add('border-red-500/50');
+    }
+
+    clearCustomAddressError() {
+        const errorEl = document.getElementById('dm-custom-storage-address-error');
+        const inputEl = document.getElementById('dm-custom-storage-address');
+        errorEl?.classList.add('hidden');
+        inputEl?.classList.remove('border-red-500/50');
     }
 
     /**
@@ -201,12 +235,16 @@ class DMModalsUI {
         // Reset to defaults
         this.selectedStorageProvider = 'streamr';
         this.selectedStorageDays = 180;
-        
+        this.selectedCustomStorageAddress = '';
+
         // Reset UI
         this.selectStorageProvider('streamr');
         const slider = document.getElementById('dm-storage-days-input');
         if (slider) slider.value = '180';
         this.updateStorageDaysDisplay(180);
+        const customAddrInput = document.getElementById('dm-custom-storage-address');
+        if (customAddrInput) customAddrInput.value = '';
+        this.clearCustomAddressError();
         
         // Update gas estimate
         this.updateGasEstimate();
@@ -263,10 +301,31 @@ class DMModalsUI {
         const btn = document.getElementById('create-dm-inbox-btn');
         if (!btn) return;
 
-        // Prepare options based on user selection
+        let customStorageAddress = null;
+        if (this.selectedStorageProvider === 'custom') {
+            customStorageAddress = (document.getElementById('dm-custom-storage-address')?.value || '').trim();
+            if (!/^0x[a-fA-F0-9]{40}$/.test(customStorageAddress)) {
+                this.showCustomAddressError('Enter a valid EVM address (0x followed by 40 hex characters).');
+                return;
+            }
+
+            try {
+                await streamrController.validateCustomStorageNodeAddress(customStorageAddress);
+            } catch (error) {
+                this.showCustomAddressError(error.message || 'Custom storage node is not compatible with Pombo web.');
+                return;
+            }
+
+            this.clearCustomAddressError();
+        } else if (!window.STREAMR_STORAGE_NODE_ADDRESS) {
+            this.showNotification('Streamr storage node is unavailable. Try again or use a custom node.', 'error');
+            return;
+        }
+
         const options = {
             storageProvider: this.selectedStorageProvider,
-            storageDays: this.selectedStorageProvider === 'streamr' ? this.selectedStorageDays : null
+            customStorageAddress,
+            storageDays: this.selectedStorageDays
         };
 
         // ─── Pre-flight balance check ──────────────────────────────────────

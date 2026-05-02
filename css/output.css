@@ -1823,10 +1823,6 @@ video {
   background-color: rgb(245 158 11 / 0.1);
 }
 
-.bg-amber-500\/20 {
-  background-color: rgb(245 158 11 / 0.2);
-}
-
 .bg-amber-500\/5 {
   background-color: rgb(245 158 11 / 0.05);
 }
@@ -2044,11 +2040,6 @@ video {
 .px-0\.5 {
   padding-left: 0.125rem;
   padding-right: 0.125rem;
-}
-
-.px-1 {
-  padding-left: 0.25rem;
-  padding-right: 0.25rem;
 }
 
 .px-1\.5 {
@@ -2534,6 +2525,14 @@ video {
 
 .underline {
   text-decoration-line: underline;
+}
+
+.placeholder-white\/20::-moz-placeholder {
+  color: rgb(255 255 255 / 0.2);
+}
+
+.placeholder-white\/20::placeholder {
+  color: rgb(255 255 255 / 0.2);
 }
 
 .placeholder-white\/25::-moz-placeholder {
@@ -3190,10 +3189,6 @@ select option {
 
   .md\:items-center {
     align-items: center;
-  }
-
-  .md\:gap-3 {
-    gap: 0.75rem;
   }
 
   .md\:gap-4 {

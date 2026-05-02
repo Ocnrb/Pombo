@@ -42,11 +42,8 @@ import {
 // Protocol constants live in streamConstants.js; this object adds the
 // dynamic/environment bits (storage node address, provider catalog).
 const STREAM_CONFIG = {
-    // Streamr's official storage node (will be set from SDK after load)
-    NODE_ADDRESS: null, // Set dynamically in init()
-
-    // LogStore Virtual Storage Node
-    LOGSTORE_NODE: CONFIG.storage.logstoreNode,
+    // Streamr's official storage node (set from SDK after load)
+    NODE_ADDRESS: null,
 
     // Storage Providers Configuration
     STORAGE_PROVIDERS: {
@@ -56,16 +53,15 @@ const STREAM_CONFIG = {
             description: 'Official Streamr storage cluster with configurable retention',
             supportsTTL: true,
             defaultDays: CONFIG.storage.defaultRetentionDays,
-            // Node address set dynamically from SDK
             getNodeAddress: () => STREAM_CONFIG.NODE_ADDRESS
         },
-        LOGSTORE: {
-            id: 'logstore',
-            name: 'LogStore',
-            description: 'Optimized cache with potential permanent storage',
-            supportsTTL: false,
-            defaultDays: null, // No TTL - data persists indefinitely
-            getNodeAddress: () => STREAM_CONFIG.LOGSTORE_NODE
+        CUSTOM: {
+            id: 'custom',
+            name: 'Custom Storage Node',
+            description: 'User-supplied Streamr-compatible storage node',
+            supportsTTL: true,
+            defaultDays: CONFIG.storage.defaultRetentionDays,
+            getNodeAddress: (address) => address
         }
     },
 
@@ -101,6 +97,41 @@ const isMessageStream = _isMessageStream;
 const isEphemeralStream = _isEphemeralStream;
 const isAdminStream = _isAdminStream;
 
+const isIpLiteralHost = (hostname) => {
+    if (!hostname) {
+        return false;
+    }
+
+    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname)) {
+        return true;
+    }
+
+    return hostname.includes(':');
+};
+
+const isWebSafeStorageNodeUrl = (value) => {
+    try {
+        const url = new URL(value);
+        const hostname = url.hostname.toLowerCase();
+
+        if (url.protocol !== 'https:') {
+            return false;
+        }
+
+        if (!hostname || hostname === 'localhost' || hostname.endsWith('.localhost')) {
+            return false;
+        }
+
+        if (isIpLiteralHost(hostname)) {
+            return false;
+        }
+
+        return true;
+    } catch {
+        return false;
+    }
+};
+
 class StreamrController {
     constructor() {
         this.client = null;
@@ -112,6 +143,34 @@ class StreamrController {
         // DM decrypt key recovery tracking
         this._dmKeyAddedForPublisher = new Set();  // Publishers we've added Pombo key for
         this._dmPublishKeySet = new Set();  // Streams we've already set publish key for
+    }
+
+    async validateCustomStorageNodeAddress(nodeAddress) {
+        if (!this.client) {
+            throw new Error('Client not initialized');
+        }
+
+        if (!/^0x[a-fA-F0-9]{40}$/.test(nodeAddress)) {
+            throw new Error('Invalid custom storage node address');
+        }
+
+        const metadata = await this.client.getStorageNodeMetadata(nodeAddress);
+        const urls = Array.isArray(metadata?.urls) ? metadata.urls.filter((url) => typeof url === 'string' && url.length > 0) : [];
+
+        if (!urls.length) {
+            throw new Error('Custom storage node has no published URLs');
+        }
+
+        const webSafeUrl = urls.find((url) => isWebSafeStorageNodeUrl(url));
+        if (!webSafeUrl) {
+            throw new Error('Custom storage node must publish at least one HTTPS hostname URL');
+        }
+
+        return {
+            metadata,
+            urls,
+            webSafeUrl
+        };
     }
 
     /**
@@ -154,13 +213,12 @@ class StreamrController {
                 }
             });
             
-            // Set storage node address from SDK (prefer Streamr's official node)
+            // Set storage node address from SDK
             if (window.STREAMR_STORAGE_NODE_ADDRESS) {
                 STREAM_CONFIG.NODE_ADDRESS = window.STREAMR_STORAGE_NODE_ADDRESS;
                 Logger.debug('Using Streamr official storage node');
             } else {
-                STREAM_CONFIG.NODE_ADDRESS = STREAM_CONFIG.LOGSTORE_NODE;
-                Logger.debug('Using LogStore storage node (fallback)');
+                Logger.warn('STREAMR_STORAGE_NODE_ADDRESS not available; Streamr storage option will be unavailable');
             }
             
             this.address = await this.client.getAddress();
@@ -918,8 +976,9 @@ class StreamrController {
      * Permissions: public SUBSCRIBE + PUBLISH (Streamr is a blind pipe; E2E encryption at app layer)
      * @param {string} publicKey - Owner's compressed public key (hex, for ECDH)
      * @param {Object} options - Storage options
-     * @param {string} options.storageProvider - 'streamr' or 'logstore' (default: 'streamr')
-     * @param {number} options.storageDays - Retention days for Streamr (default: 180)
+     * @param {string} options.storageProvider - 'streamr' or 'custom' (default: 'streamr')
+     * @param {string} [options.customStorageAddress] - EVM address of the custom storage node (required if provider is 'custom')
+     * @param {number} options.storageDays - Retention days (default: 180)
      * @returns {Promise<{messageStreamId: string, ephemeralStreamId: string}>}
      */
     async createDMInbox(publicKey, options = {}) {
@@ -1035,6 +1094,7 @@ class StreamrController {
         try {
             await this.enableStorage(messageStreamId, {
                 storageProvider: options.storageProvider,
+                customStorageAddress: options.customStorageAddress,
                 storageDays: options.storageDays,
                 onProgress
             });
@@ -1135,15 +1195,12 @@ class StreamrController {
                 report.storage.enabled = storageInfo.enabled;
                 report.storage.storageDays = storageInfo.storageDays;
                 if (storageInfo.enabled && storageInfo.nodes?.length > 0) {
-                    // Determine provider from node address
-                    const nodeAddr = typeof storageInfo.nodes[0] === 'string' 
-                        ? storageInfo.nodes[0].toLowerCase() 
+                    const nodeAddr = typeof storageInfo.nodes[0] === 'string'
+                        ? storageInfo.nodes[0].toLowerCase()
                         : String(storageInfo.nodes[0]).toLowerCase();
-                    if (nodeAddr === STREAM_CONFIG.LOGSTORE_NODE.toLowerCase()) {
-                        report.storage.provider = 'logstore';
-                    } else {
-                        report.storage.provider = 'streamr';
-                    }
+                    const streamrAddr = (STREAM_CONFIG.NODE_ADDRESS || '').toLowerCase();
+                    report.storage.provider = (streamrAddr && nodeAddr === streamrAddr) ? 'streamr' : 'custom';
+                    report.storage.nodeAddress = nodeAddr;
                 }
             } catch (e) {
                 Logger.debug('Diagnose: Could not check storage:', e.message);
@@ -1327,6 +1384,7 @@ class StreamrController {
             try {
                 await this.enableStorage(messageStreamId, {
                     storageProvider: options.storageProvider,
+                    customStorageAddress: options.customStorageAddress,
                     storageDays: options.storageDays
                 });
                 result.storage = 'ok';
@@ -1596,7 +1654,7 @@ class StreamrController {
                         storageDays = typeof result === 'bigint' ? Number(result) : result;
                     }
                 } catch (e) {
-                    // May fail if TTL not set (e.g., LogStore)
+                    // May fail if TTL not set on this storage node
                 }
             }
             
@@ -2543,8 +2601,9 @@ class StreamrController {
      * 
      * @param {string} messageStreamId - Message Stream ID (must end with -1)
      * @param {Object} options - Storage options
-     * @param {string} options.storageProvider - 'streamr' or 'logstore' (default: from config)
-     * @param {number} options.storageDays - Retention days (only for Streamr, default: 180)
+     * @param {string} options.storageProvider - 'streamr' or 'custom' (default: from config)
+     * @param {string} [options.customStorageAddress] - EVM address of the custom storage node (required if provider is 'custom')
+     * @param {number} options.storageDays - Retention days (default: 180)
      * @param {number} retries - Number of retry attempts
      * @returns {Promise<{success: boolean, provider: string, storageDays: number|null}>} - Result
      */
@@ -2552,43 +2611,59 @@ class StreamrController {
         if (!this.client) {
             throw new Error('Client not initialized');
         }
-        
+
         // Safety check: only enable storage for streams that should persist (-1 message, -3 admin)
         if (!isMessageStream(messageStreamId) && !isAdminStream(messageStreamId)) {
             Logger.warn('enableStorage called on non-persistent stream, ignoring:', messageStreamId);
             return { success: false, provider: null, storageDays: null };
         }
-        
-        // Determine storage provider
+
         const providerId = options.storageProvider || STREAM_CONFIG.DEFAULT_STORAGE_PROVIDER;
-        const providerConfig = providerId === 'logstore' 
-            ? STREAM_CONFIG.STORAGE_PROVIDERS.LOGSTORE 
+        const providerConfig = providerId === 'custom'
+            ? STREAM_CONFIG.STORAGE_PROVIDERS.CUSTOM
             : STREAM_CONFIG.STORAGE_PROVIDERS.STREAMR;
-        
-        // Get node address for the provider
-        const nodeAddress = providerConfig.getNodeAddress() || STREAM_CONFIG.LOGSTORE_NODE;
-        
-        // Determine storage days (only applicable for Streamr)
-        const storageDays = providerConfig.supportsTTL 
+
+        const nodeAddress = providerId === 'custom'
+            ? providerConfig.getNodeAddress(options.customStorageAddress)
+            : providerConfig.getNodeAddress();
+
+        if (!nodeAddress) {
+            Logger.error('Missing storage node address for provider:', providerId);
+            return { success: false, provider: providerId, storageDays: null };
+        }
+
+        if (providerId === 'custom' && !/^0x[a-fA-F0-9]{40}$/.test(nodeAddress)) {
+            Logger.error('Invalid custom storage node address:', nodeAddress);
+            return { success: false, provider: providerId, storageDays: null };
+        }
+
+        if (providerId === 'custom') {
+            try {
+                await this.validateCustomStorageNodeAddress(nodeAddress);
+            } catch (validationError) {
+                Logger.error('Custom storage node validation failed:', validationError.message);
+                return { success: false, provider: providerId, storageDays: null };
+            }
+        }
+
+        const storageDays = providerConfig.supportsTTL
             ? (options.storageDays || providerConfig.defaultDays)
             : null;
-        
-        Logger.debug('Enabling storage:', { 
-            streamId: messageStreamId, 
-            provider: providerId, 
+
+        Logger.debug('Enabling storage:', {
+            streamId: messageStreamId,
+            provider: providerId,
             nodeAddress: nodeAddress.slice(0, 12) + '...',
-            storageDays 
+            storageDays
         });
-        
+
         try {
             await executeWithRetry('enableStorage', async () => {
                 const stream = await this.client.getStream(messageStreamId);
-                
-                // Add to storage node
+
                 await stream.addToStorageNode(nodeAddress);
                 try { options.onProgress?.(); } catch (_) { /* progress callback errors must not break flow */ }
-                
-                // Set storage days if supported by provider
+
                 if (storageDays && providerConfig.supportsTTL) {
                     try {
                         await stream.setStorageDayCount(storageDays);
@@ -2599,17 +2674,17 @@ class StreamrController {
                         try { options.onProgress?.(); } catch (_) { /* ignore */ }
                     }
                 }
-                
+
                 Logger.info('Storage enabled:', {
                     stream: messageStreamId,
                     provider: providerId,
                     days: storageDays
                 });
             }, { maxRetries: retries });
-            
-            return { 
-                success: true, 
-                provider: providerId, 
+
+            return {
+                success: true,
+                provider: providerId,
                 storageDays: storageDays,
                 nodeAddress: nodeAddress
             };

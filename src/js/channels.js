@@ -306,8 +306,9 @@ class ChannelManager {
      * @param {string[]} members - Member addresses for native private channels (optional)
      * @param {Object} options - Additional options
      * @param {string} options.exposure - 'visible' or 'hidden'
-     * @param {string} options.storageProvider - 'streamr' or 'logstore' (default: 'streamr')
-     * @param {number} options.storageDays - Retention days (for Streamr, default: 180)
+     * @param {string} options.storageProvider - 'streamr' or 'custom' (default: 'streamr')
+     * @param {string} [options.customStorageAddress] - EVM address of the custom storage node (required if provider is 'custom')
+     * @param {number} options.storageDays - Retention days (default: 180)
      * @returns {Promise<Object>} - Created channel
      */
     async createChannel(name, type, password = null, members = [], options = {}) {
@@ -342,6 +343,7 @@ class ChannelManager {
             try {
                 storageResult = await streamrController.enableStorage(streamInfo.messageStreamId, {
                     storageProvider: options.storageProvider,
+                    customStorageAddress: options.customStorageAddress,
                     storageDays: options.storageDays,
                     onProgress
                 });
@@ -354,6 +356,7 @@ class ChannelManager {
                 try {
                     const adminStorageResult = await streamrController.enableStorage(streamInfo.adminStreamId, {
                         storageProvider: options.storageProvider,
+                        customStorageAddress: options.customStorageAddress,
                         storageDays: options.storageDays,
                         onProgress
                     });

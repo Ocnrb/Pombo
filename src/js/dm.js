@@ -123,8 +123,9 @@ class DMManager {
     /**
      * Create inbox streams (idempotent — skips if already exists)
      * @param {Object} options - Storage options
-     * @param {string} options.storageProvider - 'streamr' or 'logstore' (default: 'streamr')
-     * @param {number} options.storageDays - Retention days for Streamr (default: 180)
+     * @param {string} options.storageProvider - 'streamr' or 'custom' (default: 'streamr')
+     * @param {string} [options.customStorageAddress] - EVM address of the custom storage node (required if provider is 'custom')
+     * @param {number} options.storageDays - Retention days (default: 180)
      * @param {Function} [options.onProgress] - Called once per on-chain step
      * @returns {Promise<{messageStreamId: string, ephemeralStreamId: string}>}
      */
@@ -165,7 +166,7 @@ class DMManager {
     /**
      * Repair inbox based on diagnosis — only runs missing/broken steps.
      * @param {Object} diagnosis - Result from diagnoseInbox()
-     * @param {Object} options - Storage options { storageProvider, storageDays }
+     * @param {Object} options - Storage options { storageProvider, customStorageAddress, storageDays }
      * @param {Function} onStep - Progress callback: (stepName, status)
      * @returns {Promise<Object>} Repair result
      */
@@ -1031,7 +1032,7 @@ class DMManager {
         const received = channel.messages.filter(m => m._dmReceived);
 
         // Merge: combine sent + received, deduplicate by id, sort by timestamp
-        // Prefer versions that have imageData (LogStore messages may have it when sentMessages lost it)
+        // Prefer versions that have imageData (storage-backed messages may have it when sentMessages lost it)
         const allMessages = [...sent, ...received];
         const unique = new Map();
         for (const msg of allMessages) {

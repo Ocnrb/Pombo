@@ -2,7 +2,7 @@
 <html lang="pt">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-vvt4KWwuNr51XfE5m+hzeNEGhiOfZzG97ccfqGsPwvE='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; connect-src 'self' wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://eth.drpc.org https://polygon-bor-rpc.publicnode.com https://ethereum-rpc.publicnode.com https://cloudflare-eth.com https://gasstation.polygon.technology https://*.llamarpc.com https://1rpc.io https://*.meowrpc.com https://*.gateway.tenderly.co https://*.thegraph.com https://*.ens.domains https://euc.li https://*.logstore.usher.so https://fcm.googleapis.com https://*.push.services.mozilla.com https://updates.push.services.mozilla.com; base-uri 'self'; form-action 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-vvt4KWwuNr51XfE5m+hzeNEGhiOfZzG97ccfqGsPwvE='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; connect-src 'self' https: wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://eth.drpc.org https://polygon-bor-rpc.publicnode.com https://ethereum-rpc.publicnode.com https://cloudflare-eth.com https://gasstation.polygon.technology https://*.llamarpc.com https://1rpc.io https://*.meowrpc.com https://*.gateway.tenderly.co https://*.thegraph.com https://*.ens.domains https://euc.li https://fcm.googleapis.com https://*.push.services.mozilla.com https://updates.push.services.mozilla.com; base-uri 'self'; form-action 'self'">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Pombo - Own Your Communications</title>
 
@@ -762,16 +762,30 @@
                                         <span>Streamr</span>
                                     </div>
                                 </button>
-                                <button type="button" data-storage="logstore" class="storage-provider-tab flex-1 px-3 py-2.5 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 hover:bg-white/10 hover:text-white/70">
+                                <button type="button" data-storage="custom" class="storage-provider-tab flex-1 px-3 py-2.5 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 hover:bg-white/10 hover:text-white/70">
                                     <div class="flex items-center gap-2 justify-center">
-                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/></svg>
-                                        <span>LogStore</span>
-                                        <span class="text-[10px] px-1 py-0.5 bg-amber-500/20 text-amber-400 rounded font-semibold">BETA</span>
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+                                        <span>Custom</span>
                                     </div>
                                 </button>
                             </div>
-                            
-                            <!-- Storage Days (only for Streamr) -->
+
+                            <!-- Streamr Address (shown when Streamr selected) -->
+                            <div id="streamr-address-display" class="mt-3">
+                                <span class="text-[10px] text-white/30 uppercase tracking-wider block mb-1.5">Storage Cluster</span>
+                                <div class="w-full px-3 py-2 text-xs font-mono bg-white/5 border border-white/10 rounded-lg text-white/50 break-all">
+                                    <span id="streamr-address-value">—</span>
+                                </div>
+                            </div>
+
+                            <!-- Custom Address Input (hidden by default) -->
+                            <div id="custom-address-section" class="hidden mt-3">
+                                <label for="custom-storage-address" class="text-[10px] text-white/30 uppercase tracking-wider block mb-1.5">Storage Cluster</label>
+                                <input type="text" id="custom-storage-address" placeholder="0x..." spellcheck="false" autocomplete="off" class="w-full px-3 py-2 text-xs font-mono bg-white/5 border border-white/10 rounded-lg text-white placeholder-white/20 focus:outline-none focus:border-white/20 transition">
+                                <p id="custom-storage-address-error" class="hidden text-[11px] text-red-400 mt-1.5"></p>
+                            </div>
+
+                            <!-- Storage Days slider -->
                             <div id="storage-days-section" class="mt-3">
                                 <div class="flex items-center justify-between mb-3">
                                     <label class="text-xs font-medium text-white/40 uppercase tracking-wider">Message Retention</label>
@@ -785,20 +799,12 @@
                                         <span>1 year</span>
                                     </div>
                                 </div>
-                                <button type="button" class="storage-learn-more-btn text-xs text-white/30 hover:text-white/50 transition mt-2 flex items-center gap-1">
-                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                    <span>Learn more about storage</span>
-                                </button>
                             </div>
-                            
-                            <!-- LogStore Info (hidden by default) -->
-                            <div id="logstore-info" class="hidden mt-3 p-3 bg-white/5 rounded-lg border border-white/5">
-                                <p class="text-xs text-white/40">LogStore uses optimized caching. Data may persist indefinitely but retention is not guaranteed.</p>
-                                <button type="button" class="storage-learn-more-btn text-xs text-white/30 hover:text-white/50 transition mt-2 flex items-center gap-1">
-                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                    <span>Learn more about storage</span>
-                                </button>
-                            </div>
+
+                            <button type="button" class="storage-learn-more-btn text-xs text-white/30 hover:text-white/50 transition mt-2 flex items-center gap-1">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                <span>Learn more about storage</span>
+                            </button>
                         </div>
 
                     </div>
@@ -927,7 +933,7 @@
             <div class="p-5 md:p-6 space-y-4 md:space-y-5 flex-1 overflow-y-auto md:max-h-[70vh]">
                 <!-- Intro -->
                 <p class="text-sm text-white/50 leading-relaxed">
-                    Pombo offers two storage options for message history. Both provide equal privacy and security — all data flows through the Streamr Network's encrypted P2P transport.
+                    Pombo offers two storage options for message history. Both flow through the Streamr Network's encrypted P2P transport — only the storage destination differs.
                 </p>
 
                 <!-- Streamr Storage -->
@@ -962,45 +968,36 @@
                     </div>
                 </div>
 
-                <!-- LogStore -->
+                <!-- Custom Storage Node -->
                 <div class="p-4 bg-white/5 rounded-xl border border-white/5">
                     <div class="flex items-center gap-3 mb-3">
                         <div class="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
-                            <svg class="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/></svg>
+                            <svg class="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
                         </div>
-                        <h4 class="text-sm font-medium text-white">LogStore Network</h4>
-                        <span class="text-[10px] px-1 py-0.5 bg-amber-500/20 text-amber-400 rounded font-semibold">BETA</span>
+                        <h4 class="text-sm font-medium text-white">Custom Storage Node</h4>
                     </div>
                     <p class="text-sm text-white/40 leading-relaxed">
-                        Decentralized middleware by Usher Labs that bridges Streamr's real-time transport with Arweave's permanent storage via KYVE consensus. Broker Nodes (run by Usher Labs, but open for anyone to operate) cache data and route to Validators for archival on the Permaweb. <strong class="text-white/50">Best-effort retention</strong> — data persists in cache but long-term permanence depends on network conditions.
+                        Bring your own Streamr-compatible storage node or cluster. Provide the node's on-chain address and Pombo will register your stream against it. TTL behavior depends on your node's configuration. Use this to self-host history, route to a private cluster, or experiment with third-party storage providers.
                     </p>
                     <div class="mt-3 pt-3 border-t border-white/5 space-y-2">
                         <div class="flex items-start gap-2">
                             <span class="text-[10px] text-white/20 uppercase tracking-wider w-20 flex-shrink-0 pt-0.5">Node</span>
-                            <span class="text-xs text-white/40 font-mono">0x17f98084...8a57</span>
+                            <span class="text-xs text-white/40">User-supplied EVM address</span>
+                        </div>
+                        <div class="flex items-start gap-2">
+                            <span class="text-[10px] text-white/20 uppercase tracking-wider w-20 flex-shrink-0 pt-0.5">TTL</span>
+                            <span class="text-xs text-white/40">Best-effort (depends on node)</span>
                         </div>
                         <div class="flex items-start gap-2">
                             <span class="text-[10px] text-white/20 uppercase tracking-wider w-20 flex-shrink-0 pt-0.5">Type</span>
-                            <span class="text-xs text-white/40">Decentralized Broker mesh</span>
-                        </div>
-                        <div class="flex items-start gap-2">
-                            <span class="text-[10px] text-white/20 uppercase tracking-wider w-20 flex-shrink-0 pt-0.5">Archive</span>
-                            <span class="text-xs text-white/40">KYVE → Arweave (Permaweb)</span>
-                        </div>
-                        <div class="flex items-start gap-2">
-                            <span class="text-[10px] text-white/20 uppercase tracking-wider w-20 flex-shrink-0 pt-0.5">Retention</span>
-                            <span class="text-xs text-white/40">Best-effort (persistent cache)</span>
+                            <span class="text-xs text-white/40">Self-hosted or third-party</span>
                         </div>
                     </div>
-                    <div class="flex flex-wrap gap-2 md:gap-3 mt-3 pt-3 border-t border-white/5 text-xs text-white/30">
-                        <span>KYVE consensus</span>
-                        <span>Arweave archival</span>
-                        <span>Best-effort</span>
+                    <div class="flex flex-wrap gap-2 md:gap-4 mt-3 pt-3 border-t border-white/5 text-xs text-white/30">
+                        <span>Self-sovereign</span>
+                        <span>Streamr-compatible</span>
+                        <span>Advanced</span>
                     </div>
-                    <a href="https://www.usher.so/blog/log-store-with-streamr-1-0-interplanetary-storage-for-real-time-data/" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-xs text-white/30 hover:text-white/50 transition mt-3">
-                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
-                        <span>Learn more at usher.so</span>
-                    </a>
                 </div>
             </div>
 
@@ -1138,16 +1135,30 @@
                                     <span>Streamr</span>
                                 </div>
                             </button>
-                            <button type="button" data-dm-storage="logstore" class="dm-storage-provider-tab flex-1 px-3 py-2.5 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 hover:bg-white/10 hover:text-white/70">
+                            <button type="button" data-dm-storage="custom" class="dm-storage-provider-tab flex-1 px-3 py-2.5 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 hover:bg-white/10 hover:text-white/70">
                                 <div class="flex items-center gap-2 justify-center">
-                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/></svg>
-                                    <span>LogStore</span>
-                                    <span class="text-[10px] px-1 py-0.5 bg-amber-500/20 text-amber-400 rounded font-semibold">BETA</span>
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+                                    <span>Custom</span>
                                 </div>
                             </button>
                         </div>
-                        
-                        <!-- Storage Days (only for Streamr) -->
+
+                        <!-- Streamr Address (shown when Streamr selected) -->
+                        <div id="dm-streamr-address-display" class="mt-3">
+                            <span class="text-[10px] text-white/30 uppercase tracking-wider block mb-1.5">Storage Node</span>
+                            <div class="w-full px-3 py-2 text-xs font-mono bg-white/5 border border-white/10 rounded-lg text-white/50 break-all">
+                                <span id="dm-streamr-address-value">—</span>
+                            </div>
+                        </div>
+
+                        <!-- Custom Address Input (hidden by default) -->
+                        <div id="dm-custom-address-section" class="hidden mt-3">
+                            <label for="dm-custom-storage-address" class="text-[10px] text-white/30 uppercase tracking-wider block mb-1.5">Storage Node Address</label>
+                            <input type="text" id="dm-custom-storage-address" placeholder="0x..." spellcheck="false" autocomplete="off" class="w-full px-3 py-2 text-xs font-mono bg-white/5 border border-white/10 rounded-lg text-white placeholder-white/20 focus:outline-none focus:border-white/20 transition">
+                            <p id="dm-custom-storage-address-error" class="hidden text-[11px] text-red-400 mt-1.5"></p>
+                        </div>
+
+                        <!-- Storage Days slider -->
                         <div id="dm-storage-days-section" class="mt-3">
                             <div class="flex items-center justify-between mb-3">
                                 <label class="text-xs font-medium text-white/40 uppercase tracking-wider">Message Retention</label>
@@ -1161,20 +1172,12 @@
                                     <span>1 year</span>
                                 </div>
                             </div>
-                            <button type="button" class="dm-storage-learn-more-btn text-xs text-white/30 hover:text-white/50 transition mt-2 flex items-center gap-1">
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                <span>Learn more about storage</span>
-                            </button>
                         </div>
-                        
-                        <!-- LogStore Info (hidden by default) -->
-                        <div id="dm-logstore-info" class="hidden mt-3 p-3 bg-white/5 rounded-lg border border-white/5">
-                            <p class="text-xs text-white/40">LogStore uses optimized caching. Data may persist indefinitely but retention is not guaranteed.</p>
-                            <button type="button" class="dm-storage-learn-more-btn text-xs text-white/30 hover:text-white/50 transition mt-2 flex items-center gap-1">
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                <span>Learn more about storage</span>
-                            </button>
-                        </div>
+
+                        <button type="button" class="dm-storage-learn-more-btn text-xs text-white/30 hover:text-white/50 transition mt-2 flex items-center gap-1">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            <span>Learn more about storage</span>
+                        </button>
                     </div>
                 </div>
             </div>

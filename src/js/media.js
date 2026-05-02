@@ -581,7 +581,7 @@ class MediaController {
         this.imageCacheBytes += base64Data.length * 2;
         this.evictImageCacheIfNeeded();
         
-        // Create image message with data embedded (for LogStore persistence)
+        // Create image message with data embedded (so storage backends can persist it)
         // This goes to messageStream so it's stored and retrievable from history
         const announcement = await identityManager.createSignedMessage('', messageStreamId);
         announcement.type = 'image';
