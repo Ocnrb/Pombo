@@ -172,11 +172,12 @@ describe('StreamrController Core', () => {
             expect(STREAM_CONFIG.NODE_ADDRESS).toBe('0xstorage');
         });
 
-        it('should fall back to LOGSTORE_NODE if no STREAMR_STORAGE_NODE_ADDRESS', async () => {
+        it('should leave NODE_ADDRESS null if no STREAMR_STORAGE_NODE_ADDRESS', async () => {
             window.StreamrClient = function() { Object.assign(this, mockClient); };
             window.STREAMR_STORAGE_NODE_ADDRESS = null;
+            STREAM_CONFIG.NODE_ADDRESS = null;
             await streamrController.init({ privateKey: '0xabc' });
-            expect(STREAM_CONFIG.NODE_ADDRESS).toBe(STREAM_CONFIG.LOGSTORE_NODE);
+            expect(STREAM_CONFIG.NODE_ADDRESS).toBeNull();
         });
     });
 
@@ -959,6 +960,10 @@ describe('StreamrController Core', () => {
 
     // ==================== enableStorage() ====================
     describe('enableStorage()', () => {
+        beforeEach(() => {
+            STREAM_CONFIG.NODE_ADDRESS = '0xstorage';
+        });
+
         it('should throw if client is null', async () => {
             streamrController.client = null;
             await expect(streamrController.enableStorage('stream-1'))

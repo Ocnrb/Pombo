@@ -39,8 +39,8 @@ describe('config', () => {
 
         it('should have storage configuration', () => {
             expect(CONFIG.storage).toBeDefined();
-            expect(CONFIG.storage.logstoreNode).toMatch(/^0x[a-fA-F0-9]+$/);
-            expect(['streamr', 'logstore']).toContain(CONFIG.storage.defaultProvider);
+            expect(['streamr', 'custom']).toContain(CONFIG.storage.defaultProvider);
+            expect(CONFIG.storage.defaultRetentionDays).toBeGreaterThan(0);
         });
 
         it('should have app metadata', () => {
