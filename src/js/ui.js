@@ -120,6 +120,7 @@ class UIController {
                     }
                 }).catch(() => {});
             },
+            recoverImage: (imageId) => mediaController.recoverImage(imageId),
             getCurrentChannel: () => this.getActiveChannel(),
             getFileUrl: (fileId) => mediaController.getFileUrl(fileId),
             isSeeding: (fileId) => mediaController.isSeeding(fileId),
@@ -1718,36 +1719,42 @@ class UIController {
     setupMediaHandlers() {
         // Image received - update image placeholders
         mediaController.onImageReceived((imageId, base64Data) => {
-            const placeholder = document.querySelector(`[data-image-id="${CSS.escape(imageId)}"]`);
-            if (placeholder) {
-                // CRITICAL: Verify channel context to prevent cross-channel image leakage
+            // Replace ALL placeholders for this imageId — re-shares produce
+            // multiple placeholders, and `recoverImage` relies on this fan-out.
+            const placeholders = document.querySelectorAll(`[data-image-id="${CSS.escape(imageId)}"]`);
+            if (placeholders.length === 0) return;
+
+            const currentChannel = this.getActiveChannel();
+            const mediaId = mediaHandler.registerMedia(base64Data, 'image');
+            if (!mediaId) return;
+
+            const replacementHtml = `
+                <div class="relative inline-block max-w-xs group">
+                    <img src="${base64Data}" 
+                         class="max-w-full max-h-60 rounded-lg cursor-pointer object-contain lightbox-trigger" 
+                         data-media-id="${mediaId}"
+                         alt="Image"/>
+                    <button class="absolute top-1 right-1 bg-black/60 hover:bg-black/80 text-white p-1 rounded transition opacity-0 group-hover:opacity-100 lightbox-trigger"
+                            data-media-id="${mediaId}"
+                            title="Maximize">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
+                        </svg>
+                    </button>
+                </div>
+            `;
+
+            let replacedAny = false;
+            for (const placeholder of placeholders) {
                 const placeholderChannelId = placeholder.getAttribute('data-channel-id');
-                const currentChannel = this.getActiveChannel();
                 if (placeholderChannelId && currentChannel && placeholderChannelId !== currentChannel.streamId) {
                     Logger.debug('Image received for different channel, skipping DOM update:', imageId);
-                    return;
+                    continue;
                 }
-                
-                // Register media for safe onclick handling
-                const mediaId = mediaHandler.registerMedia(base64Data, 'image');
-                if (!mediaId) return; // Invalid URL rejected
-                
-                placeholder.outerHTML = `
-                    <div class="relative inline-block max-w-xs group">
-                        <img src="${base64Data}" 
-                             class="max-w-full max-h-60 rounded-lg cursor-pointer object-contain lightbox-trigger" 
-                             data-media-id="${mediaId}"
-                             alt="Image"/>
-                        <button class="absolute top-1 right-1 bg-black/60 hover:bg-black/80 text-white p-1 rounded transition opacity-0 group-hover:opacity-100 lightbox-trigger"
-                                data-media-id="${mediaId}"
-                                title="Maximize">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
-                            </svg>
-                        </button>
-                    </div>
-                `;
-                // Attach click handlers
+                placeholder.outerHTML = replacementHtml;
+                replacedAny = true;
+            }
+            if (replacedAny) {
                 mediaHandler.attachLightboxListeners();
             }
         });

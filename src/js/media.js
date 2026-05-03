@@ -742,8 +742,9 @@ class MediaController {
 
             const actualHash = await this.sha256(chunkBuffer);
             if (actualHash !== expectedHash) {
-                Logger.warn('Stored image chunk hash mismatch:', imageId, chunkIndex);
-                chunks.delete(chunkIndex);
+                // Keep the chunk: a future redelivery will overwrite it via
+                // `registerStoredImageChunk` and the next assembly may succeed.
+                Logger.warn('Stored image chunk hash mismatch (kept for redelivery):', imageId, chunkIndex);
                 return false;
             }
 
@@ -1353,6 +1354,40 @@ class MediaController {
      */
     getImage(imageId) {
         return this.imageCache.get(imageId) || null;
+    }
+
+    /**
+     * Heal a stuck image placeholder. Re-fires `onImageReceived` if the
+     * image is already cached, or retries assembly if the pending state
+     * is complete. Safe to call repeatedly — all branches are idempotent.
+     * Used to recover from re-render races that orphan placeholders.
+     * @param {string} imageId
+     */
+    recoverImage(imageId) {
+        if (!imageId) return;
+        const cached = this.imageCache.get(imageId);
+        if (cached) {
+            // Defer so the caller's freshly-rendered placeholder is in the
+            // DOM before `onImageReceived` queries for it.
+            const fire = () => {
+                if (this.handlers.onImageReceived) {
+                    try {
+                        this.handlers.onImageReceived(imageId, cached);
+                    } catch (e) {
+                        Logger.debug('recoverImage onImageReceived error:', e?.message || e);
+                    }
+                }
+            };
+            if (typeof queueMicrotask === 'function') queueMicrotask(fire);
+            else setTimeout(fire, 0);
+            return;
+        }
+        const pending = this.pendingImageAssemblies.get(imageId);
+        if (pending?.manifest && pending.chunks.size >= pending.manifest.chunkCount) {
+            this.tryAssembleStoredImage(imageId).catch(err => {
+                Logger.debug('recoverImage assembly retry failed:', err?.message || err);
+            });
+        }
     }
 
     /**

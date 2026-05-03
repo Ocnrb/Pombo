@@ -248,7 +248,16 @@ class ChatAreaUI {
         // Remove any existing "search older" / "history end" banners before loading
         this._removeSearchOlderBanner();
         this._removeHistoryEndBanner();
-        
+
+        // When the area has no messages (e.g. user clicked the "Search older"
+        // banner on an empty DM), force a re-render so the central spinner
+        // appears for the duration of the fetch. With `_loadOp` active,
+        // `renderMessages([])` deterministically takes the non-terminal-empty
+        // branch and shows the spinner.
+        if (!showIndicator) {
+            this.renderMessages(channel.messages);
+        }
+
         const previousScrollHeight = this.messagesArea.scrollHeight;
         const previousScrollTop = this.messagesArea.scrollTop;
         
@@ -267,7 +276,7 @@ class ChatAreaUI {
             // never appears in this cycle and the user waits even longer
             // for an auto-load retry.
             if (op.cancelled) return;
-            
+
             if (result.loaded > 0) {
                 this.renderMessages(channel.messages, () => {
                     this._attachMessageListeners();
@@ -277,23 +286,26 @@ class ChatAreaUI {
                 const heightDiff = newScrollHeight - previousScrollHeight;
                 this.messagesArea.scrollTop = previousScrollTop + heightDiff;
             } else if (result.noResultsInWindow && result.hasMore) {
-                // DM pagination: no messages from this peer in the current time window
+                // DM pagination: no messages from this peer in the current time window.
+                // End the op BEFORE rendering the banner so `renderMessages`
+                // (called transitively from `_showSearchOlderBanner` for empty
+                // channels) can correctly evaluate `isTerminalEmpty` without
+                // our own in-flight op blocking the check.
+                this._endLoadOp(op);
                 this._showSearchOlderBanner(channel, channelManager);
-            } else if (!result.hasMore && result.loaded === 0) {
-                // Reached the beginning. Force a re-render so the inline
-                // "— beginning of conversation —" marker is emitted by
-                // `renderMessages` for ALL channel types (it conditions on
-                // `hasMoreHistory === false`, which is now true). The marker
-                // is the SINGLE source of truth — no separate icon banner —
-                // so subsequent renders triggered by unrelated events
-                // (initial_history_complete, history_batch_loaded,
-                // admin_state_updated, …) cannot double-stack indicators.
-                this.renderMessages(channel.messages, () => {
-                    this._attachMessageListeners();
-                });
-            } else if (channel.messages.length === 0) {
-                // No messages loaded and channel is empty - re-render to update spinner to "no messages"
-                this.renderMessages(channel.messages);
+            } else {
+                // Empty result. End the op BEFORE re-rendering so the
+                // empty-state derivation in `renderMessages` (which requires
+                // `_loadOp === null`) can resolve correctly — either to the
+                // "— beginning of conversation —" marker (when `hasMore`
+                // flipped to false) or to "No messages yet" for an empty
+                // channel that has reached exhaustion.
+                this._endLoadOp(op);
+                if (!result.hasMore || channel.messages.length === 0) {
+                    this.renderMessages(channel.messages, () => {
+                        this._attachMessageListeners();
+                    });
+                }
             }
         } catch (error) {
             this.deps.Logger?.error('Failed to load more messages:', error);
@@ -379,6 +391,12 @@ class ChatAreaUI {
 
         this._removeHistoryEndBanner();
 
+        // See `_loadMoreChannelHistory`: render the central spinner while
+        // the fetch runs against an empty preview channel.
+        if (!showIndicator) {
+            this.renderMessages(previewChannel.messages);
+        }
+
         const previousScrollHeight = this.messagesArea.scrollHeight;
         const previousScrollTop = this.messagesArea.scrollTop;
         
@@ -387,7 +405,7 @@ class ChatAreaUI {
 
             if (!previewModeUI.isInPreviewMode()) return;
             if (!this._isOpCurrent(op)) return;
-            
+
             if (result.loaded > 0) {
                 this.renderMessages(previewChannel.messages, () => {
                     this._attachMessageListeners();
@@ -396,18 +414,17 @@ class ChatAreaUI {
                 const newScrollHeight = this.messagesArea.scrollHeight;
                 const heightDiff = newScrollHeight - previousScrollHeight;
                 this.messagesArea.scrollTop = previousScrollTop + heightDiff;
-            } else if (!result.hasMore && result.loaded === 0) {
-                // Exhausted preview history — re-render so the inline
-                // "— beginning of conversation —" marker is emitted by
-                // `renderMessages` (gated on `hasMoreHistory === false`).
-                // No separate icon banner: the inline marker is the single
-                // source of truth across every channel type.
-                this.renderMessages(previewChannel.messages, () => {
-                    this._attachMessageListeners();
-                });
-            } else if (previewChannel.messages.length === 0) {
-                // No messages loaded and channel is empty - re-render to update spinner to "no messages"
-                this.renderMessages(previewChannel.messages);
+            } else {
+                // Empty result. End the op BEFORE re-rendering so the
+                // empty-state derivation in `renderMessages` (which requires
+                // `_loadOp === null`) can resolve to either the
+                // "— beginning of conversation —" marker or "No messages yet".
+                this._endLoadOp(op);
+                if (!result.hasMore || previewChannel.messages.length === 0) {
+                    this.renderMessages(previewChannel.messages, () => {
+                        this._attachMessageListeners();
+                    });
+                }
             }
         } catch (error) {
             this.deps.Logger?.error('Failed to load more preview messages:', error);
@@ -417,17 +434,11 @@ class ChatAreaUI {
     }
 
     /**
-     * Show loading indicator at top of messages. Re-renders use this on the
-     * `renderMessages` path to re-attach the spinner after `innerHTML=` wipe;
-     * always tagged with the active op token so a stale render cannot inject
-     * a spinner that no live op owns.
-     *
-     * Must mark `op.indicatorShown = true` so that the eventual
-     * `_endLoadOp`/`_cancelLoadOp` actually removes the spinner. Without this,
-     * an op that started with `showIndicator:false` (e.g. preview auto-load
-     * with empty `messages`) but later had the spinner re-attached by a
-     * concurrent `renderMessages` (realtime message arriving mid-fetch) would
-     * leave the spinner orphaned in the DOM after the op ends.
+     * Re-attach the spinner after a `renderMessages` `innerHTML=` wipe.
+     * Marking `op.indicatorShown` is required so `_endLoadOp` /
+     * `_cancelLoadOp` will remove the spinner — otherwise an op that
+     * began with `showIndicator:false` and had the spinner re-attached
+     * here would leak it on completion.
      */
     showLoadingMoreIndicator() {
         const op = this._loadOp;
@@ -473,7 +484,7 @@ class ChatAreaUI {
     renderMessages(messages, onRenderComplete = null) {
         const { channelManager, authManager, getActiveChannel } = this.deps;
         
-        const channel = getActiveChannel ? getActiveChannel() : channelManager?.getCurrentChannel();
+        const channel = getActiveChannel ? getActiveChannel() : channelManager?.getCurrentChannel?.();
         const previewChannel = previewModeUI.getPreviewChannel?.();
         const effectiveChannel = previewChannel || channel;
         const hasMoreHistory = effectiveChannel?.hasMoreHistory !== false;
@@ -515,43 +526,27 @@ class ChatAreaUI {
         }
         
         if (messagesForRender.length === 0) {
-            // If there might be more history to load, show loading spinner instead of "no messages"
-            if (hasMoreHistory) {
+            // "No messages yet" requires every loading signal to be quiescent;
+            // otherwise we keep the spinner. Avoids the prior timer-based
+            // fallback that raced slow resend iterators.
+            const isTerminalEmpty =
+                effectiveChannel?.initialLoadInProgress !== true &&
+                hasMoreHistory === false &&
+                this._loadOp == null &&
+                !effectiveChannel?.loadingHistory &&
+                !document.getElementById('dm-search-older-banner');
+
+            if (isTerminalEmpty) {
+                this.messagesArea.innerHTML = `
+                    <div class="flex items-center justify-center h-full text-white/40">
+                        No messages yet. Start the conversation!
+                    </div>
+                `;
+            } else {
                 this.messagesArea.innerHTML = `
                     <div class="flex flex-col items-center justify-center h-full text-white/40 gap-3">
                         <div class="spinner" style="width: 24px; height: 24px;"></div>
                         <span class="text-sm">Loading messages...</span>
-                    </div>
-                `;
-                // Fallback: if loading never resolves, show the empty state.
-                // Suppressed when ANY of:
-                //   (a) a UI pagination op is still in flight (`_loadOp`)
-                //   (b) the channel-level pagination flag is still set
-                //       (`channel.loadingHistory`) — outlives the UI watchdog,
-                //       so a slow `fetchOlderDMMessages` (7-day inbox window)
-                //       can't get blasted by "No messages yet" mid-flight
-                //   (c) a "Search older messages" banner was already rendered
-                // Without (b) the watchdog at 15s clears `_loadOp`; the 20s
-                // timer then races ahead of the actual fetch result and
-                // briefly flashes "No messages yet" before the banner.
-                const channelId = channel?.streamId;
-                this._loadingTimeoutId = setTimeout(() => {
-                    const currentChannel = getActiveChannel ? getActiveChannel() : channelManager?.getCurrentChannel();
-                    if (currentChannel?.streamId !== channelId) return;
-                    if ((currentChannel?.messages?.length ?? 0) !== 0) return;
-                    if (this._loadOp) return;
-                    if (currentChannel?.loadingHistory) return;
-                    if (document.getElementById('dm-search-older-banner')) return;
-                    this.messagesArea.innerHTML = `
-                        <div class="flex items-center justify-center h-full text-white/40">
-                            No messages yet. Start the conversation!
-                        </div>
-                    `;
-                }, 20000);
-            } else {
-                this.messagesArea.innerHTML = `
-                    <div class="flex items-center justify-center h-full text-white/40">
-                        No messages yet. Start the conversation!
                     </div>
                 `;
             }

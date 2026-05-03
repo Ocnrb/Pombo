@@ -233,6 +233,33 @@ class SubscriptionManager {
 
         this.previewChannelId = messageStreamId;
 
+        // Safety net: wrap onHistoryComplete so it fires at most once and
+        // is forced after 30s if the SDK resend iterator never signals
+        // `done` (custom storage / legacy single-partition streams).
+        // Without this, `previewChannel.initialLoadInProgress` stays true
+        // and the empty-state render keeps the spinner indefinitely.
+        let historyCompleteFired = false;
+        let previewHistorySafetyTimer = null;
+        const wrappedOnHistoryComplete = onHistoryComplete
+            ? (stats) => {
+                if (historyCompleteFired) return;
+                historyCompleteFired = true;
+                if (previewHistorySafetyTimer) {
+                    clearTimeout(previewHistorySafetyTimer);
+                    previewHistorySafetyTimer = null;
+                }
+                try { onHistoryComplete(stats); }
+                catch (e) { Logger.warn('preview onHistoryComplete error:', e?.message || e); }
+            }
+            : null;
+        if (wrappedOnHistoryComplete) {
+            previewHistorySafetyTimer = setTimeout(() => {
+                if (historyCompleteFired) return;
+                Logger.warn(`Preview history safety timeout for ${messageStreamId.slice(-20)}`);
+                wrappedOnHistoryComplete(null);
+            }, 30000);
+        }
+
         // Subscribe to both streams with proper handler object format
         // Using streamrController directly since channel is not in channelManager yet
         let ephemeralStreamId = null;
@@ -305,7 +332,7 @@ class SubscriptionManager {
                 },
                 null, // password
                 STREAM_CONFIG.INITIAL_MESSAGES, // historyCount - load recent messages
-                onHistoryComplete // callback when history is fully loaded
+                wrappedOnHistoryComplete // safety-wrapped callback (forces fire after 30s)
             );
 
             // If a newer preview has claimed the slot while we were
@@ -314,6 +341,10 @@ class SubscriptionManager {
             // previewChannelId, plus presence/poller would never stop).
             if (gen !== this.previewSwitchGeneration) {
                 Logger.warn('setPreviewChannel: superseded after subscribe, unsubscribing orphan:', messageStreamId);
+                if (previewHistorySafetyTimer) {
+                    clearTimeout(previewHistorySafetyTimer);
+                    previewHistorySafetyTimer = null;
+                }
                 try {
                     await streamrController.unsubscribeFromDualStream(messageStreamId, ephemeralStreamId);
                 } catch (e) {
@@ -332,6 +363,13 @@ class SubscriptionManager {
             this._startPreviewPresence(messageStreamId, ephemeralStreamId);
         } catch (error) {
             Logger.error('Failed to subscribe to preview channel:', error);
+            if (previewHistorySafetyTimer) {
+                clearTimeout(previewHistorySafetyTimer);
+                previewHistorySafetyTimer = null;
+            }
+            // Fire the wrapped callback so PreviewModeUI releases
+            // `initialLoadInProgress` and the spinner is dismissed.
+            if (wrappedOnHistoryComplete) wrappedOnHistoryComplete(null);
             // Only clear our claim if still current — a newer setPreviewChannel
             // may have already taken ownership of previewChannelId.
             if (gen === this.previewSwitchGeneration && this.previewChannelId === messageStreamId) {

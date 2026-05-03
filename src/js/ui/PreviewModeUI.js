@@ -5,6 +5,7 @@
 
 import { Logger } from '../logger.js';
 import { STREAM_CONFIG } from '../streamr.js';
+import { mediaController } from '../media.js';
 
 class PreviewModeUI {
     constructor() {
@@ -909,22 +910,45 @@ class PreviewModeUI {
         channel.loadingHistory = true;
 
         try {
-            const [contentResult, overrideResult] = await Promise.all([
-                streamrController.fetchOlderHistory(
-                    streamId,
-                    STREAM_CONFIG.MESSAGE_STREAM.MESSAGES,
-                    beforeTimestamp,
-                    30,
-                    channel.password
-                ),
-                streamrController.fetchOlderHistory(
-                    streamId,
-                    STREAM_CONFIG.MESSAGE_STREAM.CONTROL,
-                    beforeTimestamp,
-                    30,
-                    channel.password
-                )
-            ]);
+            const fetchContent = () => streamrController.fetchOlderHistory(
+                streamId,
+                STREAM_CONFIG.MESSAGE_STREAM.MESSAGES,
+                beforeTimestamp,
+                30,
+                channel.password
+            );
+            const fetchOverrides = () => streamrController.fetchOlderHistory(
+                streamId,
+                STREAM_CONFIG.MESSAGE_STREAM.CONTROL,
+                beforeTimestamp,
+                30,
+                channel.password
+            );
+
+            let [contentResult, overrideResult] = await Promise.all([fetchContent(), fetchOverrides()]);
+
+            // Storage race mitigation (symmetric with `channels.loadMoreHistory`):
+            // when both partitions return zero across a non-trivial range, the
+            // storage iterator may have closed early. Progressive backoff
+            // (1s, 2s, 3s) disambiguates flakiness from true exhaustion.
+            const isEmpty = (c, o) => (c?.messages?.length || 0) === 0
+                && (o?.messages?.length || 0) === 0;
+            if (isEmpty(contentResult, overrideResult) && beforeTimestamp > 1 && this.previewChannel === channel) {
+                const backoffMs = [1000, 2000, 3000];
+                for (let attempt = 0; attempt < backoffMs.length; attempt++) {
+                    await new Promise(r => setTimeout(r, backoffMs[attempt]));
+                    if (this.previewChannel !== channel) break;
+                    const [retryContent, retryOverride] = await Promise.all([fetchContent(), fetchOverrides()]);
+                    if (!isEmpty(retryContent, retryOverride)) {
+                        Logger.info?.(
+                            `loadMorePreviewHistory: retry #${attempt + 1} recovered messages after empty first response`
+                        );
+                        contentResult = retryContent;
+                        overrideResult = retryOverride;
+                        break;
+                    }
+                }
+            }
 
             if (!this.previewChannel) return { loaded: 0, hasMore: false };
 
@@ -933,6 +957,21 @@ class PreviewModeUI {
             const { reactionManager } = this.deps;
 
             for (const msg of contentResult.messages || []) {
+                // Stored image chunks (no id/sender) — feed the assembler
+                // before the generic incomplete-message filter drops them.
+                if (typeof mediaController?.isStoredImageChunkMessage === 'function'
+                    && mediaController.isStoredImageChunkMessage(msg)) {
+                    if (msg.timestamp && (!channel.oldestTimestamp || msg.timestamp < channel.oldestTimestamp)) {
+                        channel.oldestTimestamp = msg.timestamp;
+                    }
+                    try {
+                        await mediaController.registerStoredImageChunk(streamId, msg);
+                    } catch (err) {
+                        Logger.debug?.('Preview loadMore: chunk register failed:', err?.message || err);
+                    }
+                    continue;
+                }
+
                 if (msg?.type === 'reaction') {
                     const reactionUser = msg.user || msg.senderId;
                     if (reactionUser) {
@@ -963,6 +1002,22 @@ class PreviewModeUI {
 
                     // Re-check after await (race with concurrent handler)
                     if (channel.messages.some(m => m.id === msg.id)) continue;
+
+                    // Register chunked-image manifests so already-buffered
+                    // chunks (or chunks paginated in this same window) can
+                    // complete assembly.
+                    if (
+                        typeof mediaController?.isStoredChunkedImageManifest === 'function'
+                        && mediaController.isStoredChunkedImageManifest(msg)
+                        && msg.verified?.valid !== false
+                        && typeof mediaController.registerStoredImageManifest === 'function'
+                    ) {
+                        try {
+                            await mediaController.registerStoredImageManifest(streamId, msg);
+                        } catch (err) {
+                            Logger.debug?.('Preview loadMore: manifest register failed:', err?.message || err);
+                        }
+                    }
 
                     channel.messages.push(msg);
                     addedCount++;

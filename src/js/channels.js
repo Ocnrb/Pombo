@@ -1798,8 +1798,27 @@ class ChannelManager {
             channel.initialLoadInProgress = true;
         }
 
+        // Safety net: the SDK resend iterator does not deterministically
+        // signal `done` on every backend (custom storage, legacy single-
+        // partition streams). Release the UI gate after 30s so the
+        // "Loading messages..." spinner is not permanent. `hasMoreHistory`
+        // is left untouched — exhaustion is determined later by the
+        // bounded windowed paginate (`loadMoreHistory`).
+        const INITIAL_HISTORY_SAFETY_MS = 30000;
+        let initialHistorySafetyTimer = setTimeout(() => {
+            if (!channel || !channel.initialLoadInProgress) return;
+            Logger.warn(`Initial history safety timeout fired for ${messageStreamId.slice(-20)}`);
+            channel.initialLoadInProgress = false;
+            this.notifyHandlers('initial_history_complete', { streamId: messageStreamId });
+        }, INITIAL_HISTORY_SAFETY_MS);
+
         // Use dual-stream subscription with onHistoryComplete callback
         const onHistoryComplete = async (stats) => {
+            // Cancel safety net — real completion took over.
+            if (initialHistorySafetyTimer) {
+                clearTimeout(initialHistorySafetyTimer);
+                initialHistorySafetyTimer = null;
+            }
             if (!channel || !channel.initialLoadInProgress) return;
             
             // Flush any remaining batch verifications
@@ -1812,47 +1831,55 @@ class ChannelManager {
             this.applyPendingOverrides(channel);
             channel.messages = channel.messages.filter(m => !m._deleted);
 
-            // Deterministic exhaustion detection: when the storage resend
-            // returned fewer raw messages than requested for the content
-            // partition, no older history exists and `hasMoreHistory` should
-            // flip to `false` BEFORE the UI re-renders. Without this, the
-            // "— beginning of conversation —" marker only appeared after a
-            // user-driven extra paginate (and never on legacy single-partition
-            // channels where the SDK never signals `done`).
-            if (stats
-                && typeof stats.contentLoaded === 'number'
-                && typeof stats.contentRequested === 'number'
-                && stats.contentRequested > 0
-                && stats.contentLoaded < stats.contentRequested) {
-                channel.hasMoreHistory = false;
-            }
+            // Exhaustion is NOT inferred from `loaded < requested` — that
+            // heuristic is unsound (storage WS drops, decrypt errors, SDK
+            // early termination all produce short responses). The bounded
+            // `loadMoreHistory` windowed query is the single source of
+            // truth for `hasMoreHistory`.
+            Logger.debug(
+                `Initial history complete for ${messageStreamId.slice(-20)}: ` +
+                `content ${stats?.contentLoaded ?? '?'}/${stats?.contentRequested ?? '?'}, ` +
+                `control ${stats?.controlLoaded ?? '?'}/${stats?.controlRequested ?? '?'}`
+            );
 
             channel.initialLoadInProgress = false;
-            Logger.debug('Initial history load complete for', messageStreamId.slice(-20));
             
             this.notifyHandlers('initial_history_complete', { streamId: messageStreamId });
         };
 
-        await streamrController.subscribeToDualStream(
-            messageStreamId,
-            ephemeralStreamId,
-            {
-                onMessage: (data) => this.handleTextMessage(messageStreamId, data),
-                onOverride: hasControlPartition
-                    ? (data) => this.handleOverrideMessage(
-                        messageStreamId,
-                        data,
-                        channel?.initialLoadInProgress ?? false
-                    )
-                    : null,
-                allowOverridesInContentPartition: !hasControlPartition,
-                onControl: (data) => this.handleControlMessage(messageStreamId, data),
-                onMedia: (data, senderId) => this.handleMediaMessage(messageStreamId, data, senderId)
-            },
-            pwd,
-            STREAM_CONFIG.INITIAL_MESSAGES,
-            onHistoryComplete
-        );
+        try {
+            await streamrController.subscribeToDualStream(
+                messageStreamId,
+                ephemeralStreamId,
+                {
+                    onMessage: (data) => this.handleTextMessage(messageStreamId, data),
+                    onOverride: hasControlPartition
+                        ? (data) => this.handleOverrideMessage(
+                            messageStreamId,
+                            data,
+                            channel?.initialLoadInProgress ?? false
+                        )
+                        : null,
+                    allowOverridesInContentPartition: !hasControlPartition,
+                    onControl: (data) => this.handleControlMessage(messageStreamId, data),
+                    onMedia: (data, senderId) => this.handleMediaMessage(messageStreamId, data, senderId)
+                },
+                pwd,
+                STREAM_CONFIG.INITIAL_MESSAGES,
+                onHistoryComplete
+            );
+        } catch (subscribeError) {
+            // Release UI gate so the user is not stranded on the spinner.
+            if (initialHistorySafetyTimer) {
+                clearTimeout(initialHistorySafetyTimer);
+                initialHistorySafetyTimer = null;
+            }
+            if (channel) {
+                channel.initialLoadInProgress = false;
+                this.notifyHandlers('initial_history_complete', { streamId: messageStreamId });
+            }
+            throw subscribeError;
+        }
         
         Logger.debug('Subscribed to dual-stream channel:', messageStreamId);
 
@@ -3007,18 +3034,18 @@ class ChannelManager {
         try {
             Logger.debug('Loading more history before:', new Date(beforeTimestamp).toISOString());
             const supportsControlPartition = channel?._controlPartitionSupported !== false;
-            
+
             // Fetch from MESSAGE stream partition 0 (content) and partition 1 (overrides)
-            const [contentResult, overrideResult] = await Promise.all([
-                streamrController.fetchOlderHistory(
-                    messageStreamId,
-                    STREAM_CONFIG.MESSAGE_STREAM.MESSAGES,
-                    beforeTimestamp,
-                    STREAM_CONFIG.LOAD_MORE_COUNT,
-                    channel.password,
-                    signal,
-                    !supportsControlPartition
-                ),
+            const fetchContent = () => streamrController.fetchOlderHistory(
+                messageStreamId,
+                STREAM_CONFIG.MESSAGE_STREAM.MESSAGES,
+                beforeTimestamp,
+                STREAM_CONFIG.LOAD_MORE_COUNT,
+                channel.password,
+                signal,
+                !supportsControlPartition
+            );
+            const fetchOverrides = () => (
                 supportsControlPartition
                     ? streamrController.fetchOlderHistory(
                         messageStreamId,
@@ -3030,7 +3057,44 @@ class ChannelManager {
                         false
                     )
                     : Promise.resolve({ messages: [], hasMore: false })
-            ]);
+            );
+
+            let [contentResult, overrideResult] = await Promise.all([fetchContent(), fetchOverrides()]);
+
+            // Storage race mitigation: a {from:0, to:before} resend that returns
+            // zero messages can mean either (a) true exhaustion, or (b) the
+            // storage node closed the iterator early (observed with custom
+            // storage and large temporal gaps where the iterator must traverse
+            // many empty buckets before reaching real data).
+            //
+            // Without retries, case (b) permanently flags `hasMoreHistory=false`
+            // and orphans any older messages. A single 1s retry covered most
+            // cases but failed for the worst gaps. Use progressive backoff
+            // (1s, 2s, 3s — total worst-case +6s in the truly-exhausted path)
+            // to give the storage node enough time to walk the gap. Any
+            // attempt that returns data wins immediately; we don't keep
+            // retrying after success.
+            const isEmpty = (c, o) => (c?.messages?.length || 0) === 0
+                && (o?.messages?.length || 0) === 0;
+            if (isEmpty(contentResult, overrideResult)
+                && beforeTimestamp > 1
+                && !signal?.aborted
+                && this.switchGeneration === generationAtStart) {
+                const backoffMs = [1000, 2000, 3000];
+                for (let attempt = 0; attempt < backoffMs.length; attempt++) {
+                    await new Promise(r => setTimeout(r, backoffMs[attempt]));
+                    if (signal?.aborted || this.switchGeneration !== generationAtStart) break;
+                    const [retryContent, retryOverride] = await Promise.all([fetchContent(), fetchOverrides()]);
+                    if (!isEmpty(retryContent, retryOverride)) {
+                        Logger.info(
+                            `loadMoreHistory: retry #${attempt + 1} recovered messages after empty first response`
+                        );
+                        contentResult = retryContent;
+                        overrideResult = retryOverride;
+                        break;
+                    }
+                }
+            }
             
             // Discard results if user switched channels during fetch
             if (this.switchGeneration !== generationAtStart) {
@@ -3050,6 +3114,25 @@ class ChannelManager {
                 const overrides = [...overridesRaw];
                 
                 for (const msg of contentMessagesRaw) {
+                    // Stored chunked-image chunks have `timestamp` but no
+                    // `id`/`sender`, so the generic "incomplete message"
+                    // filter below would drop them. Route to the assembler
+                    // first — without this, paginating older history can
+                    // never recover chunks whose manifest sits inside the
+                    // initial resend window but whose chunks fall outside.
+                    if (typeof mediaController?.isStoredImageChunkMessage === 'function'
+                        && mediaController.isStoredImageChunkMessage(msg)) {
+                        if (msg.timestamp && (!channel.oldestTimestamp || msg.timestamp < channel.oldestTimestamp)) {
+                            channel.oldestTimestamp = msg.timestamp;
+                        }
+                        try {
+                            await mediaController.registerStoredImageChunk(messageStreamId, msg);
+                        } catch (err) {
+                            Logger.debug('loadMoreHistory: chunk register failed:', err?.message || err);
+                        }
+                        continue;
+                    }
+
                     // Route reactions to storeReaction (NOT channel.messages)
                     if (msg?.type === 'reaction') {
                         const reactionUser = msg.senderId || msg.user;
@@ -3111,6 +3194,23 @@ class ChannelManager {
                         if (channel.messages.some(m => m.id === msg.id)) {
                             continue;
                         }
+
+                        // Register chunked-image manifests with the assembler
+                        // so any chunks already buffered (or arriving in
+                        // this same paginate window above) can complete.
+                        if (
+                            typeof mediaController?.isStoredChunkedImageManifest === 'function'
+                            && mediaController.isStoredChunkedImageManifest(msg)
+                            && msg.verified?.valid !== false
+                            && typeof mediaController.registerStoredImageManifest === 'function'
+                        ) {
+                            try {
+                                await mediaController.registerStoredImageManifest(messageStreamId, msg);
+                            } catch (err) {
+                                Logger.debug('loadMoreHistory: manifest register failed:', err?.message || err);
+                            }
+                        }
+
                         channel.messages.push(msg);
                         addedCount++;
                         

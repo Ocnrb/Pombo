@@ -186,6 +186,9 @@ class MessageRenderer {
         } else {
             // Load image from IndexedDB ledger (async, will replace placeholder when ready)
             this.deps.loadImageFromLedger?.(msg.imageId);
+            // Re-fire delivery if the image is already cached — heals
+            // placeholders orphaned by re-render races.
+            this.deps.recoverImage?.(msg.imageId);
             // Include channel ID in placeholder to verify channel context when image arrives
             const channel = this.deps.getCurrentChannel?.();
             const channelId = channel?.streamId || '';
