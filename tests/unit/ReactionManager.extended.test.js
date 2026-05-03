@@ -354,8 +354,8 @@ describe('ReactionManager DOM Methods', () => {
             emojiBtn.id = 'emoji-btn';
             document.body.appendChild(emojiBtn);
 
-            messageInput = document.createElement('input');
-            messageInput.type = 'text';
+            messageInput = document.createElement('div');
+            messageInput.contentEditable = 'true';
             document.body.appendChild(messageInput);
         });
 
@@ -382,7 +382,7 @@ describe('ReactionManager DOM Methods', () => {
             const spans = emojiPicker.querySelectorAll('span');
             spans[0].click();
 
-            expect(messageInput.value.length).toBeGreaterThan(0);
+            expect(messageInput.textContent.length).toBeGreaterThan(0);
         });
 
         it('focuses message input after emoji selection', () => {

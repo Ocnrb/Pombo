@@ -89,7 +89,7 @@ describe('ChatAreaUI', () => {
             <div id="messages-area" style="height: 500px; overflow-y: auto;"></div>
             <div id="edit-bar"><span id="edit-bar-text"></span></div>
             <div id="reply-bar"><span id="reply-to-name"></span><span id="reply-to-text"></span></div>
-            <textarea id="message-input"></textarea>
+            <div id="message-input" contenteditable="true"></div>
         `;
 
         messageInput = document.getElementById('message-input');
@@ -136,7 +136,7 @@ describe('ChatAreaUI', () => {
 
             chatAreaUI.startEdit('msg-1');
 
-            expect(messageInput.value).toBe('Hello world');
+            expect(messageInput.textContent).toBe('Hello world');
         });
 
         it('should show edit bar with active class', () => {
@@ -238,14 +238,14 @@ describe('ChatAreaUI', () => {
         });
 
         it('should clear message input', () => {
-            messageInput.value = 'some text';
+            messageInput.textContent = 'some text';
 
             chatAreaUI.cancelEdit();
 
-            expect(messageInput.value).toBe('');
+            expect(messageInput.textContent).toBe('');
         });
 
-        it('should dispatch input event to trigger resize', () => {
+        it('should dispatch input event when cleared', () => {
             const inputSpy = vi.fn();
             messageInput.addEventListener('input', inputSpy);
 
