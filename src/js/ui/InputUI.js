@@ -49,6 +49,10 @@ class InputUI {
         
         // Setup typing indicator
         this.setupTypingIndicator();
+
+        // Setup paste / drag-and-drop image insertion
+        this.setupImagePaste();
+        this.setupImageDrop();
     }
 
     /**
@@ -68,11 +72,11 @@ class InputUI {
      */
     setupTypingIndicator() {
         if (!this.messageInput) return;
-        
+
         this.messageInput.addEventListener('input', () => {
             const { channelManager } = this.deps;
             const now = Date.now();
-            
+
             // Send typing signal every 2 seconds while typing
             if (now - this.lastTypingSent > 2000) {
                 const currentChannel = channelManager?.getCurrentChannel();
@@ -81,11 +85,94 @@ class InputUI {
                 }
                 this.lastTypingSent = now;
             }
-            
+
             clearTimeout(this.typingTimeout);
             this.typingTimeout = setTimeout(() => {
                 // Stop typing (no-op for now, can add notification)
             }, 3000);
+        });
+    }
+
+    /**
+     * Allowed image MIME types for paste/drop. Mirrors the
+     * `accept` attribute of #image-input in index.html.
+     */
+    static IMAGE_MIME_ALLOWLIST = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+
+    /**
+     * Pick the first allowed image File from a DataTransferItemList /
+     * FileList. Returns null if none match. Only File instances pass —
+     * never strings/HTML — so this path cannot inject markup into the DOM.
+     * @param {DataTransferItem[]|File[]} items
+     * @returns {File|null}
+     */
+    _pickImageFile(items) {
+        if (!items) return null;
+        for (const item of items) {
+            // DataTransferItem (paste / drop): kind === 'file'
+            if (item && typeof item.getAsFile === 'function' && item.kind === 'file') {
+                const file = item.getAsFile();
+                if (file && InputUI.IMAGE_MIME_ALLOWLIST.includes(file.type)) {
+                    return file;
+                }
+                continue;
+            }
+            // FileList entry
+            if (item instanceof File && InputUI.IMAGE_MIME_ALLOWLIST.includes(item.type)) {
+                return item;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Capture image files pasted into the message textarea (mobile keyboard
+     * stickers/GIFs that copy to clipboard, desktop screenshot paste, etc.).
+     * Only consumes the event when an allowed image is found, so plain-text
+     * paste keeps its native behaviour.
+     */
+    setupImagePaste() {
+        if (!this.messageInput) return;
+        this.messageInput.addEventListener('paste', (e) => {
+            const file = this._pickImageFile(e.clipboardData?.items || []);
+            if (!file) return; // Let textarea handle text paste normally
+            e.preventDefault();
+            this.showFileConfirmModal(file, 'image');
+        });
+    }
+
+    /**
+     * Accept image files dropped onto the chat area. Scoped to the chat
+     * column to avoid stealing drops elsewhere; falls back to messageInput
+     * if the chat container isn't in the DOM yet.
+     */
+    setupImageDrop() {
+        const dropZone = document.getElementById('chat-area')
+            || document.getElementById('message-input-container')
+            || this.messageInput;
+        if (!dropZone) return;
+
+        const isImageDrag = (e) => {
+            const types = e.dataTransfer?.types;
+            if (!types) return false;
+            // 'Files' is the standard token Chromium/Firefox set when a file
+            // is dragged from the OS. We can't read the actual file list
+            // until 'drop', so this is a best-effort check.
+            return Array.from(types).includes('Files');
+        };
+
+        dropZone.addEventListener('dragover', (e) => {
+            if (!isImageDrag(e)) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            if (!isImageDrag(e)) return;
+            const file = this._pickImageFile(e.dataTransfer?.files || []);
+            if (!file) return;
+            e.preventDefault();
+            this.showFileConfirmModal(file, 'image');
         });
     }
 

@@ -24,6 +24,7 @@ const CONFIG = {
     IMAGE_MAX_HEIGHT: APP_CONFIG.media.imageMaxHeight,
     IMAGE_QUALITY: APP_CONFIG.media.imageQuality,
     IMAGE_MAX_ASSEMBLED_BYTES: APP_CONFIG.media.imageMaxAssembledBytes,
+    IMAGE_GIF_MAX_ASSEMBLED_BYTES: APP_CONFIG.media.imageGifMaxAssembledBytes,
     IMAGE_PAYLOAD_MAX_BYTES: APP_CONFIG.media.imagePayloadMaxBytes,
     IMAGE_PAYLOAD_SAFETY_MARGIN_BYTES: APP_CONFIG.media.imagePayloadSafetyMarginBytes,
     IMAGE_CHUNK_INITIAL_RAW_BYTES: APP_CONFIG.media.imageChunkInitialRawBytes,
@@ -753,7 +754,10 @@ class MediaController {
             totalBytes += chunkBytes.byteLength;
         }
 
-        if (totalBytes !== manifest.finalSizeBytes || totalBytes > CONFIG.IMAGE_MAX_ASSEMBLED_BYTES) {
+        const assembledLimit = manifest.finalMime === 'image/gif'
+            ? CONFIG.IMAGE_GIF_MAX_ASSEMBLED_BYTES
+            : CONFIG.IMAGE_MAX_ASSEMBLED_BYTES;
+        if (totalBytes !== manifest.finalSizeBytes || totalBytes > assembledLimit) {
             Logger.warn('Stored image assembled size mismatch:', imageId, totalBytes, manifest.finalSizeBytes);
             return false;
         }
@@ -792,7 +796,12 @@ class MediaController {
             throw new Error('Image MIME type is required');
         }
 
-        if (file.size <= CONFIG.IMAGE_MAX_ASSEMBLED_BYTES) {
+        const isGif = originalMime === 'image/gif';
+        const sizeLimit = isGif
+            ? CONFIG.IMAGE_GIF_MAX_ASSEMBLED_BYTES
+            : CONFIG.IMAGE_MAX_ASSEMBLED_BYTES;
+
+        if (file.size <= sizeLimit) {
             const originalBytes = await this.blobToArrayBuffer(file);
             return {
                 blob: file,
@@ -805,8 +814,9 @@ class MediaController {
             };
         }
 
-        if (originalMime === 'image/gif' && CONFIG.FAIL_GIF_ON_OVERFLOW) {
-            throw new Error('GIF image exceeds 1MB and cannot be compressed without losing animation');
+        if (isGif && CONFIG.FAIL_GIF_ON_OVERFLOW) {
+            const limitMb = Math.round(CONFIG.IMAGE_GIF_MAX_ASSEMBLED_BYTES / (1024 * 1024));
+            throw new Error(`GIF image exceeds ${limitMb}MB and cannot be compressed without losing animation`);
         }
 
         const image = await this.loadImageFromBlob(file);

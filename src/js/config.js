@@ -160,7 +160,8 @@ export const CONFIG = {
         imageMaxWidth: 1280,
         imageMaxHeight: 720,
         imageQuality: 0.92,
-        imageMaxAssembledBytes: 1 * 1024 * 1024,          // 1MB max mounted chat image payload
+        imageMaxAssembledBytes: 1 * 1024 * 1024,          // 1MB max mounted chat image payload (jpg/png/webp)
+        imageGifMaxAssembledBytes: 5 * 1024 * 1024,       // 5MB max for animated GIFs (cannot be re-compressed without losing animation)
         imagePayloadMaxBytes: 220 * 1024,                 // Max per stored image manifest/chunk payload
         imagePayloadSafetyMarginBytes: 1024,              // Headroom while sizing JSON payload chunks
         imageChunkInitialRawBytes: 150 * 1024,            // Starting raw chunk size before payload measurement
