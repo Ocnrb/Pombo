@@ -43,28 +43,19 @@ class InputUI {
     init(elements) {
         this.messageInput = elements.messageInput;
         this.sendMessageBtn = elements.sendMessageBtn;
-        
-        // Setup auto-resize
-        this.setupAutoResize();
-        
+
         // Setup typing indicator
         this.setupTypingIndicator();
+
+        // Enter handling for contenteditable (insert plain '\n' instead of <div>/<br>)
+        this.setupEnterKey();
 
         // Setup paste / drag-and-drop image insertion
         this.setupImagePaste();
         this.setupImageDrop();
-    }
 
-    /**
-     * Setup auto-resize for textarea
-     */
-    setupAutoResize() {
-        if (!this.messageInput) return;
-        
-        this.messageInput.addEventListener('input', () => {
-            this.messageInput.style.height = 'auto';
-            this.messageInput.style.height = Math.min(this.messageInput.scrollHeight, 120) + 'px';
-        });
+        // Watch for keyboard-injected <img> elements (Android Gboard / Tenor)
+        this.setupKeyboardImageObserver();
     }
 
     /**
@@ -126,18 +117,26 @@ class InputUI {
     }
 
     /**
-     * Capture image files pasted into the message textarea (mobile keyboard
+     * Capture image files pasted into the message input (mobile keyboard
      * stickers/GIFs that copy to clipboard, desktop screenshot paste, etc.).
-     * Only consumes the event when an allowed image is found, so plain-text
-     * paste keeps its native behaviour.
+     * Falls back to plain-text insertion to keep the contenteditable safe
+     * from rich-HTML injection (XSS).
      */
     setupImagePaste() {
         if (!this.messageInput) return;
         this.messageInput.addEventListener('paste', (e) => {
             const file = this._pickImageFile(e.clipboardData?.items || []);
-            if (!file) return; // Let textarea handle text paste normally
-            e.preventDefault();
-            this.showFileConfirmModal(file, 'image');
+            if (file) {
+                e.preventDefault();
+                this.showFileConfirmModal(file, 'image');
+                return;
+            }
+            // Strip rich HTML — only plain text is allowed into the contenteditable.
+            const text = e.clipboardData?.getData('text/plain');
+            if (typeof text === 'string') {
+                e.preventDefault();
+                this._insertText(text);
+            }
         });
     }
 
@@ -174,6 +173,93 @@ class InputUI {
             e.preventDefault();
             this.showFileConfirmModal(file, 'image');
         });
+    }
+
+    /**
+     * Insert plain text at the current caret position. Used by the paste
+     * handler (after stripping HTML) and the Enter handler (for newlines).
+     * Always operates on Text nodes — never on HTML — so XSS is impossible.
+     * @param {string} text
+     */
+    _insertText(text) {
+        const sel = window.getSelection?.();
+        if (!sel || !this.messageInput) return;
+        // If the selection is outside our input, append at the end instead.
+        if (sel.rangeCount === 0 || !this.messageInput.contains(sel.anchorNode)) {
+            this.messageInput.appendChild(document.createTextNode(text));
+        } else {
+            const range = sel.getRangeAt(0);
+            range.deleteContents();
+            const node = document.createTextNode(text);
+            range.insertNode(node);
+            range.setStartAfter(node);
+            range.setEndAfter(node);
+            sel.removeAllRanges();
+            sel.addRange(range);
+        }
+        this.messageInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    /**
+     * Force Enter to insert a literal '\n' character (Text node) instead of
+     * the browser's default <div> or <br> insertion in contenteditable.
+     * Without this, `textContent` on multi-line input would join all lines
+     * with no separator. Ctrl/Cmd+Enter is left alone for the global send
+     * handler in ui.js.
+     */
+    setupEnterKey() {
+        if (!this.messageInput) return;
+        this.messageInput.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            if (e.ctrlKey || e.metaKey) return; // Send shortcut handled in ui.js
+            e.preventDefault();
+            this._insertText('\n');
+        });
+    }
+
+    /**
+     * Some Android keyboards (Gboard with Tenor, SwiftKey stickers) deliver
+     * GIFs/images via InputConnection.commitContent which Chromium surfaces
+     * by inserting an `<img src="content://...">` (or blob:/data:) element
+     * into the focused contenteditable. We intercept those, fetch the
+     * underlying blob, route it through the normal image-confirm flow, and
+     * remove the injected element. The element is also hidden by CSS so
+     * users never see a partial state.
+     *
+     * Note on XSS: the injected element comes from the browser's own input
+     * pipeline (not from another origin), and we only ever read its `src`
+     * to fetch a Blob — never inject the element's HTML elsewhere.
+     */
+    setupKeyboardImageObserver() {
+        if (!this.messageInput || typeof MutationObserver === 'undefined') return;
+        const handleNode = async (node) => {
+            if (!(node instanceof HTMLElement)) return;
+            const imgs = node.tagName === 'IMG' ? [node] : Array.from(node.querySelectorAll?.('img') || []);
+            for (const img of imgs) {
+                const src = img.getAttribute('src') || '';
+                img.remove();
+                if (!src) continue;
+                try {
+                    const response = await fetch(src);
+                    const blob = await response.blob();
+                    if (!InputUI.IMAGE_MIME_ALLOWLIST.includes(blob.type)) {
+                        Logger.debug('Keyboard image: rejected MIME', blob.type);
+                        continue;
+                    }
+                    const ext = blob.type.split('/')[1] || 'bin';
+                    const file = new File([blob], `keyboard-image.${ext}`, { type: blob.type });
+                    this.showFileConfirmModal(file, 'image');
+                } catch (err) {
+                    Logger.debug('Keyboard image: fetch failed', err?.message);
+                }
+            }
+        };
+        const observer = new MutationObserver((mutations) => {
+            for (const m of mutations) {
+                m.addedNodes.forEach(handleNode);
+            }
+        });
+        observer.observe(this.messageInput, { childList: true, subtree: true });
     }
 
     /**
@@ -343,32 +429,32 @@ class InputUI {
     }
 
     /**
-     * Get current input value (trimmed)
+     * Get current input value (trimmed). Reads `textContent` so HTML inserted
+     * by anything other than our own handlers is ignored as plain text.
      * @returns {string} Input text
      */
     getValue() {
-        return this.messageInput?.value.trim() || '';
+        return (this.messageInput?.textContent || '').trim();
     }
 
     /**
-     * Set input value
+     * Set input value as plain text.
      * @param {string} text - Text to set
      */
     setValue(text) {
         if (this.messageInput) {
-            this.messageInput.value = text;
-            // Trigger resize
-            this.messageInput.dispatchEvent(new Event('input'));
+            this.messageInput.textContent = text;
+            this.messageInput.dispatchEvent(new Event('input', { bubbles: true }));
         }
     }
 
     /**
-     * Clear input and reset height
+     * Clear input.
      */
     clear() {
         if (this.messageInput) {
-            this.messageInput.value = '';
-            this.messageInput.style.height = 'auto';
+            this.messageInput.textContent = '';
+            this.messageInput.dispatchEvent(new Event('input', { bubbles: true }));
         }
     }
 

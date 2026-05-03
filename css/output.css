@@ -636,6 +636,10 @@ video {
   visibility: visible;
 }
 
+.collapse {
+  visibility: collapse;
+}
+
 .static {
   position: static;
 }
@@ -1548,6 +1552,14 @@ video {
 
 .whitespace-pre-line {
   white-space: pre-line;
+}
+
+.whitespace-pre-wrap {
+  white-space: pre-wrap;
+}
+
+.break-words {
+  overflow-wrap: break-word;
 }
 
 .break-all {
@@ -2728,14 +2740,6 @@ select option {
 
 .placeholder\:text-white\/20::placeholder {
   color: rgb(255 255 255 / 0.2);
-}
-
-.placeholder\:text-white\/25::-moz-placeholder {
-  color: rgb(255 255 255 / 0.25);
-}
-
-.placeholder\:text-white\/25::placeholder {
-  color: rgb(255 255 255 / 0.25);
 }
 
 .placeholder\:text-white\/30::-moz-placeholder {

@@ -4,7 +4,7 @@
 // to have scope over all pages.
 // ================================================
 
-const SW_VERSION = '2.1.0';
+const SW_VERSION = '2.2.0';
 
 // ================================================
 // INDEXEDDB CONFIGURATION
@@ -541,6 +541,51 @@ self.addEventListener('notificationclick', (event) => {
 self.addEventListener('notificationclose', (event) => {
     console.log('[SW] Notification closed');
 });
+
+// ================================================
+// WEB SHARE TARGET
+// Receives images shared from any Android app (Tenor, Gallery,
+// Samsung Keyboard long-press → Share, etc.) when Pombo is installed
+// as a PWA. Files are stashed in a Cache and the page is redirected
+// to /?share=1 so the SPA can pick them up on boot.
+// ================================================
+
+const SHARE_CACHE = 'pombo-share-v1';
+const SHARE_ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+
+self.addEventListener('fetch', (event) => {
+    const url = new URL(event.request.url);
+    if (event.request.method !== 'POST' || url.pathname !== '/share') return;
+    event.respondWith(handleShareTarget(event.request));
+});
+
+async function handleShareTarget(request) {
+    try {
+        const formData = await request.formData();
+        const files = formData.getAll('shared').filter(f =>
+            f instanceof File && SHARE_ALLOWED_MIME.includes(f.type)
+        );
+        const cache = await caches.open(SHARE_CACHE);
+        // Wipe previous shares so we never replay stale files.
+        const old = await cache.keys();
+        await Promise.all(old.map(req => cache.delete(req)));
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            await cache.put(
+                `/__shared/${i}`,
+                new Response(file, {
+                    headers: {
+                        'Content-Type': file.type,
+                        'X-Pombo-Filename': encodeURIComponent(file.name || `shared-${i}`)
+                    }
+                })
+            );
+        }
+    } catch (err) {
+        console.warn('[SW] Share target handling failed:', err?.message);
+    }
+    return Response.redirect('/?share=1', 303);
+}
 
 // ================================================
 // CLIENT MESSAGES

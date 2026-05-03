@@ -302,7 +302,8 @@ class ReactionManager {
         emojiPicker.querySelectorAll('span').forEach(span => {
             span.addEventListener('click', () => {
                 if (messageInput) {
-                    messageInput.value += span.textContent;
+                    messageInput.textContent += span.textContent;
+                    messageInput.dispatchEvent(new Event('input', { bubbles: true }));
                     messageInput.focus();
                 }
             });

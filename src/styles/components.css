@@ -3,6 +3,16 @@
    Extracted from inline styles for better maintainability
    =========================================== */
 
+/* ----- Contenteditable message input placeholder ----- */
+#message-input:empty::before {
+    content: attr(data-placeholder);
+    color: rgba(255, 255, 255, 0.25);
+    pointer-events: none;
+    display: block; /* keeps caret visible at the start */
+}
+#message-input { word-wrap: break-word; }
+#message-input img { display: none; } /* defence-in-depth: any keyboard-injected <img> stays hidden until our handler extracts it */
+
 /* ----- Storage Slider ----- */
 .storage-slider {
     -webkit-appearance: none;

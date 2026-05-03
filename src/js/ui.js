@@ -908,13 +908,8 @@ class UIController {
                 messageEntry.classList.toggle('message-active');
             }
         });
-        
-        // Auto-resize textarea as user types
-        this.elements.messageInput.addEventListener('input', () => {
-            const textarea = this.elements.messageInput;
-            textarea.style.height = 'auto';
-            textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
-        });
+
+        // (Auto-resize handled by CSS min-h/max-h on the contenteditable input.)
 
         // Typing indicator - send signal while typing
         let typingTimeout;
@@ -2265,8 +2260,8 @@ class UIController {
         
         if (disabled) {
             if (messageInput) {
-                messageInput.disabled = true;
-                messageInput.placeholder = 'This channel is read-only';
+                messageInput.contentEditable = 'false';
+                messageInput.dataset.placeholder = 'This channel is read-only';
                 messageInput.classList.add('cursor-not-allowed', 'opacity-50');
             }
             if (sendBtn) {
@@ -2275,8 +2270,8 @@ class UIController {
             }
         } else {
             if (messageInput) {
-                messageInput.disabled = false;
-                messageInput.placeholder = canBroadcast ? 'Type a message (broadcast)...' : 'Type a message...';
+                messageInput.contentEditable = 'true';
+                messageInput.dataset.placeholder = canBroadcast ? 'Type a message (broadcast)...' : 'Type a message...';
                 messageInput.classList.remove('cursor-not-allowed', 'opacity-50');
             }
             if (sendBtn) {

@@ -366,8 +366,8 @@ class PreviewModeUI {
                 const messageInput = elements.messageInput;
                 const sendBtn = document.querySelector('#send-btn');
                 if (messageInput) {
-                    messageInput.disabled = true;
-                    messageInput.placeholder = 'This channel is read-only';
+                    messageInput.contentEditable = 'false';
+                    messageInput.dataset.placeholder = 'This channel is read-only';
                     messageInput.classList.add('cursor-not-allowed', 'opacity-50');
                 }
                 if (sendBtn) {

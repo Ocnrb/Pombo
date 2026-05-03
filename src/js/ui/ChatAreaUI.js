@@ -1016,11 +1016,16 @@ class ChatAreaUI {
 
         // Pre-fill input with current text
         if (this.messageInput) {
-            this.messageInput.value = msg.text;
-            this.messageInput.dispatchEvent(new Event('input')); // trigger resize
+            this.messageInput.textContent = msg.text;
+            this.messageInput.dispatchEvent(new Event('input', { bubbles: true }));
             this.messageInput.focus();
-            // Move cursor to end
-            this.messageInput.setSelectionRange(msg.text.length, msg.text.length);
+            // Move caret to end of contenteditable input
+            const range = document.createRange();
+            range.selectNodeContents(this.messageInput);
+            range.collapse(false);
+            const sel = window.getSelection();
+            sel?.removeAllRanges();
+            sel?.addRange(range);
         }
     }
 
@@ -1035,8 +1040,8 @@ class ChatAreaUI {
         }
         // Clear input
         if (this.messageInput) {
-            this.messageInput.value = '';
-            this.messageInput.dispatchEvent(new Event('input'));
+            this.messageInput.textContent = '';
+            this.messageInput.dispatchEvent(new Event('input', { bubbles: true }));
         }
     }
 

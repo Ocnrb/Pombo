@@ -498,14 +498,18 @@
                     <input type="file" id="image-input" class="hidden" accept="image/jpeg,image/png,image/gif,image/webp">
                     <input type="file" id="video-input" class="hidden" accept="video/mp4,video/webm,video/quicktime">
                     
-                    <!-- Input -->
-                    <textarea
+                    <!-- Input (contenteditable so Android keyboards can commit images/GIFs) -->
+                    <div
                         id="message-input"
-                        placeholder="Type a message..."
-                        autocomplete="off"
-                        rows="1"
-                        class="flex-1 bg-white/[0.05] text-white px-4 py-3 rounded-2xl focus:outline-none focus:ring-1 focus:ring-white/10 border border-white/[0.08] text-sm transition-all duration-200 resize-none overflow-y-auto min-h-[44px] max-h-[120px] leading-5 placeholder:text-white/25"
-                    ></textarea>
+                        contenteditable="true"
+                        role="textbox"
+                        aria-multiline="true"
+                        aria-label="Type a message"
+                        data-placeholder="Type a message..."
+                        spellcheck="true"
+                        autocapitalize="sentences"
+                        class="flex-1 bg-white/[0.05] text-white px-4 py-3 rounded-2xl focus:outline-none focus:ring-1 focus:ring-white/10 border border-white/[0.08] text-sm transition-all duration-200 overflow-y-auto min-h-[44px] max-h-[120px] leading-5 break-words whitespace-pre-wrap"
+                    ></div>
                     
                     <!-- Send Button: transparent, dark-orange arrow icon -->
                     <button id="send-message-btn" class="bg-transparent w-9 h-9 transition flex items-center justify-center p-0" aria-label="Send message">

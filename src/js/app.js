@@ -38,6 +38,14 @@ class App {
     async init() {
         Logger.info('Pombo - Initializing...');
 
+        // Web Share Target intake: if user shared an image into Pombo from
+        // another Android app (Tenor, Gallery, Samsung Keyboard long-press),
+        // the service worker stashed the files at /__shared/<i> and
+        // redirected here with ?share=1. Pull them now so the chat input
+        // path can pick them up once the channel is loaded.
+        await this._consumeSharedFiles().catch(err =>
+            Logger.debug('Share intake skipped:', err?.message));
+
         try {
             // Initialize media controller
             await mediaController.init();
@@ -611,6 +619,63 @@ class App {
         channelManager.onOnlineUsersChange((streamId, users) => {
             uiController.updateOnlineUsers(streamId, users);
         });
+    }
+
+    /**
+     * Read any files the service worker stashed via the Web Share Target
+     * (manifest action /share). Stashed at /__shared/<i> in the
+     * pombo-share-v1 cache. Buffers them in memory and arms a hashchange
+     * listener so the modal opens as soon as the user is in a channel.
+     * @private
+     */
+    async _consumeSharedFiles() {
+        if (typeof caches === 'undefined') return;
+        const params = new URLSearchParams(window.location.search);
+        if (!params.has('share')) return;
+
+        try {
+            const cache = await caches.open('pombo-share-v1');
+            const requests = await cache.keys();
+            const files = [];
+            for (const req of requests) {
+                const res = await cache.match(req);
+                if (!res) continue;
+                const blob = await res.blob();
+                const filename = decodeURIComponent(
+                    res.headers.get('X-Pombo-Filename') || 'shared'
+                );
+                files.push(new File([blob], filename, { type: blob.type }));
+                await cache.delete(req);
+            }
+            this._sharedFilesQueue = files;
+            // Strip the marker from the URL so a refresh doesn't replay.
+            const cleanUrl = window.location.pathname + window.location.hash;
+            window.history.replaceState({}, '', cleanUrl);
+            // Try to drain now (probably no channel yet) and on every navigation.
+            this._drainSharedFiles();
+            window.addEventListener('hashchange', () => this._drainSharedFiles());
+        } catch (err) {
+            Logger.warn('Failed to consume shared files:', err.message);
+        }
+    }
+
+    /**
+     * Open the file-confirm modal for the next queued shared file, but only
+     * once the user has a channel (joined or preview) selected. The first
+     * call from boot will typically no-op; the hashchange listener covers
+     * the case where the user is mid-route.
+     * @private
+     */
+    async _drainSharedFiles() {
+        if (!this._sharedFilesQueue?.length) return;
+        const { inputUI } = await import('./ui/InputUI.js');
+        const hasChannel = !!channelManager.getCurrentChannel()
+            || !!this._getDeepLinkStreamId();
+        if (!hasChannel) return;
+        const file = this._sharedFilesQueue.shift();
+        if (file && typeof inputUI.showFileConfirmModal === 'function') {
+            inputUI.showFileConfirmModal(file, 'image');
+        }
     }
 
     /**
