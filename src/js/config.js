@@ -167,6 +167,13 @@ export const CONFIG = {
         imageChunkInitialRawBytes: 150 * 1024,            // Starting raw chunk size before payload measurement
         imageChunkMinRawBytes: 16 * 1024,                 // Smallest raw chunk size before failing
         imageAssemblyTtlMs: 10 * 60 * 1000,               // Keep partial image chunk assemblies for 10 minutes
+        // Chunked-image recovery (paginate to fill manifests whose chunks
+        // fell outside the initial resend window). See
+        // channels.recoverIncompleteImages / preview equivalent.
+        recoveryMaxRounds: 20,                            // Max pagination rounds per recovery pass
+        recoveryStagnantRoundsLimit: 3,                   // Abort after N consecutive rounds with no progress
+        recoverySignatureRaceWaitMs: 300,                 // Wait for async signature verification before scanning (TODO: replace with deterministic signal from identityManager)
+        recoveryScrollChainCap: 4,                        // Auto-chain consecutive scroll-load batches that yielded 0 visible messages
         jpegInitialQuality: 1.0,
         jpegMinQuality: 0.68,
         webpInitialQuality: 1.0,

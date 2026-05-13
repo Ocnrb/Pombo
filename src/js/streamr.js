@@ -2695,6 +2695,97 @@ class StreamrController {
     }
 
     /**
+     * Add a single storage node to a stream (no retention change unless `storageDays` provided).
+     * Used by the Channel Settings UI to grow storage redundancy on existing channels
+     * without going through the full `enableStorage` create-time flow.
+     *
+     * @param {string} streamId - Stream ID (-1 message or -3 admin only)
+     * @param {Object} options
+     * @param {string} [options.storageProvider='streamr'] - 'streamr' or 'custom'
+     * @param {string} [options.customStorageAddress] - EVM address (required if provider is 'custom')
+     * @param {number} [options.storageDays] - Optional retention to set after add
+     * @returns {Promise<{success: boolean, nodeAddress: string|null, error?: string}>}
+     */
+    async addStorageNodeToStream(streamId, options = {}) {
+        if (!this.client) {
+            throw new Error('Client not initialized');
+        }
+
+        if (!isMessageStream(streamId) && !isAdminStream(streamId)) {
+            return { success: false, nodeAddress: null, error: 'Storage not allowed on this stream' };
+        }
+
+        const providerId = options.storageProvider || STREAM_CONFIG.DEFAULT_STORAGE_PROVIDER;
+        const providerConfig = providerId === 'custom'
+            ? STREAM_CONFIG.STORAGE_PROVIDERS.CUSTOM
+            : STREAM_CONFIG.STORAGE_PROVIDERS.STREAMR;
+
+        const nodeAddress = providerId === 'custom'
+            ? providerConfig.getNodeAddress(options.customStorageAddress)
+            : providerConfig.getNodeAddress();
+
+        if (!nodeAddress) {
+            return { success: false, nodeAddress: null, error: 'Missing storage node address' };
+        }
+
+        if (!/^0x[a-fA-F0-9]{40}$/.test(nodeAddress)) {
+            return { success: false, nodeAddress, error: 'Invalid storage node address' };
+        }
+
+        if (providerId === 'custom') {
+            try {
+                await this.validateCustomStorageNodeAddress(nodeAddress);
+            } catch (validationError) {
+                return { success: false, nodeAddress, error: validationError.message };
+            }
+        }
+
+        try {
+            const stream = await this.client.getStream(streamId);
+            await stream.addToStorageNode(nodeAddress);
+            if (typeof options.storageDays === 'number' && options.storageDays > 0 && providerConfig.supportsTTL) {
+                try {
+                    await stream.setStorageDayCount(options.storageDays);
+                } catch (ttlError) {
+                    Logger.warn('addStorageNodeToStream: could not set storage days:', ttlError.message);
+                }
+            }
+            Logger.info('Storage node added:', { stream: streamId, nodeAddress });
+            return { success: true, nodeAddress };
+        } catch (error) {
+            Logger.error('Failed to add storage node:', error.message);
+            return { success: false, nodeAddress, error: error.message };
+        }
+    }
+
+    /**
+     * Remove a storage node from a stream.
+     *
+     * @param {string} streamId - Stream ID
+     * @param {string} nodeAddress - EVM address of the storage node to remove
+     * @returns {Promise<{success: boolean, error?: string}>}
+     */
+    async removeStorageFromStream(streamId, nodeAddress) {
+        if (!this.client) {
+            throw new Error('Client not initialized');
+        }
+
+        if (!nodeAddress || !/^0x[a-fA-F0-9]{40}$/.test(nodeAddress)) {
+            return { success: false, error: 'Invalid storage node address' };
+        }
+
+        try {
+            const stream = await this.client.getStream(streamId);
+            await stream.removeFromStorageNode(nodeAddress);
+            Logger.info('Storage node removed:', { stream: streamId, nodeAddress });
+            return { success: true };
+        } catch (error) {
+            Logger.error('Failed to remove storage node:', error.message);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
      * Update storage days for a stream (only works with Streamr storage node)
      * @param {string} messageStreamId - Message Stream ID
      * @param {number} days - Number of days to retain messages

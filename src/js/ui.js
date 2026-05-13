@@ -343,11 +343,20 @@ class UIController {
             membersSection: document.getElementById('members-section'),
             nonNativeMessage: document.getElementById('non-native-message'),
             channelDescriptionDisplay: document.getElementById('channel-description-display'),
-            channelStorageProvider: document.getElementById('channel-storage-provider'),
-            channelStorageNode: document.getElementById('channel-storage-node'),
-            channelStorageRetention: document.getElementById('channel-storage-retention'),
+            channelStorageRetentionReadonly: document.getElementById('channel-storage-retention-readonly'),
+            channelStorageRetentionEditor: document.getElementById('channel-storage-retention-editor'),
+            channelStorageRetentionInput: document.getElementById('channel-storage-retention-input'),
+            channelStorageRetentionSave: document.getElementById('channel-storage-retention-save'),
+            channelStorageNodesList: document.getElementById('channel-storage-nodes-list'),
+            channelStorageAddSection: document.getElementById('channel-storage-add-section'),
+            channelStorageAddToggleBtn: document.getElementById('channel-storage-add-toggle-btn'),
+            channelStorageAddForm: document.getElementById('channel-storage-add-form'),
+            channelStorageCustomAddress: document.getElementById('channel-storage-custom-address'),
+            channelStorageAddDays: document.getElementById('channel-storage-add-days'),
+            channelStorageAddCancel: document.getElementById('channel-storage-add-cancel'),
+            channelStorageAddConfirm: document.getElementById('channel-storage-add-confirm'),
+            channelStorageGasWarning: document.getElementById('channel-storage-gas-warning'),
             channelStorageNoStorage: document.getElementById('channel-storage-no-storage'),
-            copyStorageNodeBtn: document.getElementById('copy-storage-node-btn'),
             refreshMembersBtn: document.getElementById('refresh-members-btn'),
             addMemberForm: document.getElementById('add-member-form'),
             addMemberInput: document.getElementById('add-member-input'),
@@ -1074,20 +1083,6 @@ class UIController {
             });
         }
 
-        // Copy storage node address button
-        if (this.elements.copyStorageNodeBtn) {
-            this.elements.copyStorageNodeBtn.addEventListener('click', async () => {
-                const nodeAddress = this.elements.channelStorageNode?.textContent;
-                if (nodeAddress && nodeAddress !== '-' && nodeAddress !== 'Streamr Network Storage') {
-                    try {
-                        await navigator.clipboard.writeText(nodeAddress);
-                        this.showNotification('Node address copied!', 'success');
-                    } catch {
-                        this.showNotification('Failed to copy', 'error');
-                    }
-                }
-            });
-        }
 
         // Delete channel button
         if (this.elements.deleteChannelBtn) {
@@ -1753,6 +1748,67 @@ class UIController {
                 mediaHandler.attachLightboxListeners();
             }
         });
+        
+        // Image recovery gave up — render "Image unavailable" + Retry button
+        // for each affected placeholder. Channel manager dispatches this
+        // when pagination is exhausted or the recovery loop stagnates;
+        // the Retry handler restarts the loop in case the stream has since
+        // gained more storage history.
+        if (typeof window !== 'undefined' && !this._imageRecoveryGaveUpBound) {
+            this._imageRecoveryGaveUpBound = true;
+            window.addEventListener('pombo:imageRecoveryGaveUp', (ev) => {
+                const detail = ev?.detail || {};
+                const ids = Array.isArray(detail.imageIds) ? detail.imageIds : [];
+                if (ids.length === 0) return;
+                for (const imageId of ids) {
+                    try {
+                        const placeholders = document.querySelectorAll(`[data-image-id="${CSS.escape(imageId)}"]`);
+                        if (placeholders.length === 0) continue;
+                        for (const el of placeholders) {
+                            el.innerHTML = `
+                                <div class="flex flex-col items-center gap-2 text-white/40 text-sm p-3">
+                                    <div class="flex items-center gap-2">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                            <line x1="3" y1="3" x2="21" y2="21"></line>
+                                        </svg>
+                                        <span>Image unavailable</span>
+                                    </div>
+                                    <button type="button" class="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white/80 text-xs" data-retry-image-id="${imageId}">Retry</button>
+                                </div>
+                            `;
+                            const btn = el.querySelector(`[data-retry-image-id="${CSS.escape(imageId)}"]`);
+                            if (btn) {
+                                btn.addEventListener('click', async (clickEv) => {
+                                    clickEv.preventDefault();
+                                    clickEv.stopPropagation();
+                                    // Reset to spinner state
+                                    try {
+                                        el.innerHTML = `
+                                            <div class="flex items-center gap-2 text-white/40 text-sm">
+                                                <div class="w-4 h-4 border-2 border-white/30 border-t-white/80 rounded-full animate-spin" aria-hidden="true"></div>
+                                                <span>Loading\u2026</span>
+                                            </div>
+                                        `;
+                                    } catch (_) { /* ignore DOM reset errors */ }
+                                    // Re-run recovery for this channel
+                                    const channelId = el.getAttribute('data-channel-id') || detail.streamId;
+                                    if (channelId) {
+                                        try {
+                                            await channelManager.recoverIncompleteImages(channelId);
+                                        } catch (err) {
+                                            Logger.debug('image retry: recovery failed:', err?.message || err);
+                                        }
+                                    }
+                                }, { once: true });
+                            }
+                        }
+                    } catch (err) {
+                        Logger.debug('image-recovery-gave-up: DOM update failed:', err?.message || err);
+                    }
+                }
+            });
+        }
         
         // File progress - update progress overlay and bar
         mediaController.onFileProgress((fileId, percent, received, total, fileSize) => {

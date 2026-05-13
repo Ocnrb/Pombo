@@ -380,8 +380,18 @@ class ChatAreaUI {
     /**
      * Load more history for a preview channel
      * @private
+     * @param {Object} previewChannel
+     * @param {number} [chainDepth=0] - Internal counter for empty-batch
+     *   auto-chaining. When a load returns `loaded:0` but `hasMore:true`
+     *   (e.g. the entire batch was chunked-image chunks that produce no
+     *   visible messages), the IntersectionObserver sentinel stays in the
+     *   same intersecting state and won't fire a new event, so the user
+     *   would have to scroll out and back in to keep paginating. To avoid
+     *   that dead-end, we transparently chain another load up to a small
+     *   cap so subsequent batches that DO carry visible messages (or chunks
+     *   that complete a stuck image manifest) reach the UI.
      */
-    async _loadMorePreviewHistory(previewChannel) {
+    async _loadMorePreviewHistory(previewChannel, chainDepth = 0) {
         const streamId = previewChannel?.streamId || null;
 
         // Only show "Loading More" indicator if there are existing messages
@@ -424,6 +434,23 @@ class ChatAreaUI {
                     this.renderMessages(previewChannel.messages, () => {
                         this._attachMessageListeners();
                     });
+                }
+                // IntersectionObserver auto-chain: this batch yielded no
+                // visible messages but more history exists. The sentinel
+                // is still intersecting, so the IO will not fire again
+                // until the user scrolls out and back in. Continue the
+                // chain ourselves up to a small cap to fetch the next
+                // window. Common when a batch is entirely image chunks.
+                if (result.hasMore
+                    && previewChannel.hasMoreHistory !== false
+                    && chainDepth < CONFIG.media.recoveryScrollChainCap
+                    && previewModeUI.isInPreviewMode()
+                    && previewModeUI.getPreviewChannel() === previewChannel) {
+                    // Yield to the event loop so React/DOM updates settle
+                    // and the user can interrupt with a channel switch.
+                    await new Promise(r => setTimeout(r, 0));
+                    if (previewModeUI.getPreviewChannel() !== previewChannel) return;
+                    await this._loadMorePreviewHistory(previewChannel, chainDepth + 1);
                 }
             }
         } catch (error) {

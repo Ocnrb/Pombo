@@ -220,78 +220,250 @@ class ChannelSettingsUI {
     }
 
     /**
-     * Populate storage info panel from Streamr SDK
+     * Populate storage info panel from Streamr SDK.
+     * Single unified list (merges -1 + -3). Admin gets add/remove/edit controls.
      * @param {Object} channel - Channel object
      */
     async populateStorageInfo(channel) {
-        const { streamrController } = this.deps;
+        const { channelManager } = this.deps;
 
-        const STREAMR_OFFICIAL_NODE = window.STREAMR_STORAGE_NODE_ADDRESS || null;
+        const list = this.elements.channelStorageNodesList;
+        if (!list) return;
 
-        // Show loading state
-        if (this.elements.channelStorageProvider) {
-            this.elements.channelStorageProvider.textContent = 'Loading...';
-        }
-        if (this.elements.channelStorageNode) {
-            this.elements.channelStorageNode.textContent = 'Loading...';
-        }
-        if (this.elements.channelStorageRetention) {
-            this.elements.channelStorageRetention.textContent = 'Loading...';
-        }
+        // Loading state
+        list.innerHTML = '<div class="text-sm text-white/40 px-1">Loading…</div>';
+        this.elements.channelStorageRetentionReadonly && (this.elements.channelStorageRetentionReadonly.textContent = 'Loading…');
+        this.elements.channelStorageNoStorage?.classList.add('hidden');
+
+        // Determine admin status from already-fetched cached perm (set by show()).
+        const isPreviewMode = this.deps.isInPreviewMode?.() || false;
+        const isDM = channel.type === 'dm';
+        const cached = channelManager.getCachedDeletePermission(channel.streamId);
+        const canManage = !isPreviewMode && !isDM && cached.valid && cached.canDelete;
+
+        // Toggle admin-only sections
+        this.elements.channelStorageAddSection?.classList.toggle('hidden', !canManage);
+        this.elements.channelStorageGasWarning?.classList.toggle('hidden', !canManage);
+        this.elements.channelStorageRetentionEditor?.classList.toggle('hidden', !canManage);
+        this.elements.channelStorageRetentionReadonly?.classList.toggle('hidden', canManage);
+        // Reset add form
+        this.elements.channelStorageAddForm?.classList.add('hidden');
 
         try {
-            const storageInfo = await streamrController.getStreamStorageInfo(channel.streamId);
-            const { enabled, nodes, storageDays } = storageInfo;
+            const info = await channelManager.getChannelStorageInfo(channel.streamId);
+            this._renderStorageList(channel, info, canManage);
+        } catch (err) {
+            Logger.error('Failed to fetch storage info:', err);
+            list.innerHTML = '<div class="text-sm text-red-400/80 px-1">Failed to load storage info</div>';
+            this.elements.channelStorageRetentionReadonly && (this.elements.channelStorageRetentionReadonly.textContent = '-');
+        }
 
-            let providerName = 'Unknown';
-            let nodeAddress = '-';
+        if (canManage) {
+            this._wireStorageHandlers(channel);
+        }
+    }
 
-            if (enabled && nodes.length > 0) {
-                nodeAddress = nodes[0];
-                if (STREAMR_OFFICIAL_NODE && nodeAddress.toLowerCase() === STREAMR_OFFICIAL_NODE.toLowerCase()) {
-                    providerName = 'Streamr Official';
-                } else {
-                    providerName = 'Custom Storage Node';
+    /**
+     * Render the unified storage nodes list and retention.
+     * @private
+     */
+    _renderStorageList(channel, info, canManage) {
+        const list = this.elements.channelStorageNodesList;
+        const STREAMR_OFFICIAL_NODE = window.STREAMR_STORAGE_NODE_ADDRESS || null;
+        const { enabled, nodes, storageDays } = info;
+
+        // Retention
+        const daysText = (typeof storageDays === 'number') ? `${storageDays} days` : (enabled ? 'Not set' : '-');
+        if (this.elements.channelStorageRetentionReadonly) {
+            this.elements.channelStorageRetentionReadonly.textContent = daysText;
+        }
+        if (this.elements.channelStorageRetentionInput && typeof storageDays === 'number') {
+            this.elements.channelStorageRetentionInput.value = String(storageDays);
+        }
+
+        // No-storage warning
+        this.elements.channelStorageNoStorage?.classList.toggle('hidden', enabled);
+
+        // Nodes
+        if (!enabled || nodes.length === 0) {
+            list.innerHTML = '<div class="text-sm text-white/40 px-1">No storage nodes</div>';
+            return;
+        }
+
+        list.innerHTML = nodes.map(n => {
+            const addr = n.address;
+            const isOfficial = STREAMR_OFFICIAL_NODE && addr.toLowerCase() === STREAMR_OFFICIAL_NODE.toLowerCase();
+            const label = isOfficial ? 'Streamr Official' : 'Custom';
+            const divergent = !(n.onMessage && n.onAdmin);
+            const divergentBadge = divergent
+                ? '<span class="text-[10px] text-amber-400/80 ml-1.5" title="Storage assignment is out of sync between channel streams. Removing and re-adding will heal it.">partial</span>'
+                : '';
+            const removeBtn = canManage
+                ? `<button data-storage-remove="${escapeAttr(addr)}" class="storage-remove-btn shrink-0 text-white/40 hover:text-red-400/90 px-2 py-1 rounded transition" title="Remove">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3"/></svg>
+                   </button>`
+                : '';
+            return `
+                <div class="flex items-center justify-between gap-3 px-3 py-2 bg-white/[0.03] border border-white/5 rounded-xl">
+                    <div class="min-w-0 flex-1">
+                        <div class="text-xs text-white/50">${escapeHtml(label)}${divergentBadge}</div>
+                        <code class="text-xs text-white/70 font-mono truncate block">${escapeHtml(addr)}</code>
+                    </div>
+                    ${removeBtn}
+                </div>
+            `;
+        }).join('');
+    }
+
+    /**
+     * Attach event listeners for storage admin controls.
+     * Idempotent — uses node cloning to reset listeners on each show().
+     * @private
+     */
+    _wireStorageHandlers(channel) {
+        const { channelManager, showNotification } = this.deps;
+
+        // Reset and rebind: nodes list (delegated remove)
+        const list = this.elements.channelStorageNodesList;
+        if (list) {
+            const newList = list.cloneNode(true);
+            list.parentNode.replaceChild(newList, list);
+            this.elements.channelStorageNodesList = newList;
+            newList.addEventListener('click', async (e) => {
+                const btn = e.target.closest('.storage-remove-btn');
+                if (!btn) return;
+                const addr = btn.dataset.storageRemove;
+                if (!addr) return;
+                if (!confirm(`Remove storage node ${addr.slice(0, 6)}…${addr.slice(-4)} from this channel?\n\nThis is an on-chain transaction.`)) return;
+                btn.disabled = true;
+                btn.classList.add('opacity-50');
+                showNotification?.('Removing storage node…', 'info');
+                try {
+                    const result = await channelManager.removeChannelStorageNode(channel.streamId, addr);
+                    this._reportStorageResult(result, 'remove');
+                } catch (err) {
+                    showNotification?.(`Failed to remove storage node: ${err.message}`, 'error');
+                } finally {
+                    await this.populateStorageInfo(channel);
                 }
-            }
+            });
+        }
 
-            if (this.elements.channelStorageProvider) {
-                this.elements.channelStorageProvider.textContent = enabled ? providerName : '-';
-            }
+        // Add toggle + form
+        const toggle = this.elements.channelStorageAddToggleBtn;
+        const form = this.elements.channelStorageAddForm;
+        const cancel = this.elements.channelStorageAddCancel;
+        const confirmBtn = this.elements.channelStorageAddConfirm;
+        const customInput = this.elements.channelStorageCustomAddress;
+        const daysInput = this.elements.channelStorageAddDays;
 
-            if (this.elements.channelStorageNode) {
-                this.elements.channelStorageNode.textContent = enabled ? nodeAddress : '-';
-            }
+        const radios = document.getElementsByName('channel-storage-provider-radio');
+        const setProvider = () => {
+            const val = Array.from(radios).find(r => r.checked)?.value || 'streamr';
+            customInput?.classList.toggle('hidden', val !== 'custom');
+        };
+        radios.forEach(r => {
+            const fresh = r.cloneNode(true);
+            r.parentNode.replaceChild(fresh, r);
+        });
+        document.getElementsByName('channel-storage-provider-radio').forEach(r => {
+            r.addEventListener('change', setProvider);
+        });
+        setProvider();
 
-            if (this.elements.channelStorageRetention) {
-                if (!enabled) {
-                    this.elements.channelStorageRetention.textContent = '-';
-                } else if (storageDays !== null && storageDays !== undefined && typeof storageDays === 'number') {
-                    this.elements.channelStorageRetention.textContent = `${storageDays} days`;
-                } else {
-                    this.elements.channelStorageRetention.textContent = 'Not set';
+        if (toggle) {
+            toggle.onclick = () => {
+                form?.classList.toggle('hidden');
+                if (daysInput && !daysInput.value) daysInput.value = '180';
+            };
+        }
+        if (cancel) {
+            cancel.onclick = () => {
+                form?.classList.add('hidden');
+                if (customInput) customInput.value = '';
+            };
+        }
+        if (confirmBtn) {
+            confirmBtn.onclick = async () => {
+                const provider = Array.from(document.getElementsByName('channel-storage-provider-radio'))
+                    .find(r => r.checked)?.value || 'streamr';
+                const customAddress = customInput?.value.trim() || '';
+                if (provider === 'custom' && !/^0x[a-fA-F0-9]{40}$/.test(customAddress)) {
+                    showNotification?.('Invalid custom storage node address', 'error');
+                    return;
                 }
-            }
+                const daysRaw = parseInt(daysInput?.value, 10);
+                const storageDays = Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : undefined;
 
-            if (this.elements.channelStorageNoStorage) {
-                this.elements.channelStorageNoStorage.classList.toggle('hidden', enabled);
-            }
-        } catch (error) {
-            Logger.error('Failed to fetch storage info:', error);
+                confirmBtn.disabled = true;
+                confirmBtn.textContent = 'Adding…';
+                showNotification?.('Adding storage node…', 'info');
+                try {
+                    const result = await channelManager.addChannelStorageNode(channel.streamId, {
+                        storageProvider: provider,
+                        customStorageAddress: customAddress,
+                        storageDays
+                    });
+                    this._reportStorageResult(result, 'add');
+                    form?.classList.add('hidden');
+                    if (customInput) customInput.value = '';
+                } catch (err) {
+                    showNotification?.(`Failed to add storage node: ${err.message}`, 'error');
+                } finally {
+                    confirmBtn.disabled = false;
+                    confirmBtn.textContent = 'Add';
+                    await this.populateStorageInfo(channel);
+                }
+            };
+        }
 
-            // Show error state
-            if (this.elements.channelStorageProvider) {
-                this.elements.channelStorageProvider.textContent = 'Error';
-            }
-            if (this.elements.channelStorageNode) {
-                this.elements.channelStorageNode.textContent = '-';
-            }
-            if (this.elements.channelStorageRetention) {
-                this.elements.channelStorageRetention.textContent = '-';
-            }
-            if (this.elements.channelStorageNoStorage) {
-                this.elements.channelStorageNoStorage.classList.remove('hidden');
-            }
+        // Retention save
+        const retSave = this.elements.channelStorageRetentionSave;
+        const retInput = this.elements.channelStorageRetentionInput;
+        if (retSave && retInput) {
+            retSave.onclick = async () => {
+                const days = parseInt(retInput.value, 10);
+                if (!Number.isFinite(days) || days < 1) {
+                    showNotification?.('Retention must be a positive number of days', 'error');
+                    return;
+                }
+                retSave.disabled = true;
+                retSave.textContent = 'Saving…';
+                showNotification?.('Updating retention…', 'info');
+                try {
+                    const result = await channelManager.setChannelStorageDays(channel.streamId, days);
+                    const ok = result.message && result.admin;
+                    showNotification?.(
+                        ok ? `Retention updated to ${days} days` : 'Retention updated partially. Try again.',
+                        ok ? 'success' : 'error'
+                    );
+                } catch (err) {
+                    showNotification?.(`Failed to update retention: ${err.message}`, 'error');
+                } finally {
+                    retSave.disabled = false;
+                    retSave.textContent = 'Save';
+                    await this.populateStorageInfo(channel);
+                }
+            };
+        }
+    }
+
+    /**
+     * Surface a dual-stream result via toast.
+     * @private
+     */
+    _reportStorageResult(result, op) {
+        const { showNotification } = this.deps;
+        const msgOk = !!result?.message?.success;
+        const adminOk = !!result?.admin?.success;
+        const verb = op === 'add' ? 'added' : 'removed';
+        if (msgOk && adminOk) {
+            showNotification?.(`Storage node ${verb}`, 'success');
+        } else if (!msgOk && !adminOk) {
+            const err = result?.message?.error || result?.admin?.error || 'unknown error';
+            showNotification?.(`Failed to ${op} storage node: ${err}`, 'error');
+        } else {
+            showNotification?.(`Storage node partially ${verb}. Retry to sync.`, 'error');
         }
     }
 

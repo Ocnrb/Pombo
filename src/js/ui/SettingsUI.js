@@ -2069,6 +2069,193 @@ class SettingsUI {
             });
             this._repairInboxReadyListenerAttached = true;
         }
+
+        this._initInboxStorageUI();
+    }
+
+    // === INBOX STORAGE UI ===
+
+    /**
+     * Wire up event listeners for the Inbox Storage section (under Debug tab).
+     * The section itself is shown/hidden by `_refreshInboxStorage` based on
+     * whether an inbox exists. Listeners are attached once on init.
+     */
+    _initInboxStorageUI() {
+        const toggleBtn = document.getElementById('inbox-storage-add-toggle-btn');
+        const form = document.getElementById('inbox-storage-add-form');
+        const cancelBtn = document.getElementById('inbox-storage-add-cancel');
+        const confirmBtn = document.getElementById('inbox-storage-add-confirm');
+        const customInput = document.getElementById('inbox-storage-custom-address');
+        const daysInput = document.getElementById('inbox-storage-add-days');
+        const retentionSave = document.getElementById('inbox-storage-retention-save');
+        const retentionInput = document.getElementById('inbox-storage-retention-input');
+
+        // Provider radio toggle for custom address visibility
+        const radios = document.getElementsByName('inbox-storage-provider-radio');
+        const setProvider = () => {
+            const val = Array.from(radios).find(r => r.checked)?.value || 'streamr';
+            customInput?.classList.toggle('hidden', val !== 'custom');
+        };
+        radios.forEach(r => r.addEventListener('change', setProvider));
+
+        toggleBtn?.addEventListener('click', () => {
+            form?.classList.toggle('hidden');
+            if (daysInput && !daysInput.value) daysInput.value = '180';
+        });
+
+        cancelBtn?.addEventListener('click', () => {
+            form?.classList.add('hidden');
+            if (customInput) customInput.value = '';
+        });
+
+        confirmBtn?.addEventListener('click', async () => {
+            const streamId = this.dmManager?.inboxMessageStreamId;
+            if (!streamId) {
+                this.showNotification('No DM inbox available', 'error');
+                return;
+            }
+            const provider = Array.from(document.getElementsByName('inbox-storage-provider-radio'))
+                .find(r => r.checked)?.value || 'streamr';
+            const customAddress = customInput?.value.trim() || '';
+            if (provider === 'custom' && !/^0x[a-fA-F0-9]{40}$/.test(customAddress)) {
+                this.showNotification('Invalid custom storage node address', 'error');
+                return;
+            }
+            const daysRaw = parseInt(daysInput?.value, 10);
+            const storageDays = Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : undefined;
+
+            confirmBtn.disabled = true;
+            confirmBtn.textContent = 'Adding…';
+            this.showNotification('Adding storage node…', 'info');
+            try {
+                const result = await this.streamrController.addStorageNodeToStream(streamId, {
+                    storageProvider: provider,
+                    customStorageAddress: customAddress,
+                    storageDays
+                });
+                if (result.success) {
+                    this.showNotification('Storage node added', 'success');
+                    form?.classList.add('hidden');
+                    if (customInput) customInput.value = '';
+                } else {
+                    this.showNotification(`Failed to add storage node: ${result.error || 'unknown error'}`, 'error');
+                }
+            } catch (err) {
+                this.showNotification(`Failed to add storage node: ${err.message}`, 'error');
+            } finally {
+                confirmBtn.disabled = false;
+                confirmBtn.textContent = 'Add';
+                await this._refreshInboxStorage();
+            }
+        });
+
+        retentionSave?.addEventListener('click', async () => {
+            const streamId = this.dmManager?.inboxMessageStreamId;
+            if (!streamId) {
+                this.showNotification('No DM inbox available', 'error');
+                return;
+            }
+            const days = parseInt(retentionInput?.value, 10);
+            if (!Number.isFinite(days) || days < 1) {
+                this.showNotification('Retention must be a positive number of days', 'error');
+                return;
+            }
+            retentionSave.disabled = true;
+            retentionSave.textContent = 'Saving…';
+            this.showNotification('Updating retention…', 'info');
+            try {
+                const ok = await this.streamrController.setStorageDays(streamId, days);
+                this.showNotification(
+                    ok ? `Retention updated to ${days} days` : 'Failed to update retention',
+                    ok ? 'success' : 'error'
+                );
+            } catch (err) {
+                this.showNotification(`Failed to update retention: ${err.message}`, 'error');
+            } finally {
+                retentionSave.disabled = false;
+                retentionSave.textContent = 'Save';
+                await this._refreshInboxStorage();
+            }
+        });
+
+        // Delegated remove handler on the nodes list
+        const list = document.getElementById('inbox-storage-nodes-list');
+        list?.addEventListener('click', async (e) => {
+            const btn = e.target.closest('.inbox-storage-remove-btn');
+            if (!btn) return;
+            const addr = btn.dataset.storageRemove;
+            const streamId = this.dmManager?.inboxMessageStreamId;
+            if (!addr || !streamId) return;
+            if (!confirm(`Remove storage node ${addr.slice(0, 6)}…${addr.slice(-4)} from your inbox?\n\nThis is an on-chain transaction.`)) return;
+            btn.disabled = true;
+            btn.classList.add('opacity-50');
+            this.showNotification('Removing storage node…', 'info');
+            try {
+                const result = await this.streamrController.removeStorageFromStream(streamId, addr);
+                if (result.success) {
+                    this.showNotification('Storage node removed', 'success');
+                } else {
+                    this.showNotification(`Failed to remove storage node: ${result.error || 'unknown error'}`, 'error');
+                }
+            } catch (err) {
+                this.showNotification(`Failed to remove storage node: ${err.message}`, 'error');
+            } finally {
+                await this._refreshInboxStorage();
+            }
+        });
+    }
+
+    /**
+     * Refresh the inbox storage section (nodes list + retention).
+     * Hides the section when there's no inbox.
+     */
+    async _refreshInboxStorage() {
+        const section = document.getElementById('inbox-storage-section');
+        const list = document.getElementById('inbox-storage-nodes-list');
+        const retentionInput = document.getElementById('inbox-storage-retention-input');
+        if (!section || !list) return;
+
+        const streamId = this.dmManager?.inboxMessageStreamId;
+        if (!streamId) {
+            section.classList.add('hidden');
+            return;
+        }
+
+        section.classList.remove('hidden');
+        list.innerHTML = '<div class="text-sm text-white/40 px-1">Loading…</div>';
+
+        try {
+            const info = await this.streamrController.getStreamStorageInfo(streamId);
+            const STREAMR_OFFICIAL_NODE = window.STREAMR_STORAGE_NODE_ADDRESS || null;
+
+            if (retentionInput && typeof info.storageDays === 'number') {
+                retentionInput.value = String(info.storageDays);
+            }
+
+            if (!info.enabled || !info.nodes?.length) {
+                list.innerHTML = '<div class="text-sm text-white/40 px-1">No storage nodes</div>';
+                return;
+            }
+
+            list.innerHTML = info.nodes.map(addr => {
+                const isOfficial = STREAMR_OFFICIAL_NODE && String(addr).toLowerCase() === STREAMR_OFFICIAL_NODE.toLowerCase();
+                const label = isOfficial ? 'Streamr Official' : 'Custom';
+                return `
+                    <div class="flex items-center justify-between gap-3 px-3 py-2 bg-white/[0.03] border border-white/5 rounded-xl">
+                        <div class="min-w-0 flex-1">
+                            <div class="text-xs text-white/50">${label}</div>
+                            <code class="text-xs text-white/70 font-mono truncate block">${addr}</code>
+                        </div>
+                        <button data-storage-remove="${addr}" class="inbox-storage-remove-btn shrink-0 text-white/40 hover:text-red-400/90 px-2 py-1 rounded transition" title="Remove">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3"/></svg>
+                        </button>
+                    </div>
+                `;
+            }).join('');
+        } catch (err) {
+            this.Logger?.error('Failed to fetch inbox storage info:', err);
+            list.innerHTML = '<div class="text-sm text-red-400/80 px-1">Failed to load storage info</div>';
+        }
     }
 
     handleRepairPrimaryAction() {
@@ -2205,12 +2392,18 @@ class SettingsUI {
                 this._setRepairPrimaryAction('create');
                 this._setRepairStatus('noInbox');
                 fixBtn?.classList.add('hidden');
+                document.getElementById('inbox-storage-section')?.classList.add('hidden');
                 return;
             }
 
             const diagnosis = await this.dmManager.diagnoseInbox();
             this._repairDiagnosis = diagnosis;
             this._setRepairPrimaryAction('diagnose');
+
+            // Refresh storage section (fire-and-forget; non-blocking)
+            this._refreshInboxStorage().catch(err => {
+                this.Logger?.debug('Inbox storage refresh failed:', err.message);
+            });
 
             // Count issues
             const issues = [];

@@ -537,7 +537,13 @@ class App {
             } else if (event === 'message_edited') {
                 if (data.streamId === currentStreamId) {
                     const channel = channelManager.getCurrentChannel();
-                    if (channel && !channel.initialLoadInProgress) {
+                    // Note: handle even during initialLoadInProgress so that
+                    // an edit override delivered in the history resend (after
+                    // its target was already rendered by `history_batch_loaded`)
+                    // updates the visible DOM immediately, instead of waiting
+                    // for the final `initial_history_complete` render that may
+                    // be up to 30s away on streams whose iterator never signals done.
+                    if (channel) {
                         // Granular DOM update: find the edited message and replace
                         // only that node instead of rebuilding the entire conversation.
                         const edited = channel.messages.find(
@@ -558,7 +564,12 @@ class App {
             } else if (event === 'message_deleted') {
                 if (data.streamId === currentStreamId) {
                     const channel = channelManager.getCurrentChannel();
-                    if (channel && !channel.initialLoadInProgress) {
+                    // Same rationale as message_edited: must drop the visible
+                    // node even during initial history load so a delete that
+                    // arrives just after `history_batch_loaded` rendered the
+                    // target does not leave the message on screen until
+                    // `initial_history_complete` finally fires.
+                    if (channel) {
                         // Granular DOM removal: just drop the deleted node.
                         const didRemove = chatAreaUI.removeMessage(data.targetId);
                         if (!didRemove) {

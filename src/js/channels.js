@@ -958,6 +958,124 @@ class ChannelManager {
         }
     }
 
+    // ===== STORAGE MANAGEMENT (POST-CREATION) ========================================
+
+    /**
+     * Get aggregated storage info for a channel (merges message + admin streams).
+     * The user-facing view is a single list — internally we coordinate both
+     * persistent streams (-1 message, -3 admin). The ephemeral stream (-2)
+     * never has storage by design.
+     *
+     * Returned `nodes` array contains entries `{ address, onMessage, onAdmin }`
+     * so the UI can warn (and the update flow can heal) divergence between
+     * the two streams if a previous operation partially failed.
+     *
+     * @param {string} messageStreamId
+     * @returns {Promise<{enabled: boolean, nodes: Array<{address:string,onMessage:boolean,onAdmin:boolean}>, storageDays: number|null}>}
+     */
+    async getChannelStorageInfo(messageStreamId) {
+        const channel = this.channels.get(messageStreamId);
+        const adminStreamId = channel?.adminStreamId || deriveAdminId(messageStreamId);
+
+        const [msgInfo, adminInfo] = await Promise.all([
+            streamrController.getStreamStorageInfo(messageStreamId).catch(() => ({ enabled: false, nodes: [], storageDays: null })),
+            adminStreamId
+                ? streamrController.getStreamStorageInfo(adminStreamId).catch(() => ({ enabled: false, nodes: [], storageDays: null }))
+                : Promise.resolve({ enabled: false, nodes: [], storageDays: null })
+        ]);
+
+        const map = new Map(); // address(lower) -> { address, onMessage, onAdmin }
+        for (const n of msgInfo.nodes || []) {
+            const key = String(n).toLowerCase();
+            map.set(key, { address: n, onMessage: true, onAdmin: false });
+        }
+        for (const n of adminInfo.nodes || []) {
+            const key = String(n).toLowerCase();
+            const existing = map.get(key);
+            if (existing) {
+                existing.onAdmin = true;
+            } else {
+                map.set(key, { address: n, onMessage: false, onAdmin: true });
+            }
+        }
+
+        const nodes = Array.from(map.values());
+        // Show message-stream TTL as the channel TTL (admin TTL tracks it but
+        // is not surfaced to users).
+        const storageDays = typeof msgInfo.storageDays === 'number' ? msgInfo.storageDays : null;
+
+        return {
+            enabled: nodes.length > 0,
+            nodes,
+            storageDays
+        };
+    }
+
+    /**
+     * Add a storage node to a channel (applied to both -1 and -3).
+     * Same retention is applied to both streams when `storageDays` is provided.
+     *
+     * @param {string} messageStreamId
+     * @param {Object} options
+     * @param {string} options.storageProvider - 'streamr' or 'custom'
+     * @param {string} [options.customStorageAddress] - EVM address (required if provider is 'custom')
+     * @param {number} [options.storageDays] - Retention days (applied to both streams)
+     * @returns {Promise<{message: {success:boolean,error?:string}, admin: {success:boolean,error?:string}}>}
+     */
+    async addChannelStorageNode(messageStreamId, options = {}) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) throw new Error('Channel not found');
+        const adminStreamId = channel.adminStreamId || deriveAdminId(messageStreamId);
+
+        // Sequential to avoid nonce conflicts (REPLACEMENT_UNDERPRICED).
+        const message = await streamrController.addStorageNodeToStream(messageStreamId, options);
+        const admin = adminStreamId
+            ? await streamrController.addStorageNodeToStream(adminStreamId, options)
+            : { success: false, error: 'No admin stream' };
+
+        return { message, admin };
+    }
+
+    /**
+     * Remove a storage node from a channel (from both -1 and -3).
+     * @param {string} messageStreamId
+     * @param {string} nodeAddress
+     * @returns {Promise<{message: {success:boolean,error?:string}, admin: {success:boolean,error?:string}}>}
+     */
+    async removeChannelStorageNode(messageStreamId, nodeAddress) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) throw new Error('Channel not found');
+        const adminStreamId = channel.adminStreamId || deriveAdminId(messageStreamId);
+
+        // Sequential to avoid nonce conflicts.
+        const message = await streamrController.removeStorageFromStream(messageStreamId, nodeAddress);
+        const admin = adminStreamId
+            ? await streamrController.removeStorageFromStream(adminStreamId, nodeAddress)
+            : { success: true };
+
+        return { message, admin };
+    }
+
+    /**
+     * Update retention (storage days) on both streams.
+     * @param {string} messageStreamId
+     * @param {number} days
+     * @returns {Promise<{message: boolean, admin: boolean}>}
+     */
+    async setChannelStorageDays(messageStreamId, days) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) throw new Error('Channel not found');
+        const adminStreamId = channel.adminStreamId || deriveAdminId(messageStreamId);
+
+        // Sequential to avoid nonce conflicts.
+        const message = await streamrController.setStorageDays(messageStreamId, days);
+        const admin = adminStreamId
+            ? await streamrController.setStorageDays(adminStreamId, days)
+            : false;
+
+        return { message, admin };
+    }
+
     // ===== ADMIN STREAM (-3/P0) =====================================================
 
     /**
@@ -1810,6 +1928,9 @@ class ChannelManager {
             Logger.warn(`Initial history safety timeout fired for ${messageStreamId.slice(-20)}`);
             channel.initialLoadInProgress = false;
             this.notifyHandlers('initial_history_complete', { streamId: messageStreamId });
+            this.recoverIncompleteImages(messageStreamId).catch(err => {
+                Logger.debug('recoverIncompleteImages (safety) failed:', err?.message || err);
+            });
         }, INITIAL_HISTORY_SAFETY_MS);
 
         // Use dual-stream subscription with onHistoryComplete callback
@@ -1845,6 +1966,10 @@ class ChannelManager {
             channel.initialLoadInProgress = false;
             
             this.notifyHandlers('initial_history_complete', { streamId: messageStreamId });
+
+            this.recoverIncompleteImages(messageStreamId).catch(err => {
+                Logger.debug('recoverIncompleteImages failed:', err?.message || err);
+            });
         };
 
         try {
@@ -3252,6 +3377,214 @@ class ChannelManager {
             channel.loadingHistory = false;
             this.notifyHandlers('history_loading', { streamId: messageStreamId, loading: false });
             return { loaded: 0, hasMore: channel.hasMoreHistory };
+        }
+    }
+
+    /**
+     * Recover image manifests whose chunks fell outside the initial resend
+     * window. Each chunked image publishes N chunk messages followed by 1
+     * manifest; with `INITIAL_MESSAGES = 50` bounded by Streamr `last:N`,
+     * multiple historical images cause older manifests to land without all
+     * their chunks (the manifest is at the end of the upload run, so the
+     * manifest itself usually fits but the head chunks get truncated).
+     * Without this, the affected placeholders stay on "Loading…" forever
+     * unless the user scrolls back manually.
+     *
+     * Strategy: scan visible manifests, identify those that haven't been
+     * cached, persisted, or fully assembled, and call `loadMoreHistory`
+     * in a bounded loop until they are recovered or no more history is
+     * available. Chunks that arrive feed `registerStoredImageChunk` →
+     * `tryAssembleStoredImage` → `onImageReceived`, which the UI handler
+     * in `setupMediaHandlers` uses to swap placeholders in place.
+     *
+     * @param {string} messageStreamId
+     * @param {number} [maxRounds]
+     */
+    async recoverIncompleteImages(messageStreamId, maxRounds = CONFIG.media.recoveryMaxRounds) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) return;
+        if (channel.writeOnly || channel.type === 'dm') return;
+        if (typeof mediaController?.isStoredChunkedImageManifest !== 'function') return;
+
+        const stagnantLimit = CONFIG.media.recoveryStagnantRoundsLimit;
+        const generationAtStart = this.switchGeneration;
+        let prevIncompleteCount = -1;
+        let stagnantRounds = 0;
+
+        // Sum buffered chunk counts across the given imageIds so we can
+        // distinguish "pagination loaded chunks but no manifest completed
+        // yet" (real progress) from "pagination found nothing" (stagnant).
+        const sumPendingChunks = (ids) => {
+            let total = 0;
+            for (const id of ids) {
+                const pending = mediaController.pendingImageAssemblies?.get?.(id);
+                if (pending) total += pending.chunks.size;
+            }
+            return total;
+        };
+
+        // Global view: count chunks across ALL pending assemblies for this
+        // stream. Some assemblies may be in `pendingImageAssemblies` without
+        // having been re-classified as "incomplete" yet (e.g., manifest just
+        // re-registered this round) — counting only the per-id total can
+        // misreport stagnation. This catches chunks landing for any pending
+        // image owned by this stream.
+        const sumAllChunks = (streamId) => {
+            let total = 0;
+            const map = mediaController.pendingImageAssemblies;
+            if (!map || typeof map.forEach !== 'function') return 0;
+            map.forEach((pending) => {
+                if (pending?.streamId === streamId) total += pending.chunks.size;
+            });
+            return total;
+        };
+
+        for (let round = 0; round < maxRounds; round++) {
+            if (this.switchGeneration !== generationAtStart) return;
+
+            const incompleteIds = [];
+            for (const msg of channel.messages) {
+                if (!mediaController.isStoredChunkedImageManifest(msg)) continue;
+                if (msg.verified?.valid === false) continue;
+                if (!msg.imageId) continue;
+                if (mediaController.deletedImageIds?.has?.(msg.imageId)) continue;
+
+                // Already cached in memory — placeholder will heal via recoverImage()
+                if (mediaController.getImage?.(msg.imageId)) {
+                    // Re-fire delivery in case the placeholder was rendered
+                    // after the cache fill (covers the race where assembly
+                    // completed during the same tick as the render).
+                    mediaController.recoverImage?.(msg.imageId);
+                    continue;
+                }
+
+                // Already persisted to ledger — load it and let the placeholder healer fire
+                try {
+                    const fromLedger = await secureStorage.getImageBlob?.(msg.imageId);
+                    if (fromLedger) {
+                        mediaController.handleImageData?.({
+                            type: 'image_data',
+                            imageId: msg.imageId,
+                            data: fromLedger
+                        });
+                        continue;
+                    }
+                } catch (err) {
+                    Logger.debug('recoverIncompleteImages: ledger lookup failed:', err?.message || err);
+                }
+
+                // Manifest registered but not yet via assembler (e.g., verified after
+                // initial flush, or arrived in pagination without manifest re-register).
+                // Force re-registration so any buffered chunks can complete.
+                try {
+                    if (typeof mediaController.registerStoredImageManifest === 'function') {
+                        await mediaController.registerStoredImageManifest(messageStreamId, msg);
+                    }
+                } catch (err) {
+                    Logger.debug('recoverIncompleteImages: manifest re-register failed:', err?.message || err);
+                }
+
+                // After re-register the assembly may have completed
+                if (mediaController.getImage?.(msg.imageId)) {
+                    mediaController.recoverImage?.(msg.imageId);
+                    continue;
+                }
+
+                // Pending assembly already complete — nudge it to retry
+                const pending = mediaController.pendingImageAssemblies?.get?.(msg.imageId);
+                if (pending?.manifest && pending.chunks.size >= pending.manifest.chunkCount) {
+                    mediaController.recoverImage?.(msg.imageId);
+                    continue;
+                }
+
+                incompleteIds.push(msg.imageId);
+            }
+
+            if (incompleteIds.length === 0) {
+                if (round > 0) {
+                    Logger.debug(
+                        `recoverIncompleteImages: all manifests resolved for ${messageStreamId.slice(-20)} after ${round} round(s)`
+                    );
+                }
+                return;
+            }
+            if (!channel.hasMoreHistory) {
+                Logger.warn(
+                    `recoverIncompleteImages: ${incompleteIds.length} manifest(s) still incomplete (chunks not in stored history) for ${messageStreamId.slice(-20)}`
+                );
+                this._markChannelImagesUnavailable(messageStreamId, incompleteIds);
+                return;
+            }
+
+            Logger.debug(
+                `recoverIncompleteImages: paginating to recover ${incompleteIds.length} image manifest(s) ` +
+                `for ${messageStreamId.slice(-20)} (round ${round + 1}/${maxRounds})`
+            );
+
+            // Snapshot pending chunk totals BEFORE pagination so we can detect
+            // real progress (chunks arriving) even when no manifest completed
+            // this round — a single 5MB GIF can need 25+ chunks across many
+            // pagination rounds before the count of incomplete manifests drops.
+            const chunksBefore = sumPendingChunks(incompleteIds);
+            const allChunksBefore = sumAllChunks(messageStreamId);
+
+            const result = await this.loadMoreHistory(messageStreamId);
+            if (this.switchGeneration !== generationAtStart) return;
+
+            const chunksAfter = sumPendingChunks(incompleteIds);
+            const allChunksAfter = sumAllChunks(messageStreamId);
+            const madeProgress = result.loaded > 0
+                || chunksAfter > chunksBefore
+                || allChunksAfter > allChunksBefore
+                || incompleteIds.length !== prevIncompleteCount;
+
+            // Stagnation guard: only count rounds where nothing changed
+            // (no new messages, no new chunks, same incomplete count).
+            // Without this, multi-GIF backlogs would bail before later
+            // images had a chance to complete their long chunk runs.
+            if (madeProgress) {
+                stagnantRounds = 0;
+                prevIncompleteCount = incompleteIds.length;
+            } else {
+                stagnantRounds++;
+                if (stagnantRounds >= stagnantLimit) {
+                    Logger.warn(
+                        `recoverIncompleteImages: ${incompleteIds.length} manifest(s) stagnant after ${stagnantRounds} rounds — giving up for ${messageStreamId.slice(-20)}`
+                    );
+                    this._markChannelImagesUnavailable(messageStreamId, incompleteIds);
+                    return;
+                }
+            }
+
+            // Nothing new fetched and no more history → continue (stagnation
+            // counter will catch the dead end after `stagnantLimit` rounds).
+            if (result.loaded === 0 && !result.hasMore && chunksAfter === chunksBefore && allChunksAfter === allChunksBefore) {
+                continue;
+            }
+        }
+
+        Logger.debug(
+            `recoverIncompleteImages: hit max rounds (${maxRounds}) for ${messageStreamId.slice(-20)}`
+        );
+    }
+
+    /**
+     * Mark image placeholders as unavailable (history exhausted or recovery
+     * gave up). Emits an event the chat UI can render as an "Image unavailable"
+     * tile with a Retry button (handler re-invokes recoverIncompleteImages).
+     * @param {string} messageStreamId
+     * @param {string[]} imageIds
+     * @private
+     */
+    _markChannelImagesUnavailable(messageStreamId, imageIds) {
+        if (!Array.isArray(imageIds) || imageIds.length === 0) return;
+        if (typeof window === 'undefined') return;
+        try {
+            window.dispatchEvent(new CustomEvent('pombo:imageRecoveryGaveUp', {
+                detail: { streamId: messageStreamId, imageIds: imageIds.slice() }
+            }));
+        } catch (err) {
+            Logger.debug('_markChannelImagesUnavailable: dispatch failed:', err?.message || err);
         }
     }
 

@@ -172,6 +172,13 @@ class MediaController {
         this.imageCacheBytes = 0;
         this.MAX_IMAGE_CACHE_BYTES = APP_CONFIG.media.maxImageCacheBytes;
         this.pendingImageAssemblies = new Map();
+
+        // Tombstone set: imageIds whose owning message was deleted in this
+        // session. Blocks every late-arrival path (chunk register, manifest
+        // register, getImage, recoverImage, handleImageData) so a paginated
+        // resend or a stuck-placeholder recover cannot resurrect a deleted
+        // image. Per-session (not persisted) — same lifetime as imageCache.
+        this.deletedImageIds = new Set();
         
         // Local files being seeded: fileId -> { file, metadata, streamId }
         this.localFiles = new Map();
@@ -277,6 +284,7 @@ class MediaController {
             }
         }
         this.pendingImageAssemblies.clear();
+        this.deletedImageIds.clear();
         this.localFiles.clear();
         this.downloadedUrls.clear();
         this.incomingFiles.clear();
@@ -645,6 +653,11 @@ class MediaController {
         if (!isStoredImageChunkMessage(chunk)) {
             return false;
         }
+        if (this.deletedImageIds.has(chunk.imageId)) {
+            // Owning message was deleted in this session — drop the chunk
+            // so a paginated history cannot resurrect the image.
+            return false;
+        }
 
         const pending = this.getOrCreatePendingImageAssembly(chunk.imageId, messageStreamId);
         const existing = pending.chunks.get(chunk.chunkIndex);
@@ -664,6 +677,9 @@ class MediaController {
 
     async registerStoredImageManifest(messageStreamId, manifest) {
         if (!isStoredChunkedImageManifest(manifest)) {
+            return false;
+        }
+        if (this.deletedImageIds.has(manifest.imageId)) {
             return false;
         }
 
@@ -1344,6 +1360,11 @@ class MediaController {
         if (data.type !== 'image_data' || !data.imageId || !data.data) {
             return;
         }
+        if (this.deletedImageIds.has(data.imageId)) {
+            // Late assembly result for a tombstoned image — do not cache
+            // and do not fan-out via onImageReceived.
+            return;
+        }
         
         // Cache the image
         this.imageCache.set(data.imageId, data.data);
@@ -1363,6 +1384,7 @@ class MediaController {
      * @returns {string|null} - Base64 data or null
      */
     getImage(imageId) {
+        if (imageId && this.deletedImageIds.has(imageId)) return null;
         return this.imageCache.get(imageId) || null;
     }
 
@@ -1375,6 +1397,7 @@ class MediaController {
      */
     recoverImage(imageId) {
         if (!imageId) return;
+        if (this.deletedImageIds.has(imageId)) return;
         const cached = this.imageCache.get(imageId);
         if (cached) {
             // Defer so the caller's freshly-rendered placeholder is in the
@@ -1406,11 +1429,48 @@ class MediaController {
      * @param {string} data - Base64 image data
      */
     cacheImage(imageId, data) {
+        if (this.deletedImageIds.has(imageId)) return;
         if (!this.imageCache.has(imageId)) {
             this.imageCache.set(imageId, data);
             this.imageCacheBytes += data.length * 2;
             this.evictImageCacheIfNeeded();
             Logger.debug('Image cached from message:', imageId);
+        }
+    }
+
+    /**
+     * Mark an imageId as deleted. Called when the owning message is deleted
+     * by its author. Evicts every local artifact (RAM cache, in-flight
+     * assembly state, IndexedDB ledger) and records the imageId in a
+     * tombstone set so that any late arrival (paginated chunk/manifest,
+     * recoverImage retry, network re-publish) is rejected for the rest of
+     * this session. Safe to call repeatedly.
+     * @param {string} imageId
+     */
+    markImageDeleted(imageId) {
+        if (!imageId) return;
+        this.deletedImageIds.add(imageId);
+
+        // Evict RAM cache
+        if (this.imageCache.has(imageId)) {
+            const cached = this.imageCache.get(imageId);
+            this.imageCacheBytes -= (cached?.length || 0) * 2;
+            if (this.imageCacheBytes < 0) this.imageCacheBytes = 0;
+            this.imageCache.delete(imageId);
+        }
+
+        // Drop any in-flight chunked assembly state
+        this.clearPendingImageAssembly(imageId);
+
+        // Best-effort ledger purge \u2014 fire and forget. The tombstone above
+        // already prevents `loadImageFromLedger` from serving the blob even
+        // if the IDB delete is slow or fails.
+        try {
+            secureStorage.deleteImageFromLedger?.(imageId)?.catch?.(err => {
+                Logger.debug('markImageDeleted ledger delete failed:', err?.message || err);
+            });
+        } catch (err) {
+            Logger.debug('markImageDeleted ledger delete threw:', err?.message || err);
         }
     }
 

@@ -1284,6 +1284,18 @@ class SecureStorage {
     }
 
     /**
+     * Public API: delete a single image record from the IndexedDB ledger.
+     * Called when the corresponding message is deleted by its author so the
+     * blob does not linger locally and cannot be re-served by a stale
+     * `loadImageFromLedger` triggered by a re-render race.
+     * @param {string} imageId
+     */
+    async deleteImageFromLedger(imageId) {
+        if (!imageId) return;
+        await this._deleteLedgerRecord(imageId);
+    }
+
+    /**
      * Delete all images for a given stream from the IndexedDB ledger.
      * @param {string} streamId
      */
