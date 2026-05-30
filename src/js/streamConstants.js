@@ -63,9 +63,20 @@ export const ADMIN_STREAM = Object.freeze({
 
     // Partition indexes
     MODERATION: 0,        // ADMIN_STATE: bannedMembers, hiddenMessageIds, pins
-    CHANNEL_IMAGE: 1,     // RESERVED — channel image / profile metadata
-    PASSWORD_CHALLENGE: 2 // RESERVED — password challenge protocol
+    CHANNEL_IMAGE: 1,     // CHANNEL_IMAGE: channel image / profile metadata
+    PASSWORD_CHALLENGE: 2 // PASSWORD_CHALLENGE: encrypted magic-plaintext blob for password verification
 });
+
+/**
+ * Magic plaintext encrypted with the channel password and published to
+ * ADMIN_STREAM partition 2 (PASSWORD_CHALLENGE). Successful decryption of the
+ * payload's `magic` field with a candidate password proves that password is
+ * correct, without revealing it on the network.
+ *
+ * Treated as an immutable, single-shot challenge per channel (published once
+ * at channel creation; no rotation in this scope).
+ */
+export const PASSWORD_CHALLENGE_MAGIC = 'POMBO_PWD_CHALLENGE_V1';
 
 // ================================================
 // ID DERIVATION HELPERS

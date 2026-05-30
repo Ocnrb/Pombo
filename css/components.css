@@ -669,6 +669,14 @@ body {
     overflow-wrap: break-word;
 }
 
+/* Slightly smaller bubble text on mobile */
+@media (max-width: 639px) {
+    .message-content {
+        font-size: 0.875rem;
+        line-height: 1.3rem;
+    }
+}
+
 /* Inline emojis - slightly larger than text */
 .message-content .inline-emoji {
     font-size: 1.2em;

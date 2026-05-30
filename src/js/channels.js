@@ -366,6 +366,26 @@ class ChannelManager {
                 }
             }
 
+            // Seed PASSWORD_CHALLENGE on -3/P2 immediately, then kick off a
+            // background loop that keeps republishing until the storage node
+            // has actually retained it (resend last:1 returns the entry).
+            //
+            // Why: joiners now fail-closed when the challenge is missing, so
+            // until the storage node attachment finishes and the publish is
+            // retained, nobody (not even the owner from another device) can
+            // join the channel. A single create-time publish is not enough
+            // because storage attachment can race with publish.
+            if (type === 'password' && password && streamInfo.adminStreamId) {
+                try {
+                    await streamrController.publishPasswordChallenge(streamInfo.adminStreamId, password);
+                    Logger.debug('Initial PASSWORD_CHALLENGE published on -3/P2');
+                } catch (challengeError) {
+                    Logger.warn('Initial PASSWORD_CHALLENGE publish failed (background loop will retry):', challengeError.message);
+                }
+                // Fire-and-forget background retention loop.
+                this._ensurePasswordChallengeRetained(streamInfo.adminStreamId, password).catch(() => {});
+            }
+
             // Create channel object with dual-stream IDs
             // Include owner in members array for native channels
             const channelMembers = type === 'native' 
@@ -545,6 +565,49 @@ class ChannelManager {
             if (!channelType || channelType === 'unknown') {
                 Logger.debug('Type unknown, defaulting to native (private)');
                 channelType = password ? 'password' : 'native';
+            }
+
+            // PASSWORD VERIFICATION (blocking, fail-closed) — password channels only.
+            // Reject the join with a clear error before touching local state /
+            // subscribing to -1, so the user gets immediate "wrong password"
+            // feedback instead of silently entering a channel where every
+            // decrypt fails.
+            //
+            // Storage propagation: right after channel creation the challenge
+            // publish may not yet be retained by the storage node. We retry a
+            // few times before giving up. After retries:
+            //   - `!found` → reject as UNVERIFIED (legacy channels without a
+            //     challenge cannot be joined; per V0 decision we ignore legacy).
+            //   - `found && !valid` → reject as WRONG_PASSWORD.
+            if (channelType === 'password' && password) {
+                let challenge;
+                try {
+                    challenge = await streamrController.verifyPasswordChallenge(
+                        adminStreamId,
+                        password,
+                        { retries: 4, retryDelayMs: 1500 }
+                    );
+                } catch (verifyError) {
+                    // Pure infrastructure failure (e.g. client not initialized).
+                    // Surface a distinct error so the UI can suggest retrying.
+                    const err = new Error('Could not verify channel password (network error). Try again.');
+                    err.code = 'CHALLENGE_VERIFY_FAILED';
+                    err.cause = verifyError;
+                    throw err;
+                }
+                if (challenge.found && !challenge.valid) {
+                    Logger.warn('Password challenge failed on -3/P2 — wrong password for channel', messageStreamId);
+                    const err = new Error('Incorrect password for this channel');
+                    err.code = 'WRONG_PASSWORD';
+                    throw err;
+                }
+                if (!challenge.found) {
+                    Logger.warn('No PASSWORD_CHALLENGE retained on -3/P2 after retries — refusing join (unverifiable channel)');
+                    const err = new Error('Channel password could not be verified (no challenge available). The channel may still be initialising — try again shortly.');
+                    err.code = 'CHALLENGE_NOT_FOUND';
+                    throw err;
+                }
+                Logger.debug('Password challenge verified on -3/P2');
             }
             
             // Extract name from streamId if not provided (simplified ID format)
@@ -1168,6 +1231,48 @@ class ChannelManager {
                 rev: channel.adminRev
             });
         }
+    }
+
+    /**
+     * Background loop that republishes the PASSWORD_CHALLENGE on -3/P2 until
+     * the storage node has actually retained it. Used right after channel
+     * creation, when the storage attachment may still be racing with the
+     * initial publish. Joiners now fail-closed on missing challenge, so we
+     * MUST guarantee retention before remote users can verify and join.
+     *
+     * Fire-and-forget; safe to ignore the returned promise. Self-terminates
+     * once a verify succeeds, or after a hard cap on attempts.
+     *
+     * @param {string} adminStreamId - Admin stream id (-3)
+     * @param {string} password - Channel password
+     * @param {Object} [options]
+     * @param {number} [options.maxAttempts=12] Total publish/verify cycles
+     * @param {number} [options.delayMs=5000]   Delay between cycles
+     */
+    async _ensurePasswordChallengeRetained(adminStreamId, password, { maxAttempts = 12, delayMs = 5000 } = {}) {
+        if (!adminStreamId || !password) return;
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            await new Promise(r => setTimeout(r, delayMs));
+            let res;
+            try {
+                res = await streamrController.verifyPasswordChallenge(adminStreamId, password);
+            } catch (e) {
+                Logger.debug(`PASSWORD_CHALLENGE retention check #${attempt} errored:`, e?.message);
+                continue;
+            }
+            if (res.found && res.valid) {
+                Logger.info(`PASSWORD_CHALLENGE retained on -3/P2 (after ${attempt} verify cycle${attempt > 1 ? 's' : ''})`);
+                return;
+            }
+            // Not retained yet — republish and try again next cycle.
+            try {
+                await streamrController.publishPasswordChallenge(adminStreamId, password);
+                Logger.debug(`PASSWORD_CHALLENGE republished (retention attempt ${attempt}/${maxAttempts})`);
+            } catch (e) {
+                Logger.debug(`PASSWORD_CHALLENGE republish #${attempt} failed:`, e?.message);
+            }
+        }
+        Logger.warn(`PASSWORD_CHALLENGE not retained on -3/P2 after ${maxAttempts} attempts — joiners will see CHALLENGE_NOT_FOUND until storage catches up`);
     }
 
     /**
@@ -1883,6 +1988,41 @@ class ChannelManager {
             // The manager dedups across UI surfaces and caches in IDB.
             if (channel && channel.type !== 'dm') {
                 channelImageManager.get(adminStreamId, { password: pwd }).catch(() => {});
+            }
+
+            // Fire-and-forget: redundancy publish of PASSWORD_CHALLENGE (-3/P2).
+            // The initial publish in createChannel happens immediately after
+            // storage is enabled, which may race the storage node attachment
+            // and leave nothing persisted. Every time the OWNER opens a
+            // password channel we verify; if no challenge is found we
+            // re-publish. Idempotent and self-healing: once retained, this
+            // becomes a single resend per session and never re-publishes.
+            if (channel && channel.type === 'password' && pwd) {
+                const myAddress = authManager.getAddress();
+                const isOwner = !!myAddress
+                    && !!channel.createdBy
+                    && myAddress.toLowerCase() === channel.createdBy.toLowerCase();
+                if (isOwner) {
+                    (async () => {
+                        try {
+                            const res = await streamrController.verifyPasswordChallenge(adminStreamId, pwd);
+                            if (!res.found) {
+                                Logger.info('PASSWORD_CHALLENGE not retained on -3/P2 — owner republishing for redundancy');
+                                await streamrController.publishPasswordChallenge(adminStreamId, pwd);
+                            } else if (!res.valid) {
+                                // Should not happen (only owner can publish on -3),
+                                // but if a stale/corrupt entry was retained,
+                                // republish to restore a valid challenge.
+                                Logger.warn('PASSWORD_CHALLENGE on -3/P2 did not verify with owner password — republishing');
+                                await streamrController.publishPasswordChallenge(adminStreamId, pwd);
+                            } else {
+                                Logger.debug('PASSWORD_CHALLENGE already retained — skipping republish');
+                            }
+                        } catch (e) {
+                            Logger.debug('PASSWORD_CHALLENGE redundancy check failed (will retry next open):', e?.message);
+                        }
+                    })();
+                }
             }
         }
 

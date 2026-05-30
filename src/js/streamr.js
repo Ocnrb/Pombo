@@ -30,6 +30,7 @@ import {
     MESSAGE_STREAM as MESSAGE_STREAM_CONSTANTS,
     EPHEMERAL_STREAM as EPHEMERAL_STREAM_CONSTANTS,
     ADMIN_STREAM as ADMIN_STREAM_CONSTANTS,
+    PASSWORD_CHALLENGE_MAGIC,
     deriveEphemeralId as _deriveEphemeralId,
     deriveMessageId as _deriveMessageId,
     deriveAdminId as _deriveAdminId,
@@ -2258,6 +2259,151 @@ class StreamrController {
             rev: latest?.rev
         });
         return latest;
+    }
+
+    /**
+     * Publish PASSWORD_CHALLENGE to ADMIN STREAM partition 2.
+     *
+     * Encrypts a known magic plaintext with the channel password using the
+     * normal `publish()` encryption path (PBKDF2 + AES-GCM via cryptoManager).
+     * Verifying a candidate password later is just "try to decrypt and
+     * check the magic field matches". Single-shot per channel (immutable in
+     * this scope — no rotation).
+     *
+     * Permissions on `-3` already restrict publish to the owner, so only the
+     * channel creator can establish the canonical challenge.
+     *
+     * @param {string} adminStreamId - Admin stream ID (ends with -3)
+     * @param {string} password - Channel password (required)
+     */
+    async publishPasswordChallenge(adminStreamId, password) {
+        if (!password || typeof password !== 'string') {
+            throw new Error('publishPasswordChallenge requires a non-empty password');
+        }
+        const payload = {
+            type: 'PASSWORD_CHALLENGE',
+            v: 1,
+            magic: PASSWORD_CHALLENGE_MAGIC,
+            ts: Date.now()
+        };
+        Logger.debug('publishPasswordChallenge called - adminStream partition 2:', {
+            adminStreamId: String(adminStreamId).slice(-30)
+        });
+        return await this.publish(
+            adminStreamId,
+            STREAM_CONFIG.ADMIN_STREAM.PASSWORD_CHALLENGE,
+            payload,
+            password
+        );
+    }
+
+    /**
+     * Verify a candidate password against the PASSWORD_CHALLENGE blob
+     * published on ADMIN STREAM partition 2.
+     *
+     * Fetches the most recent entry on -3/P2 and attempts to decrypt it with
+     * the candidate password. Success iff decrypt succeeds AND payload shape
+     * matches (`type === 'PASSWORD_CHALLENGE'` and `magic === MAGIC`).
+     *
+     * Optional retry/backoff handles storage propagation: right after a
+     * channel is created the storage node may not yet have retained the
+     * challenge, so a transient `{found:false}` is expected. Callers that
+     * want to fail-closed on `!found` should pass retries > 0.
+     *
+     * Returns:
+     *   - { found: false, valid: false } when no challenge was ever published
+     *     (or storage never retained one, after retries exhausted).
+     *   - { found: true,  valid: true  } when password is correct.
+     *   - { found: true,  valid: false } when password is wrong.
+     *
+     * @param {string} adminStreamId - Admin stream ID (ends with -3)
+     * @param {string} password - Candidate password
+     * @param {Object} [options]
+     * @param {number} [options.retries=0] Extra attempts after the first if `!found`
+     * @param {number} [options.retryDelayMs=1500] Delay between attempts
+     * @returns {Promise<{found: boolean, valid: boolean}>}
+     */
+    async verifyPasswordChallenge(adminStreamId, password, { retries = 0, retryDelayMs = 1500 } = {}) {
+        if (!this.client) {
+            throw new Error('Streamr client not initialized');
+        }
+        if (!_isAdminStream(adminStreamId)) {
+            Logger.warn('Invalid adminStreamId (should end with -3):', adminStreamId);
+        }
+        if (!password || typeof password !== 'string') {
+            return { found: false, valid: false };
+        }
+
+        const partition = STREAM_CONFIG.ADMIN_STREAM.PASSWORD_CHALLENGE;
+        const maxAttempts = Math.max(1, 1 + Math.max(0, retries));
+
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            let rawContent = null;
+            try {
+                const resend = await this.client.resend(
+                    { streamId: adminStreamId, partition },
+                    { last: 1 }
+                );
+
+                const iterator = resend[Symbol.asyncIterator]();
+                let iteratorDone = false;
+
+                while (!iteratorDone) {
+                    let message;
+                    try {
+                        const result = await iterator.next();
+                        iteratorDone = result.done;
+                        if (iteratorDone) break;
+                        message = result.value;
+                    } catch (iterError) {
+                        Logger.warn('verifyPasswordChallenge iteration error:', iterError.message);
+                        continue;
+                    }
+                    rawContent = message?.content ?? message;
+                }
+            } catch (error) {
+                Logger.warn('verifyPasswordChallenge resend error:', error.message);
+                // Treat infra error like "not found" for retry purposes.
+                rawContent = null;
+            }
+
+            if (rawContent == null) {
+                if (attempt < maxAttempts - 1) {
+                    Logger.debug(`verifyPasswordChallenge: no entry yet (attempt ${attempt + 1}/${maxAttempts}), retrying in ${retryDelayMs}ms`);
+                    await new Promise(r => setTimeout(r, retryDelayMs));
+                    continue;
+                }
+                Logger.debug('verifyPasswordChallenge: no challenge published on -3/P2', {
+                    adminStreamId: String(adminStreamId).slice(-30),
+                    attempts: maxAttempts
+                });
+                return { found: false, valid: false };
+            }
+
+            // Challenge is always published encrypted, so resend returns a string.
+            // If we get an object, the publisher published in clear — treat as
+            // malformed and reject (cannot prove password knowledge).
+            if (typeof rawContent !== 'string') {
+                Logger.warn('verifyPasswordChallenge: challenge entry was not encrypted; treating as invalid');
+                return { found: true, valid: false };
+            }
+
+            let decoded = null;
+            try {
+                decoded = await cryptoManager.decryptJSON(rawContent, password);
+            } catch (decryptError) {
+                return { found: true, valid: false };
+            }
+
+            const ok = !!decoded
+                && typeof decoded === 'object'
+                && decoded.type === 'PASSWORD_CHALLENGE'
+                && decoded.magic === PASSWORD_CHALLENGE_MAGIC;
+
+            return { found: true, valid: !!ok };
+        }
+
+        return { found: false, valid: false };
     }
 
     /**
