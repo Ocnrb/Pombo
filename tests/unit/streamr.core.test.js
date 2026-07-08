@@ -1206,6 +1206,43 @@ describe('StreamrController Core', () => {
             const result = await streamrController.fetchOlderHistory('stream-1', 0, 1000);
             expect(result).toEqual({ messages: [], hasMore: false });
         });
+
+        it('should confirm exhaustion with a second pass and merge truncated results', async () => {
+            // First pass: silently truncated (storage WS drop) — only 1 message
+            const truncated = [
+                createMockMessage({ id: '1', text: 'a', sender: '0x1', timestamp: 100, type: 'text' })
+            ];
+            // Confirmation pass on a fresh connection: full range — 3 messages
+            const full = [
+                createMockMessage({ id: '1', text: 'a', sender: '0x1', timestamp: 100, type: 'text' }),
+                createMockMessage({ id: '2', text: 'b', sender: '0x1', timestamp: 200, type: 'text' }),
+                createMockMessage({ id: '3', text: 'c', sender: '0x1', timestamp: 300, type: 'text' })
+            ];
+            mockClient.resend
+                .mockResolvedValueOnce(createMockAsyncIterator(truncated))
+                .mockResolvedValueOnce(createMockAsyncIterator(full));
+
+            const result = await streamrController.fetchOlderHistory('stream-1', 0, 9999, 10);
+
+            // Both passes ran (exhaustion was claimed by the first)
+            expect(mockClient.resend).toHaveBeenCalledTimes(2);
+            // Union of both passes, deduped by id
+            expect(result.messages).toHaveLength(3);
+            expect(result.messages.map(m => m.id)).toEqual(['1', '2', '3']);
+        });
+
+        it('should not run a confirmation pass when hasMore is already true', async () => {
+            const msgs = [];
+            for (let i = 0; i < 5; i++) {
+                msgs.push(createMockMessage({ id: `${i}`, text: 'x', sender: '0x1', timestamp: i * 100, type: 'text' }));
+            }
+            mockClient.resend.mockResolvedValue(createMockAsyncIterator(msgs));
+
+            const result = await streamrController.fetchOlderHistory('stream-1', 0, 9999, 3);
+
+            expect(result.hasMore).toBe(true);
+            expect(mockClient.resend).toHaveBeenCalledTimes(1);
+        });
     });
 
     // ==================== subscribeWithHistory() ====================

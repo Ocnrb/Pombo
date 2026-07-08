@@ -26,7 +26,8 @@ vi.mock('../../src/js/streamr.js', () => ({
         subscribeToDualStream: vi.fn().mockResolvedValue(undefined),
         resendAdminState: vi.fn().mockResolvedValue(null),
         publishControl: vi.fn().mockResolvedValue(undefined),
-        fetchOlderHistory: vi.fn().mockResolvedValue({ messages: [] })
+        fetchOlderHistory: vi.fn().mockResolvedValue({ messages: [] }),
+        fetchHistoryAsync: vi.fn().mockResolvedValue(undefined)
     },
     STREAM_CONFIG: { 
         partitions: 1,
@@ -733,9 +734,20 @@ describe('SubscriptionManager', () => {
         });
     });
 
+    // Stub for streamrController.fetchHistoryAsync — invokes the per-message
+    // handler with each provided message (mirrors the real {last:N} resend).
+    function stubFetchHistoryAsync(messages = []) {
+        streamrController.fetchHistoryAsync = vi.fn().mockImplementation(
+            async (_streamId, _partition, _count, handler) => {
+                for (const m of messages) await handler(m);
+            }
+        );
+        return streamrController.fetchHistoryAsync;
+    }
+
     describe('pollBackgroundChannels()', () => {
         beforeEach(() => {
-            streamrController.fetchOlderHistory = vi.fn().mockResolvedValue({ messages: [] });
+            stubFetchHistoryAsync();
         });
 
         it('should skip if already polling', async () => {
@@ -744,7 +756,7 @@ describe('SubscriptionManager', () => {
             
             await subscriptionManager.pollBackgroundChannels();
             
-            expect(streamrController.fetchOlderHistory).not.toHaveBeenCalled();
+            expect(streamrController.fetchHistoryAsync).not.toHaveBeenCalled();
         });
 
         it('should skip active channel', async () => {
@@ -758,7 +770,7 @@ describe('SubscriptionManager', () => {
             await subscriptionManager.pollBackgroundChannels();
             
             // Should only poll stream2
-            const calls = streamrController.fetchOlderHistory.mock.calls;
+            const calls = streamrController.fetchHistoryAsync.mock.calls;
             const polledIds = calls.map(c => c[0]);
             expect(polledIds).not.toContain('stream1');
         });
@@ -786,7 +798,7 @@ describe('SubscriptionManager', () => {
             await subscriptionManager.pollBackgroundChannels();
             
             // POLL_BATCH_SIZE is 3 by default
-            expect(streamrController.fetchOlderHistory.mock.calls.length).toBeLessThanOrEqual(3);
+            expect(streamrController.fetchHistoryAsync.mock.calls.length).toBeLessThanOrEqual(3);
             
             vi.useFakeTimers();
         });
@@ -810,7 +822,7 @@ describe('SubscriptionManager', () => {
             
             await subscriptionManager.pollBackgroundChannels();
             
-            expect(streamrController.fetchOlderHistory).not.toHaveBeenCalled();
+            expect(streamrController.fetchHistoryAsync).not.toHaveBeenCalled();
         });
 
         it('should skip when no background channels', async () => {
@@ -818,13 +830,13 @@ describe('SubscriptionManager', () => {
             
             await subscriptionManager.pollBackgroundChannels();
             
-            expect(streamrController.fetchOlderHistory).not.toHaveBeenCalled();
+            expect(streamrController.fetchHistoryAsync).not.toHaveBeenCalled();
         });
     });
 
     describe('checkChannelActivity()', () => {
         beforeEach(() => {
-            streamrController.fetchOlderHistory = vi.fn().mockResolvedValue({ messages: [] });
+            stubFetchHistoryAsync();
         });
 
         it('should fetch recent history for channel', async () => {
@@ -833,18 +845,16 @@ describe('SubscriptionManager', () => {
             
             await subscriptionManager.checkChannelActivity(channel);
             
-            expect(streamrController.fetchOlderHistory).toHaveBeenCalled();
-            expect(streamrController.fetchOlderHistory.mock.calls[0][0]).toBe('stream1');
+            expect(streamrController.fetchHistoryAsync).toHaveBeenCalled();
+            expect(streamrController.fetchHistoryAsync.mock.calls[0][0]).toBe('stream1');
         });
 
         it('should count new messages since last check', async () => {
             const now = Date.now();
-            streamrController.fetchOlderHistory.mockResolvedValue({
-                messages: [
-                    { id: 'm1', text: 'hello', sender: '0x1', timestamp: now - 500 },
-                    { id: 'm2', text: 'world', sender: '0x2', timestamp: now - 100 }
-                ]
-            });
+            stubFetchHistoryAsync([
+                { id: 'm1', text: 'hello', sender: '0x1', timestamp: now - 500 },
+                { id: 'm2', text: 'world', sender: '0x2', timestamp: now - 100 }
+            ]);
             subscriptionManager.channelActivity.set('stream1', { lastMessageTime: now - 1000, unreadCount: 0, lastChecked: 0 });
             
             await subscriptionManager.checkChannelActivity({ messageStreamId: 'stream1' });
@@ -855,12 +865,10 @@ describe('SubscriptionManager', () => {
 
         it('should update lastMessageTime to latest', async () => {
             const now = Date.now();
-            streamrController.fetchOlderHistory.mockResolvedValue({
-                messages: [
-                    { id: 'm1', text: 'hello', sender: '0x1', timestamp: now - 500 },
-                    { id: 'm2', text: 'world', sender: '0x2', timestamp: now - 100 }
-                ]
-            });
+            stubFetchHistoryAsync([
+                { id: 'm1', text: 'hello', sender: '0x1', timestamp: now - 500 },
+                { id: 'm2', text: 'world', sender: '0x2', timestamp: now - 100 }
+            ]);
             subscriptionManager.channelActivity.set('stream1', { lastMessageTime: now - 1000, unreadCount: 0, lastChecked: 0 });
             
             await subscriptionManager.checkChannelActivity({ messageStreamId: 'stream1' });
@@ -873,9 +881,7 @@ describe('SubscriptionManager', () => {
             const handler = vi.fn();
             subscriptionManager.activityHandlers = [handler];
             const now = Date.now();
-            streamrController.fetchOlderHistory.mockResolvedValue({
-                messages: [{ id: 'm1', text: 'hello', sender: '0x1', timestamp: now }]
-            });
+            stubFetchHistoryAsync([{ id: 'm1', text: 'hello', sender: '0x1', timestamp: now }]);
             subscriptionManager.channelActivity.set('stream1', { lastMessageTime: now - 1000, unreadCount: 0, lastChecked: 0 });
             
             await subscriptionManager.checkChannelActivity({ messageStreamId: 'stream1' });
@@ -885,13 +891,11 @@ describe('SubscriptionManager', () => {
 
         it('should push the newest previewable message into channelLatestMessageManager', async () => {
             const now = Date.now();
-            streamrController.fetchOlderHistory.mockResolvedValue({
-                messages: [
-                    { id: 'm1', type: 'text', text: 'older', senderId: '0x1', senderName: 'Alice', timestamp: now - 500 },
-                    { id: 'm2', type: 'reaction', emoji: '🔥', senderId: '0x2', timestamp: now - 300 },
-                    { id: 'm3', type: 'text', text: 'newest', senderId: '0x3', senderName: 'Bob', timestamp: now - 100 }
-                ]
-            });
+            stubFetchHistoryAsync([
+                { id: 'm1', type: 'text', text: 'older', senderId: '0x1', senderName: 'Alice', timestamp: now - 500 },
+                { id: 'm2', type: 'reaction', emoji: '🔥', senderId: '0x2', timestamp: now - 300 },
+                { id: 'm3', type: 'text', text: 'newest', senderId: '0x3', senderName: 'Bob', timestamp: now - 100 }
+            ]);
             subscriptionManager.channelActivity.set('stream1', { lastMessageTime: now - 1000, unreadCount: 0, lastChecked: 0 });
 
             await subscriptionManager.checkChannelActivity({ messageStreamId: 'stream1' });
@@ -907,11 +911,9 @@ describe('SubscriptionManager', () => {
 
         it('should not update the preview when only reactions are newer', async () => {
             const now = Date.now();
-            streamrController.fetchOlderHistory.mockResolvedValue({
-                messages: [
-                    { id: 'm1', type: 'reaction', emoji: '🔥', senderId: '0x1', timestamp: now - 100 }
-                ]
-            });
+            stubFetchHistoryAsync([
+                { id: 'm1', type: 'reaction', emoji: '🔥', senderId: '0x1', timestamp: now - 100 }
+            ]);
             subscriptionManager.channelActivity.set('stream1', { lastMessageTime: now - 1000, unreadCount: 0, lastChecked: 0 });
 
             await subscriptionManager.checkChannelActivity({ messageStreamId: 'stream1' });
@@ -922,7 +924,7 @@ describe('SubscriptionManager', () => {
         it('should not notify if no new messages', async () => {
             const handler = vi.fn();
             subscriptionManager.activityHandlers = [handler];
-            streamrController.fetchOlderHistory.mockResolvedValue({ messages: [] });
+            stubFetchHistoryAsync([]);
             subscriptionManager.channelActivity.set('stream1', { lastMessageTime: Date.now(), unreadCount: 0, lastChecked: 0 });
             
             await subscriptionManager.checkChannelActivity({ messageStreamId: 'stream1' });
@@ -931,7 +933,7 @@ describe('SubscriptionManager', () => {
         });
 
         it('should update lastChecked even on error', async () => {
-            streamrController.fetchOlderHistory.mockRejectedValue(new Error('Fetch failed'));
+            streamrController.fetchHistoryAsync = vi.fn().mockRejectedValue(new Error('Fetch failed'));
             const beforeTime = Date.now();
             subscriptionManager.channelActivity.set('stream1', { lastMessageTime: 0, unreadCount: 0, lastChecked: 0 });
             
@@ -947,8 +949,8 @@ describe('SubscriptionManager', () => {
             
             await subscriptionManager.checkChannelActivity(channel);
             
-            // fetchOlderHistory(streamId, partition, timestamp, count, password)
-            expect(streamrController.fetchOlderHistory.mock.calls[0][4]).toBe('secret');
+            // fetchHistoryAsync(streamId, partition, count, handler, password, ...)
+            expect(streamrController.fetchHistoryAsync.mock.calls[0][4]).toBe('secret');
         });
 
         it('should handle streamId fallback', async () => {
@@ -957,13 +959,13 @@ describe('SubscriptionManager', () => {
             
             await subscriptionManager.checkChannelActivity(channel);
             
-            expect(streamrController.fetchOlderHistory.mock.calls[0][0]).toBe('legacy-stream');
+            expect(streamrController.fetchHistoryAsync.mock.calls[0][0]).toBe('legacy-stream');
         });
     });
 
     describe('forcePollChannel()', () => {
         beforeEach(() => {
-            streamrController.fetchOlderHistory = vi.fn().mockResolvedValue({ messages: [] });
+            stubFetchHistoryAsync();
         });
 
         it('should poll specified channel', async () => {
@@ -972,7 +974,7 @@ describe('SubscriptionManager', () => {
             
             await subscriptionManager.forcePollChannel('stream1');
             
-            expect(streamrController.fetchOlderHistory).toHaveBeenCalled();
+            expect(streamrController.fetchHistoryAsync).toHaveBeenCalled();
         });
 
         it('should skip if channel not found', async () => {

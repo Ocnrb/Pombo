@@ -43,6 +43,8 @@ vi.mock('../../src/js/streamr.js', () => ({
         subscribeToDualStream: vi.fn().mockResolvedValue(undefined),
         resendAdminState: vi.fn().mockResolvedValue(null),
         publishAdminState: vi.fn().mockResolvedValue(undefined),
+        publishPasswordChallenge: vi.fn().mockResolvedValue(undefined),
+        verifyPasswordChallenge: vi.fn().mockResolvedValue({ found: true, valid: true }),
         setDMPublishKey: vi.fn().mockResolvedValue(undefined),
         checkPermissions: vi.fn().mockResolvedValue({ canSubscribe: true, canPublish: true, isOwner: false })
     },

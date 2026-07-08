@@ -79,12 +79,24 @@ vi.mock('../../src/js/dmCrypto.js', () => ({
     }
 }));
 
+vi.mock('../../src/js/secureStorage.js', () => {
+    let stored = [];
+    return {
+        secureStorage: {
+            getPendingInvites: vi.fn(() => stored),
+            setPendingInvites: vi.fn(async (invites) => { stored = invites; }),
+            __setStored: (v) => { stored = v; }
+        }
+    };
+});
+
 import { notificationManager } from '../../src/js/notifications.js';
 import { streamrController } from '../../src/js/streamr.js';
 import { authManager } from '../../src/js/auth.js';
 import { channelManager } from '../../src/js/channels.js';
 import { uiController } from '../../src/js/ui.js';
 import { dmCrypto } from '../../src/js/dmCrypto.js';
+import { secureStorage } from '../../src/js/secureStorage.js';
 
 describe('NotificationManager', () => {
     beforeEach(() => {
@@ -95,6 +107,9 @@ describe('NotificationManager', () => {
 
         // Clear localStorage
         localStorage.clear();
+
+        // Reset mocked secure storage backing store
+        secureStorage.__setStored([]);
 
         vi.clearAllMocks();
         authManager.getAddress.mockReturnValue('0xAbC1230000000000000000000000000000004567');
@@ -273,14 +288,16 @@ describe('NotificationManager', () => {
             expect(notificationManager.pendingInvites.get('inv_42')).toEqual(invite);
         });
 
-        it('should save pending invites to localStorage', () => {
+        it('should save pending invites to encrypted secure storage', () => {
             const invite = { inviteId: 'inv_42', from: '0xpeer', channel: { name: 'Room' } };
             notificationManager.handleChannelInvite(invite);
 
+            expect(secureStorage.setPendingInvites).toHaveBeenCalledWith(
+                expect.arrayContaining([expect.objectContaining({ inviteId: 'inv_42' })])
+            );
+            // Invites carry channel passwords — must never hit plain localStorage
             const address = '0xabc1230000000000000000000000000000004567';
-            const stored = JSON.parse(localStorage.getItem(`pombo_invites_${address}`));
-            expect(stored).toHaveLength(1);
-            expect(stored[0].inviteId).toBe('inv_42');
+            expect(localStorage.getItem(`pombo_invites_${address}`)).toBeNull();
         });
     });
 
@@ -354,7 +371,7 @@ describe('NotificationManager', () => {
 
     // ==================== loadPendingInvites() ====================
     describe('loadPendingInvites()', () => {
-        it('should load invites from localStorage', () => {
+        it('should migrate legacy plaintext invites from localStorage and delete the key', () => {
             const address = '0xabc1230000000000000000000000000000004567';
             const invites = [
                 { inviteId: 'inv_1', from: '0xpeer1' },
@@ -365,6 +382,29 @@ describe('NotificationManager', () => {
             notificationManager.loadPendingInvites();
 
             expect(notificationManager.pendingInvites.size).toBe(2);
+            // Legacy plaintext payload must be removed after migration
+            expect(localStorage.getItem(`pombo_invites_${address}`)).toBeNull();
+            // Migrated invites are re-persisted encrypted
+            expect(secureStorage.setPendingInvites).toHaveBeenCalled();
+        });
+
+        it('should load invites from secure storage', () => {
+            secureStorage.__setStored([
+                { inviteId: 'inv_1', from: '0xpeer1' },
+                { inviteId: 'inv_2', from: '0xpeer2' }
+            ]);
+
+            notificationManager.loadPendingInvites();
+
+            expect(notificationManager.pendingInvites.size).toBe(2);
+        });
+
+        it('should clear invites left over from a previous account', () => {
+            notificationManager.pendingInvites.set('stale', { inviteId: 'stale' });
+
+            notificationManager.loadPendingInvites();
+
+            expect(notificationManager.pendingInvites.has('stale')).toBe(false);
         });
 
         it('should handle missing data gracefully', () => {
@@ -372,7 +412,7 @@ describe('NotificationManager', () => {
             expect(notificationManager.pendingInvites.size).toBe(0);
         });
 
-        it('should handle corrupted data', () => {
+        it('should handle corrupted legacy data', () => {
             const address = '0xabc1230000000000000000000000000000004567';
             localStorage.setItem(`pombo_invites_${address}`, 'not valid json');
 
@@ -389,18 +429,19 @@ describe('NotificationManager', () => {
 
     // ==================== savePendingInvites() ====================
     describe('savePendingInvites()', () => {
-        it('should save invites to localStorage', () => {
+        it('should save invites via secure storage, never plaintext', () => {
             notificationManager.pendingInvites.set('inv_1', { inviteId: 'inv_1', from: '0x1' });
 
             notificationManager.savePendingInvites();
 
-            const address = '0xabc1230000000000000000000000000000004567';
-            const stored = JSON.parse(localStorage.getItem(`pombo_invites_${address}`));
-            expect(stored).toHaveLength(1);
-            expect(stored[0].inviteId).toBe('inv_1');
+            expect(secureStorage.setPendingInvites).toHaveBeenCalledWith(
+                expect.arrayContaining([expect.objectContaining({ inviteId: 'inv_1' })])
+            );
+            // No plaintext key written
+            expect(localStorage.length).toBe(0);
         });
 
-        it('should skip when no address', () => {
+        it('should not write plaintext even without address', () => {
             authManager.getAddress.mockReturnValue(null);
             notificationManager.pendingInvites.set('inv_1', { inviteId: 'inv_1' });
 

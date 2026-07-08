@@ -1670,6 +1670,19 @@ describe('DMManager', () => {
             await expect(dmManager.sendEdit(streamId, 'm-1', 'x'))
                 .rejects.toThrow('peer public key not available');
         });
+
+        it('should not mutate local state when publish fails', async () => {
+            streamrController.publishMessage.mockRejectedValueOnce(new Error('network down'));
+
+            await expect(dmManager.sendEdit(streamId, 'm-1', 'new text'))
+                .rejects.toThrow('network down');
+
+            // Publish-first: local state must be untouched on failure
+            const ch = channelManager.channels.get(streamId);
+            expect(ch.messages[0].text).toBe('hello');
+            expect(ch.messages[0]._edited).toBeUndefined();
+            expect(secureStorage.updateSentMessage).not.toHaveBeenCalled();
+        });
     });
 
     describe('sendDelete()', () => {
@@ -1721,6 +1734,18 @@ describe('DMManager', () => {
             dmCrypto.peerPublicKeys.clear();
             await expect(dmManager.sendDelete(streamId, 'm-1'))
                 .rejects.toThrow('peer public key not available');
+        });
+
+        it('should not remove the message locally when publish fails', async () => {
+            streamrController.publishMessage.mockRejectedValueOnce(new Error('network down'));
+
+            await expect(dmManager.sendDelete(streamId, 'm-1'))
+                .rejects.toThrow('network down');
+
+            // Publish-first: local state must be untouched on failure
+            const ch = channelManager.channels.get(streamId);
+            expect(ch.messages).toHaveLength(1);
+            expect(secureStorage.removeSentMessage).not.toHaveBeenCalled();
         });
     });
 

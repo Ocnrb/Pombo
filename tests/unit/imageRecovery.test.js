@@ -32,6 +32,7 @@ vi.mock('../../src/js/streamr.js', () => ({
         hasDeletePermission: vi.fn().mockResolvedValue(false),
         resend: vi.fn(),
         fetchOlderHistory: vi.fn().mockResolvedValue({ messages: [], hasMore: false }),
+        fetchOlderHistoryWindowed: vi.fn().mockResolvedValue({ messages: [], hasMore: false, windowStart: 0 }),
         checkPermissions: vi.fn().mockResolvedValue({ canSubscribe: true, canPublish: true, isOwner: false })
     },
     STREAM_CONFIG: {
@@ -96,12 +97,14 @@ vi.mock('../../src/js/dm.js', () => ({
 vi.mock('../../src/js/media.js', () => {
     const mediaController = {
         isStoredChunkedImageManifest: vi.fn((m) => m?.type === 'image_manifest'),
+        isStoredImageChunkMessage: vi.fn((m) => m?.type === 'image_chunk'),
         deletedImageIds: new Set(),
         pendingImageAssemblies: new Map(),
         getImage: vi.fn().mockReturnValue(null),
         recoverImage: vi.fn(),
         handleImageData: vi.fn(),
-        registerStoredImageManifest: vi.fn().mockResolvedValue(undefined)
+        registerStoredImageManifest: vi.fn().mockResolvedValue(undefined),
+        registerStoredImageChunk: vi.fn().mockResolvedValue(true)
     };
     return { mediaController, handleMediaMessage: vi.fn() };
 });
@@ -112,6 +115,7 @@ import { previewModeUI } from '../../src/js/ui/PreviewModeUI.js';
 import { secureStorage } from '../../src/js/secureStorage.js';
 import { Logger } from '../../src/js/logger.js';
 import { mediaController } from '../../src/js/media.js';
+import { streamrController } from '../../src/js/streamr.js';
 
 // ---------- Helpers ----------
 
@@ -271,6 +275,94 @@ describe('channelManager.recoverIncompleteImages', () => {
         // No pagination — the manifest was resolved by cache lookup
         expect(channelManager.loadMoreHistory).not.toHaveBeenCalled();
         expect(mediaController.recoverImage).toHaveBeenCalledWith(imageId);
+    });
+
+    it('recovers chunks via targeted window when pagination was silently truncated', async () => {
+        const imageId = 'img-truncated';
+        // Manifest WITH timestamp — anchor for the window query
+        const manifest = {
+            type: 'image_manifest',
+            imageId,
+            timestamp: 1700000000000,
+            verified: { valid: true }
+        };
+        channelManager.channels.set(streamId, {
+            streamId,
+            messages: [manifest],
+            hasMoreHistory: false, // pagination (falsely) exhausted
+            writeOnly: false,
+            type: 'public',
+            password: null
+        });
+        mediaController.pendingImageAssemblies.set(imageId,
+            makePending({ streamId, chunkCount: 2, chunks: 0 }));
+
+        // The targeted window resend DOES return the "missing" chunks
+        streamrController.fetchOlderHistoryWindowed.mockResolvedValue({
+            messages: [
+                { content: { type: 'image_chunk', imageId, chunkIndex: 0 }, publisherId: '0xme', timestamp: 1699999990000 },
+                { content: { type: 'image_chunk', imageId, chunkIndex: 1 }, publisherId: '0xme', timestamp: 1699999995000 }
+            ],
+            hasMore: false,
+            windowStart: 0
+        });
+        mediaController.registerStoredImageChunk.mockImplementation(async (_sid, chunk) => {
+            const pending = mediaController.pendingImageAssemblies.get(chunk.imageId);
+            pending.chunks.set(chunk.chunkIndex, { idx: chunk.chunkIndex });
+            return true;
+        });
+
+        const events = [];
+        const handler = (ev) => events.push(ev.detail);
+        window.addEventListener('pombo:imageRecoveryGaveUp', handler);
+
+        await channelManager.recoverIncompleteImages(streamId);
+
+        window.removeEventListener('pombo:imageRecoveryGaveUp', handler);
+
+        // Window recovery was attempted with the channel's stream + partition
+        expect(streamrController.fetchOlderHistoryWindowed).toHaveBeenCalled();
+        // Chunks completed the assembly → image nudged, NOT marked unavailable
+        expect(mediaController.recoverImage).toHaveBeenCalledWith(imageId);
+        expect(events.length).toBe(0);
+    });
+
+    it('marks unavailable only images the window recovery could not complete', async () => {
+        const imageId = 'img-really-gone';
+        const manifest = {
+            type: 'image_manifest',
+            imageId,
+            timestamp: 1700000000000,
+            verified: { valid: true }
+        };
+        channelManager.channels.set(streamId, {
+            streamId,
+            messages: [manifest],
+            hasMoreHistory: false,
+            writeOnly: false,
+            type: 'public',
+            password: null
+        });
+        mediaController.pendingImageAssemblies.set(imageId,
+            makePending({ streamId, chunkCount: 3, chunks: 1 }));
+
+        // Window resend returns nothing — chunks truly absent from storage
+        streamrController.fetchOlderHistoryWindowed.mockResolvedValue({
+            messages: [], hasMore: false, windowStart: 0
+        });
+
+        const events = [];
+        const handler = (ev) => events.push(ev.detail);
+        window.addEventListener('pombo:imageRecoveryGaveUp', handler);
+
+        await channelManager.recoverIncompleteImages(streamId);
+
+        window.removeEventListener('pombo:imageRecoveryGaveUp', handler);
+
+        // Retried the window (fresh connections) before giving up
+        expect(streamrController.fetchOlderHistoryWindowed.mock.calls.length).toBeGreaterThanOrEqual(2);
+        expect(events.length).toBeGreaterThanOrEqual(1);
+        expect(events[0].imageIds).toContain(imageId);
     });
 });
 

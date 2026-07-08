@@ -38,6 +38,8 @@ vi.mock('../../src/js/streamr.js', () => ({
         subscribeToDualStream: vi.fn().mockResolvedValue(undefined),
         resendAdminState: vi.fn().mockResolvedValue(null),
         publishAdminState: vi.fn().mockResolvedValue(undefined),
+        publishPasswordChallenge: vi.fn().mockResolvedValue(undefined),
+        verifyPasswordChallenge: vi.fn().mockResolvedValue({ found: true, valid: true }),
         checkPermissions: vi.fn().mockResolvedValue({ canSubscribe: true, canPublish: true, isOwner: false })
     },
     STREAM_CONFIG: {
@@ -1194,12 +1196,6 @@ describe('ChannelManager', () => {
         });
     });
 
-    describe('pendingMessages tracking', () => {
-        it('should have pendingMessages map', () => {
-            expect(channelManager.pendingMessages).toBeInstanceOf(Map);
-        });
-    });
-
     // ==================== leaveChannel() DM cleanup ====================
     describe('leaveChannel() DM cleanup', () => {
         it('should soft-leave DM channel by default (setDMLeftAt)', async () => {
@@ -2192,54 +2188,6 @@ describe('ChannelManager', () => {
             });
 
             expect(channel.members).toEqual(['0x1', '0x2', '0x3']);
-        });
-    });
-
-    // ==================== retryPendingMessage() ====================
-    describe('retryPendingMessage()', () => {
-        it('should retry and confirm a pending message', async () => {
-            const channel = {
-                messageStreamId: 'stream-1',
-                messages: [{ id: 'msg_pending', text: 'hi', pending: true }],
-                password: null
-            };
-            channelManager.channels.set('stream-1', channel);
-
-            const handler = vi.fn();
-            channelManager.onMessage(handler);
-
-            const originalPublish = channelManager.publishWithRetry.bind(channelManager);
-            channelManager.publishWithRetry = vi.fn().mockResolvedValue(undefined);
-
-            await channelManager.retryPendingMessage('stream-1', 'msg_pending');
-
-            expect(channel.messages[0].pending).toBe(false);
-            expect(handler).toHaveBeenCalledWith('message_confirmed', expect.objectContaining({
-                messageId: 'msg_pending'
-            }));
-
-            channelManager.publishWithRetry = originalPublish;
-        });
-
-        it('should do nothing for non-existent channel', async () => {
-            await channelManager.retryPendingMessage('nonexistent', 'msg1');
-            // Should not throw
-        });
-
-        it('should do nothing for non-pending message', async () => {
-            const channel = {
-                messageStreamId: 'stream-1',
-                messages: [{ id: 'msg1', text: 'hi', pending: false }],
-                password: null
-            };
-            channelManager.channels.set('stream-1', channel);
-
-            const handler = vi.fn();
-            channelManager.onMessage(handler);
-
-            await channelManager.retryPendingMessage('stream-1', 'msg1');
-
-            expect(handler).not.toHaveBeenCalled();
         });
     });
 
