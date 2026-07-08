@@ -353,7 +353,7 @@ class ExploreUI {
                 : '';
             // Defense-in-depth: sanitize user-provided content before escaping
             const description = ch.description 
-                ? `<p class="text-xs text-white/40 mt-1 line-clamp-2">${escapeHtml(sanitizeText(ch.description))}</p>` 
+                ? `<p class="text-base text-white/40 mt-1 line-clamp-2">${escapeHtml(sanitizeText(ch.description))}</p>` 
                 : '';
 
             // Latest message preview (sidebar/Explore share the same source).
@@ -399,7 +399,7 @@ class ExploreUI {
                         <div class="flex-1 min-w-0">
                             <div class="flex items-center gap-2 flex-wrap">
                                 ${readOnlyBadge}
-                                <h4 class="text-sm font-medium text-white/90 truncate">${escapeHtml(sanitizeText(ch.name || ch.displayName || 'Unknown'))}</h4>
+                                <h4 class="text-base font-large text-white/90 truncate">${escapeHtml(sanitizeText(ch.name || ch.displayName || 'Unknown'))}</h4>
                             </div>
                             ${description}
                             ${previewLine}
