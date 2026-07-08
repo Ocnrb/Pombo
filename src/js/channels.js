@@ -251,6 +251,9 @@ class ChannelManager {
                 type: ch.type,
                 createdAt: ch.createdAt,
                 createdBy: ch.createdBy,
+                // Local membership timestamp — drives per-channel latest-wins
+                // in cross-device sync (join vs leave tombstone comparison)
+                joinedAt: ch.joinedAt || ch.createdAt || null,
                 password: ch.password,
                 members: ch.members || [],
                 storageEnabled: ch.storageEnabled,
@@ -416,6 +419,7 @@ class ChannelManager {
                 name: name,
                 type: type,
                 createdAt: Date.now(),
+                joinedAt: Date.now(),
                 createdBy: realAddress,
                 password: password,
                 members: channelMembers,
@@ -445,6 +449,7 @@ class ChannelManager {
 
             // Add to channels map (keyed by messageStreamId)
             this.channels.set(channel.messageStreamId, channel);
+            await secureStorage.clearChannelLeftAt(channel.messageStreamId);
             await this.saveChannels();
             
             // Add to channel order (new channels go to top)
@@ -634,6 +639,7 @@ class ChannelManager {
                 name: channelName,
                 type: channelType,
                 createdAt: Date.now(),
+                joinedAt: Date.now(),
                 createdBy: createdBy,
                 password: password,
                 members: members,
@@ -670,7 +676,7 @@ class ChannelManager {
             // Channel is already in memory, so subscription can start immediately
             // Skip network subscription for write-only channels (no subscribe permission)
             const tasks = [
-                this.saveChannels(),
+                secureStorage.clearChannelLeftAt(messageStreamId).then(() => this.saveChannels()),
                 secureStorage.addToChannelOrder(messageStreamId)
             ];
             if (permissions.canSubscribe) {
@@ -776,6 +782,7 @@ class ChannelManager {
                 name: channelName,
                 type: channelType,
                 createdAt: Date.now(),
+                joinedAt: Date.now(),
                 createdBy: previewInfo.createdBy || null,
                 password: null, // Preview doesn't support password channels yet
                 members: [],
@@ -819,7 +826,7 @@ class ChannelManager {
 
             // Save to storage (parallel)
             await Promise.all([
-                this.saveChannels(),
+                secureStorage.clearChannelLeftAt(messageStreamId).then(() => this.saveChannels()),
                 secureStorage.addToChannelOrder(messageStreamId)
             ]);
 
@@ -4101,6 +4108,9 @@ class ChannelManager {
             this.onlineUsers.delete(messageStreamId);
             
             this.channels.delete(messageStreamId);
+            // Tombstone so sync propagates the leave without deleting
+            // channels re-joined later (per-channel latest-wins)
+            await secureStorage.setChannelLeftAt(messageStreamId, Date.now());
             await this.saveChannels();
             
             // Remove from channel order
@@ -4180,6 +4190,8 @@ class ChannelManager {
             
             // Remove from local storage
             this.channels.delete(streamId);
+            // Tombstone so sync doesn't resurrect the deleted channel
+            await secureStorage.setChannelLeftAt(streamId, Date.now());
             await this.saveChannels();
             
             // Clear transient async/send state for this channel

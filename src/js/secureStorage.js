@@ -157,6 +157,7 @@ class SecureStorage {
             lastOpenedChannel: null,
             blockedPeers: [],
             dmLeftAt: {},
+            channelsLeftAt: {},
             pendingInvites: [],
             version: 2
         };
@@ -513,6 +514,42 @@ class SecureStorage {
         if (!this.isUnlocked) return;
         this.cache.channels = channels;
         await this.saveToStorage();
+    }
+
+    /**
+     * Get all channel leave tombstones { messageStreamId: leftTs }.
+     * Used by sync merge so a leave propagates across devices without
+     * deleting channels re-joined later (per-channel latest-wins).
+     */
+    getChannelsLeftAt() {
+        if (!this.isUnlocked) return {};
+        return this.cache.channelsLeftAt || {};
+    }
+
+    /**
+     * Record a channel leave tombstone.
+     * @param {string} messageStreamId
+     * @param {number} timestamp
+     */
+    async setChannelLeftAt(messageStreamId, timestamp) {
+        if (!this.isUnlocked) return;
+        if (!this.cache.channelsLeftAt) {
+            this.cache.channelsLeftAt = {};
+        }
+        this.cache.channelsLeftAt[messageStreamId] = timestamp;
+        await this.saveToStorage();
+    }
+
+    /**
+     * Clear a channel leave tombstone (on re-join).
+     * @param {string} messageStreamId
+     */
+    async clearChannelLeftAt(messageStreamId) {
+        if (!this.isUnlocked) return;
+        if (this.cache.channelsLeftAt?.[messageStreamId]) {
+            delete this.cache.channelsLeftAt[messageStreamId];
+            await this.saveToStorage();
+        }
     }
 
     /**
@@ -1550,6 +1587,7 @@ class SecureStorage {
             sentMessages,
             sentReactions: this.cache.sentReactions || {},
             channels: this.cache.channels || [],
+            channelsLeftAt: this.cache.channelsLeftAt || {},
             blockedPeers: this.cache.blockedPeers || [],
             dmLeftAt: this.cache.dmLeftAt || {},
             trustedContacts: this.cache.trustedContacts || {},
@@ -1593,6 +1631,10 @@ class SecureStorage {
                 changes.channelsUpdated = true;
                 changes.hasChanges = true;
             }
+        }
+        if (data.channelsLeftAt !== undefined && !isEqual(this.cache.channelsLeftAt, data.channelsLeftAt)) {
+            this.cache.channelsLeftAt = data.channelsLeftAt;
+            changes.hasChanges = true;
         }
         if (data.blockedPeers !== undefined && !isEqual(this.cache.blockedPeers, data.blockedPeers)) {
             this.cache.blockedPeers = data.blockedPeers;
@@ -1857,6 +1899,7 @@ class SecureStorage {
             sentMessages: this.cache.sentMessages || {},
             sentReactions: this.cache.sentReactions || {},
             channels: this.cache.channels || [],
+            channelsLeftAt: this.cache.channelsLeftAt || {},
             blockedPeers: this.cache.blockedPeers || [],
             dmLeftAt: this.cache.dmLeftAt || {},
             trustedContacts: this.cache.trustedContacts || {},
