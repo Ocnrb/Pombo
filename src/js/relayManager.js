@@ -216,6 +216,10 @@ class RelayManager {
             });
             
             this.enabled = true;
+            // Start the token-refresh timer for this new subscription — init()
+            // only starts it when a subscription already existed, so without
+            // this call fresh subscriptions never refreshed until reload.
+            this.startReRegistrationTimer();
             Logger.info('Subscribed successfully');
             
             return this.pushSubscription;

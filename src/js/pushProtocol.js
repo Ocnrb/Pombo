@@ -5,6 +5,7 @@
 // ==================================================
 
 import { CONFIG } from './config.js';
+import { Logger } from './logger.js';
 
 // ethers is exposed globally by vendor.bundle.js
 const getEthers = () => {
@@ -123,7 +124,7 @@ export async function calculatePoW(tag, difficulty = CONFIG.push.powDifficulty) 
         pow = eth.keccak256(eth.toUtf8Bytes(data));
         
         if (pow.slice(2).startsWith(target)) {
-            console.log(`[PoW] Main thread found in ${Date.now() - startTime}ms, nonce: ${nonce}, epoch: ${epoch}`);
+            Logger.debug(`[PoW] Main thread found in ${Date.now() - startTime}ms, nonce: ${nonce}, epoch: ${epoch}`);
             return { pow, nonce, epoch };
         }
         

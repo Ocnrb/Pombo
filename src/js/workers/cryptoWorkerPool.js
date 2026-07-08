@@ -10,8 +10,13 @@
  */
 
 import { Logger } from '../logger.js';
+import { CONFIG } from '../config.js';
 
 class CryptoWorkerPool {
+    // Per-task safety-net timeout. PBKDF2 with 310k iterations can take a few
+    // seconds on slow devices, so keep this generous.
+    static TASK_TIMEOUT_MS = 30000;
+
     constructor() {
         // Pool configuration
         this.poolSize = Math.min(navigator.hardwareConcurrency || 2, 4);
@@ -119,11 +124,13 @@ class CryptoWorkerPool {
     
     /**
      * Get next worker (round-robin)
+     * @returns {{ worker: Worker, index: number }}
      */
     getNextWorker() {
-        const worker = this.workers[this.currentWorker];
+        const index = this.currentWorker;
+        const worker = this.workers[index];
         this.currentWorker = (this.currentWorker + 1) % this.poolSize;
-        return worker;
+        return { worker, index };
     }
     
     /**
@@ -145,9 +152,18 @@ class CryptoWorkerPool {
         
         return new Promise((resolve, reject) => {
             const id = ++this.taskId;
-            this.pendingTasks.set(id, { resolve, reject, type });
+            const { worker, index } = this.getNextWorker();
             
-            const worker = this.getNextWorker();
+            // Safety-net timeout: without it, a crashed/hung worker leaves the
+            // promise pending forever, silently blocking callers on the auth
+            // critical path (deriveStorageKey/verifyMessage).
+            const timer = setTimeout(() => {
+                if (this.pendingTasks.delete(id)) {
+                    reject(new Error(`Crypto worker task ${type} timed out after ${CryptoWorkerPool.TASK_TIMEOUT_MS}ms`));
+                }
+            }, CryptoWorkerPool.TASK_TIMEOUT_MS);
+            
+            this.pendingTasks.set(id, { resolve, reject, type, workerIndex: index, timer });
             worker.postMessage({ id, type, payload });
         });
     }
@@ -162,6 +178,7 @@ class CryptoWorkerPool {
         if (!task) return;
         
         this.pendingTasks.delete(id);
+        clearTimeout(task.timer);
         
         if (success) {
             task.resolve(result);
@@ -172,12 +189,18 @@ class CryptoWorkerPool {
     
     /**
      * Handle worker error
+     * Rejects all tasks pending on the failed worker so callers fail fast
+     * instead of hanging on a promise that will never settle.
      */
     handleError(error, workerIndex) {
         Logger.error(`Worker ${workerIndex} error:`, error);
         
-        // Reject all pending tasks for this worker
-        // In practice, errors are rare and we could restart the worker
+        for (const [id, task] of this.pendingTasks) {
+            if (task.workerIndex !== workerIndex) continue;
+            this.pendingTasks.delete(id);
+            clearTimeout(task.timer);
+            task.reject(new Error(`Crypto worker ${workerIndex} failed during ${task.type}: ${error?.message || 'worker error'}`));
+        }
     }
     
     // ==================== FALLBACK IMPLEMENTATIONS ====================
@@ -234,7 +257,7 @@ class CryptoWorkerPool {
         return keccak256(toUtf8Bytes(data));
     }
     
-    async deriveKeyFallback({ password, salt, iterations = 310000 }) {
+    async deriveKeyFallback({ password, salt, iterations = CONFIG.crypto.pbkdf2Iterations }) {
         const encoder = new TextEncoder();
         const keyMaterial = await crypto.subtle.importKey(
             'raw', encoder.encode(password), 'PBKDF2', false, ['deriveKey']
@@ -288,6 +311,11 @@ class CryptoWorkerPool {
     terminate() {
         this.workers.forEach(w => w.terminate());
         this.workers = [];
+        // Reject (not just clear) pending tasks so callers don't hang forever
+        for (const [id, task] of this.pendingTasks) {
+            clearTimeout(task.timer);
+            task.reject(new Error(`Crypto worker pool terminated during ${task.type}`));
+        }
         this.pendingTasks.clear();
         this.initialized = false;
         this.initializing = false;

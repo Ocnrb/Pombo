@@ -10,6 +10,11 @@
 
 // Import only the functions we need from ethers (tree-shaking friendly)
 import { keccak256, toUtf8Bytes, verifyMessage as ethersVerifyMessage } from 'ethers';
+import { CONFIG } from '../config.js';
+
+// Single source of truth for PBKDF2 iterations — hardcoding this in multiple
+// places risks silent decrypt failures if the values ever drift apart.
+const PBKDF2_ITERATIONS = CONFIG.crypto.pbkdf2Iterations;
 
 // Text encoder/decoder for string operations
 const textEncoder = new TextEncoder();
@@ -109,7 +114,7 @@ async function verifySignature({ messageHash, signature, expectedSender }) {
  * Derive encryption key from password using PBKDF2
  * This is very CPU-intensive: 310k iterations
  */
-async function deriveKey({ password, salt, iterations = 310000 }) {
+async function deriveKey({ password, salt, iterations = PBKDF2_ITERATIONS }) {
     // Convert salt from array back to Uint8Array
     const saltArray = new Uint8Array(salt);
     
@@ -154,7 +159,7 @@ async function encrypt({ plaintext, password, salt, iv }) {
     const ivArray = new Uint8Array(iv);
     
     // Derive key from password
-    const key = await deriveKey({ password, salt, iterations: 310000 });
+    const key = await deriveKey({ password, salt, iterations: PBKDF2_ITERATIONS });
     
     // Encrypt the plaintext
     const plaintextBuffer = textEncoder.encode(plaintext);
@@ -193,7 +198,7 @@ async function decrypt({ encryptedBase64, password }) {
     const ciphertext = combined.slice(28);
     
     // Derive key from password
-    const key = await deriveKey({ password, salt: Array.from(salt), iterations: 310000 });
+    const key = await deriveKey({ password, salt: Array.from(salt), iterations: PBKDF2_ITERATIONS });
     
     // Decrypt the ciphertext
     const plaintextBuffer = await crypto.subtle.decrypt(

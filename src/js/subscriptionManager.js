@@ -891,17 +891,23 @@ class SubscriptionManager {
         };
 
         try {
-            // Fetch recent messages from MESSAGE stream (lightweight - no subscription needed)
-            // Note: Only messageStream has storage, so we can only query it
-            const result = await streamrController.fetchOlderHistory(
+            // Fetch only the N most recent stored messages via a `{ last: N }`
+            // resend (fetchHistoryAsync). The previous implementation called
+            // fetchOlderHistory(..., Date.now(), ...) which resends from
+            // timestamp 0 — iterating and decrypting the ENTIRE stored history
+            // of every background channel on every poll tick (O(history)).
+            // Note: only messageStream has storage, so we can only query it.
+            const messages = [];
+            await streamrController.fetchHistoryAsync(
                 messageStreamId,
                 STREAM_CONFIG.MESSAGE_STREAM.MESSAGES, // partition 0
-                Date.now(),
                 this.config.ACTIVITY_CHECK_MESSAGES,
-                password
+                (msg) => { messages.push(msg); },
+                password,
+                null,   // onHistoryComplete
+                false,  // allowOverridesInContentPartition
+                { quiet: true }
             );
-
-            const messages = result.messages || [];
 
             // Count only content messages for unread/background activity.
             // P0 may include reactions, so filter them out explicitly.

@@ -12,6 +12,7 @@ import { escapeHtml } from './ui/utils.js';
 import { sanitizeText } from './ui/sanitizer.js';
 import { CONFIG } from './config.js';
 import { dmCrypto } from './dmCrypto.js';
+import { secureStorage } from './secureStorage.js';
 
 class NotificationManager {
     constructor() {
@@ -283,21 +284,48 @@ class NotificationManager {
     }
 
     /**
-     * Load pending invites from localStorage
+     * Load pending invites from encrypted secure storage.
+     * Invites carry channel passwords, so they are stored encrypted at rest.
+     * Migrates (and deletes) the legacy plaintext localStorage payload once.
      */
     loadPendingInvites() {
         try {
             const address = authManager.getAddress();
             if (!address) return;
-            
-            const key = CONFIG.storageKeys.invites(address);
-            const saved = localStorage.getItem(key);
-            if (saved) {
-                const invites = JSON.parse(saved);
-                for (const invite of invites) {
+
+            // Clear any invites left over from a previously connected account
+            // (otherwise account A's invites get re-saved under account B's key)
+            this.pendingInvites.clear();
+
+            // One-time migration: legacy plaintext localStorage payload
+            let migrated = false;
+            try {
+                const legacyKey = CONFIG.storageKeys.invites(address);
+                const legacy = localStorage.getItem(legacyKey);
+                if (legacy) {
+                    for (const invite of JSON.parse(legacy)) {
+                        this.pendingInvites.set(invite.inviteId, invite);
+                    }
+                    localStorage.removeItem(legacyKey);
+                    migrated = true;
+                    Logger.info('Migrated legacy plaintext invites to secure storage');
+                }
+            } catch (e) {
+                Logger.warn('Failed to migrate legacy invites:', e.message);
+            }
+
+            for (const invite of secureStorage.getPendingInvites()) {
+                if (!this.pendingInvites.has(invite.inviteId)) {
                     this.pendingInvites.set(invite.inviteId, invite);
                 }
-                Logger.info('Loaded pending invites:', invites.length);
+            }
+
+            if (migrated) {
+                this.savePendingInvites();
+            }
+
+            if (this.pendingInvites.size > 0) {
+                Logger.info('Loaded pending invites:', this.pendingInvites.size);
             }
         } catch (error) {
             Logger.error('Failed to load pending invites:', error);
@@ -305,16 +333,16 @@ class NotificationManager {
     }
 
     /**
-     * Save pending invites to localStorage
+     * Save pending invites to encrypted secure storage.
+     * Never writes plaintext: if storage is locked (e.g. guest without
+     * unlock), invites stay in memory only.
      */
     savePendingInvites() {
         try {
-            const address = authManager.getAddress();
-            if (!address) return;
-            
-            const key = CONFIG.storageKeys.invites(address);
             const invites = Array.from(this.pendingInvites.values());
-            localStorage.setItem(key, JSON.stringify(invites));
+            secureStorage.setPendingInvites(invites).catch((error) => {
+                Logger.error('Failed to save pending invites:', error);
+            });
         } catch (error) {
             Logger.error('Failed to save pending invites:', error);
         }

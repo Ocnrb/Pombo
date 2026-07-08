@@ -157,6 +157,7 @@ class SecureStorage {
             lastOpenedChannel: null,
             blockedPeers: [],
             dmLeftAt: {},
+            pendingInvites: [],
             version: 2
         };
     }
@@ -651,6 +652,28 @@ class SecureStorage {
         await this.saveToStorage();
     }
 
+    // ==================== Pending Channel Invites ====================
+
+    /**
+     * Get pending channel invites (encrypted at rest — invites carry channel
+     * passwords, so they must never live in plain localStorage)
+     * @returns {Array} - Array of invite objects
+     */
+    getPendingInvites() {
+        if (!this.isUnlocked) return [];
+        return this.cache.pendingInvites || [];
+    }
+
+    /**
+     * Persist pending channel invites
+     * @param {Array} invites - Array of invite objects
+     */
+    async setPendingInvites(invites) {
+        if (!this.isUnlocked) return;
+        this.cache.pendingInvites = Array.isArray(invites) ? invites : [];
+        await this.saveToStorage();
+    }
+
     // ==================== Channel Last Access ====================
 
     /**
@@ -679,9 +702,12 @@ class SecureStorage {
                 this.cache.channelLastAccess = {};
             }
             this.cache.channelLastAccess[streamId] = emergencyAccess;
-            // Clean up emergency key (async, fire-and-forget)
+            // Clean up emergency key (async, fire-and-forget — must not produce
+            // an unhandled rejection if storage is locked mid-flight, e.g. logout)
             localStorage.removeItem(emergencyKey);
-            this.saveToStorage();
+            this.saveToStorage().catch((e) => {
+                Logger.debug('channelLastAccess sync save failed (non-fatal):', e?.message || e);
+            });
         }
         
         return latestAccess > 0 ? latestAccess : null;

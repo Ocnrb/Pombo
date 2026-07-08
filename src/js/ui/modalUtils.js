@@ -86,6 +86,15 @@ export function createModalFromTemplate(templateId, data = {}) {
 export function closeModal(modal, callback = null) {
     if (!modal) return;
     
+    // Run any cleanup registered by setupModalCloseHandlers (e.g. the
+    // document-level Escape listener) regardless of which path closed the
+    // modal — previously the keydown listener leaked unless Escape itself
+    // was the close trigger.
+    if (typeof modal._modalCleanup === 'function') {
+        try { modal._modalCleanup(); } catch (_) { /* cleanup must not block close */ }
+        modal._modalCleanup = null;
+    }
+    
     // Optional fade out animation
     modal.classList.add('opacity-0');
     modal.style.transition = 'opacity 150ms ease-out';
@@ -124,15 +133,26 @@ export function setupModalCloseHandlers(modal, onClose, options = {}) {
         });
     }
     
-    // Escape key
+    // Escape key — the listener is removed via modal._modalCleanup when the
+    // modal closes by ANY path (button, backdrop, Escape or programmatic).
     if (closeOnEscape) {
         const escHandler = (e) => {
-            if (e.key === 'Escape') {
+            // Self-heal: if the modal was removed without going through
+            // closeModal, drop the listener instead of acting on a dead node.
+            if (!modal.isConnected) {
                 document.removeEventListener('keydown', escHandler);
+                return;
+            }
+            if (e.key === 'Escape') {
                 closeModal(modal, onClose);
             }
         };
         document.addEventListener('keydown', escHandler);
+        const prevCleanup = modal._modalCleanup;
+        modal._modalCleanup = () => {
+            if (typeof prevCleanup === 'function') prevCleanup();
+            document.removeEventListener('keydown', escHandler);
+        };
     }
 }
 

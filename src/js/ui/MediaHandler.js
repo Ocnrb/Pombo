@@ -6,6 +6,14 @@
 import { Logger } from '../logger.js';
 import { isValidMediaUrl } from './utils.js';
 
+// mediaCache eviction thresholds. Re-renders re-register every visible image
+// with a fresh id, so without eviction the Map accumulates orphaned base64
+// blobs for the whole session (memory leak). When the size crosses MAX we
+// sweep out entries whose id is no longer referenced by any element in the
+// DOM (i.e. superseded by a re-render or belonging to a left channel).
+const MEDIA_CACHE_MAX = 300;
+const MEDIA_CACHE_TARGET = 200;
+
 class MediaHandler {
     constructor() {
         // Media cache for safe lightbox handling (prevents XSS via onclick)
@@ -39,7 +47,30 @@ class MediaHandler {
         }
         const mediaId = `media_${++this.mediaIdCounter}`;
         this.mediaCache.set(mediaId, { url, type });
+        this._evictStaleMedia();
         return mediaId;
+    }
+
+    /**
+     * Evict cache entries no longer referenced in the DOM once the cache
+     * grows past MEDIA_CACHE_MAX. Oldest-inserted first; entries still
+     * referenced by a rendered element are always kept, so an open channel
+     * with many visible images is never broken.
+     * @private
+     */
+    _evictStaleMedia() {
+        if (this.mediaCache.size <= MEDIA_CACHE_MAX) return;
+        for (const mediaId of this.mediaCache.keys()) {
+            if (this.mediaCache.size <= MEDIA_CACHE_TARGET) break;
+            try {
+                if (!document.querySelector(`[data-media-id="${CSS.escape(mediaId)}"]`)) {
+                    this.mediaCache.delete(mediaId);
+                }
+            } catch (_) {
+                // DOM unavailable (tests/teardown) — stop sweeping
+                break;
+            }
+        }
     }
 
     /**

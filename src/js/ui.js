@@ -1774,7 +1774,7 @@ class UIController {
                                         </svg>
                                         <span>Image unavailable</span>
                                     </div>
-                                    <button type="button" class="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white/80 text-xs" data-retry-image-id="${imageId}">Retry</button>
+                                    <button type="button" class="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white/80 text-xs" data-retry-image-id="${_escapeAttr(imageId)}">Retry</button>
                                 </div>
                             `;
                             const btn = el.querySelector(`[data-retry-image-id="${CSS.escape(imageId)}"]`);
@@ -1856,9 +1856,11 @@ class UIController {
             if (container) {
                 const isSeeding = mediaController.isSeeding(fileId);
                 
-                // Defense-in-depth: sanitize network-provided metadata
-                const safeFileName = sanitizeText(metadata.fileName);
-                const safeFileType = sanitizeText(metadata.fileType);
+                // Defense-in-depth: sanitize + HTML/attribute-escape network-provided
+                // metadata (sanitizeText alone does not neutralize quotes, allowing
+                // attribute injection when interpolated into download/type attrs)
+                const safeFileName = _escapeAttr(sanitizeText(metadata.fileName));
+                const safeFileType = _escapeAttr(sanitizeText(metadata.fileType));
                 
                 if (metadata.fileType.startsWith('video/')) {
                     // Check if video format is playable in browser

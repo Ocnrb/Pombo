@@ -2240,13 +2240,14 @@ class SettingsUI {
             list.innerHTML = info.nodes.map(addr => {
                 const isOfficial = STREAMR_OFFICIAL_NODE && String(addr).toLowerCase() === STREAMR_OFFICIAL_NODE.toLowerCase();
                 const label = isOfficial ? 'Streamr Official' : 'Custom';
+                const safeAddr = _escapeHtml(String(addr));
                 return `
                     <div class="flex items-center justify-between gap-3 px-3 py-2 bg-white/[0.03] border border-white/5 rounded-xl">
                         <div class="min-w-0 flex-1">
                             <div class="text-xs text-white/50">${label}</div>
-                            <code class="text-xs text-white/70 font-mono truncate block">${addr}</code>
+                            <code class="text-xs text-white/70 font-mono truncate block">${safeAddr}</code>
                         </div>
-                        <button data-storage-remove="${addr}" class="inbox-storage-remove-btn shrink-0 text-white/40 hover:text-red-400/90 px-2 py-1 rounded transition" title="Remove">
+                        <button data-storage-remove="${_escapeAttr(String(addr))}" class="inbox-storage-remove-btn shrink-0 text-white/40 hover:text-red-400/90 px-2 py-1 rounded transition" title="Remove">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3"/></svg>
                         </button>
                     </div>

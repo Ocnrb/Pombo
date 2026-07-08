@@ -326,42 +326,44 @@ class StreamrController {
         const ephemeralStreamId = `${baseStreamPath}-2`;
         const adminStreamId = `${baseStreamPath}-3`;
 
+        // Build metadata for The Graph indexing (abbreviated keys per MIGRATION_PLAN)
+        // Native channels are always hidden; others default to hidden unless specified
+        // NOTE: declared outside the try block because the recovery path in the
+        // catch handler also needs readOnly/ephemeralMetadata (scoping bug fix)
+        const exposure = options.exposure || 'hidden';
+        const readOnly = options.readOnly || false;
+        const metadata = JSON.stringify({
+            a: 'pombo',           // app
+            v: '1',               // version
+            n: exposure === 'hidden' ? null : channelName,  // name
+            t: type,              // type: public|private|native
+            e: exposure,          // exposure: visible|hidden
+            r: readOnly,          // readOnly
+            // Only include metadata if visible
+            d: exposure === 'visible' ? (options.description || '') : undefined,  // description
+            l: exposure === 'visible' ? (options.language || 'en') : undefined,   // language
+            c: exposure === 'visible' ? (options.category || 'general') : undefined,  // category
+            ts: Date.now()        // createdAt
+        });
+
+        const ephemeralMetadata = JSON.stringify({
+            a: 'pombo',           // app
+            v: '1',               // version
+            ln: messageStreamId   // linkedTo (parentStream)
+        });
+
+        const adminMetadata = JSON.stringify({
+            a: 'pombo',           // app
+            v: '1',               // version
+            ln: messageStreamId,  // linkedTo (parentStream)
+            k: 'admin'            // kind
+        });
+
         try {
             Logger.debug('Creating triple-stream channel:', { messageStreamId, ephemeralStreamId, adminStreamId });
             Logger.debug('   Owner address:', ownerAddress);
             Logger.debug('   Original name:', channelName);
             Logger.debug('   Type:', type);
-
-            // Build metadata for The Graph indexing (abbreviated keys per MIGRATION_PLAN)
-            // Native channels are always hidden; others default to hidden unless specified
-            const exposure = options.exposure || 'hidden';
-            const readOnly = options.readOnly || false;
-            const metadata = JSON.stringify({
-                a: 'pombo',           // app
-                v: '1',               // version
-                n: exposure === 'hidden' ? null : channelName,  // name
-                t: type,              // type: public|private|native
-                e: exposure,          // exposure: visible|hidden
-                r: readOnly,          // readOnly
-                // Only include metadata if visible
-                d: exposure === 'visible' ? (options.description || '') : undefined,  // description
-                l: exposure === 'visible' ? (options.language || 'en') : undefined,   // language
-                c: exposure === 'visible' ? (options.category || 'general') : undefined,  // category
-                ts: Date.now()        // createdAt
-            });
-
-            const ephemeralMetadata = JSON.stringify({
-                a: 'pombo',           // app
-                v: '1',               // version
-                ln: messageStreamId   // linkedTo (parentStream)
-            });
-
-            const adminMetadata = JSON.stringify({
-                a: 'pombo',           // app
-                v: '1',               // version
-                ln: messageStreamId,  // linkedTo (parentStream)
-                k: 'admin'            // kind
-            });
 
             // === SERIAL CREATION: Streams must be created one after another ===
             // Note: Parallel creation causes REPLACEMENT_UNDERPRICED error due to nonce conflicts
@@ -3147,9 +3149,13 @@ class StreamrController {
             return false;
         };
         
-        try {
-            Logger.debug(`Fetching ${count} older messages before ${new Date(beforeTimestamp).toISOString()}`);
-            
+        // Single range-resend pass. Extracted so exhaustion claims can be
+        // CONFIRMED with a second pass on a fresh storage connection: range
+        // resends can be silently truncated (WS drop mid-iteration → short
+        // response, no error). Without confirmation, one truncated response
+        // falsely latches `hasMore: false` and kills scroll-up pagination
+        // for the rest of the session.
+        const collectRange = async () => {
             // Streamr SDK resend with range: from epoch to beforeTimestamp (inclusive).
             // We use an INCLUSIVE upper bound and rely on caller-side dedup by msg.id to drop
             // the boundary message we already loaded. Using `beforeTimestamp - 1` here would
@@ -3165,7 +3171,7 @@ class StreamrController {
             );
             
             // Collect all messages in range; ordering is enforced explicitly after the loop.
-            const allMessages = [];
+            const collected = [];
             
             // Manual iteration to catch decrypt errors per-message
             const iterator = resend[Symbol.asyncIterator]();
@@ -3242,7 +3248,7 @@ class StreamrController {
                         continue;
                     }
                     
-                    allMessages.push(content);
+                    collected.push(content);
                 } catch (e) {
                     Logger.warn('Error processing historical message:', e.message);
                 }
@@ -3250,6 +3256,44 @@ class StreamrController {
             
             if (decryptErrors > 0) {
                 Logger.debug(`fetchOlderHistory: skipped ${decryptErrors} messages (decrypt error)`);
+            }
+            
+            return collected;
+        };
+
+        // Dedup key for merging two passes — either pass may have holes.
+        const msgKey = (m) => m?.id
+            || (m?.type === 'image_chunk' && m?.imageId != null ? `chunk:${m.imageId}:${m.chunkIndex}` : null)
+            || `${m?.type}:${m?._timestamp || m?.timestamp || ''}:${m?.senderId || ''}:${m?.messageId || m?.targetId || ''}:${m?.emoji || ''}:${m?.action || ''}`;
+        
+        try {
+            Logger.debug(`Fetching ${count} older messages before ${new Date(beforeTimestamp).toISOString()}`);
+            
+            let allMessages = await collectRange();
+            
+            // Exhaustion claimed (range returned ≤ count messages)? Confirm on a
+            // fresh connection before trusting it — one truncated response would
+            // permanently disable pagination for the session. At the TRUE end of
+            // history the confirmation pass is cheap (returns the same few
+            // messages). Both passes are unioned since each may have holes.
+            if (allMessages.length <= count && !signal?.aborted) {
+                try {
+                    const confirm = await collectRange();
+                    if (confirm.length !== allMessages.length) {
+                        Logger.info(
+                            `fetchOlderHistory: confirmation pass returned ${confirm.length} vs ${allMessages.length} messages — first response was truncated (storage WS drop)`
+                        );
+                    }
+                    const byKey = new Map();
+                    for (const m of allMessages) byKey.set(msgKey(m), m);
+                    for (const m of confirm) {
+                        const k = msgKey(m);
+                        if (!byKey.has(k)) byKey.set(k, m);
+                    }
+                    allMessages = Array.from(byKey.values());
+                } catch (confirmError) {
+                    Logger.debug('fetchOlderHistory: confirmation pass failed (keeping first result):', confirmError.message);
+                }
             }
             
             // Sort by timestamp ASC explicitly. The Streamr SDK resend iterator order
@@ -3292,9 +3336,10 @@ class StreamrController {
      * @param {number} beforeTimestamp - Fetch messages before this timestamp (ms)
      * @param {number} windowMs - Time window size in ms (e.g. 7 days)
      * @param {AbortSignal} [signal] - Optional abort signal
+     * @param {string} [password] - Channel password for payload decryption (optional)
      * @returns {Promise<{messages: Array, hasMore: boolean, windowStart: number}>}
      */
-    async fetchOlderHistoryWindowed(streamId, partition, beforeTimestamp, windowMs, signal = null) {
+    async fetchOlderHistoryWindowed(streamId, partition, beforeTimestamp, windowMs, signal = null, password = null) {
         if (!this.client) {
             throw new Error('Client not initialized');
         }
@@ -3338,7 +3383,18 @@ class StreamrController {
                 }
 
                 try {
-                    const content = message.content || message;
+                    let content = message.content || message;
+
+                    // Decrypt payload for password-encrypted channels. DM inbox
+                    // callers pass no password (E2E envelopes decrypt downstream).
+                    if (password && typeof content === 'string') {
+                        try {
+                            content = await cryptoManager.decryptJSON(content, password);
+                        } catch (decryptError) {
+                            continue; // Skip messages we can't decrypt
+                        }
+                    }
+
                     const publisherId = typeof message.getPublisherId === 'function'
                         ? message.getPublisherId()
                         : message.publisherId;
@@ -3468,7 +3524,14 @@ class StreamrController {
      * @param {Function} handler - Message handler
      * @param {string} password - Password for decryption (optional)
      */
-    async fetchHistoryAsync(streamId, partition, count, handler, password = null, onHistoryComplete = null, allowOverridesInContentPartition = false) {
+    async fetchHistoryAsync(streamId, partition, count, handler, password = null, onHistoryComplete = null, allowOverridesInContentPartition = false, opts = {}) {
+        // opts.quiet: suppress info-level logs (used by high-frequency callers
+        // like the background activity poller)
+        const quiet = !!opts.quiet;
+        // Declared outside the try block so the finally handler can report the
+        // real count to onHistoryComplete (scoping bug fix: it previously read
+        // an out-of-scope variable via typeof and always reported 0)
+        let rawCount = 0;
         try {
             Logger.debug(`Fetching ${count} historical messages for partition ${partition}${password ? ' (encrypted)' : ''}...`);
             
@@ -3483,7 +3546,6 @@ class StreamrController {
             // Consume the async iterator and process each message
             let msgCount = 0;
             let skippedCount = 0;
-            let rawCount = 0;
             
             // Ephemeral message types that should NEVER be loaded from history
             const EPHEMERAL_TYPES = ['presence', 'typing'];
@@ -3582,12 +3644,23 @@ class StreamrController {
                     }
 
                     // Inject senderId from StreamMessage (same as realtime handler)
+                    // Also surface broker timestamps (same as fetchOlderHistory) so
+                    // consumers can rely on `timestamp`/`_timestamp` fallbacks.
                     if (typeof content === 'object') {
                         const publisherId = typeof message.getPublisherId === 'function'
                             ? message.getPublisherId()
                             : message.publisherId;
+                        const messageTimestamp = typeof message.getTimestamp === 'function'
+                            ? message.getTimestamp()
+                            : message.timestamp;
                         if (publisherId) {
                             content.senderId = publisherId;
+                        }
+                        if (!content.timestamp && messageTimestamp) {
+                            content.timestamp = messageTimestamp;
+                        }
+                        if (messageTimestamp) {
+                            content._timestamp = messageTimestamp;
                         }
                     }
                     
@@ -3634,12 +3707,18 @@ class StreamrController {
             }
             
             if (decryptErrors > 0) {
-                Logger.info(`History: skipped ${decryptErrors} messages (old GroupKey encryption)`);
+                // NOTE: must keep Logger as `this` — a detached method reference
+                // ((quiet ? Logger.debug : Logger.info)(...)) loses the binding
+                // and throws "Cannot read properties of undefined (currentLevel)"
+                if (quiet) Logger.debug(`History: skipped ${decryptErrors} messages (old GroupKey encryption)`);
+                else Logger.info(`History: skipped ${decryptErrors} messages (old GroupKey encryption)`);
             }
             
             if (msgCount > 0) {
-                Logger.info(`Loaded ${msgCount} historical messages for partition ${partition}` + 
-                    (skippedCount > 0 ? ` (skipped ${skippedCount} ephemeral)` : ''));
+                const summary = `Loaded ${msgCount} historical messages for partition ${partition}` + 
+                    (skippedCount > 0 ? ` (skipped ${skippedCount} ephemeral)` : '');
+                if (quiet) Logger.debug(summary);
+                else Logger.info(summary);
             } else {
                 Logger.debug(`No historical messages for partition ${partition}` +
                     (skippedCount > 0 ? ` (skipped ${skippedCount} ephemeral)` : '') +
@@ -3656,7 +3735,7 @@ class StreamrController {
             // `hasMoreHistory=false` deterministically.
             if (onHistoryComplete) {
                 try {
-                    await onHistoryComplete({ loaded: typeof rawCount === 'number' ? rawCount : 0, requested: count });
+                    await onHistoryComplete({ loaded: rawCount, requested: count });
                 } catch (e) { Logger.warn('onHistoryComplete error:', e); }
             }
         }

@@ -8,6 +8,7 @@ import { STREAM_CONFIG } from '../streamr.js';
 import { mediaController } from '../media.js';
 import { secureStorage } from '../secureStorage.js';
 import { CONFIG } from '../config.js';
+import { escapeAttr } from './utils.js';
 
 class PreviewModeUI {
     constructor() {
@@ -1363,7 +1364,7 @@ class PreviewModeUI {
                             </svg>
                             <span>Image unavailable</span>
                         </div>
-                        <button type="button" class="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white/80 text-xs" data-retry-image-id="${imageId}">Retry</button>
+                        <button type="button" class="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white/80 text-xs" data-retry-image-id="${escapeAttr(imageId)}">Retry</button>
                     </div>
                 `;
                 const btn = el.querySelector(`[data-retry-image-id="${CSS.escape(imageId)}"]`);

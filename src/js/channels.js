@@ -53,10 +53,14 @@ class ChannelManager {
         this.ONLINE_TIMEOUT = CONFIG.channels.onlineTimeoutMs;
         this.onlineUsersHandlers = [];
         
-        // Pending messages (failed to send, will retry)
-        this.pendingMessages = new Map(); // streamId -> [messages]
         this.MAX_RETRIES = CONFIG.channels.maxRetries;
         this.RETRY_DELAY = CONFIG.channels.retryDelayMs;
+        
+        // Serialization of ADMIN_STATE publishes per channel. Two concurrent
+        // publishes (e.g. rapid ban + pin) would otherwise read the same
+        // adminRev and publish colliding revs — latest-wins would then
+        // silently drop one of the operations.
+        this._adminPublishChain = new Map(); // messageStreamId -> Promise
         
         // OPTIMIZATION: Batch message verification for history loading
         // Messages arriving within BATCH_WINDOW_MS are batched and verified in parallel
@@ -285,7 +289,6 @@ class ChannelManager {
         this.setCurrentChannel(null);
         this.onlineUsers.clear();
         this.processingMessages.clear();
-        this.pendingMessages.clear();
         this.sendingMessages.clear();
         this.pendingReactions.clear();
         // Cancel all pending batch verifications
@@ -1370,6 +1373,24 @@ class ChannelManager {
      * @returns {Promise<{rev: number, state: Object}>} The published snapshot
      */
     async publishAdminState(messageStreamId, update = {}) {
+        // Serialize publishes per channel: concurrent calls (e.g. rapid ban +
+        // pin) would read the same adminRev and publish colliding revs.
+        const prev = this._adminPublishChain.get(messageStreamId) || Promise.resolve();
+        const run = prev
+            .catch(() => { /* previous failure must not block the queue */ })
+            .then(() => this._publishAdminStateInner(messageStreamId, update));
+        this._adminPublishChain.set(messageStreamId, run);
+        try {
+            return await run;
+        } finally {
+            if (this._adminPublishChain.get(messageStreamId) === run) {
+                this._adminPublishChain.delete(messageStreamId);
+            }
+        }
+    }
+
+    /** @private Actual ADMIN_STATE publish — always called serialized per channel. */
+    async _publishAdminStateInner(messageStreamId, update = {}) {
         const channel = this.channels.get(messageStreamId);
         if (!channel) {
             throw new Error('Channel not found');
@@ -2299,6 +2320,14 @@ class ChannelManager {
         for (const id of applied) {
             channel._pendingOverrides.delete(id);
         }
+
+        // Prune deleted messages in place (preserving array identity) so the
+        // final state matches handleOverrideMessage's splice path. Callers no
+        // longer need to remember a `filter(m => !m._deleted)` afterwards —
+        // forgetting it used to leave deleted messages visible.
+        for (let i = channel.messages.length - 1; i >= 0; i--) {
+            if (channel.messages[i]._deleted) channel.messages.splice(i, 1);
+        }
     }
 
     /**
@@ -3192,33 +3221,6 @@ class ChannelManager {
     }
     
     /**
-     * Retry sending a pending message
-     * @param {string} streamId - Stream ID
-     * @param {string} messageId - Message ID to retry
-     */
-    async retryPendingMessage(streamId, messageId) {
-        const channel = this.channels.get(streamId);
-        if (!channel) return;
-        
-        const message = channel.messages.find(m => m.id === messageId && m.pending);
-        if (!message) {
-            Logger.warn('Message not found or not pending:', messageId);
-            return;
-        }
-        
-        try {
-            await this.publishWithRetry(streamId, message, channel.password);
-            message.pending = false;
-            // NOTE: No saveChannels() - messages are not persisted
-            this.notifyHandlers('message_confirmed', { streamId, messageId: message.id });
-            Logger.debug('Pending message sent:', messageId);
-        } catch (error) {
-            Logger.error('Failed to retry message:', error);
-            this.notifyHandlers('message_failed', { streamId, messageId, error: error.message });
-        }
-    }
-    
-    /**
      * Sort messages by timestamp
      * @param {Object} channel - Channel object
      */
@@ -3254,6 +3256,9 @@ class ChannelManager {
                 return { loaded: 0, hasMore: false };
             }
             channel.loadingHistory = true;
+            // Abort any still-running fetch before replacing the controller —
+            // otherwise the orphaned fetch keeps consuming its iterator.
+            this.historyAbortController?.abort();
             this.historyAbortController = new AbortController();
             const signal = this.historyAbortController.signal;
             const generationAtStart = this.switchGeneration;
@@ -3292,7 +3297,9 @@ class ChannelManager {
         
         const generationAtStart = this.switchGeneration;
         
-        // Create AbortController for this fetch - will be aborted on channel switch
+        // Create AbortController for this fetch - will be aborted on channel switch.
+        // Abort any previous in-flight fetch first so it doesn't keep running orphaned.
+        this.historyAbortController?.abort();
         this.historyAbortController = new AbortController();
         const signal = this.historyAbortController.signal;
         
@@ -3649,10 +3656,23 @@ class ChannelManager {
                 return;
             }
             if (!channel.hasMoreHistory) {
+                // Pagination exhausted — but range resends can be silently
+                // truncated, so "not in stored history" may be false. Try a
+                // targeted window re-query around each manifest before giving up.
                 Logger.warn(
-                    `recoverIncompleteImages: ${incompleteIds.length} manifest(s) still incomplete (chunks not in stored history) for ${messageStreamId.slice(-20)}`
+                    `recoverIncompleteImages: ${incompleteIds.length} manifest(s) incomplete after pagination for ${messageStreamId.slice(-20)} — trying targeted window recovery`
                 );
-                this._markChannelImagesUnavailable(messageStreamId, incompleteIds);
+                const recoveredIds = await this._recoverChunksViaWindow(
+                    messageStreamId, channel, incompleteIds, generationAtStart
+                );
+                if (this.switchGeneration !== generationAtStart) return;
+                const stillIncomplete = incompleteIds.filter(id => !recoveredIds.includes(id));
+                if (stillIncomplete.length > 0) {
+                    Logger.warn(
+                        `recoverIncompleteImages: ${stillIncomplete.length} manifest(s) still incomplete (chunks truly not in stored history) for ${messageStreamId.slice(-20)}`
+                    );
+                    this._markChannelImagesUnavailable(messageStreamId, stillIncomplete);
+                }
                 return;
             }
 
@@ -3689,9 +3709,16 @@ class ChannelManager {
                 stagnantRounds++;
                 if (stagnantRounds >= stagnantLimit) {
                     Logger.warn(
-                        `recoverIncompleteImages: ${incompleteIds.length} manifest(s) stagnant after ${stagnantRounds} rounds — giving up for ${messageStreamId.slice(-20)}`
+                        `recoverIncompleteImages: ${incompleteIds.length} manifest(s) stagnant after ${stagnantRounds} rounds — trying targeted window recovery for ${messageStreamId.slice(-20)}`
                     );
-                    this._markChannelImagesUnavailable(messageStreamId, incompleteIds);
+                    const recoveredIds = await this._recoverChunksViaWindow(
+                        messageStreamId, channel, incompleteIds, generationAtStart
+                    );
+                    if (this.switchGeneration !== generationAtStart) return;
+                    const stillIncomplete = incompleteIds.filter(id => !recoveredIds.includes(id));
+                    if (stillIncomplete.length > 0) {
+                        this._markChannelImagesUnavailable(messageStreamId, stillIncomplete);
+                    }
                     return;
                 }
             }
@@ -3706,6 +3733,115 @@ class ChannelManager {
         Logger.debug(
             `recoverIncompleteImages: hit max rounds (${maxRounds}) for ${messageStreamId.slice(-20)}`
         );
+    }
+
+    /**
+     * Targeted window recovery for incomplete chunked images.
+     *
+     * Storage range resends can be SILENTLY TRUNCATED (WS drop mid-iteration
+     * yields a short response with no error — confirmed against a storage
+     * node holding 422 messages while the client received ~106). When that
+     * happens, pagination concludes `hasMore: false` and the chunks look
+     * "missing" even though they are stored.
+     *
+     * Since chunks are always published moments before their manifest, we
+     * re-query a small window around each incomplete manifest's timestamp,
+     * with a few fresh attempts (each opens a new storage connection).
+     *
+     * @param {string} messageStreamId
+     * @param {Object} channel
+     * @param {string[]} incompleteIds
+     * @param {number} generationAtStart - Switch fence captured by the caller
+     * @returns {Promise<string[]>} imageIds recovered (assembled or chunk-complete)
+     * @private
+     */
+    async _recoverChunksViaWindow(messageStreamId, channel, incompleteIds, generationAtStart) {
+        const windowMs = CONFIG.media.recoveryWindowMs;
+        const forwardMarginMs = CONFIG.media.recoveryWindowForwardMarginMs;
+        const maxAttempts = CONFIG.media.recoveryWindowAttempts;
+        const recovered = [];
+        const incompleteSet = new Set(incompleteIds);
+
+        const chunkDiag = (imageId) => {
+            const pending = mediaController.pendingImageAssemblies?.get?.(imageId);
+            const total = pending?.manifest?.chunkCount;
+            if (!pending || !Number.isInteger(total)) return `${imageId}: no pending assembly`;
+            const missing = [];
+            for (let i = 0; i < total; i++) {
+                if (!pending.chunks.has(i)) missing.push(i);
+            }
+            return `${imageId}: ${pending.chunks.size}/${total} chunks, missing [${missing.join(',')}]`;
+        };
+
+        for (const imageId of incompleteIds) {
+            if (this.switchGeneration !== generationAtStart) return recovered;
+
+            const manifestMsg = channel.messages.find(
+                (m) => m?.imageId === imageId && mediaController.isStoredChunkedImageManifest?.(m)
+            );
+            const anchorTs = manifestMsg?.timestamp
+                || mediaController.pendingImageAssemblies?.get?.(imageId)?.manifest?.timestamp;
+            if (!anchorTs) {
+                Logger.debug(`window recovery: no manifest timestamp for ${imageId} — skipping`);
+                continue;
+            }
+
+            Logger.info(`window recovery: ${chunkDiag(imageId)} — querying ±window around manifest`);
+
+            let done = false;
+            for (let attempt = 1; attempt <= maxAttempts && !done; attempt++) {
+                if (this.switchGeneration !== generationAtStart) return recovered;
+                try {
+                    const result = await streamrController.fetchOlderHistoryWindowed(
+                        messageStreamId,
+                        STREAM_CONFIG.MESSAGE_STREAM.MESSAGES,
+                        anchorTs + forwardMarginMs,
+                        windowMs + forwardMarginMs,
+                        this.historyAbortController?.signal ?? null,
+                        channel.password || null
+                    );
+
+                    for (const item of result.messages || []) {
+                        const content = item?.content;
+                        if (
+                            content
+                            && mediaController.isStoredImageChunkMessage?.(content)
+                            && incompleteSet.has(content.imageId)
+                        ) {
+                            await mediaController.registerStoredImageChunk(messageStreamId, content);
+                        }
+                    }
+
+                    // Re-register the manifest to trigger assembly of buffered chunks
+                    if (manifestMsg && typeof mediaController.registerStoredImageManifest === 'function') {
+                        await mediaController.registerStoredImageManifest(messageStreamId, manifestMsg);
+                    }
+                } catch (err) {
+                    Logger.debug(`window recovery attempt ${attempt} failed for ${imageId}:`, err?.message || err);
+                }
+
+                if (mediaController.getImage?.(imageId)) {
+                    mediaController.recoverImage?.(imageId);
+                    recovered.push(imageId);
+                    done = true;
+                } else {
+                    const pending = mediaController.pendingImageAssemblies?.get?.(imageId);
+                    if (pending?.manifest && pending.chunks.size >= pending.manifest.chunkCount) {
+                        mediaController.recoverImage?.(imageId);
+                        recovered.push(imageId);
+                        done = true;
+                    }
+                }
+
+                if (!done && attempt < maxAttempts) {
+                    Logger.debug(`window recovery: retrying ${imageId} (attempt ${attempt + 1}/${maxAttempts}) — ${chunkDiag(imageId)}`);
+                }
+            }
+
+            Logger.info(`window recovery: ${done ? 'RECOVERED' : 'still incomplete'} — ${chunkDiag(imageId)}`);
+        }
+
+        return recovered;
     }
 
     /**
@@ -3875,7 +4011,10 @@ class ChannelManager {
             
             // Persist locally for write-only channels
             if (channel.writeOnly) {
-                await secureStorage.addSentReaction(streamId, messageId, emoji, reaction.user, action);
+                // Use own address — the reaction object has no `user` field
+                // (the old `reaction.user` was always undefined, breaking
+                // reaction rendering after reload on write-only channels)
+                await secureStorage.addSentReaction(streamId, messageId, emoji, authManager.getAddress(), action);
             }
             
             Logger.debug('Reaction', action, ':', emoji, 'to message:', messageId);
@@ -3964,12 +4103,15 @@ class ChannelManager {
             this.setCurrentChannel(null);
             this.onlineUsers.clear();
             this.processingMessages.clear();
-            this.pendingMessages.clear();
+            this.sendingMessages.clear();
+            this.pendingReactions.clear();
+            this.pendingOverrides.clear();
             // Cancel all pending batch verifications
             for (const [, batch] of this.pendingVerifications) {
                 if (batch.timer) clearTimeout(batch.timer);
             }
             this.pendingVerifications.clear();
+            this.pendingFlushPromises.clear();
             // Don't clear from localStorage - keep for reconnect
             Logger.debug('Left all channels');
         } catch (error) {

@@ -942,17 +942,10 @@ class DMManager {
 
         const override = { type: 'edit', targetId, text: newText.trim(), timestamp: Date.now() };
 
-        // Apply locally first
-        original.text = override.text;
-        original._edited = true;
-        original._editedAt = override.timestamp;
-
-        // Update local persisted copy
-        secureStorage.updateSentMessage(peerInboxStreamId, targetId, { text: override.text, _edited: true, _editedAt: override.timestamp });
-
-        channelManager.notifyHandlers('message_edited', { streamId: peerInboxStreamId, targetId });
-
-        // E2E encrypt and publish to peer's inbox
+        // E2E encrypt and publish to peer's inbox FIRST — only mutate/persist
+        // local state after the publish succeeds. Applying (and persisting)
+        // before publishing meant a failed publish left local state
+        // permanently divergent from what the peer sees, with no rollback.
         const privateKey = authManager.wallet?.privateKey;
         const peerAddress = channel.peerAddress;
         if (!privateKey || !peerAddress) throw new Error('Cannot send DM edit: missing credentials');
@@ -964,6 +957,14 @@ class DMManager {
         const payload = await dmCrypto.encrypt(override, aesKey);
         await streamrController.setDMPublishKey(peerInboxStreamId);
         await streamrController.publishMessage(peerInboxStreamId, payload, null);
+
+        // Publish succeeded — apply locally and persist
+        original.text = override.text;
+        original._edited = true;
+        original._editedAt = override.timestamp;
+        secureStorage.updateSentMessage(peerInboxStreamId, targetId, { text: override.text, _edited: true, _editedAt: override.timestamp });
+
+        channelManager.notifyHandlers('message_edited', { streamId: peerInboxStreamId, targetId });
 
         Logger.debug('DM: Edit sent for message:', targetId);
     }
@@ -987,16 +988,8 @@ class DMManager {
 
         const override = { type: 'delete', targetId, timestamp: Date.now() };
 
-        // Apply locally — remove from messages array
-        const idx = channel.messages.indexOf(original);
-        if (idx >= 0) channel.messages.splice(idx, 1);
-
-        // Remove from local persisted copy
-        secureStorage.removeSentMessage(peerInboxStreamId, targetId);
-
-        channelManager.notifyHandlers('message_deleted', { streamId: peerInboxStreamId, targetId });
-
-        // E2E encrypt and publish to peer's inbox
+        // E2E encrypt and publish to peer's inbox FIRST — only mutate/persist
+        // local state after the publish succeeds (see sendEdit rationale).
         const privateKey = authManager.wallet?.privateKey;
         const peerAddress = channel.peerAddress;
         if (!privateKey || !peerAddress) throw new Error('Cannot send DM delete: missing credentials');
@@ -1008,6 +1001,13 @@ class DMManager {
         const payload = await dmCrypto.encrypt(override, aesKey);
         await streamrController.setDMPublishKey(peerInboxStreamId);
         await streamrController.publishMessage(peerInboxStreamId, payload, null);
+
+        // Publish succeeded — remove locally and from persisted copy
+        const idx = channel.messages.indexOf(original);
+        if (idx >= 0) channel.messages.splice(idx, 1);
+        secureStorage.removeSentMessage(peerInboxStreamId, targetId);
+
+        channelManager.notifyHandlers('message_deleted', { streamId: peerInboxStreamId, targetId });
 
         Logger.debug('DM: Delete sent for message:', targetId);
     }

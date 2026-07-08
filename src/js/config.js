@@ -172,6 +172,14 @@ export const CONFIG = {
         // channels.recoverIncompleteImages / preview equivalent.
         recoveryMaxRounds: 20,                            // Max pagination rounds per recovery pass
         recoveryStagnantRoundsLimit: 3,                   // Abort after N consecutive rounds with no progress
+        // Targeted window recovery: storage range resends can be silently
+        // truncated (WS drop mid-iteration → short response, no error).
+        // Before giving up, re-query a small window around each incomplete
+        // manifest's timestamp — chunks are always published moments before
+        // their manifest. Each attempt opens a fresh storage connection.
+        recoveryWindowMs: 15 * 60 * 1000,                 // Window size around the manifest timestamp
+        recoveryWindowForwardMarginMs: 60 * 1000,         // Forward margin past the manifest timestamp
+        recoveryWindowAttempts: 3,                        // Fresh resend attempts per incomplete image
         recoverySignatureRaceWaitMs: 300,                 // Wait for async signature verification before scanning (TODO: replace with deterministic signal from identityManager)
         recoveryScrollChainCap: 4,                        // Auto-chain consecutive scroll-load batches that yielded 0 visible messages
         jpegInitialQuality: 1.0,

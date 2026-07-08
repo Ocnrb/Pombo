@@ -276,6 +276,13 @@ class App {
         
         try {
             channelManager.stopPresenceTracking();
+            // Stop background timers that survive disconnect otherwise:
+            // sync auto-push and relay token re-registration (6h interval)
+            syncManager.cancelAutoPush();
+            relayManager.stopReRegistrationTimer();
+            // Drop invites of the disconnecting account so they can't be
+            // re-saved under the next account's storage
+            notificationManager.pendingInvites.clear();
             await subscriptionManager.cleanup();
             await channelManager.leaveAllChannels();
             await dmManager.destroy();
@@ -401,10 +408,15 @@ class App {
                 await dmManager.init();
                 Logger.info('DM manager initialized');
                 if (dmManager.inboxReady) {
-                    // Wire blob_pulled events to update image placeholders in real-time
-                    syncManager.on('blob_pulled', ({ imageId, data }) => {
-                        mediaController.handleImageData({ type: 'image_data', imageId, data });
-                    });
+                    // Wire blob_pulled events to update image placeholders in real-time.
+                    // Register once per app lifetime — re-registering on every
+                    // reconnect accumulated duplicate handlers.
+                    if (!this._blobPulledHandler) {
+                        this._blobPulledHandler = ({ imageId, data }) => {
+                            mediaController.handleImageData({ type: 'image_data', imageId, data });
+                        };
+                        syncManager.on('blob_pulled', this._blobPulledHandler);
+                    }
 
                     syncManager.runForegroundSync('Syncing your data', async () => {
                         const pullResult = await this.pullSyncedStateAndBlobs();
