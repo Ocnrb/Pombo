@@ -12,6 +12,7 @@ import { previewModeUI } from './PreviewModeUI.js';
 import { pinnedBannerUI } from './PinnedBannerUI.js';
 import { analyzeMessageGroups, getGroupPositionClass, analyzeSpacing, getSpacingClass, shouldGroup } from './MessageGrouper.js';
 import { escapeHtml, formatAddress } from './utils.js';
+import { getAvatarHtml } from './AvatarGenerator.js';
 import { identityManager } from '../identity.js';
 import { CONFIG } from '../config.js';
 
@@ -690,6 +691,62 @@ class ChatAreaUI {
         // Auto-load more if content doesn't fill viewport (e.g. only 1 message visible)
         if (!this.isLoadingMore) {
             requestAnimationFrame(() => this._autoLoadIfContentShort());
+        }
+
+        // Kick off ENS avatar resolution for senders not yet cached — until
+        // now only the user's own avatar was ever resolved (app.js startup),
+        // so other users' ENS avatars never appeared in the chat.
+        this._resolveMessageAvatars(messagesForRender);
+    }
+
+    /**
+     * Fire-and-forget ENS avatar resolution for the senders of the rendered
+     * messages. `renderMessages` reads avatars synchronously via
+     * `getCachedENSAvatar`, so an avatar only shows if something resolved it
+     * first. identityManager dedups in-flight lookups and caches results
+     * (positive 24h, null 1h), so calling this on every render is cheap.
+     * When a lookup lands with a URL, the existing avatar rails are patched
+     * in place — no full re-render needed.
+     * @private
+     * @param {Array} messages - Messages that were just rendered
+     */
+    _resolveMessageAvatars(messages) {
+        if (!Array.isArray(messages)) return;
+        const seen = new Set();
+        for (const msg of messages) {
+            const sender = msg?.sender;
+            if (typeof sender !== 'string' || !sender) continue;
+            const normalized = sender.toLowerCase();
+            if (seen.has(normalized)) continue;
+            seen.add(normalized);
+            if (identityManager.getCachedENSAvatar(sender)) continue;
+            try {
+                identityManager.resolveENSAvatar?.(sender)
+                    ?.then(url => {
+                        if (url) this._patchSenderAvatars(normalized, url);
+                    })
+                    ?.catch(() => {});
+            } catch { /* non-critical */ }
+        }
+    }
+
+    /**
+     * Replace the avatar content of every rendered message group belonging
+     * to `normalizedSender` with the freshly resolved ENS avatar.
+     * @private
+     * @param {string} normalizedSender - Lowercased sender address
+     * @param {string} url - Resolved ENS avatar URL
+     */
+    _patchSenderAvatars(normalizedSender, url) {
+        if (!this.messagesArea) return;
+        const groups = this.messagesArea.querySelectorAll('.message-group[data-group-sender]');
+        for (const group of groups) {
+            const sender = group.getAttribute('data-group-sender');
+            if (!sender || sender.toLowerCase() !== normalizedSender) continue;
+            const avatarEl = group.querySelector('.message-avatar');
+            if (avatarEl) {
+                avatarEl.innerHTML = getAvatarHtml(sender, 46, 0.5, url);
+            }
         }
     }
 
