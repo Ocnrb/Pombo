@@ -1366,7 +1366,16 @@ class MediaController {
             return;
         }
         
-        // Cache the image
+        // Cache the image. Replace-aware accounting: re-deliveries of an
+        // already-cached image (blob sync, ledger loads, recovery passes)
+        // must not inflate imageCacheBytes — phantom bytes eventually poison
+        // the budget and evictImageCacheIfNeeded evicts EVERYTHING, leaving
+        // guests (no ledger fallback) with permanent "Loading image".
+        const previous = this.imageCache.get(data.imageId);
+        if (previous) {
+            this.imageCacheBytes -= previous.length * 2;
+            if (this.imageCacheBytes < 0) this.imageCacheBytes = 0;
+        }
         this.imageCache.set(data.imageId, data.data);
         this.imageCacheBytes += data.data.length * 2;
         this.evictImageCacheIfNeeded();
@@ -1485,6 +1494,14 @@ class MediaController {
             this.imageCacheBytes -= value.length * 2; // base64 string ~2 bytes/char in JS
             this.imageCache.delete(key);
             evicted++;
+        }
+        // Self-heal accounting drift: if the map is empty the byte counter
+        // MUST be zero. Otherwise leftover phantom bytes keep the counter
+        // above the limit forever and every future insert is evicted
+        // immediately (permanently poisoned cache).
+        if (this.imageCache.size === 0 && this.imageCacheBytes !== 0) {
+            Logger.warn(`Image cache accounting drift detected (~${(this.imageCacheBytes / 1024 / 1024).toFixed(1)}MB phantom) — resetting counter`);
+            this.imageCacheBytes = 0;
         }
         Logger.debug(`Image cache evicted ${evicted} entries, ~${(this.imageCacheBytes / 1024 / 1024).toFixed(1)}MB remaining`);
     }

@@ -160,6 +160,16 @@ class ChannelViewUI {
             this.deps.attachReactionListeners();
             mediaHandler.attachLightboxListeners();
         });
+        
+        // Self-heal image placeholders after render. Crucial for re-selecting
+        // the ALREADY-active channel: setActiveChannel early-returns (no
+        // resubscribe, no initial_history_complete), so without this trigger
+        // a cache-missed image has no recovery path — guests (no IDB ledger)
+        // would stay on "Loading image" until they switch away and back.
+        // Cheap when everything is cached (recoverImage re-fires from cache).
+        channelManager.recoverIncompleteImages?.(streamId)?.catch?.((err) => {
+            Logger.debug('selectChannel image recovery failed:', err?.message || err);
+        });
         // Mark channel as read
         await secureStorage.setChannelLastAccess(streamId, Date.now());
         

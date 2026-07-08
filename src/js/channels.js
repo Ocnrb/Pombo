@@ -72,6 +72,12 @@ class ChannelManager {
         // AbortController for in-flight history fetches - aborted on channel switch
         this.historyAbortController = null;
         
+        // Re-entrance guard for recoverIncompleteImages (per stream). The
+        // recovery loop calls loadMoreHistory internally, and loadMoreHistory
+        // triggers recovery on completion — without this guard that would
+        // recurse forever.
+        this._imageRecoveryInFlight = new Set(); // messageStreamId
+        
         // Deduplication: track edit/delete operations currently being sent
         this.pendingOverrides = new Set(); // streamId:targetId:type
     }
@@ -3518,6 +3524,20 @@ class ChannelManager {
             
             Logger.info(`Loaded ${addedCount} older messages (P0: ${contentMessagesRaw.length}, P1: ${overridesRaw.length}), hasMore: ${contentResult.hasMore}`);
             
+            // Pagination may have delivered image manifests whose chunks are
+            // missing (or chunks without their manifest). Re-run image
+            // recovery unless we're already inside a recovery pass — without
+            // this, images arriving via scroll pagination with incomplete
+            // chunks stay on "Loading Image" forever: the initial-history
+            // recovery trigger has long passed and no gave-up event (hence
+            // no Retry button) is ever emitted. Fire-and-forget so scroll
+            // latency is unaffected.
+            if (!this._imageRecoveryInFlight.has(messageStreamId)) {
+                this.recoverIncompleteImages(messageStreamId).catch(err => {
+                    Logger.debug('post-pagination image recovery failed:', err?.message || err);
+                });
+            }
+            
             return { loaded: addedCount, hasMore: contentResult.hasMore };
         } catch (error) {
             Logger.error('Failed to load more history:', error);
@@ -3552,7 +3572,18 @@ class ChannelManager {
         if (!channel) return;
         if (channel.writeOnly || channel.type === 'dm') return;
         if (typeof mediaController?.isStoredChunkedImageManifest !== 'function') return;
+        if (this._imageRecoveryInFlight.has(messageStreamId)) return;
 
+        this._imageRecoveryInFlight.add(messageStreamId);
+        try {
+            await this._recoverIncompleteImagesInner(messageStreamId, channel, maxRounds);
+        } finally {
+            this._imageRecoveryInFlight.delete(messageStreamId);
+        }
+    }
+
+    /** @private Recovery loop body — always called with the in-flight guard held. */
+    async _recoverIncompleteImagesInner(messageStreamId, channel, maxRounds) {
         const stagnantLimit = CONFIG.media.recoveryStagnantRoundsLimit;
         const generationAtStart = this.switchGeneration;
         let prevIncompleteCount = -1;
