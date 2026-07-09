@@ -262,6 +262,9 @@ class ChannelManager {
                 description: ch.description || '',
                 language: ch.language || '',
                 category: ch.category || '',
+                // Timestamp of the last local on-chain metadata edit (name/description)
+                // — prevents Graph indexing lag from reverting local admin edits
+                metaUpdatedAt: ch.metaUpdatedAt || null,
                 // Channel options
                 readOnly: ch.readOnly || false,
                 writeOnly: ch.writeOnly || false,
@@ -330,6 +333,13 @@ class ChannelManager {
                 continue;
             }
             if (!info) continue;
+
+            // Skip if The Graph data predates a local admin edit — indexing lag
+            // would otherwise revert the channel to its previous name/description
+            if (channel.metaUpdatedAt && (!info.updatedAt || info.updatedAt <= channel.metaUpdatedAt)) {
+                Logger.debug('Metadata refresh: skipping (Graph data older than local edit):', channel.streamId);
+                continue;
+            }
 
             // Name: on-chain name is authoritative for non-DM channels (admin-managed)
             if (info.name && info.name !== channel.name) {

@@ -1692,17 +1692,20 @@ class ChannelSettingsUI {
             this.elements.editChannelNameBtn.classList.add('hidden');
         }
 
-        // Description editing: only for non-DM channels that have a visible description section
+        // Description editing: open/password channels only. Native channels
+        // intentionally have no description; DMs neither. If the channel has
+        // no description yet, the field still appears so the admin can add one.
         const { channelManager } = this.deps;
         const currentChannel = this.deps.getActiveChannel?.() || channelManager.getCurrentChannel();
         const isDM = currentChannel?.type === 'dm';
-        const descriptionSectionVisible = this.elements.nonNativeMessage
-            && !this.elements.nonNativeMessage.classList.contains('hidden');
-        this._editingDescription = !isDM && descriptionSectionVisible;
+        const isNative = currentChannel?.type === 'native';
+        this._editingDescription = !isDM && !isNative;
 
         if (this._editingDescription && this.elements.channelSettingsDescriptionInput) {
             const currentDescription = this.elements.channelDescriptionDisplay?.textContent || '';
             this.elements.channelSettingsDescriptionInput.value = currentDescription;
+            // Section may be hidden when the channel has no description yet — unhide while editing
+            this.elements.nonNativeMessage?.classList.remove('hidden');
             this.elements.channelSettingsDescriptionInput.classList.remove('hidden');
             this.elements.channelDescriptionDisplay?.classList.add('hidden');
         }
@@ -1742,6 +1745,12 @@ class ChannelSettingsUI {
             this.elements.channelSettingsDescriptionInput.classList.add('hidden');
         }
         this.elements.channelDescriptionDisplay?.classList.remove('hidden');
+        // Re-hide the description section if there is still no description
+        // (it was unhidden for editing on channels without one)
+        if (this._editingDescription && this.elements.nonNativeMessage) {
+            const hasDescription = (this.elements.channelDescriptionDisplay?.textContent || '').trim().length > 0;
+            this.elements.nonNativeMessage.classList.toggle('hidden', !hasDescription);
+        }
         // Hide actions
         if (this.elements.channelEditActions) {
             this.elements.channelEditActions.classList.add('hidden');
@@ -1799,6 +1808,10 @@ class ChannelSettingsUI {
                 if (nameChanged) updates.name = newName;
                 if (descriptionChanged) updates.description = newDescription;
                 await streamrController.updateStreamMetadata(currentChannel.streamId, updates);
+
+                // Timestamp of the local admin edit — guards refreshChannelMetadataFromGraph
+                // against reverting to stale Graph data (indexing lag)
+                currentChannel.metaUpdatedAt = Date.now();
 
                 // Keep cached on-chain info in sync
                 if (currentChannel.channelInfo) {

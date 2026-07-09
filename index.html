@@ -1462,19 +1462,7 @@
                                     </button>
                                 </div>
                                 <div class="flex items-center gap-4">
-                                    <div class="flex-1 min-w-0">
-                                        <div class="flex items-center gap-2">
-                                            <div id="channel-settings-name" class="text-lg text-white/90 font-medium truncate"></div>
-                                            <button id="edit-channel-name-btn" class="hidden p-1 hover:bg-white/5 rounded transition flex-shrink-0" title="Edit channel info">
-                                                <svg class="w-3.5 h-3.5 text-white/40 hover:text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10"/></svg>
-                                            </button>
-                                        </div>
-                                        <!-- Edit input (hidden by default) -->
-                                        <div id="channel-name-edit-container" class="hidden mt-2">
-                                            <input type="text" id="channel-settings-name-input" class="w-full bg-white/5 border border-white/10 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-white/30 transition" placeholder="Enter name">
-                                        </div>
-                                    </div>
-                                    <!-- Channel Image (right side) -->
+                                    <!-- Channel Image (left of the name — proximity principle) -->
                                     <div id="channel-image-section" class="hidden flex-shrink-0 flex flex-col items-center">
                                         <div class="relative w-20 h-20">
                                             <div id="channel-image-preview" class="w-20 h-20 rounded-full overflow-hidden border border-white/[0.08] bg-white/[0.04] flex items-center justify-center"></div>
@@ -1486,6 +1474,18 @@
                                             </div>
                                         </div>
                                         <p id="channel-image-status" class="text-[11px] mt-2 hidden text-center"></p>
+                                    </div>
+                                    <div class="flex-1 min-w-0">
+                                        <div class="flex items-center gap-2">
+                                            <div id="channel-settings-name" class="text-xl text-white/90 font-semibold truncate"></div>
+                                            <button id="edit-channel-name-btn" class="hidden p-1 hover:bg-white/5 rounded transition flex-shrink-0" title="Edit channel info">
+                                                <svg class="w-3.5 h-3.5 text-white/40 hover:text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10"/></svg>
+                                            </button>
+                                        </div>
+                                        <!-- Edit input (hidden by default) -->
+                                        <div id="channel-name-edit-container" class="hidden mt-2">
+                                            <input type="text" id="channel-settings-name-input" class="w-full bg-white/5 border border-white/10 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-white/30 transition" placeholder="Enter name">
+                                        </div>
                                     </div>
                                 </div>
                             </div>
