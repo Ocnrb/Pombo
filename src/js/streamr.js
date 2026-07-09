@@ -1613,6 +1613,45 @@ class StreamrController {
     }
 
     /**
+     * Update channel metadata (name and/or description) in the stream's on-chain
+     * metadata (admin only). Values live in the Pombo metadata JSON stored in the
+     * stream description (keys 'n' = name, 'd' = description).
+     * Both fields are written in a SINGLE on-chain transaction.
+     * Requires EDIT permission on the stream.
+     * @param {string} streamId - Message stream ID
+     * @param {Object} updates - { name?: string, description?: string }
+     * @returns {Promise<boolean>}
+     */
+    async updateStreamMetadata(streamId, updates = {}) {
+        if (!this.client) {
+            throw new Error('Streamr client not initialized');
+        }
+
+        const stream = await this.client.getStream(streamId);
+        if (!stream) {
+            throw new Error('Stream not found');
+        }
+
+        // Parse existing Pombo metadata from the stream description
+        let meta = {};
+        try {
+            const desc = await stream.getDescription();
+            meta = desc ? JSON.parse(desc) : {};
+        } catch (e) {
+            Logger.warn('updateStreamMetadata: could not parse existing metadata:', e.message);
+            meta = {};
+        }
+
+        if (typeof updates.name === 'string') meta.n = updates.name;
+        if (typeof updates.description === 'string') meta.d = updates.description;
+
+        // Single on-chain transaction: updates stream metadata
+        await stream.setDescription(JSON.stringify(meta));
+        Logger.info('✓ Stream metadata updated on-chain:', { streamId, updates });
+        return true;
+    }
+
+    /**
      * Get storage information for a stream from the Streamr SDK
      * @param {string} streamId - Stream ID
      * @returns {Promise<{enabled: boolean, nodes: string[], storageDays: number|null}>}

@@ -311,6 +311,51 @@ class ChannelManager {
     }
 
     /**
+     * Refresh channel name/description from on-chain metadata (via The Graph)
+     * for all non-DM channels. Picks up admin renames so members who already
+     * joined see the updated name in the sidebar.
+     * @returns {Promise<boolean>} - true if any channel changed
+     */
+    async refreshChannelMetadataFromGraph() {
+        let changed = false;
+
+        for (const channel of this.channels.values()) {
+            if (!channel || channel.type === 'dm') continue;
+
+            let info = null;
+            try {
+                info = await graphAPI.getChannelInfo(channel.streamId);
+            } catch (e) {
+                Logger.debug('Metadata refresh: Graph lookup failed for', channel.streamId, e.message);
+                continue;
+            }
+            if (!info) continue;
+
+            // Name: on-chain name is authoritative for non-DM channels (admin-managed)
+            if (info.name && info.name !== channel.name) {
+                Logger.info('Metadata refresh: channel renamed on-chain:', channel.name, '→', info.name);
+                channel.name = info.name;
+                if (channel.channelInfo) channel.channelInfo.name = info.name;
+                changed = true;
+            }
+
+            // Description: only for visible channels (hidden channels keep description off-chain)
+            if (info.exposure === 'visible'
+                && typeof info.description === 'string'
+                && info.description !== (channel.description || '')) {
+                channel.description = info.description;
+                if (channel.channelInfo) channel.channelInfo.description = info.description;
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            await this.saveChannels();
+        }
+        return changed;
+    }
+
+    /**
      * Create a new channel
      * @param {string} name - Channel name
      * @param {string} type - Channel type: 'public', 'password', 'native'

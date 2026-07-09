@@ -339,6 +339,8 @@ class UIController {
             channelSettingsNameInput: document.getElementById('channel-settings-name-input'),
             saveChannelNameBtn: document.getElementById('save-channel-name-btn'),
             cancelChannelNameBtn: document.getElementById('cancel-channel-name-btn'),
+            channelSettingsDescriptionInput: document.getElementById('channel-settings-description-input'),
+            channelEditActions: document.getElementById('channel-edit-actions'),
             copyStreamIdBtn: document.getElementById('copy-stream-id-btn'),
             membersSection: document.getElementById('members-section'),
             nonNativeMessage: document.getElementById('non-native-message'),

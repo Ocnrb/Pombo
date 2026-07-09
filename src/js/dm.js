@@ -563,10 +563,15 @@ class DMManager {
         }
 
         if (!channel) {
-            // Auto-create conversation for new sender
+            // Auto-create conversation for new sender.
+            // Name priority: trusted contact → ENS → sender's display name from the
+            // first message (senderName, if the user set one) → truncated address.
             Logger.info('DM: New conversation from', senderAddress);
+            const senderDisplayName = typeof data.senderName === 'string'
+                ? data.senderName.trim().slice(0, 50)
+                : null;
             try {
-                channel = await this.getOrCreateConversation(senderAddress);
+                channel = await this.getOrCreateConversation(senderAddress, null, senderDisplayName || null);
             } catch (e) {
                 Logger.error('DM: Failed to create conversation for', senderAddress, e);
                 return;
@@ -671,9 +676,11 @@ class DMManager {
      * Get existing or create a new DM conversation with a peer
      * @param {string} peerAddress - Peer's Ethereum address
      * @param {string} [localName] - Optional local name for the conversation
+     * @param {string} [fallbackName] - Optional fallback name (e.g. sender's display name
+     *                                  from the first message) used if no contact/ENS name
      * @returns {Object} - Channel object
      */
-    async getOrCreateConversation(peerAddress, localName) {
+    async getOrCreateConversation(peerAddress, localName, fallbackName) {
         const normalizedPeer = peerAddress.toLowerCase();
 
         // Check if conversation already exists
@@ -693,7 +700,7 @@ class DMManager {
         }
 
         // Create the promise and store it SYNCHRONOUSLY before any await
-        const creationPromise = this._createConversation(normalizedPeer, localName);
+        const creationPromise = this._createConversation(normalizedPeer, localName, fallbackName);
         this.pendingConversations.set(normalizedPeer, creationPromise);
 
         try {
@@ -707,15 +714,16 @@ class DMManager {
      * Internal: actually create a DM conversation (called only once per peer)
      * @param {string} normalizedPeer - Lowercase peer address
      * @param {string} [localName] - Optional local name
+     * @param {string} [fallbackName] - Optional fallback name used after contact/ENS lookup
      * @returns {Promise<Object>} - Channel object
      */
-    async _createConversation(normalizedPeer, localName) {
+    async _createConversation(normalizedPeer, localName, fallbackName) {
         // Build deterministic stream IDs for the PEER's inbox (where we publish TO)
         const peerInboxId = streamrController.getDMInboxId(normalizedPeer);
         const peerEphemeralId = streamrController.getDMEphemeralId(normalizedPeer);
 
         // Resolve a display name
-        const displayName = localName || await this.resolveDisplayName(normalizedPeer);
+        const displayName = localName || await this.resolveDisplayName(normalizedPeer, fallbackName);
 
         // Create channel object
         const channel = {
@@ -1216,11 +1224,12 @@ class DMManager {
 
     /**
      * Resolve a display name for a peer address.
-     * Tries: trusted contact name → ENS → truncated address.
+     * Tries: trusted contact name → ENS → fallback name → truncated address.
      * @param {string} address - Ethereum address
+     * @param {string} [fallbackName] - Optional fallback (e.g. sender's self-assigned display name)
      * @returns {Promise<string>} - Display name
      */
-    async resolveDisplayName(address) {
+    async resolveDisplayName(address, fallbackName = null) {
         const normalized = address.toLowerCase();
 
         // Check trusted contacts
@@ -1235,6 +1244,11 @@ class DMManager {
             if (ensName) return ensName;
         } catch (e) {
             // ENS lookup failed, use fallback
+        }
+
+        // Sender's self-assigned display name (e.g. from the first DM message)
+        if (fallbackName && typeof fallbackName === 'string' && fallbackName.trim()) {
+            return fallbackName.trim();
         }
 
         // Fallback: truncated address

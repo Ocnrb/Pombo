@@ -451,6 +451,17 @@ class App {
             uiController.renderChannelList();
             await uiController.processInitialUrl();
 
+            // Background: refresh channel names/descriptions from on-chain metadata
+            // (picks up admin renames for channels the user already joined)
+            channelManager.refreshChannelMetadataFromGraph()
+                .then(changed => {
+                    if (changed) {
+                        uiController.renderChannelList();
+                        Logger.info('Channel metadata refreshed from The Graph (changes applied)');
+                    }
+                })
+                .catch(e => Logger.debug('Channel metadata refresh failed (non-critical):', e.message));
+
             subscriptionManager.startBackgroundPoller();
             Logger.info('Dynamic subscription management active (background poller started)');
 

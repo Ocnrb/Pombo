@@ -67,28 +67,28 @@ class ChannelSettingsUI {
         this.elements.channelSettingsType.innerHTML = this.deps.getChannelTypeLabel(currentChannel.type, effectiveReadOnly, true);
         this.elements.channelSettingsId.textContent = currentChannel.streamId;
 
-        // Populate channel name (network name or local fallback)
-        const channelName = currentChannel.channelInfo?.name || currentChannel.name || '';
+        // Populate channel name (network name, local name, or display fallback)
+        const channelName = currentChannel.channelInfo?.name || currentChannel.name || currentChannel.channelInfo?.displayName || '';
         if (this.elements.channelSettingsName) {
             this.elements.channelSettingsName.textContent = channelName;
         }
-        if (this.elements.channelNameSection) {
-            // Always show name section for DM/native channels even if name is empty
-            const isDM = currentChannel.type === 'dm';
-            const isNativeType = currentChannel.type === 'native';
-            const showNameSection = channelName.trim() || isDM || isNativeType;
-            this.elements.channelNameSection.classList.toggle('hidden', !showNameSection);
-        }
 
-        // Show edit button for channels with local names (DM, native, or channels without on-chain metadata)
-        const canEditName = currentChannel.type === 'dm' || currentChannel.type === 'native' || !currentChannel.channelInfo?.name;
-        if (this.elements.editChannelNameBtn) {
-            this.elements.editChannelNameBtn.classList.toggle('hidden', !canEditName || isPreviewMode);
-        }
-        // Hide edit container initially
+        // Reset edit state: hide edit container and restore name display
+        // (guards against modal being closed mid-edit, which left the name hidden)
         if (this.elements.channelNameEditContainer) {
             this.elements.channelNameEditContainer.classList.add('hidden');
         }
+        if (this.elements.channelSettingsName) {
+            this.elements.channelSettingsName.classList.remove('hidden');
+        }
+        if (this.elements.channelSettingsDescriptionInput) {
+            this.elements.channelSettingsDescriptionInput.classList.add('hidden');
+        }
+        this.elements.channelDescriptionDisplay?.classList.remove('hidden');
+        if (this.elements.channelEditActions) {
+            this.elements.channelEditActions.classList.add('hidden');
+        }
+        this._editingDescription = false;
 
         // Determine channel type
         const isNative = currentChannel.type === 'native';
@@ -112,6 +112,20 @@ class ChannelSettingsUI {
             
             // Check if user can add members (owner OR has GRANT permission)
             canAddMembers = isNative ? await channelManager.canAddMembers(currentChannel.streamId) : false;
+        }
+
+        // Edit name permission:
+        // - DM channels: any user can rename locally (propagated via sync)
+        // - Non-DM channels: only the admin (DELETE permission) can rename — on-chain metadata update
+        const canEditName = (currentChannel.type === 'dm' || canDelete) && !isPreviewMode;
+        if (this.elements.editChannelNameBtn) {
+            this.elements.editChannelNameBtn.classList.toggle('hidden', !canEditName);
+        }
+
+        // Show name section if there is a name to display, or if the user can edit it
+        if (this.elements.channelNameSection) {
+            const showNameSection = channelName.trim() || currentChannel.type === 'dm' || isNative || canEditName;
+            this.elements.channelNameSection.classList.toggle('hidden', !showNameSection);
         }
 
         // Get description from channel (regular or preview mode)
@@ -1648,10 +1662,21 @@ class ChannelSettingsUI {
                 }
             });
         }
+
+        // Escape key in description textarea cancels edit mode
+        if (this.elements.channelSettingsDescriptionInput) {
+            this.elements.channelSettingsDescriptionInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    this.cancelEditingName();
+                }
+            });
+        }
     }
 
     /**
-     * Start editing the channel name
+     * Start editing the channel name (and description, when the channel has one).
+     * Single global edit mode: unlocks both fields so name + description are
+     * saved together in one on-chain transaction.
      */
     startEditingName() {
         const currentName = this.elements.channelSettingsName?.textContent || '';
@@ -1666,6 +1691,29 @@ class ChannelSettingsUI {
         if (this.elements.editChannelNameBtn) {
             this.elements.editChannelNameBtn.classList.add('hidden');
         }
+
+        // Description editing: only for non-DM channels that have a visible description section
+        const { channelManager } = this.deps;
+        const currentChannel = this.deps.getActiveChannel?.() || channelManager.getCurrentChannel();
+        const isDM = currentChannel?.type === 'dm';
+        const descriptionSectionVisible = this.elements.nonNativeMessage
+            && !this.elements.nonNativeMessage.classList.contains('hidden');
+        this._editingDescription = !isDM && descriptionSectionVisible;
+
+        if (this._editingDescription && this.elements.channelSettingsDescriptionInput) {
+            const currentDescription = this.elements.channelDescriptionDisplay?.textContent || '';
+            this.elements.channelSettingsDescriptionInput.value = currentDescription;
+            this.elements.channelSettingsDescriptionInput.classList.remove('hidden');
+            this.elements.channelDescriptionDisplay?.classList.add('hidden');
+        }
+
+        // Show save/cancel actions (positioned below the description field)
+        if (this.elements.channelEditActions) {
+            this.elements.channelEditActions.classList.remove('hidden');
+        }
+
+        // Gas warning: only for non-DM channels (rename/description = on-chain tx)
+        document.getElementById('channel-edit-gas-warning')?.classList.toggle('hidden', isDM);
         
         // Set current name in input and focus
         if (this.elements.channelSettingsNameInput) {
@@ -1676,7 +1724,7 @@ class ChannelSettingsUI {
     }
 
     /**
-     * Cancel editing the channel name
+     * Cancel editing the channel name/description
      */
     cancelEditingName() {
         // Hide edit container, show name display
@@ -1689,13 +1737,26 @@ class ChannelSettingsUI {
         if (this.elements.editChannelNameBtn) {
             this.elements.editChannelNameBtn.classList.remove('hidden');
         }
+        // Hide description editor, restore display
+        if (this.elements.channelSettingsDescriptionInput) {
+            this.elements.channelSettingsDescriptionInput.classList.add('hidden');
+        }
+        this.elements.channelDescriptionDisplay?.classList.remove('hidden');
+        // Hide actions
+        if (this.elements.channelEditActions) {
+            this.elements.channelEditActions.classList.add('hidden');
+        }
+        this._editingDescription = false;
     }
 
     /**
-     * Save the edited channel name
+     * Save the edited channel name (and description, if unlocked)
+     * - DM channels: local rename, propagated to other devices via sync (saveChannels → auto-push)
+     * - Non-DM channels: admin-only, updates the stream's on-chain metadata
+     *   (name + description written in a SINGLE transaction)
      */
     async saveChannelName() {
-        const { channelManager, showNotification } = this.deps;
+        const { channelManager, streamrController, showNotification } = this.deps;
         
         const currentChannel = this.deps.getActiveChannel?.() || channelManager.getCurrentChannel();
         if (!currentChannel) return;
@@ -1707,11 +1768,55 @@ class ChannelSettingsUI {
             return;
         }
 
+        const isDM = currentChannel.type === 'dm';
+        const editingDescription = !isDM && this._editingDescription;
+        const newDescription = editingDescription
+            ? (this.elements.channelSettingsDescriptionInput?.value?.trim() || '')
+            : null;
+
+        // Detect changes — skip on-chain tx if nothing changed
+        const oldName = currentChannel.channelInfo?.name || currentChannel.name || '';
+        const oldDescription = currentChannel.channelInfo?.description ?? currentChannel.description ?? '';
+        const nameChanged = newName !== oldName;
+        const descriptionChanged = editingDescription && newDescription !== oldDescription;
+
+        if (!nameChanged && !descriptionChanged) {
+            this.cancelEditingName();
+            return;
+        }
+
+        const saveBtn = this.elements.saveChannelNameBtn;
+        const cancelBtn = this.elements.cancelChannelNameBtn;
+
         try {
-            // Update channel name
+            if (!isDM) {
+                // Non-DM: admin-only on-chain metadata update (single tx for name + description)
+                if (saveBtn) saveBtn.disabled = true;
+                if (cancelBtn) cancelBtn.disabled = true;
+                showNotification('Updating channel info on-chain...', 'info');
+
+                const updates = {};
+                if (nameChanged) updates.name = newName;
+                if (descriptionChanged) updates.description = newDescription;
+                await streamrController.updateStreamMetadata(currentChannel.streamId, updates);
+
+                // Keep cached on-chain info in sync
+                if (currentChannel.channelInfo) {
+                    if (nameChanged) currentChannel.channelInfo.name = newName;
+                    if (descriptionChanged) currentChannel.channelInfo.description = newDescription;
+                }
+                if (descriptionChanged) {
+                    currentChannel.description = newDescription;
+                    if (this.elements.channelDescriptionDisplay) {
+                        this.elements.channelDescriptionDisplay.textContent = newDescription;
+                    }
+                }
+            }
+
+            // Update local channel name (DM: primary source; non-DM: local cache)
             currentChannel.name = newName;
             
-            // Save to localStorage
+            // Save to localStorage (triggers sync auto-push → name propagates across devices)
             await channelManager.saveChannels();
             
             // Update UI display in modal
@@ -1739,12 +1844,15 @@ class ChannelSettingsUI {
             // Re-render channel list to show new name
             this.deps.renderChannelList?.();
             
-            showNotification('Name updated!', 'success');
-            Logger.debug('Channel name updated:', newName);
+            showNotification('Channel info updated!', 'success');
+            Logger.debug('Channel info updated:', { newName, newDescription });
             
         } catch (error) {
-            showNotification('Failed to save name: ' + error.message, 'error');
-            Logger.error('Failed to save channel name:', error);
+            showNotification('Failed to save: ' + error.message, 'error');
+            Logger.error('Failed to save channel info:', error);
+        } finally {
+            if (saveBtn) saveBtn.disabled = false;
+            if (cancelBtn) cancelBtn.disabled = false;
         }
     }
 
