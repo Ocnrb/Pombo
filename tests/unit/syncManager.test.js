@@ -486,9 +486,10 @@ describe('syncManager', () => {
                 }
             });
 
-            expect(secureStorage.importFromSync).toHaveBeenCalledWith(expect.objectContaining({
-                channels: localChannels
-            }));
+            // Per-channel merge: the fresh local channel must survive the
+            // stale remote snapshot (union, no tombstones involved)
+            const imported = secureStorage.importFromSync.mock.calls[0][0];
+            expect(imported.channels.map(c => c.messageStreamId)).toContain('ch-new');
         });
     });
 
@@ -527,7 +528,7 @@ describe('syncManager', () => {
             expect(result.sentMessages.stream1).toHaveLength(1);
         });
 
-        it('should use latest channels from incoming (latest-wins)', () => {
+        it('should union channels per-channel (LWW-element-set)', () => {
             const base = {
                 channels: [{ messageStreamId: 'ch1', name: 'Channel 1' }]
             };
@@ -537,9 +538,86 @@ describe('syncManager', () => {
             
             const result = syncManager.mergeState(base, incoming);
             
-            // Incoming wins — only ch2, ch1 is gone
+            // Union — without a leave tombstone, both channels survive
+            expect(result.channels).toHaveLength(2);
+            expect(result.channels.map(c => c.messageStreamId).sort()).toEqual(['ch1', 'ch2']);
+        });
+
+        it('should remove a channel when leave tombstone is newer than join', () => {
+            const base = {
+                channels: [{ messageStreamId: 'ch1', joinedAt: 1000 }]
+            };
+            const incoming = {
+                channels: [],
+                channelsLeftAt: { 'ch1': 2000 }
+            };
+
+            const result = syncManager.mergeState(base, incoming);
+
+            expect(result.channels).toHaveLength(0);
+            expect(result.channelsLeftAt.ch1).toBe(2000);
+        });
+
+        it('should keep a re-joined channel when join is newer than leave tombstone', () => {
+            const base = {
+                // Re-joined locally after having left in the past
+                channels: [{ messageStreamId: 'ch1', joinedAt: 3000 }]
+            };
+            const incoming = {
+                // Stale remote snapshot from before the re-join
+                channels: [],
+                channelsLeftAt: { 'ch1': 2000 }
+            };
+
+            const result = syncManager.mergeState(base, incoming);
+
             expect(result.channels).toHaveLength(1);
-            expect(result.channels[0].messageStreamId).toBe('ch2');
+            expect(result.channels[0].messageStreamId).toBe('ch1');
+            // Superseded tombstone is pruned
+            expect(result.channelsLeftAt.ch1).toBeUndefined();
+        });
+
+        it('should keep the join on a join/leave timestamp tie', () => {
+            const base = {
+                channels: [{ messageStreamId: 'ch1', joinedAt: 2000 }]
+            };
+            const incoming = {
+                channels: [],
+                channelsLeftAt: { 'ch1': 2000 }
+            };
+
+            const result = syncManager.mergeState(base, incoming);
+
+            expect(result.channels).toHaveLength(1);
+        });
+
+        it('should prefer incoming channel entry metadata when joins tie', () => {
+            const base = {
+                channels: [{ messageStreamId: 'ch1', joinedAt: 1000, name: 'Old Name' }]
+            };
+            const incoming = {
+                channels: [{ messageStreamId: 'ch1', joinedAt: 1000, name: 'New Name' }]
+            };
+
+            const result = syncManager.mergeState(base, incoming);
+
+            expect(result.channels).toHaveLength(1);
+            expect(result.channels[0].name).toBe('New Name');
+        });
+
+        it('should fall back to createdAt when joinedAt is missing (legacy entries)', () => {
+            const base = {
+                channels: [{ messageStreamId: 'ch1', createdAt: 5000 }]
+            };
+            const incoming = {
+                channels: [],
+                channelsLeftAt: { 'ch1': 2000 }
+            };
+
+            const result = syncManager.mergeState(base, incoming);
+
+            // Legacy join (createdAt) newer than tombstone → kept
+            expect(result.channels).toHaveLength(1);
         });
 
         it('should prefer incoming username if set', () => {
