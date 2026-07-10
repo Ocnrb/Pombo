@@ -317,8 +317,8 @@ describe('RelayManager', () => {
 
             const sentData = mockPostMessage.mock.calls[0][0];
             const channelData = sentData.channels.find(c => c.streamId === streamId);
-            expect(channelData.storageEndpoints).toHaveLength(6);
-            expect(channelData.storageEndpoints[0]).toContain('storage-cluster');
+            expect(channelData.storageEndpoints).toHaveLength(2);
+            expect(channelData.storageEndpoints[0]).toContain('blob-storage-streamr.online');
         });
 
         it('should detect DM inbox subscription by stream ID pattern', () => {
