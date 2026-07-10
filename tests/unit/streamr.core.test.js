@@ -121,7 +121,6 @@ describe('StreamrController Core', () => {
             DELETE: 'DELETE'
         };
         window.EncryptionKey = null;
-        window.STREAMR_STORAGE_NODE_ADDRESS = null;
     });
 
     afterEach(() => {
@@ -165,19 +164,10 @@ describe('StreamrController Core', () => {
             expect(streamrController.address).toBe('0xmyaddress');
         });
 
-        it('should use STREAMR_STORAGE_NODE_ADDRESS if available', async () => {
+        it('should always have the hardcoded Pombo node address', async () => {
             window.StreamrClient = function() { Object.assign(this, mockClient); };
-            window.STREAMR_STORAGE_NODE_ADDRESS = '0xstorage';
             await streamrController.init({ privateKey: '0xabc' });
-            expect(STREAM_CONFIG.NODE_ADDRESS).toBe('0xstorage');
-        });
-
-        it('should leave NODE_ADDRESS null if no STREAMR_STORAGE_NODE_ADDRESS', async () => {
-            window.StreamrClient = function() { Object.assign(this, mockClient); };
-            window.STREAMR_STORAGE_NODE_ADDRESS = null;
-            STREAM_CONFIG.NODE_ADDRESS = null;
-            await streamrController.init({ privateKey: '0xabc' });
-            expect(STREAM_CONFIG.NODE_ADDRESS).toBeNull();
+            expect(STREAM_CONFIG.NODE_ADDRESS).toBe('0xae340e799e8151f6a4999d245e466197aa217667');
         });
     });
 
