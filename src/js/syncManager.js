@@ -106,6 +106,58 @@ class SyncManager {
         this.scheduleAutoPush(1000);
     }
 
+    // ==================== Applied Payload Tracking ====================
+    // Storage node replicas can diverge (LOCAL_ONE round-robin reads): a
+    // "last N" resend may return stale payloads that were already merged in
+    // a previous pull. Re-merging them is redundant and can regress
+    // remote-wins slices (sentReactions). We track the ts of every payload
+    // already applied so stale reads become no-ops — and when a read is
+    // provably stale (newest fetched < newest applied), one fresh resend
+    // usually hits the other replica.
+
+    /**
+     * localStorage key for the per-account applied-payload ledger.
+     * @returns {string|null}
+     */
+    _appliedTsKey() {
+        const address = authManager.getAddress();
+        if (!address) return null;
+        const keyFn = CONFIG.storageKeys?.syncAppliedTs;
+        return keyFn ? keyFn(address) : `pombo_sync_applied_ts_${address.toLowerCase()}`;
+    }
+
+    /**
+     * @returns {Set<number>} - Payload timestamps already merged into local state
+     */
+    _getAppliedTsSet() {
+        const key = this._appliedTsKey();
+        if (!key) return new Set();
+        try {
+            const raw = localStorage.getItem(key);
+            const list = raw ? JSON.parse(raw) : [];
+            return new Set(Array.isArray(list) ? list : []);
+        } catch {
+            return new Set();
+        }
+    }
+
+    /**
+     * Record payload timestamps as applied (pruned to the newest 300).
+     * @param {number[]} tsList
+     */
+    _recordAppliedTs(tsList) {
+        const key = this._appliedTsKey();
+        if (!key || !tsList.length) return;
+        try {
+            const set = this._getAppliedTsSet();
+            for (const ts of tsList) {
+                if (typeof ts === 'number') set.add(ts);
+            }
+            const pruned = Array.from(set).sort((a, b) => b - a).slice(0, 300);
+            localStorage.setItem(key, JSON.stringify(pruned));
+        } catch { /* storage unavailable — non-critical */ }
+    }
+
     /**
      * Register event handler
      * @param {string} event - Event name
@@ -261,6 +313,10 @@ class SyncManager {
             this.lastSyncTs = payload.ts;
             Logger.info('Sync: Pushed state to storage nodes', { ts: payload.ts });
 
+            // Our own payload's data IS local state — mark as applied so a
+            // later pull doesn't redundantly re-merge it.
+            this._recordAppliedTs([payload.ts]);
+
             // All local changes up to this snapshot reached the storage node.
             // Keep the dirty flag if new mutations were scheduled meanwhile.
             if (!this.autoPushTimeout && !this.pushQueued) {
@@ -341,35 +397,40 @@ class SyncManager {
             const myPubKey = dmCrypto.getMyPublicKey(privateKey);
             const aesKey = await dmCrypto.deriveSharedKey(privateKey, myPubKey);
 
-            const decrypted = [];
-            for (const msg of messages) {
-                Logger.debug('Sync: Processing message', { 
-                    publisherId: msg.publisherId, 
-                    myAddress,
-                    match: msg.publisherId?.toLowerCase() === myAddress
-                });
+            const decryptBatch = async (batch) => {
+                const out = [];
+                for (const msg of batch) {
+                    Logger.debug('Sync: Processing message', {
+                        publisherId: msg.publisherId,
+                        myAddress,
+                        match: msg.publisherId?.toLowerCase() === myAddress
+                    });
 
-                // Verify sender is self (ignore spam from others)
-                if (msg.publisherId?.toLowerCase() !== myAddress) {
-                    Logger.warn('Sync: Ignoring payload from unknown sender', msg.publisherId);
-                    continue;
-                }
-
-                if (!dmCrypto.isEncrypted(msg.content)) {
-                    Logger.debug('Sync: Message not encrypted, skipping');
-                    continue;
-                }
-
-                try {
-                    const payload = await dmCrypto.decrypt(msg.content, aesKey);
-                    Logger.debug('Sync: Decrypted payload', { type: payload.type, v: payload.v });
-                    if (payload.type === 'sync' && payload.v === 1) {
-                        decrypted.push(payload);
+                    // Verify sender is self (ignore spam from others)
+                    if (msg.publisherId?.toLowerCase() !== myAddress) {
+                        Logger.warn('Sync: Ignoring payload from unknown sender', msg.publisherId);
+                        continue;
                     }
-                } catch (e) {
-                    Logger.warn('Sync: Failed to decrypt payload', e.message);
+
+                    if (!dmCrypto.isEncrypted(msg.content)) {
+                        Logger.debug('Sync: Message not encrypted, skipping');
+                        continue;
+                    }
+
+                    try {
+                        const payload = await dmCrypto.decrypt(msg.content, aesKey);
+                        Logger.debug('Sync: Decrypted payload', { type: payload.type, v: payload.v });
+                        if (payload.type === 'sync' && payload.v === 1) {
+                            out.push(payload);
+                        }
+                    } catch (e) {
+                        Logger.warn('Sync: Failed to decrypt payload', e.message);
+                    }
                 }
-            }
+                return out;
+            };
+
+            const decrypted = await decryptBatch(messages);
             const decryptCompletedAt = getNow();
 
             Logger.info('Sync: Valid payloads found:', { count: decrypted.length });
@@ -379,10 +440,42 @@ class SyncManager {
                 return null;
             }
 
-            // Sort by timestamp (oldest first) and merge all
-            decrypted.sort((a, b) => a.ts - b.ts);
+            // Skip payloads already merged in previous pulls/pushes — stale
+            // replica reads must not re-merge old snapshots over newer state.
+            const appliedTs = this._getAppliedTsSet();
+            let freshPayloads = decrypted.filter(payload => !appliedTs.has(payload.ts));
 
-            const payloadsToMerge = [...decrypted];
+            if (!freshPayloads.length) {
+                const newestFetched = Math.max(...decrypted.map(payload => payload.ts));
+                const newestApplied = appliedTs.size ? Math.max(...appliedTs) : 0;
+
+                if (newestFetched < newestApplied) {
+                    // Provably stale read: we've already applied something newer
+                    // than everything this resend returned. Round-robin replica
+                    // reads mean one fresh resend usually hits the other replica.
+                    Logger.warn('Sync: Stale resend detected — retrying once', {
+                        newestFetched: new Date(newestFetched).toISOString(),
+                        newestApplied: new Date(newestApplied).toISOString()
+                    });
+                    const retryMessages = await streamrController.fetchPartitionHistory(
+                        inboxStreamId,
+                        STREAM_CONFIG.MESSAGE_STREAM.SYNC,
+                        options.limit || 10
+                    );
+                    const retryDecrypted = await decryptBatch(retryMessages);
+                    freshPayloads = retryDecrypted.filter(payload => !appliedTs.has(payload.ts));
+                }
+
+                if (!freshPayloads.length) {
+                    Logger.info('Sync: No new sync payloads (all previously applied)');
+                    return null;
+                }
+            }
+
+            // Sort by timestamp (oldest first) and merge all
+            freshPayloads.sort((a, b) => a.ts - b.ts);
+
+            const payloadsToMerge = [...freshPayloads];
             const optimisticPayload = options.optimisticPayload;
             if (optimisticPayload?.type === 'sync' && optimisticPayload.v === 1) {
                 const optimisticAlreadyVisible = payloadsToMerge.some(
@@ -436,6 +529,10 @@ class SyncManager {
 
             const latestTs = payloadsToMerge[payloadsToMerge.length - 1].ts;
             this.lastSyncTs = latestTs;
+
+            // Mark all merged payloads as applied so future stale replica
+            // reads returning them become no-ops.
+            this._recordAppliedTs(payloadsToMerge.map(payload => payload.ts));
 
             Logger.info('Sync: Merged remote state', {
                 payloads: payloadsToMerge.length,
@@ -601,7 +698,10 @@ class SyncManager {
      * Pull image blobs from Partition 2 (SYNC_BLOBS).
      * Imports blobs from other devices into the local IndexedDB ledger.
      * @param {Object} options
-     * @param {number} options.limit - Max messages to fetch (default: 50)
+     * @param {number} options.limit - Max messages to fetch (default: 200).
+     *   Chunked images consume many messages (one per ~150KB chunk plus a
+     *   manifest), so a small window can cut off older chunks and make blob
+     *   assembly fail with "incomplete" even though the data is stored.
      */
     async pullImageBlobs(options = {}) {
         if (authManager.isGuestMode()) return;
@@ -622,7 +722,7 @@ class SyncManager {
         const messages = await streamrController.fetchPartitionHistory(
             inboxStreamId,
             STREAM_CONFIG.MESSAGE_STREAM.SYNC_BLOBS,
-            options.limit || 50
+            options.limit || 200
         );
 
         if (!messages.length) return;
@@ -742,7 +842,13 @@ class SyncManager {
      * Push-first ensures our state is on the storage node before we pull,
      * so leaving a channel is respected (our push without the channel is the latest).
      * Also syncs image blobs via Partition 2.
-     * @returns {Promise<{pulled: boolean, pushed: boolean, noInbox: boolean}>}
+     *
+     * Phases are independent: a push failure (e.g. transient RPC error during
+     * the publish permission check) must not abort the pull, and vice versa.
+     * Throws only when BOTH phases fail; partial failures are reported in the
+     * result (pushError/pullError) — the dirty flag stays set on push failure,
+     * so a later auto-push recovers.
+     * @returns {Promise<{pulled: boolean, pushed: boolean, noInbox: boolean, pushError?: string, pullError?: string}>}
      */
     async smartSync() {
         if (authManager.isGuestMode()) {
@@ -759,30 +865,45 @@ class SyncManager {
 
         Logger.info('Sync: Starting smart sync...');
         const result = { pulled: false, pushed: false, noInbox: false };
+        let optimisticPayload = null;
+        let pushError = null;
+        let pullError = null;
 
+        // Push phase (partition 1 state + partition 2 blobs)
         try {
-            // Push state (partition 1)
-            const optimisticPayload = await this.pushSync();
+            optimisticPayload = await this.pushSync();
             result.pushed = true;
-
-            // Push image blobs (partition 2) — incremental, non-blocking
             await this.pushImageBlobs();
+        } catch (err) {
+            pushError = err;
+            result.pushError = err.message;
+            Logger.warn('Sync: Smart sync push phase failed (continuing to pull)', err.message);
+            // Local state didn't reach the storage node — the dirty flag is
+            // still set; schedule a recovery push instead of waiting for the
+            // next mutation/foreground event.
+            this.scheduleAutoPush(30000);
+        }
 
-            // Pull state (partition 1)
+        // Pull phase (partition 1 state + partition 2 blobs)
+        try {
             const pullResult = await this.pullSync(
                 optimisticPayload ? { optimisticPayload } : undefined
             );
             result.pulled = pullResult !== null;
-
-            // Pull image blobs (partition 2)
             await this.pullImageBlobs();
-
-            Logger.info('Sync: Smart sync completed', result);
-            this.notifyHandlers('sync_complete', result);
         } catch (err) {
-            Logger.error('Sync: Smart sync failed', err);
-            throw err;
+            pullError = err;
+            result.pullError = err.message;
+            Logger.warn('Sync: Smart sync pull phase failed', err.message);
         }
+
+        if (pushError && pullError) {
+            Logger.error('Sync: Smart sync failed (both phases)', pushError);
+            throw pushError;
+        }
+
+        Logger.info('Sync: Smart sync completed', result);
+        this.notifyHandlers('sync_complete', result);
 
         return result;
     }

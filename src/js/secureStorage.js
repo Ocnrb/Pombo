@@ -1643,15 +1643,18 @@ class SecureStorage {
             channelsUpdated: false,
             contactsUpdated: false,
             blockedPeersUpdated: false,
-            usernameUpdated: false
+            usernameUpdated: false,
+            sentMessagesUpdated: false
         };
 
         if (data.sentMessages !== undefined && !isEqual(this.cache.sentMessages, data.sentMessages)) {
             this.cache.sentMessages = data.sentMessages;
+            changes.sentMessagesUpdated = true;
             changes.hasChanges = true;
         }
         if (data.sentReactions !== undefined && !isEqual(this.cache.sentReactions, data.sentReactions)) {
             this.cache.sentReactions = data.sentReactions;
+            changes.sentMessagesUpdated = true;
             changes.hasChanges = true;
         }
         if (data.channels !== undefined) {

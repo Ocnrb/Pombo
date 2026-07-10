@@ -276,6 +276,34 @@ class App {
                 currentChannelRemoved: !!changes.currentChannelRemoved
             });
         }
+        // Refresh the open DM / write-only timeline when synced sent messages
+        // arrived — without this, messages sent on another device only appear
+        // after re-opening the channel (or restarting the app).
+        if (changes.sentMessagesUpdated) {
+            const channel = channelManager.getCurrentChannel();
+            if (channel?.type === 'dm' && channel.peerAddress) {
+                await dmManager.loadDMTimeline(channel.peerAddress);
+                chatAreaUI.renderMessages(channel.messages, () => {
+                    uiController.attachReactionListeners();
+                    mediaHandler.attachLightboxListeners();
+                });
+            } else if (channel?.writeOnly) {
+                const sentMessages = secureStorage.getSentMessages(channel.messageStreamId);
+                const existingIds = new Set(channel.messages.map(m => m.id));
+                const newMessages = sentMessages.filter(m => m.id && !existingIds.has(m.id));
+                if (newMessages.length > 0) {
+                    for (const msg of newMessages) {
+                        msg.verified = { valid: true, trustLevel: 2 };
+                        channel.messages.push(msg);
+                    }
+                    channelManager.sortMessagesByTimestamp(channel);
+                    chatAreaUI.renderMessages(channel.messages, () => {
+                        uiController.attachReactionListeners();
+                        mediaHandler.attachLightboxListeners();
+                    });
+                }
+            }
+        }
     }
 
     /**
@@ -434,41 +462,54 @@ class App {
                     // Note: not gated on dmManager.inboxReady — sync operations
                     // re-check hasInbox() themselves, so a transient failure during
                     // dmManager.init doesn't disable sync for the whole session.
-                    syncManager.runForegroundSync('Syncing your data', async () => {
-                        let pulled = null;
-                        if (syncManager.isDirty()) {
-                            // Local changes never reached the storage node (app was
-                            // closed before auto-push). Push first so the pull can't
-                            // clobber them, then merge remote state.
+                    // Retries with escalating delay: transient RPC failures during
+                    // the publish/resend path (see chainErrors) must not leave the
+                    // session unsynced until the next foreground event.
+                    const runInitialSync = (attempt = 1) => {
+                        syncManager.runForegroundSync('Syncing your data', async () => {
+                            // Always push-first (smartSync): local state that never
+                            // reached the storage node — including state stuck from
+                            // builds without mutation-triggered pushes — is flushed
+                            // before the pull, so the merge can't clobber it and
+                            // other devices receive it. One extra publish per
+                            // startup is negligible.
                             const result = await syncManager.smartSync();
-                            pulled = result.pulled ? result : null;
-                            Logger.info('Sync: Initial smart sync complete (flushed unsynced local state)');
-                        } else {
-                            pulled = await this.pullSyncedStateAndBlobs();
-                            Logger.info('Sync: Initial pull complete');
-                        }
+                            const pulled = result.pulled ? result : null;
+                            Logger.info('Sync: Initial smart sync complete');
 
-                        if (pulled !== null) {
-                            // Update header with synced username or ENS
-                            const syncedUsername = identityManager.getUsername();
-                            if (syncedUsername) {
-                                headerUI.updateDisplayName(syncedUsername);
-                            }
-                            // Always resolve own ENS after sync — overrides local username
-                            identityManager.resolveENS(address).then(ensName => {
-                                if (ensName) {
-                                    headerUI.updateDisplayName(ensName);
-                                    if (identityManager.getUsername()) {
-                                        identityManager.setUsername(null);
-                                        Logger.info('ENS active — cleared local username (post-sync)');
-                                    }
-                                    localStorage.setItem(CONFIG.storageKeys.ens(address), ensName);
+                            if (pulled !== null) {
+                                // Update header with synced username or ENS
+                                const syncedUsername = identityManager.getUsername();
+                                if (syncedUsername) {
+                                    headerUI.updateDisplayName(syncedUsername);
                                 }
-                            }).catch(() => {});
-                        }
-                    }).catch(e => {
-                        Logger.debug('Sync: Initial pull failed (non-critical):', e.message);
-                    });
+                                // Always resolve own ENS after sync — overrides local username
+                                identityManager.resolveENS(address).then(ensName => {
+                                    if (ensName) {
+                                        headerUI.updateDisplayName(ensName);
+                                        if (identityManager.getUsername()) {
+                                            identityManager.setUsername(null);
+                                            Logger.info('ENS active — cleared local username (post-sync)');
+                                        }
+                                        localStorage.setItem(CONFIG.storageKeys.ens(address), ensName);
+                                    }
+                                }).catch(() => {});
+                            }
+                        }).catch(e => {
+                            Logger.debug(`Sync: Initial sync failed (attempt ${attempt}, non-critical):`, e.message);
+                            if (attempt < 3) {
+                                const delay = attempt * 30000;
+                                Logger.info(`Sync: Retrying initial sync in ${delay / 1000}s`);
+                                setTimeout(() => {
+                                    // Skip if the account changed meanwhile (disconnect/switch)
+                                    if (authManager.getAddress() === address) {
+                                        runInitialSync(attempt + 1);
+                                    }
+                                }, delay);
+                            }
+                        });
+                    };
+                    runInitialSync();
                 }
             } catch (dmError) {
                 Logger.warn('Failed to init DM manager (non-critical):', dmError);
