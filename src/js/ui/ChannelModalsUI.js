@@ -337,15 +337,15 @@ class ChannelModalsUI {
     }
 
     /**
-     * Populate the Streamr storage node address (read from the SDK).
+     * Populate the Pombo storage node address (hardcoded).
      */
     refreshStreamrAddress() {
         const target = document.getElementById('streamr-address-value');
         if (!target) return;
-        const addr = window.STREAMR_STORAGE_NODE_ADDRESS;
-        target.textContent = addr || 'Unavailable';
-        target.classList.toggle('text-red-400', !addr);
-        target.classList.toggle('text-white/50', !!addr);
+        const addr = '0xae340e799e8151f6a4999d245e466197aa217667';
+        target.textContent = addr;
+        target.classList.remove('text-red-400');
+        target.classList.add('text-white/50');
     }
 
     /**
@@ -550,10 +550,8 @@ class ChannelModalsUI {
             }
 
             this.clearCustomAddressError();
-        } else if (!window.STREAMR_STORAGE_NODE_ADDRESS) {
-            this.showNotification('Streamr storage node is unavailable. Try again or use a custom node.', 'error');
-            return;
         }
+        // Pombo node is always available — no additional check needed
 
         if (!name) {
             this.showNotification('Please enter a channel name', 'warning');

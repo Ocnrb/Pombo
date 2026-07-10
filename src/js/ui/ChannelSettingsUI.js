@@ -283,7 +283,7 @@ class ChannelSettingsUI {
      */
     _renderStorageList(channel, info, canManage) {
         const list = this.elements.channelStorageNodesList;
-        const STREAMR_OFFICIAL_NODE = window.STREAMR_STORAGE_NODE_ADDRESS || null;
+        const POMBO_NODE = '0xae340e799e8151f6a4999d245e466197aa217667';
         const { enabled, nodes, storageDays } = info;
 
         // Retention
@@ -306,8 +306,8 @@ class ChannelSettingsUI {
 
         list.innerHTML = nodes.map(n => {
             const addr = n.address;
-            const isOfficial = STREAMR_OFFICIAL_NODE && addr.toLowerCase() === STREAMR_OFFICIAL_NODE.toLowerCase();
-            const label = isOfficial ? 'Streamr Official' : 'Custom';
+            const isOfficial = addr.toLowerCase() === POMBO_NODE.toLowerCase();
+            const label = isOfficial ? 'Pombo' : 'Custom';
             const divergent = !(n.onMessage && n.onAdmin);
             const divergentBadge = divergent
                 ? '<span class="text-[10px] text-amber-400/80 ml-1.5" title="Storage assignment is out of sync between channel streams. Removing and re-adding will heal it.">partial</span>'
@@ -369,7 +369,6 @@ class ChannelSettingsUI {
         const cancel = this.elements.channelStorageAddCancel;
         const confirmBtn = this.elements.channelStorageAddConfirm;
         const customInput = this.elements.channelStorageCustomAddress;
-        const daysInput = this.elements.channelStorageAddDays;
 
         const radios = document.getElementsByName('channel-storage-provider-radio');
         const setProvider = () => {
@@ -388,7 +387,6 @@ class ChannelSettingsUI {
         if (toggle) {
             toggle.onclick = () => {
                 form?.classList.toggle('hidden');
-                if (daysInput && !daysInput.value) daysInput.value = '180';
             };
         }
         if (cancel) {
@@ -406,17 +404,15 @@ class ChannelSettingsUI {
                     showNotification?.('Invalid custom storage node address', 'error');
                     return;
                 }
-                const daysRaw = parseInt(daysInput?.value, 10);
-                const storageDays = Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : undefined;
 
+                // New nodes inherit the channel's retention period (stream-level TTL)
                 confirmBtn.disabled = true;
                 confirmBtn.textContent = 'Adding…';
                 showNotification?.('Adding storage node…', 'info');
                 try {
                     const result = await channelManager.addChannelStorageNode(channel.streamId, {
                         storageProvider: provider,
-                        customStorageAddress: customAddress,
-                        storageDays
+                        customStorageAddress: customAddress
                     });
                     this._reportStorageResult(result, 'add');
                     form?.classList.add('hidden');
@@ -1755,6 +1751,8 @@ class ChannelSettingsUI {
         if (this.elements.channelEditActions) {
             this.elements.channelEditActions.classList.add('hidden');
         }
+        // Hide the gas warning that sits above the image in the Info tab
+        document.getElementById('channel-edit-gas-warning')?.classList.add('hidden');
         this._editingDescription = false;
     }
 

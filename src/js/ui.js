@@ -341,7 +341,6 @@ class UIController {
             cancelChannelNameBtn: document.getElementById('cancel-channel-name-btn'),
             channelSettingsDescriptionInput: document.getElementById('channel-settings-description-input'),
             channelEditActions: document.getElementById('channel-edit-actions'),
-            copyStreamIdBtn: document.getElementById('copy-stream-id-btn'),
             membersSection: document.getElementById('members-section'),
             nonNativeMessage: document.getElementById('non-native-message'),
             channelDescriptionDisplay: document.getElementById('channel-description-display'),
@@ -354,7 +353,6 @@ class UIController {
             channelStorageAddToggleBtn: document.getElementById('channel-storage-add-toggle-btn'),
             channelStorageAddForm: document.getElementById('channel-storage-add-form'),
             channelStorageCustomAddress: document.getElementById('channel-storage-custom-address'),
-            channelStorageAddDays: document.getElementById('channel-storage-add-days'),
             channelStorageAddCancel: document.getElementById('channel-storage-add-cancel'),
             channelStorageAddConfirm: document.getElementById('channel-storage-add-confirm'),
             channelStorageGasWarning: document.getElementById('channel-storage-gas-warning'),
@@ -1070,14 +1068,14 @@ class UIController {
             });
         }
 
-        // Copy stream ID button
-        if (this.elements.copyStreamIdBtn) {
-            this.elements.copyStreamIdBtn.addEventListener('click', async () => {
-                const currentChannel = channelManager.getCurrentChannel();
+        // Copy channel ID by clicking the ID field itself
+        if (this.elements.channelSettingsId) {
+            this.elements.channelSettingsId.addEventListener('click', async () => {
+                const currentChannel = this.getActiveChannel();
                 if (currentChannel) {
                     try {
                         await navigator.clipboard.writeText(currentChannel.streamId);
-                        this.showNotification('Stream ID copied!', 'success');
+                        this.showNotification('Channel ID copied!', 'success');
                     } catch {
                         this.showNotification('Failed to copy', 'error');
                     }

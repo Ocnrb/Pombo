@@ -43,15 +43,15 @@ import {
 // Protocol constants live in streamConstants.js; this object adds the
 // dynamic/environment bits (storage node address, provider catalog).
 const STREAM_CONFIG = {
-    // Streamr's official storage node (set from SDK after load)
-    NODE_ADDRESS: null,
+    // Pombo's official storage node address
+    NODE_ADDRESS: '0xae340e799e8151f6a4999d245e466197aa217667',
 
     // Storage Providers Configuration
     STORAGE_PROVIDERS: {
         STREAMR: {
             id: 'streamr',
-            name: 'Streamr Official',
-            description: 'Official Streamr storage cluster with configurable retention',
+            name: 'Pombo',
+            description: 'Official Pombo storage cluster with configurable retention',
             supportsTTL: true,
             defaultDays: CONFIG.storage.defaultRetentionDays,
             getNodeAddress: () => STREAM_CONFIG.NODE_ADDRESS
@@ -213,14 +213,6 @@ class StreamrController {
                     rpcQuorum: 1
                 }
             });
-            
-            // Set storage node address from SDK
-            if (window.STREAMR_STORAGE_NODE_ADDRESS) {
-                STREAM_CONFIG.NODE_ADDRESS = window.STREAMR_STORAGE_NODE_ADDRESS;
-                Logger.debug('Using Streamr official storage node');
-            } else {
-                Logger.warn('STREAMR_STORAGE_NODE_ADDRESS not available; Streamr storage option will be unavailable');
-            }
             
             this.address = await this.client.getAddress();
             Logger.info('Streamr client initialized with address:', this.address);
