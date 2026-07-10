@@ -45,6 +45,10 @@ class DMManager {
         // Whether inbox has been verified/created
         this.inboxReady = false;
 
+        // Positive-result cache for hasInbox() — avoids a network getStream
+        // per sync operation. Keyed by stream ID so account switches invalidate.
+        this._inboxExistsCache = null;
+
         // Event handlers (UI notifications)
         this.handlers = [];
     }
@@ -67,6 +71,7 @@ class DMManager {
 
         this.inboxMessageStreamId = streamrController.getDMInboxId(myAddress);
         this.inboxEphemeralStreamId = streamrController.getDMEphemeralId(myAddress);
+        this._inboxExistsCache = null;
 
         // Rebuild conversations map from saved channels
         this.loadConversationsFromChannels();
@@ -106,14 +111,19 @@ class DMManager {
     }
 
     /**
-     * Check if the current user's inbox already exists on-chain
+     * Check if the current user's inbox already exists on-chain.
+     * A positive result is cached for the session (streams aren't deleted
+     * mid-session); a negative result is re-checked every call so transient
+     * network failures don't disable sync until reload.
      * @returns {Promise<boolean>}
      */
     async hasInbox() {
         if (!this.inboxMessageStreamId) return false;
+        if (this._inboxExistsCache === this.inboxMessageStreamId) return true;
 
         try {
             await streamrController.client.getStream(this.inboxMessageStreamId);
+            this._inboxExistsCache = this.inboxMessageStreamId;
             return true;
         } catch (e) {
             return false;
@@ -138,6 +148,7 @@ class DMManager {
         this.inboxMessageStreamId = result.messageStreamId;
         this.inboxEphemeralStreamId = result.ephemeralStreamId;
         this.inboxReady = true;
+        this._inboxExistsCache = result.messageStreamId;
 
         Logger.info('DM: Inbox created/verified');
         this.notifyHandlers('inbox_ready', { streamId: this.inboxMessageStreamId });
@@ -1381,6 +1392,7 @@ class DMManager {
         this.inboxSubscription = null;
         this.inboxEphemeralSubscription = null;
         this.inboxReady = false;
+        this._inboxExistsCache = null;
         this.handlers = [];
         dmCrypto.clear();
     }

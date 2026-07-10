@@ -120,6 +120,17 @@ export function mergeChannels(baseChannels, incomingChannels, baseLeftAt, incomi
     return { channels, channelsLeftAt };
 }
 
+/**
+ * Defaults for the timestamped latest-wins slices.
+ */
+const SLICE_DEFAULTS = {
+    blockedPeers: [],
+    dmLeftAt: {},
+    trustedContacts: {},
+    username: null,
+    graphApiKey: null
+};
+
 export function mergeState(base, incoming, maxSentMessages = CONFIG.dm.maxSentMessages) {
     const { channels, channelsLeftAt } = mergeChannels(
         base?.channels,
@@ -127,6 +138,41 @@ export function mergeState(base, incoming, maxSentMessages = CONFIG.dm.maxSentMe
         base?.channelsLeftAt,
         incoming?.channelsLeftAt
     );
+
+    // Timestamped latest-wins slices: the side whose slice was mutated most
+    // recently (sliceTs) wins. This stops a pull from clobbering local
+    // changes that haven't been pushed yet. Payloads from older clients have
+    // no sliceTs (treated as 0) and on ties the incoming snapshot wins —
+    // preserving the previous chronological latest-wins behavior.
+    const sliceTs = {};
+    const pickSlice = (key) => {
+        const baseHas = base?.[key] !== undefined;
+        const incomingHas = incoming?.[key] !== undefined;
+        const baseTs = base?.sliceTs?.[key] || 0;
+        const incomingTs = incoming?.sliceTs?.[key] || 0;
+
+        if (incomingHas && (!baseHas || incomingTs >= baseTs)) {
+            sliceTs[key] = incomingTs;
+            return incoming[key];
+        }
+        if (baseHas) {
+            sliceTs[key] = baseTs;
+            return base[key];
+        }
+        sliceTs[key] = 0;
+        return SLICE_DEFAULTS[key];
+    };
+
+    // graphApiKey legacy behavior: when neither side has a slice timestamp
+    // (pre-sliceTs snapshots), a null incoming key must not delete a locally
+    // configured key (truthy fallback, as before).
+    let graphApiKey;
+    if (!(base?.sliceTs?.graphApiKey) && !(incoming?.sliceTs?.graphApiKey)) {
+        graphApiKey = incoming?.graphApiKey || base?.graphApiKey || null;
+        sliceTs.graphApiKey = 0;
+    } else {
+        graphApiKey = pickSlice('graphApiKey') || null;
+    }
 
     return {
         sentMessages: mergeSentMessages(
@@ -140,23 +186,16 @@ export function mergeState(base, incoming, maxSentMessages = CONFIG.dm.maxSentMe
         ),
         channels,
         channelsLeftAt,
-        blockedPeers: incoming?.blockedPeers !== undefined
-            ? incoming.blockedPeers
-            : (base?.blockedPeers || []),
-        dmLeftAt: incoming?.dmLeftAt !== undefined
-            ? incoming.dmLeftAt
-            : (base?.dmLeftAt || {}),
-        trustedContacts: incoming?.trustedContacts !== undefined
-            ? incoming.trustedContacts
-            : (base?.trustedContacts || {}),
+        blockedPeers: pickSlice('blockedPeers'),
+        dmLeftAt: pickSlice('dmLeftAt'),
+        trustedContacts: pickSlice('trustedContacts'),
         ensCache: {
             ...(base?.ensCache || {}),
             ...(incoming?.ensCache || {})
         },
-        username: incoming?.username !== undefined
-            ? (incoming.username || null)
-            : (base?.username || null),
-        graphApiKey: incoming?.graphApiKey || base?.graphApiKey
+        username: pickSlice('username') || null,
+        graphApiKey,
+        sliceTs
     };
 }
 

@@ -57,6 +57,9 @@ class App {
             channelManager.onChannelsSaved = () => syncManager.scheduleAutoPush();
             identityManager.onTrustedContactsChanged = () => syncManager.scheduleAutoPush();
             secureStorage.onBlockedPeersChanged = () => syncManager.scheduleAutoPush();
+            // Sent DMs/messages/reactions and DM soft-leaves must sync promptly —
+            // they have no other push trigger (short debounce)
+            secureStorage.onSentDataChanged = () => syncManager.scheduleAutoPush(5000);
 
             settingsUI.setDependencies({
                 connectWallet: () => walletFlows.connectWallet(),
@@ -209,15 +212,25 @@ class App {
             await handleSync(pillSyncBtn);
         });
 
-        // Auto-push on page unload
-        window.addEventListener('beforeunload', () => {
-            syncManager.forcePushNow();
-        });
+        // Best-effort push when the page is being hidden/unloaded.
+        // Only fires when there are unsynced local changes (dirty flag).
+        // Note: an async publish may not complete during unload — the dirty
+        // flag survives and startup runs a push-first smart sync to recover.
+        const pushOnHide = () => {
+            if (syncManager.isDirty()) {
+                syncManager.forcePushNow();
+            }
+        };
 
-        // Auto-push when app goes to background (mobile reliability)
+        window.addEventListener('beforeunload', pushOnHide);
+        // pagehide is the reliable unload signal on mobile (beforeunload rarely fires)
+        window.addEventListener('pagehide', pushOnHide);
+
+        // Push immediately when app goes to background — a delayed timer may
+        // never fire on mobile (page freeze); pull on return to foreground
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'hidden') {
-                syncManager.scheduleAutoPush(5000);
+                pushOnHide();
             } else if (document.visibilityState === 'visible') {
                 this.pullSyncedStateAndBlobs().catch((error) => {
                     Logger.debug('Sync: Auto-pull on foreground failed (non-critical):', error.message);
@@ -407,7 +420,7 @@ class App {
             try {
                 await dmManager.init();
                 Logger.info('DM manager initialized');
-                if (dmManager.inboxReady) {
+                if (!authManager.isGuestMode()) {
                     // Wire blob_pulled events to update image placeholders in real-time.
                     // Register once per app lifetime — re-registering on every
                     // reconnect accumulated duplicate handlers.
@@ -418,11 +431,24 @@ class App {
                         syncManager.on('blob_pulled', this._blobPulledHandler);
                     }
 
+                    // Note: not gated on dmManager.inboxReady — sync operations
+                    // re-check hasInbox() themselves, so a transient failure during
+                    // dmManager.init doesn't disable sync for the whole session.
                     syncManager.runForegroundSync('Syncing your data', async () => {
-                        const pullResult = await this.pullSyncedStateAndBlobs();
-                        Logger.info('Sync: Initial pull complete');
+                        let pulled = null;
+                        if (syncManager.isDirty()) {
+                            // Local changes never reached the storage node (app was
+                            // closed before auto-push). Push first so the pull can't
+                            // clobber them, then merge remote state.
+                            const result = await syncManager.smartSync();
+                            pulled = result.pulled ? result : null;
+                            Logger.info('Sync: Initial smart sync complete (flushed unsynced local state)');
+                        } else {
+                            pulled = await this.pullSyncedStateAndBlobs();
+                            Logger.info('Sync: Initial pull complete');
+                        }
 
-                        if (pullResult !== null) {
+                        if (pulled !== null) {
                             // Update header with synced username or ENS
                             const syncedUsername = identityManager.getUsername();
                             if (syncedUsername) {

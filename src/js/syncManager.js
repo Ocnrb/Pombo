@@ -42,6 +42,68 @@ class SyncManager {
         this.isSyncing = false;
         this.foregroundSyncDepth = 0;
         this.foregroundSyncLabel = null;
+        this.autoPushTimeout = null;
+        this.autoPushRetryCount = 0;
+        this.pushQueued = false;
+    }
+
+    // ==================== Dirty Flag (unsynced local state) ====================
+
+    /**
+     * localStorage key for the per-account dirty flag.
+     * @returns {string|null}
+     */
+    _dirtyFlagKey() {
+        const address = authManager.getAddress();
+        if (!address) return null;
+        const keyFn = CONFIG.storageKeys?.syncDirty;
+        return keyFn ? keyFn(address) : `pombo_sync_dirty_${address.toLowerCase()}`;
+    }
+
+    /**
+     * Mark local state as having changes not yet pushed to the storage node.
+     * Survives reloads so startup can flush pending state with a push-first sync.
+     */
+    markDirty() {
+        const key = this._dirtyFlagKey();
+        if (!key) return;
+        try {
+            localStorage.setItem(key, '1');
+        } catch { /* storage unavailable — non-critical */ }
+    }
+
+    /**
+     * Clear the dirty flag (all local changes reached the storage node).
+     */
+    clearDirty() {
+        const key = this._dirtyFlagKey();
+        if (!key) return;
+        try {
+            localStorage.removeItem(key);
+        } catch { /* non-critical */ }
+    }
+
+    /**
+     * @returns {boolean} - True if local changes may not have been pushed yet
+     */
+    isDirty() {
+        const key = this._dirtyFlagKey();
+        if (!key) return false;
+        try {
+            return localStorage.getItem(key) === '1';
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * If a push was requested while another sync operation was running,
+     * run it now that the operation finished (short debounce).
+     */
+    _flushQueuedPush() {
+        if (!this.pushQueued) return;
+        this.pushQueued = false;
+        this.scheduleAutoPush(1000);
     }
 
     /**
@@ -146,7 +208,8 @@ class SyncManager {
         }
 
         if (this.isSyncing) {
-            Logger.warn('Sync: Already syncing, skipping push');
+            Logger.warn('Sync: Already syncing, queueing push');
+            this.pushQueued = true;
             return null;
         }
 
@@ -198,10 +261,17 @@ class SyncManager {
             this.lastSyncTs = payload.ts;
             Logger.info('Sync: Pushed state to storage nodes', { ts: payload.ts });
 
+            // All local changes up to this snapshot reached the storage node.
+            // Keep the dirty flag if new mutations were scheduled meanwhile.
+            if (!this.autoPushTimeout && !this.pushQueued) {
+                this.clearDirty();
+            }
+
             this.notifyHandlers('sync_pushed', { ts: payload.ts });
             return payload;
         } finally {
             this.isSyncing = false;
+            this._flushQueuedPush();
         }
     }
 
@@ -384,6 +454,7 @@ class SyncManager {
             return merged;
         } finally {
             this.isSyncing = false;
+            this._flushQueuedPush();
         }
     }
 
@@ -758,10 +829,15 @@ class SyncManager {
     /**
      * Schedule an auto-push with debounce.
      * Useful for triggering sync after user actions.
+     * Marks the account dirty so a missed push is recovered at next startup.
+     * On success also pushes unsynced image blobs; on failure retries with
+     * exponential backoff (capped at 5 minutes).
      * @param {number} delay - Debounce delay in ms (default: 15000)
      */
     scheduleAutoPush(delay = 15000) {
         if (authManager.isGuestMode()) return;
+
+        this.markDirty();
 
         // Clear existing timeout
         if (this.autoPushTimeout) {
@@ -769,11 +845,20 @@ class SyncManager {
         }
 
         this.autoPushTimeout = setTimeout(async () => {
+            this.autoPushTimeout = null;
             try {
-                await this.pushSync();
+                const pushed = await this.pushSync();
+                if (pushed) {
+                    await this.pushImageBlobs();
+                }
+                this.autoPushRetryCount = 0;
                 Logger.info('Sync: Auto-push completed');
             } catch (err) {
+                this.autoPushRetryCount += 1;
+                const retryDelay = Math.min(15000 * 2 ** this.autoPushRetryCount, 300000);
                 Logger.warn('Sync: Auto-push failed', err.message);
+                Logger.debug(`Sync: Auto-push retry in ${retryDelay}ms (attempt ${this.autoPushRetryCount})`);
+                this.scheduleAutoPush(retryDelay);
             }
         }, delay);
     }
@@ -786,6 +871,8 @@ class SyncManager {
             clearTimeout(this.autoPushTimeout);
             this.autoPushTimeout = null;
         }
+        this.autoPushRetryCount = 0;
+        this.pushQueued = false;
     }
 
     /**

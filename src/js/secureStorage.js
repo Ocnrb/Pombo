@@ -22,6 +22,7 @@ class SecureStorage {
         this.cache = null;            // Decrypted data cache
         this.isGuestMode = false;     // Guest mode - no persistence
         this.onBlockedPeersChanged = null;
+        this.onSentDataChanged = null; // Fired on sent-message/reaction/dmLeftAt mutations (sync auto-push)
         this.PBKDF2_ITERATIONS = CONFIG.crypto.pbkdf2Iterations;
         // Encrypted state store (IndexedDB)
         this.stateDB = null;          // IDBDatabase for PomboStateStore
@@ -159,8 +160,22 @@ class SecureStorage {
             dmLeftAt: {},
             channelsLeftAt: {},
             pendingInvites: [],
+            sliceTs: {},
             version: 2
         };
+    }
+
+    /**
+     * Stamp a latest-wins sync slice with the current time.
+     * The sync merge uses these timestamps to decide which side's snapshot
+     * wins, so local changes not yet pushed can't be clobbered by a pull.
+     * @param {string} key - Slice name (trustedContacts, blockedPeers, dmLeftAt, username, graphApiKey)
+     */
+    _stampSliceTs(key) {
+        if (!this.cache.sliceTs) {
+            this.cache.sliceTs = {};
+        }
+        this.cache.sliceTs[key] = Date.now();
     }
 
     /**
@@ -566,6 +581,7 @@ class SecureStorage {
     async setTrustedContacts(contacts) {
         if (!this.isUnlocked) return;
         this.cache.trustedContacts = contacts;
+        this._stampSliceTs('trustedContacts');
         await this.saveToStorage();
     }
 
@@ -600,6 +616,7 @@ class SecureStorage {
     async setUsername(username) {
         if (!this.isUnlocked) return;
         this.cache.username = username;
+        this._stampSliceTs('username');
         // Also store in plain localStorage for pre-unlock display (unlock modal)
         // Skip in guest mode — guest sessions are memory-only
         if (this.address && !this.isGuestMode) {
@@ -660,6 +677,7 @@ class SecureStorage {
     async setGraphApiKey(apiKey) {
         if (!this.isUnlocked) return;
         this.cache.graphApiKey = apiKey;
+        this._stampSliceTs('graphApiKey');
         await this.saveToStorage();
     }
 
@@ -901,6 +919,7 @@ class SecureStorage {
             delete stored.imageData;
         }
         await this.saveToStorage();
+        this.onSentDataChanged?.({ type: 'sentMessage', streamId });
     }
 
     /**
@@ -930,6 +949,7 @@ class SecureStorage {
         if (!msg) return;
         Object.assign(msg, fields);
         await this.saveToStorage();
+        this.onSentDataChanged?.({ type: 'sentMessage', streamId });
     }
 
     /**
@@ -945,6 +965,7 @@ class SecureStorage {
         if (idx >= 0) {
             messages.splice(idx, 1);
             await this.saveToStorage();
+            this.onSentDataChanged?.({ type: 'sentMessage', streamId });
         }
     }
 
@@ -1005,6 +1026,7 @@ class SecureStorage {
             if (idx < 0) reactions[messageId][emoji].push(user);
         }
         await this.saveToStorage();
+        this.onSentDataChanged?.({ type: 'sentReaction', streamId });
     }
 
     // ==================== Blocked Peers (DM) ====================
@@ -1041,6 +1063,7 @@ class SecureStorage {
         }
         if (!this.cache.blockedPeers.includes(normalized)) {
             this.cache.blockedPeers.push(normalized);
+            this._stampSliceTs('blockedPeers');
             await this.saveToStorage();
             this.onBlockedPeersChanged?.({ type: 'add', address: normalized });
         }
@@ -1057,6 +1080,7 @@ class SecureStorage {
         const idx = this.cache.blockedPeers.indexOf(normalized);
         if (idx >= 0) {
             this.cache.blockedPeers.splice(idx, 1);
+            this._stampSliceTs('blockedPeers');
             await this.saveToStorage();
             this.onBlockedPeersChanged?.({ type: 'remove', address: normalized });
         }
@@ -1097,7 +1121,9 @@ class SecureStorage {
             this.cache.dmLeftAt = {};
         }
         this.cache.dmLeftAt[normalized] = timestamp;
+        this._stampSliceTs('dmLeftAt');
         await this.saveToStorage();
+        this.onSentDataChanged?.({ type: 'dmLeftAt', address: normalized });
     }
 
     /**
@@ -1109,7 +1135,9 @@ class SecureStorage {
         const normalized = address.toLowerCase();
         if (this.cache.dmLeftAt?.[normalized]) {
             delete this.cache.dmLeftAt[normalized];
+            this._stampSliceTs('dmLeftAt');
             await this.saveToStorage();
+            this.onSentDataChanged?.({ type: 'dmLeftAt', address: normalized });
         }
     }
 
@@ -1593,7 +1621,8 @@ class SecureStorage {
             trustedContacts: this.cache.trustedContacts || {},
             ensCache: this.cache.ensCache || {},
             username: this.cache.username || null,
-            graphApiKey: this.cache.graphApiKey || null
+            graphApiKey: this.cache.graphApiKey || null,
+            sliceTs: this.cache.sliceTs || {}
         };
     }
 
@@ -1671,6 +1700,10 @@ class SecureStorage {
         }
         if (data.graphApiKey !== undefined && this.cache.graphApiKey !== data.graphApiKey) {
             this.cache.graphApiKey = data.graphApiKey;
+            changes.hasChanges = true;
+        }
+        if (data.sliceTs !== undefined && !isEqual(this.cache.sliceTs, data.sliceTs)) {
+            this.cache.sliceTs = data.sliceTs;
             changes.hasChanges = true;
         }
 
@@ -1905,7 +1938,8 @@ class SecureStorage {
             trustedContacts: this.cache.trustedContacts || {},
             ensCache: this.cache.ensCache || {},
             username: this.cache.username || null,
-            graphApiKey: this.cache.graphApiKey || null
+            graphApiKey: this.cache.graphApiKey || null,
+            sliceTs: this.cache.sliceTs || {}
         };
     }
 

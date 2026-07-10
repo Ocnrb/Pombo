@@ -3076,53 +3076,46 @@ class StreamrController {
             throw new Error('Client not initialized');
         }
 
-        const messages = [];
+        // Single resend pass with per-message error handling.
+        const collectOnce = async () => {
+            const messages = [];
 
-        try {
             Logger.info(`fetchPartitionHistory: resending from ${streamId} partition ${partition}, last ${limit}`);
-            
+
             // Streamr SDK v103+: first arg is { streamId, partition }, second is resend options
             const resend = await this.client.resend(
                 { streamId: streamId, partition: partition },
                 { last: limit }
             );
 
-            Logger.info('fetchPartitionHistory: resend object obtained, iterating...');
-
             // Manual iteration to catch errors per-message
             const iterator = resend[Symbol.asyncIterator]();
             let iteratorDone = false;
-            
+
             while (!iteratorDone) {
                 try {
                     const result = await iterator.next();
                     iteratorDone = result.done;
-                    
+
                     if (!iteratorDone && result.value) {
                         const msg = result.value;
                         // Get publisherId - v103+ uses getPublisherId() method
                         const publisherId = typeof msg.getPublisherId === 'function'
                             ? msg.getPublisherId()
                             : msg.publisherId;
-                        
-                        // Get partition from message to verify
-                        const msgPartition = typeof msg.getPartition === 'function'
-                            ? msg.getPartition()
-                            : msg.partition;
-                        
-                        Logger.debug('fetchPartitionHistory: got message', { 
-                            publisherId, 
-                            msgPartition,
-                            requestedPartition: partition,
-                            hasContent: !!msg.content,
-                            contentType: typeof msg.content,
-                            contentKeys: msg.content ? Object.keys(msg.content) : []
-                        });
-                        
+
+                        // Sequence number disambiguates messages published in the
+                        // same millisecond (e.g. sync blob chunks) for dedup keys
+                        const sequenceNumber = typeof msg.getSequenceNumber === 'function'
+                            ? msg.getSequenceNumber()
+                            : msg.sequenceNumber;
+
                         messages.push({
                             content: msg.content,
                             publisherId: publisherId,
-                            timestamp: msg.timestamp
+                            timestamp: msg.timestamp,
+                            sequenceNumber: sequenceNumber,
+                            signature: msg.signature
                         });
                     }
                 } catch (iterError) {
@@ -3134,9 +3127,48 @@ class StreamrController {
 
             Logger.info(`fetchPartitionHistory: ${messages.length} messages from partition ${partition}`);
             return messages;
+        };
+
+        // Identity key for cross-pass dedup. sequenceNumber (or signature as
+        // fallback) disambiguates same-millisecond messages.
+        const messageKey = (msg) =>
+            `${msg.publisherId}:${msg.timestamp}:${msg.sequenceNumber ?? msg.signature ?? ''}`;
+
+        try {
+            const first = await collectOnce();
+            if (first.length >= limit) {
+                return first;
+            }
+
+            // A short result may be a silently-truncated range resend (WS drop
+            // mid-iteration returns a short response with NO error — known
+            // storage node behavior) or genuine exhaustion. Confirm with a
+            // second pass and union both by message identity.
+            Logger.info(`fetchPartitionHistory: short result (${first.length}/${limit}), running confirmation pass`);
+            let second = [];
+            try {
+                second = await collectOnce();
+            } catch (confirmError) {
+                Logger.warn('fetchPartitionHistory: confirmation pass failed', confirmError.message);
+            }
+
+            if (!second.length) {
+                return first;
+            }
+
+            const byKey = new Map();
+            for (const msg of [...first, ...second]) {
+                byKey.set(messageKey(msg), msg);
+            }
+            const union = Array.from(byKey.values()).sort((a, b) => a.timestamp - b.timestamp);
+
+            if (union.length !== first.length) {
+                Logger.warn(`fetchPartitionHistory: confirmation pass recovered ${union.length - first.length} missing messages`);
+            }
+            return union;
         } catch (error) {
             Logger.error('fetchPartitionHistory error:', error);
-            return messages;
+            return [];
         }
     }
 
