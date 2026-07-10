@@ -2226,7 +2226,7 @@ class SettingsUI {
 
         try {
             const info = await this.streamrController.getStreamStorageInfo(streamId);
-            const STREAMR_OFFICIAL_NODE = window.STREAMR_STORAGE_NODE_ADDRESS || null;
+            const POMBO_NODE = '0xae340e799e8151f6a4999d245e466197aa217667';
 
             if (retentionInput && typeof info.storageDays === 'number') {
                 retentionInput.value = String(info.storageDays);
@@ -2238,8 +2238,8 @@ class SettingsUI {
             }
 
             list.innerHTML = info.nodes.map(addr => {
-                const isOfficial = STREAMR_OFFICIAL_NODE && String(addr).toLowerCase() === STREAMR_OFFICIAL_NODE.toLowerCase();
-                const label = isOfficial ? 'Streamr Official' : 'Custom';
+                const isOfficial = String(addr).toLowerCase() === POMBO_NODE.toLowerCase();
+                const label = isOfficial ? 'Pombo' : 'Custom';
                 const safeAddr = _escapeHtml(String(addr));
                 return `
                     <div class="flex items-center justify-between gap-3 px-3 py-2 bg-white/[0.03] border border-white/5 rounded-xl">
