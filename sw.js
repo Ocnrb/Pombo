@@ -4,7 +4,7 @@
 // to have scope over all pages.
 // ================================================
 
-const SW_VERSION = '2.2.0';
+const SW_VERSION = '2.3.0';
 
 // ================================================
 // INDEXEDDB CONFIGURATION
@@ -21,14 +21,10 @@ const STORES = {
 
 let db = null;
 
-// Default storage endpoints (March 2026)
+// Default storage endpoints - Pombo official storage node (July 2026)
 const DEFAULT_STORAGE_ENDPOINTS = [
-    'https://storage-cluster-1.streamr.network:8002',
-    'https://storage-cluster-2.streamr.network:8002',
-    'https://storage-cluster-3.streamr.network:8002',
-    'https://storage-cluster-4.streamr.network:8002',
-    'https://storage-cluster-5.streamr.network:8002',
-    'https://storage-cluster-6.streamr.network:8002',
+    'https://blob-storage-streamr.online',
+    'https://vps2.blob-storage-streamr.online',
 ];
 
 const API_PATH = '/streams/{streamId}/data/partitions/{partition}/last?count=1';

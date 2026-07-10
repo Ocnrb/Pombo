@@ -405,14 +405,10 @@ class RelayManager {
         const channels = [];
         const dmPeers = []; // Mapping of peer addresses to names for DM notifications
         
-        // Default storage endpoints (March 2026)
+        // Default storage endpoints - Pombo official storage node (July 2026)
         const DEFAULT_STORAGE_ENDPOINTS = [
-            'https://storage-cluster-1.streamr.network:8002',
-            'https://storage-cluster-2.streamr.network:8002',
-            'https://storage-cluster-3.streamr.network:8002',
-            'https://storage-cluster-4.streamr.network:8002',
-            'https://storage-cluster-5.streamr.network:8002',
-            'https://storage-cluster-6.streamr.network:8002',
+            'https://blob-storage-streamr.online',
+            'https://vps2.blob-storage-streamr.online',
         ];
         
         // Build DM peers mapping from all DM channels
