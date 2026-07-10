@@ -890,6 +890,14 @@ video {
   margin-left: 0.5rem;
 }
 
+.ml-3 {
+  margin-left: 0.75rem;
+}
+
+.ml-4 {
+  margin-left: 1rem;
+}
+
 .ml-6 {
   margin-left: 1.5rem;
 }
@@ -2303,10 +2311,6 @@ video {
 
 .text-\[17px\] {
   font-size: 17px;
-}
-
-.text-\[9px\] {
-  font-size: 9px;
 }
 
 .text-base {

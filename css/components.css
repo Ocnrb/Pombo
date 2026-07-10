@@ -1768,6 +1768,7 @@ body {
     text-overflow: ellipsis;
     white-space: normal;
     overflow-wrap: anywhere;
+    font-size: 0.875rem; /* tamanho do preview apenas no Explore */
 }
 @media (max-width: 767px) {
     .explore-preview-line {

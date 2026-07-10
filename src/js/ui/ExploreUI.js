@@ -343,13 +343,13 @@ class ExploreUI {
 
         listEl.innerHTML = channels.map(ch => {
             const readOnlyBadge = ch.readOnly 
-                ? '<svg class="w-3.5 h-3.5 md:w-5 md:h-5 text-white/50 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"/></svg>' 
+                ? '<svg class="w-3.5 h-3.5 md:w-5 md:h-5 text-white/60 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"/></svg>' 
                 : '';
             const categoryBadge = ch.category && ch.category !== 'general'
-                ? `<span class="px-1.5 py-0.5 bg-white/5 text-white/50 text-[9px] font-medium rounded">${escapeHtml(categoryNames[ch.category] || ch.category)}</span>`
+                ? `<span class="px-1.5 py-1 bg-white/5 text-white/50 text-[11px] font-medium rounded">${escapeHtml(categoryNames[ch.category] || ch.category)}</span>`
                 : '';
             const languageBadge = ch.language
-                ? `<span class="px-1.5 py-0.5 bg-white/5 text-white/40 text-[9px] font-medium rounded">${escapeHtml(languageNames[ch.language] || ch.language.toUpperCase())}</span>`
+                ? `<span class="px-1.5 py-1 bg-white/5 text-white/50 text-[11px] font-medium rounded">${escapeHtml(languageNames[ch.language] || ch.language.toUpperCase())}</span>`
                 : '';
             // Defense-in-depth: sanitize user-provided content before escaping
             const description = ch.description 
@@ -366,13 +366,13 @@ class ExploreUI {
             // CSS rule handles overflow with multi-line clamping.
             let previewLine;
             if (previewEntry) {
-                previewLine = `<p class="channel-preview-line explore-preview-line mt-2" data-channel-preview="${escapeAttr(ch.streamId)}">${formatPreviewLine(previewEntry)}</p>`;
+                previewLine = `<p class="channel-preview-line explore-preview-line mt-3 ml-3" data-channel-preview="${escapeAttr(ch.streamId)}">${formatPreviewLine(previewEntry)}</p>`;
             } else if (!this._explorePreviewResolved.has(ch.streamId)) {
-                previewLine = `<p class="channel-preview-line explore-preview-line mt-2" data-channel-preview="${escapeAttr(ch.streamId)}"><span class="thumb-spinner inline-block align-middle" style="width:10px;height:10px"></span></p>`;
+                previewLine = `<p class="channel-preview-line explore-preview-line mt-3 ml-3" data-channel-preview="${escapeAttr(ch.streamId)}"><span class="thumb-spinner inline-block align-middle" style="width:10px;height:10px"></span></p>`;
             } else {
                 // Resolved without a usable entry → leave the slot empty
                 // (avoids a permanent dead spinner on dormant channels).
-                previewLine = `<p class="channel-preview-line explore-preview-line mt-2" data-channel-preview="${escapeAttr(ch.streamId)}"></p>`;
+                previewLine = `<p class="channel-preview-line explore-preview-line mt-3 ml-4" data-channel-preview="${escapeAttr(ch.streamId)}"></p>`;
             }
 
             // Channel thumbnail: cached if available, else spinner placeholder
