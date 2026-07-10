@@ -293,6 +293,15 @@ describe('syncManager', () => {
             
             expect(syncManager.isSyncing).toBe(false);
         });
+
+        it('should record the pushed payload ts as applied', async () => {
+            authManager.wallet = { privateKey: '0x1234' };
+            streamrController.publish.mockResolvedValue(undefined);
+
+            await syncManager.pushSync();
+
+            expect(syncManager._getAppliedTsSet().has(syncManager.lastSyncTs)).toBe(true);
+        });
     });
 
     describe('pullSync', () => {
@@ -347,6 +356,50 @@ describe('syncManager', () => {
             await syncManager.pullSync();
             
             expect(secureStorage.importFromSync).toHaveBeenCalled();
+        });
+
+        it('should skip payloads already applied in a previous pull (stale replica no-op)', async () => {
+            authManager.wallet = { privateKey: '0x1234' };
+            authManager.getAddress.mockReturnValue('0xabc123');
+
+            syncManager._recordAppliedTs([1000]);
+            dmCrypto.decrypt.mockResolvedValue({ type: 'sync', v: 1, ts: 1000, data: {} });
+            streamrController.fetchPartitionHistory.mockResolvedValue([
+                { content: { ct: 'enc' }, publisherId: '0xABC123', timestamp: 1000 }
+            ]);
+
+            const result = await syncManager.pullSync();
+
+            expect(result).toBe(null);
+            expect(secureStorage.importFromSync).not.toHaveBeenCalled();
+            // No retry: newest fetched equals newest applied (normal no-change pull)
+            expect(streamrController.fetchPartitionHistory).toHaveBeenCalledTimes(1);
+        });
+
+        it('should retry once on a provably stale read and merge newly found payloads', async () => {
+            authManager.wallet = { privateKey: '0x1234' };
+            authManager.getAddress.mockReturnValue('0xabc123');
+
+            // We've already applied up to ts 2000, but the first resend only
+            // returns ts 1000 — provably stale replica read.
+            syncManager._recordAppliedTs([1000, 2000]);
+            dmCrypto.decrypt.mockImplementation(async (env) => env._decrypted);
+            streamrController.fetchPartitionHistory
+                .mockResolvedValueOnce([
+                    { content: { ct: 'enc', _decrypted: { type: 'sync', v: 1, ts: 1000, data: {} } }, publisherId: '0xABC123', timestamp: 1000 }
+                ])
+                .mockResolvedValueOnce([
+                    { content: { ct: 'enc', _decrypted: { type: 'sync', v: 1, ts: 1000, data: {} } }, publisherId: '0xABC123', timestamp: 1000 },
+                    { content: { ct: 'enc', _decrypted: { type: 'sync', v: 1, ts: 3000, data: { username: 'fresh' } } }, publisherId: '0xABC123', timestamp: 3000 }
+                ]);
+
+            const result = await syncManager.pullSync();
+
+            expect(streamrController.fetchPartitionHistory).toHaveBeenCalledTimes(2);
+            expect(secureStorage.importFromSync).toHaveBeenCalled();
+            expect(result).not.toBe(null);
+            // The newly discovered payload is now recorded as applied
+            expect(syncManager._getAppliedTsSet().has(3000)).toBe(true);
         });
 
         it('should reload channels if updated', async () => {

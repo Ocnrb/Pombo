@@ -1318,7 +1318,8 @@ describe('secureStorage', () => {
                     channelsUpdated: true,
                     contactsUpdated: false,
                     blockedPeersUpdated: false,
-                    usernameUpdated: false
+                    usernameUpdated: false,
+                    sentMessagesUpdated: false
                 });
             });
 
@@ -1334,7 +1335,8 @@ describe('secureStorage', () => {
                     channelsUpdated: false,
                     contactsUpdated: false,
                     blockedPeersUpdated: false,
-                    usernameUpdated: true
+                    usernameUpdated: true,
+                    sentMessagesUpdated: false
                 });
             });
 
@@ -1377,7 +1379,8 @@ describe('secureStorage', () => {
                     channelsUpdated: false,
                     contactsUpdated: false,
                     blockedPeersUpdated: false,
-                    usernameUpdated: false
+                    usernameUpdated: false,
+                    sentMessagesUpdated: false
                 });
                 expect(saveSpy).not.toHaveBeenCalled();
             });

@@ -177,19 +177,48 @@ describe('syncManager extended', () => {
             expect(handler).toHaveBeenCalledWith(expect.objectContaining({ pushed: true }));
         });
 
-        it('should rethrow on push error', async () => {
+        it('should continue to pull when push fails (partial failure)', async () => {
             vi.spyOn(syncManager, 'pushSync').mockRejectedValue(new Error('push fail'));
+            const pullSpy = vi.spyOn(syncManager, 'pullSync').mockResolvedValue({ merged: true });
+            vi.spyOn(syncManager, 'pullImageBlobs').mockResolvedValue(undefined);
 
-            await expect(syncManager.smartSync()).rejects.toThrow('push fail');
-            expect(Logger.error).toHaveBeenCalled();
+            const result = await syncManager.smartSync();
+
+            expect(pullSpy).toHaveBeenCalled();
+            expect(result.pushed).toBe(false);
+            expect(result.pulled).toBe(true);
+            expect(result.pushError).toBe('push fail');
         });
 
-        it('should rethrow on pull error', async () => {
+        it('should schedule a recovery push when the push phase fails', async () => {
+            vi.useFakeTimers();
+            vi.spyOn(syncManager, 'pushSync').mockRejectedValue(new Error('push fail'));
+            vi.spyOn(syncManager, 'pullSync').mockResolvedValue(null);
+            vi.spyOn(syncManager, 'pullImageBlobs').mockResolvedValue(undefined);
+
+            await syncManager.smartSync();
+
+            expect(syncManager.autoPushTimeout).not.toBeNull();
+            vi.useRealTimers();
+        });
+
+        it('should not throw on pull error when push succeeded (partial failure)', async () => {
             vi.spyOn(syncManager, 'pushSync').mockResolvedValue(undefined);
             vi.spyOn(syncManager, 'pushImageBlobs').mockResolvedValue(undefined);
             vi.spyOn(syncManager, 'pullSync').mockRejectedValue(new Error('pull fail'));
 
-            await expect(syncManager.smartSync()).rejects.toThrow('pull fail');
+            const result = await syncManager.smartSync();
+
+            expect(result.pushed).toBe(true);
+            expect(result.pulled).toBe(false);
+            expect(result.pullError).toBe('pull fail');
+        });
+
+        it('should throw only when both phases fail', async () => {
+            vi.spyOn(syncManager, 'pushSync').mockRejectedValue(new Error('push fail'));
+            vi.spyOn(syncManager, 'pullSync').mockRejectedValue(new Error('pull fail'));
+
+            await expect(syncManager.smartSync()).rejects.toThrow('push fail');
         });
     });
 

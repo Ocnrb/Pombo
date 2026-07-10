@@ -230,7 +230,7 @@ describe('syncManager blob sync', () => {
             expect(streamrController.fetchPartitionHistory).toHaveBeenCalledWith(
                 '0xabc/Pombo-DM-1',
                 STREAM_CONFIG.MESSAGE_STREAM.SYNC_BLOBS,
-                50
+                200
             );
         });
 
