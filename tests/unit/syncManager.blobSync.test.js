@@ -95,13 +95,17 @@ import { secureStorage } from '../../src/js/secureStorage.js';
 describe('syncManager blob sync', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        syncManager.cancelAutoPush();
         syncManager.isSyncing = false;
         syncManager.lastSyncTs = null;
         syncManager.handlers = [];
+        syncManager.pushQueued = false;
+        syncManager.autoPushRetryCount = 0;
         authManager.wallet = { privateKey: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef' };
         authManager.isGuestMode.mockReturnValue(false);
         authManager.getAddress.mockReturnValue('0xabc123');
         dmManager.hasInbox.mockResolvedValue(true);
+        localStorage.clear();
     });
 
     afterEach(() => {

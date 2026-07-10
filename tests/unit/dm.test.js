@@ -1289,6 +1289,11 @@ describe('DMManager', () => {
 
     // ==================== hasInbox() ====================
     describe('hasInbox()', () => {
+        beforeEach(() => {
+            // Reset positive-result cache (singleton persists across tests)
+            dmManager._inboxExistsCache = null;
+        });
+
         it('should return false when inbox not initialized', async () => {
             dmManager.inboxMessageStreamId = null;
             expect(await dmManager.hasInbox()).toBe(false);
@@ -1298,6 +1303,27 @@ describe('DMManager', () => {
             dmManager.inboxMessageStreamId = 'test/Pombo-DM-1';
             streamrController.client.getStream.mockResolvedValue({ id: 'test/Pombo-DM-1' });
 
+            expect(await dmManager.hasInbox()).toBe(true);
+        });
+
+        it('should cache a positive result and skip the network check', async () => {
+            dmManager.inboxMessageStreamId = 'test/Pombo-DM-1';
+            streamrController.client.getStream.mockResolvedValue({ id: 'test/Pombo-DM-1' });
+
+            await dmManager.hasInbox();
+            streamrController.client.getStream.mockClear();
+
+            expect(await dmManager.hasInbox()).toBe(true);
+            expect(streamrController.client.getStream).not.toHaveBeenCalled();
+        });
+
+        it('should re-check on every call after a negative result', async () => {
+            dmManager.inboxMessageStreamId = 'test/Pombo-DM-1';
+            streamrController.client.getStream.mockRejectedValue(new Error('not found'));
+
+            expect(await dmManager.hasInbox()).toBe(false);
+
+            streamrController.client.getStream.mockResolvedValue({ id: 'test/Pombo-DM-1' });
             expect(await dmManager.hasInbox()).toBe(true);
         });
 

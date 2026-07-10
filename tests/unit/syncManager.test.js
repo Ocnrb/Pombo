@@ -138,13 +138,17 @@ import { dmManager } from '../../src/js/dm.js';
 describe('syncManager', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        syncManager.cancelAutoPush();
         syncManager.isSyncing = false;
         syncManager.lastSyncTs = null;
         syncManager.handlers = [];
+        syncManager.pushQueued = false;
+        syncManager.autoPushRetryCount = 0;
         // Reset authManager state
         authManager.wallet = { privateKey: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef' };
         authManager.isGuestMode.mockReturnValue(false);
         authManager.getAddress.mockReturnValue('0xabc123');
+        localStorage.clear();
     });
 
     describe('constructor', () => {
@@ -723,6 +727,70 @@ describe('syncManager', () => {
             const result = syncManager.mergeState(base, incoming);
 
             expect(result.dmLeftAt).toEqual({});
+        });
+
+        it('should keep a locally newer timestamped slice over an older incoming snapshot', () => {
+            const base = {
+                trustedContacts: { '0x1': { name: 'fresh local' } },
+                sliceTs: { trustedContacts: 2000 }
+            };
+            const incoming = {
+                trustedContacts: {},
+                sliceTs: { trustedContacts: 1000 }
+            };
+
+            const result = syncManager.mergeState(base, incoming);
+
+            expect(result.trustedContacts).toEqual({ '0x1': { name: 'fresh local' } });
+            expect(result.sliceTs.trustedContacts).toBe(2000);
+        });
+
+        it('should apply an incoming timestamped slice newer than base', () => {
+            const base = {
+                dmLeftAt: { '0xaaa': 100 },
+                sliceTs: { dmLeftAt: 1000 }
+            };
+            const incoming = {
+                dmLeftAt: {},
+                sliceTs: { dmLeftAt: 2000 }
+            };
+
+            const result = syncManager.mergeState(base, incoming);
+
+            expect(result.dmLeftAt).toEqual({});
+            expect(result.sliceTs.dmLeftAt).toBe(2000);
+        });
+
+        it('should let a stamped local slice beat legacy payloads without sliceTs', () => {
+            const base = {
+                blockedPeers: ['0xaaa'],
+                sliceTs: { blockedPeers: 500 }
+            };
+            const incoming = {
+                blockedPeers: [] // legacy snapshot, no sliceTs
+            };
+
+            const result = syncManager.mergeState(base, incoming);
+
+            expect(result.blockedPeers).toEqual(['0xaaa']);
+        });
+
+        it('should keep base graphApiKey when legacy incoming has none (truthy fallback)', () => {
+            const base = { graphApiKey: 'key-123' };
+            const incoming = { graphApiKey: null };
+
+            const result = syncManager.mergeState(base, incoming);
+
+            expect(result.graphApiKey).toBe('key-123');
+        });
+
+        it('should propagate stamped graphApiKey deletion', () => {
+            const base = { graphApiKey: 'key-123', sliceTs: { graphApiKey: 1000 } };
+            const incoming = { graphApiKey: null, sliceTs: { graphApiKey: 2000 } };
+
+            const result = syncManager.mergeState(base, incoming);
+
+            expect(result.graphApiKey).toBe(null);
         });
     });
 

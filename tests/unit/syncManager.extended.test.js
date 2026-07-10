@@ -101,10 +101,14 @@ import { CONFIG } from '../../src/js/config.js';
 describe('syncManager extended', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        syncManager.cancelAutoPush();
         syncManager.isSyncing = false;
         syncManager.lastSyncTs = null;
         syncManager.handlers = [];
         syncManager.autoPushTimeout = null;
+        syncManager.pushQueued = false;
+        syncManager.autoPushRetryCount = 0;
+        localStorage.clear();
         authManager.wallet = { privateKey: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef' };
         authManager.isGuestMode.mockReturnValue(false);
         authManager.getAddress.mockReturnValue('0xabc123');
@@ -327,6 +331,118 @@ describe('syncManager extended', () => {
             syncManager.autoPushTimeout = null;
             syncManager.cancelAutoPush();
             expect(syncManager.autoPushTimeout).toBeNull();
+        });
+
+        it('should reset retry count and queued push', () => {
+            syncManager.autoPushRetryCount = 3;
+            syncManager.pushQueued = true;
+            syncManager.cancelAutoPush();
+            expect(syncManager.autoPushRetryCount).toBe(0);
+            expect(syncManager.pushQueued).toBe(false);
+        });
+    });
+
+    // ==================== dirty flag ====================
+    describe('dirty flag', () => {
+        it('should mark dirty when scheduling an auto push', () => {
+            vi.useFakeTimers();
+            syncManager.scheduleAutoPush(1000);
+            expect(syncManager.isDirty()).toBe(true);
+            vi.useRealTimers();
+        });
+
+        it('should not mark dirty in guest mode', () => {
+            authManager.isGuestMode.mockReturnValue(true);
+            syncManager.scheduleAutoPush(1000);
+            expect(syncManager.isDirty()).toBe(false);
+        });
+
+        it('should clear dirty after a successful push with nothing pending', async () => {
+            syncManager.markDirty();
+            await syncManager.pushSync();
+            expect(syncManager.isDirty()).toBe(false);
+        });
+
+        it('should keep dirty when new changes are scheduled mid-push', async () => {
+            streamrController.publish.mockImplementation(async () => {
+                syncManager.scheduleAutoPush(60000);
+            });
+            await syncManager.pushSync();
+            expect(syncManager.isDirty()).toBe(true);
+        });
+    });
+
+    // ==================== queued push ====================
+    describe('queued push', () => {
+        it('should queue a push requested while syncing', async () => {
+            syncManager.isSyncing = true;
+            const result = await syncManager.pushSync();
+            expect(result).toBeNull();
+            expect(syncManager.pushQueued).toBe(true);
+        });
+
+        it('should flush the queued push when the running sync finishes', async () => {
+            vi.useFakeTimers();
+            syncManager.isSyncing = true;
+            await syncManager.pushSync(); // queued
+            syncManager.isSyncing = false;
+
+            // A pull finishing must flush the queued push (short debounce)
+            await syncManager.pullSync();
+
+            expect(syncManager.pushQueued).toBe(false);
+            expect(syncManager.autoPushTimeout).not.toBeNull();
+            vi.useRealTimers();
+        });
+    });
+
+    // ==================== auto-push blobs & retry ====================
+    describe('auto-push blobs and retry', () => {
+        it('should push image blobs after a successful auto push', async () => {
+            vi.useFakeTimers();
+            vi.spyOn(syncManager, 'pushSync').mockResolvedValue({ ts: 1 });
+            const blobSpy = vi.spyOn(syncManager, 'pushImageBlobs').mockResolvedValue(undefined);
+
+            syncManager.scheduleAutoPush(100);
+            await vi.advanceTimersByTimeAsync(100);
+
+            expect(blobSpy).toHaveBeenCalled();
+            vi.useRealTimers();
+        });
+
+        it('should not push blobs when push was skipped', async () => {
+            vi.useFakeTimers();
+            vi.spyOn(syncManager, 'pushSync').mockResolvedValue(null);
+            const blobSpy = vi.spyOn(syncManager, 'pushImageBlobs');
+
+            syncManager.scheduleAutoPush(100);
+            await vi.advanceTimersByTimeAsync(100);
+
+            expect(blobSpy).not.toHaveBeenCalled();
+            vi.useRealTimers();
+        });
+
+        it('should retry with backoff after a failed auto push', async () => {
+            vi.useFakeTimers();
+            const pushSpy = vi.spyOn(syncManager, 'pushSync')
+                .mockRejectedValueOnce(new Error('boom'))
+                .mockResolvedValueOnce({ ts: 1 });
+            const blobSpy = vi.spyOn(syncManager, 'pushImageBlobs').mockResolvedValue(undefined);
+
+            syncManager.scheduleAutoPush(100);
+            await vi.advanceTimersByTimeAsync(100);
+
+            expect(pushSpy).toHaveBeenCalledTimes(1);
+            expect(syncManager.autoPushRetryCount).toBe(1);
+            expect(syncManager.autoPushTimeout).not.toBeNull();
+
+            // Backoff: 15000 * 2^1 = 30000
+            await vi.advanceTimersByTimeAsync(30000);
+
+            expect(pushSpy).toHaveBeenCalledTimes(2);
+            expect(syncManager.autoPushRetryCount).toBe(0);
+            expect(blobSpy).toHaveBeenCalled();
+            vi.useRealTimers();
         });
     });
 

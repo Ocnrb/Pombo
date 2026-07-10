@@ -1119,6 +1119,45 @@ describe('StreamrController Core', () => {
             const result = await streamrController.fetchPartitionHistory('stream-1', 0);
             expect(result).toEqual([]);
         });
+
+        it('should run a confirmation pass on short results and union messages', async () => {
+            const msg1 = createMockMessage({ id: '1' }, '0xpub1', 1000);
+            const msg2 = createMockMessage({ id: '2' }, '0xpub1', 2000);
+            mockClient.resend
+                .mockResolvedValueOnce(createMockAsyncIterator([msg1]))        // truncated
+                .mockResolvedValueOnce(createMockAsyncIterator([msg1, msg2])); // full
+
+            const result = await streamrController.fetchPartitionHistory('stream-1', 1, 10);
+
+            expect(mockClient.resend).toHaveBeenCalledTimes(2);
+            expect(result).toHaveLength(2);
+            expect(result.map(m => m.content.id)).toEqual(['1', '2']);
+        });
+
+        it('should not run a confirmation pass when the window is full', async () => {
+            const msgs = [
+                createMockMessage({ id: '1' }, '0xpub1', 1000),
+                createMockMessage({ id: '2' }, '0xpub1', 2000)
+            ];
+            mockClient.resend.mockResolvedValue(createMockAsyncIterator(msgs));
+
+            const result = await streamrController.fetchPartitionHistory('stream-1', 1, 2);
+
+            expect(mockClient.resend).toHaveBeenCalledTimes(1);
+            expect(result).toHaveLength(2);
+        });
+
+        it('should keep the first pass when the confirmation pass fails', async () => {
+            const msg1 = createMockMessage({ id: '1' }, '0xpub1', 1000);
+            mockClient.resend
+                .mockResolvedValueOnce(createMockAsyncIterator([msg1]))
+                .mockRejectedValueOnce(new Error('ws drop'));
+
+            const result = await streamrController.fetchPartitionHistory('stream-1', 1, 10);
+
+            expect(result).toHaveLength(1);
+            expect(result[0].content.id).toBe('1');
+        });
     });
 
     // ==================== fetchOlderHistory() ====================
