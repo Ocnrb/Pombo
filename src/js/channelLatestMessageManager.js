@@ -27,7 +27,7 @@
  *   {
  *     id?: string,            // message id when known
  *     ts: number,              // ms epoch
- *     type: 'text' | 'image' | 'video_announce' | 'reaction',
+ *     type: 'text' | 'image' | 'file_announce' | 'reaction',
  *     sender: string|null,     // 0x... lowercased; null for empty caches
  *     text?: string,
  *     emoji?: string,          // reactions
@@ -290,11 +290,11 @@ class ChannelLatestMessageManager {
                 senderName
             };
         }
-        if (t === 'video_announce') {
+        if (t === 'file_announce') {
             return {
                 id: raw.id || null,
                 ts,
-                type: 'video_announce',
+                type: 'file_announce',
                 sender: senderText,
                 senderName
             };
@@ -324,7 +324,7 @@ class ChannelLatestMessageManager {
      * Accepts the same shapes used elsewhere in the app:
      *   - text:           { type:'text', id, text, sender, timestamp }
      *   - image:          { type:'image', id, sender, timestamp, ... }
-     *   - video_announce: { type:'video_announce', id, sender, timestamp, ... }
+     *   - file_announce: { type:'file_announce', id, sender, timestamp, ... }
      *   - reaction:       { type:'reaction', emoji, action, messageId, sender, timestamp }
      *
      * For deletes, callers should pass the *previous* visible message
@@ -338,7 +338,7 @@ class ChannelLatestMessageManager {
     setFromLocal(messageStreamId, message) {
         if (!messageStreamId || !message || typeof message !== 'object') return null;
         const t = message.type;
-        if (t !== 'text' && t !== 'image' && t !== 'video_announce' && t !== 'reaction') {
+        if (t !== 'text' && t !== 'image' && t !== 'file_announce' && t !== 'reaction') {
             return null;
         }
         // Reaction removals never enter the preview — see _normalizeRemoteEntry.
@@ -362,8 +362,8 @@ class ChannelLatestMessageManager {
             };
         } else if (t === 'image') {
             entry = { id: message.id || null, ts, type: 'image', sender: senderText, senderName };
-        } else if (t === 'video_announce') {
-            entry = { id: message.id || null, ts, type: 'video_announce', sender: senderText, senderName };
+        } else if (t === 'file_announce') {
+            entry = { id: message.id || null, ts, type: 'file_announce', sender: senderText, senderName };
         } else {
             entry = {
                 id: null,

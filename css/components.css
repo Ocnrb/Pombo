@@ -611,17 +611,17 @@ body {
 }
 
 /* ----- Video & Image Message Styles ----- */
-.message-entry[data-type="video_announce"] .message-bubble {
+.message-entry[data-type="file_announce"] .message-bubble {
     padding: 0.25rem;
     background: transparent;
 }
 
-.message-entry[data-type="video_announce"] .message-content {
+.message-entry[data-type="file_announce"] .message-content {
     font-size: inherit;
 }
 
-.message-entry[data-type="video_announce"].own-message .message-bubble,
-.message-entry[data-type="video_announce"].other-message .message-bubble {
+.message-entry[data-type="file_announce"].own-message .message-bubble,
+.message-entry[data-type="file_announce"].other-message .message-bubble {
     background-color: transparent;
 }
 

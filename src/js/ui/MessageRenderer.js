@@ -204,6 +204,124 @@ class MessageRenderer {
     }
 
     /**
+     * Format a transfer rate for display.
+     * @param {number|null} bytesPerSec
+     * @returns {string} Empty when there is nothing measured yet
+     */
+    formatSpeed(bytesPerSec) {
+        if (!Number.isFinite(bytesPerSec) || bytesPerSec <= 0) return '';
+        if (bytesPerSec < 1024) return `${Math.round(bytesPerSec)} B/s`;
+        if (bytesPerSec < 1048576) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
+        return `${(bytesPerSec / 1048576).toFixed(2)} MB/s`;
+    }
+
+    /**
+     * Render the bubble for a non-video file.
+     *
+     * Three states share one shell so the row does not jump around as a transfer
+     * moves between them: idle (download button), transferring (bar + statistics),
+     * and available (open/save).
+     *
+     * @param {Object} msg - Message object
+     * @param {Object} view - Precomputed view state from renderVideoContent
+     * @returns {string} - HTML for the file bubble
+     */
+    renderFileBubble(msg, { isDownloading, downloadProgress } = {}) {
+        const metadata = msg.metadata;
+        const fileId = metadata.fileId;
+        const safeFileId = escapeAttr(fileId);
+        const safeFileName = escapeHtml(sanitizeText(metadata.fileName));
+        const attrFileName = escapeAttr(sanitizeText(metadata.fileName));
+
+        const fileUrl = this.deps.getFileUrl?.(fileId);
+        const isSeeding = this.deps.isSeeding?.(fileId);
+        const canDownload = Array.isArray(metadata.pieceHashes) && metadata.pieceHashes.length > 0;
+        const active = isDownloading && downloadProgress;
+
+        const totalSize = this.formatFileSize(metadata.fileSize);
+        const percent = active ? downloadProgress.percent : 0;
+
+        // One line of statistics, never two — the bubble is wide enough to hold
+        // transferred/total and a rate side by side, and a wrap makes it jitter.
+        let detail;
+        if (active) {
+            const transferred = downloadProgress.total > 0
+                ? this.formatFileSize((downloadProgress.received / downloadProgress.total) * downloadProgress.fileSize)
+                : '0 B';
+            const speed = this.formatSpeed(downloadProgress.bytesPerSec);
+            detail = `${transferred} of ${totalSize}${speed ? ` &middot; ${speed}` : ''}`;
+        } else if (fileUrl) {
+            detail = totalSize;
+        } else if (!canDownload) {
+            detail = `${totalSize} &middot; not on this device`;
+        } else {
+            detail = totalSize;
+        }
+
+        // Serving stats sit beside the size: an upload glyph with the rate, and a
+        // person glyph with however many peers are currently pulling from us.
+        const seedingStats = (fileUrl && isSeeding) ? `
+            <span class="inline-flex items-center gap-1 ml-1.5" data-upload-stats="${safeFileId}">
+                <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 16.5V4m0 0L7.5 8.5M12 4l4.5 4.5M4.5 20h15"/>
+                </svg>
+                <span data-upload-speed="${safeFileId}"></span>
+                <svg class="w-2.5 h-2.5 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6.5 20a5.5 5.5 0 0 1 11 0M12 11.5a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5M19.5 9.5V4m0 0-2 2m2-2 2 2"/>
+                </svg>
+                <span data-leecher-count="${safeFileId}">0</span>
+            </span>
+        ` : '';
+
+        // No spinner while transferring: the bar underneath already says it is moving,
+        // and the freed width is what keeps the statistics on one line.
+        const action = (!fileUrl && canDownload && !active) ? `
+            <button class="download-file-btn flex-shrink-0 w-8 h-8 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] flex items-center justify-center transition"
+                    data-file-id="${safeFileId}" title="Download">
+                <svg class="w-4 h-4 text-white/60 download-play-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+                </svg>
+                <div class="download-loading-icon hidden"></div>
+            </button>
+        ` : '';
+
+        // Once the file is here the name is the link; a separate Save button is noise
+        const title = fileUrl
+            ? `<a href="${fileUrl}" download="${attrFileName}" class="text-[12px] text-white/80 hover:text-white truncate block" title="${attrFileName}">${safeFileName}</a>`
+            : `<div class="text-[12px] text-white/80 truncate" title="${attrFileName}">${safeFileName}</div>`;
+
+        // Green outline once the bytes are here: the file is ready to save, whether we
+        // originated it or just finished pulling it
+        const iconColour = fileUrl ? 'text-green-400/70' : 'text-white/40';
+
+        return `
+            <div data-file-id="${safeFileId}" class="rounded-xl bg-white/[0.05] overflow-hidden" style="max-width: 300px;">
+                <div class="flex items-center gap-2.5 px-3 py-2.5">
+                    <div class="flex-shrink-0 w-9 h-9 rounded-lg bg-white/[0.06] flex items-center justify-center">
+                        <svg class="w-4 h-4 ${iconColour}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5A3.375 3.375 0 0 0 10.125 2.25H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z"/>
+                        </svg>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        ${title}
+                        <div class="text-[10px] text-white/35 mt-0.5 flex items-center whitespace-nowrap">
+                            <span data-progress-text="${safeFileId}">${detail}</span>
+                            ${seedingStats}
+                        </div>
+                        ${(fileUrl && isSeeding) ? `<div class="text-[10px] text-green-400/60 mt-0.5">seeding...</div>` : ''}
+                    </div>
+                    ${action}
+                </div>
+                <div class="h-1 bg-white/[0.06] ${active ? '' : 'hidden'}" data-progress-overlay="${safeFileId}">
+                    <div class="h-full bg-blue-500 transition-all duration-300"
+                         data-progress-fill="${safeFileId}" style="width: ${percent}%"></div>
+                </div>
+                <span class="hidden" data-progress-percent="${safeFileId}">${percent}%</span>
+            </div>
+        `;
+    }
+
+    /**
      * Render video announcement content
      * @param {Object} msg - Message object
      * @returns {string} - HTML for video
@@ -225,6 +343,13 @@ class MessageRenderer {
         const safeFileName = escapeHtml(sanitizeText(metadata.fileName));
         const safeFileType = escapeHtml(sanitizeText(metadata.fileType));
         
+        // Non-video files get their own bubble in every state: the player shell and the
+        // 16:9 download panel below are both meaningless for a PDF or an archive, and a
+        // file row has space for the transfer statistics a video thumbnail does not.
+        if (!(metadata.fileType || '').startsWith('video/')) {
+            return this.renderFileBubble(msg, { isDownloading, downloadProgress });
+        }
+
         if (videoUrl) {
             const isPlayable = this.deps.isVideoPlayable?.(metadata.fileType);
             const videoMediaId = this.deps.registerMedia?.(videoUrl, 'video');
@@ -289,6 +414,30 @@ class MessageRenderer {
             }
         }
         
+        // No local copy, and no piece hashes to fetch one. This is a lean record
+        // restored from our own sync: it carries naming only, deliberately, so the
+        // manifest's hashes never ride the sync payload. Nothing here is actionable,
+        // so it gets its own muted treatment rather than a download panel whose
+        // button could only ever fail.
+        const canDownload = Array.isArray(metadata.pieceHashes) && metadata.pieceHashes.length > 0;
+        if (!canDownload) {
+            return `
+                <div data-file-id="${safeFileId}" class="flex items-center gap-2.5 rounded-xl border border-dashed border-white/10 bg-white/[0.03] px-3 py-2.5" style="max-width: 220px;">
+                    <div class="flex-shrink-0 w-8 h-8 rounded-lg bg-white/[0.04] flex items-center justify-center">
+                        <svg class="w-4 h-4 text-white/25" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/>
+                        </svg>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <div class="text-[12px] text-white/50 truncate" title="${escapeAttr(sanitizeText(metadata.fileName))}">${safeFileName}</div>
+                        <div class="text-[10px] text-white/25 mt-0.5">
+                            Video &middot; ${this.formatFileSize(metadata.fileSize)} &middot; not on this device
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
         // Video not available yet - show preview panel (with downloading state if active)
         const dlActive = isDownloading && downloadProgress;
         const dlPercent = dlActive ? downloadProgress.percent : 0;
@@ -356,7 +505,7 @@ class MessageRenderer {
             case 'image':
                 return this.renderImageContent(msg);
                 
-            case 'video_announce':
+            case 'file_announce':
                 return this.renderVideoContent(msg);
                 
             default:

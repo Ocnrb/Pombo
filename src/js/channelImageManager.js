@@ -190,8 +190,11 @@ class ChannelImageManager {
             }
 
             const prev = this.cache.get(adminStreamId);
-            // Stale guard: ignore if same hash + same/lower rev
-            if (prev && prev.hash === payload.hash) {
+            // Stale guard: ignore an unchanged payload, and also an OLDER one —
+            // right after a publish the storage node still serves the previous
+            // image, and caching that would regress the fresh optimistic entry.
+            if (prev && (prev.hash === payload.hash
+                || (payload.ts && prev.ts && payload.ts < prev.ts))) {
                 return prev;
             }
 

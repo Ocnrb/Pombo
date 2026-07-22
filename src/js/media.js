@@ -51,10 +51,20 @@ const CONFIG = {
 
     PIECE_SIZE: APP_CONFIG.media.pieceSize,
     PIECE_SEND_DELAY: APP_CONFIG.media.pieceSendDelayMs,
-    MAX_CONCURRENT_REQUESTS: APP_CONFIG.media.maxConcurrentRequests,
     CONCURRENT_SENDS: APP_CONFIG.media.concurrentSends || 3,
     PIECE_REQUEST_TIMEOUT: APP_CONFIG.media.pieceRequestTimeoutMs,
+    MAX_PIECE_FAILURES: APP_CONFIG.media.maxPieceFailures,
+    MAX_SEEDER_STRIKES: APP_CONFIG.media.maxSeederStrikes,
+    SPEED_WINDOW_MS: APP_CONFIG.media.speedWindowMs,
+    LEECHER_TIMEOUT_MS: APP_CONFIG.media.leecherTimeoutMs,
+    UPLOAD_STATS_INTERVAL_MS: APP_CONFIG.media.uploadStatsIntervalMs,
     MAX_FILE_SIZE: APP_CONFIG.media.maxFileSize,
+
+    // Adaptive request window (AIMD) — see config.js for the rationale
+    PIECE_WINDOW_START: APP_CONFIG.media.pieceWindowStart,
+    PIECE_WINDOW_MIN: APP_CONFIG.media.pieceWindowMin,
+    PIECE_WINDOW_MAX: APP_CONFIG.media.pieceWindowMax,
+    PIECE_WINDOW_BACKOFF_COOLDOWN: APP_CONFIG.media.pieceWindowBackoffCooldownMs,
     
     // Seeder Discovery settings
     MIN_SEEDERS: APP_CONFIG.media.minSeeders,
@@ -67,14 +77,10 @@ const CONFIG = {
     // Seeding Persistence settings
     MAX_SEED_STORAGE: APP_CONFIG.media.maxSeedStorage,
     SEED_FILES_EXPIRE_DAYS: APP_CONFIG.media.seedFilesExpireDays,
+    PIECE_EXPIRE_DAYS: APP_CONFIG.media.pieceExpireDays,
     AUTO_SEED_ON_JOIN: true,               // Re-announce as seeder when joining channel
     PERSIST_PUBLIC_CHANNELS: true,         // Persist files from public channels
-    PERSIST_PRIVATE_CHANNELS: true,       // Don't persist files from private channels (privacy)
-    
-    // Push-first settings
-    PUSH_WATCHDOG_INTERVAL: APP_CONFIG.media.pushWatchdogIntervalMs,
-    PUSH_WATCHDOG_START_DELAY: APP_CONFIG.media.pushWatchdogStartDelayMs,
-    PUSH_STALL_TIMEOUT: APP_CONFIG.media.pushStallTimeoutMs
+    PERSIST_PRIVATE_CHANNELS: true         // Don't persist files from private channels (privacy)
 };
 
 // ==================== BINARY PROTOCOL ====================
@@ -201,6 +207,8 @@ class MediaController {
             onFileAnnounced: null,
             onFileProgress: null,
             onFileComplete: null,
+            onFileError: null,
+            onUploadProgress: null,
             onSeederUpdate: null
         };
         
@@ -217,9 +225,10 @@ class MediaController {
         this.pieceSendQueue = [];
         this.activeSends = 0;
         this.lastPieceSentTime = 0;
-        
-        // Track files currently being push-sent (prevent duplicate pushes)
-        this.activePushes = new Set();
+
+        // Serving stats per file: upload rate and who is currently pulling from us
+        this.uploads = new Map();
+        this.lastUploadStatsAt = 0;
     }
 
     /**
@@ -228,8 +237,9 @@ class MediaController {
     async init() {
         await this.initIndexedDB();
         this.initFileWorker();
+        await this.cleanupStalePieces();
         // Note: Don't load seed files here - wait for wallet connection
-        // await this.loadPersistedSeedFiles(); 
+        // await this.loadPersistedSeedFiles();
         Logger.info('Media controller initialized (waiting for wallet connection)');
     }
 
@@ -257,8 +267,8 @@ class MediaController {
             if (transfer.seederDiscoveryTimer) {
                 clearTimeout(transfer.seederDiscoveryTimer);
             }
-            if (transfer.pushWatchdogTimer) {
-                clearTimeout(transfer.pushWatchdogTimer);
+            if (transfer.noSeederRetryTimer) {
+                clearTimeout(transfer.noSeederRetryTimer);
             }
             // Also clear any piece request timeouts
             if (transfer.requestsInFlight) {
@@ -294,7 +304,11 @@ class MediaController {
         this.pieceSendQueue = [];
         this.activeSends = 0;
         this.lastPieceSentTime = 0;
-        this.activePushes.clear();
+        for (const state of this.uploads.values()) {
+            if (state.decayTimer) clearInterval(state.decayTimer);
+        }
+        this.uploads.clear();
+        this.lastUploadStatsAt = 0;
         
         // Reset owner
         this.currentOwnerAddress = null;
@@ -323,42 +337,63 @@ class MediaController {
     }
 
     /**
-     * Initialize IndexedDB for file storage (v2 with seedFiles)
+     * Initialize IndexedDB for file storage (v3)
      */
     async initIndexedDB() {
         return new Promise((resolve, reject) => {
-            // Upgrade to version 2 for seedFiles store
-            const request = indexedDB.open('PomboMediaDB', 2);
-            
+            const request = indexedDB.open('PomboMediaDB', 3);
+
             request.onerror = () => {
                 Logger.warn('IndexedDB not available, using memory only');
                 resolve();
             };
-            
+
             request.onsuccess = (event) => {
                 this.db = event.target.result;
-                Logger.debug('IndexedDB initialized (v2)');
+                Logger.debug('IndexedDB initialized (v3)');
                 resolve();
             };
-            
+
             request.onupgradeneeded = (event) => {
                 const db = event.target.result;
-                
-                // v1: pieces store for temporary download storage
-                if (!db.objectStoreNames.contains('pieces')) {
-                    db.createObjectStore('pieces', { keyPath: ['fileId', 'pieceIndex'] });
-                }
-                
+
                 // v2: seedFiles store for persistent seeding
                 if (!db.objectStoreNames.contains('seedFiles')) {
                     const seedStore = db.createObjectStore('seedFiles', { keyPath: 'fileId' });
                     seedStore.createIndex('streamId', 'streamId', { unique: false });
                     seedStore.createIndex('timestamp', 'timestamp', { unique: false });
                 }
-                
-                Logger.info('IndexedDB upgraded to v2 with seedFiles store');
+
+                // v3: pieces gain a timestamp index so abandoned partial downloads
+                // can be swept. Pieces are scratch space for in-flight transfers, so
+                // the store is recreated rather than migrated — dropping a partial
+                // download only costs a re-download.
+                if (event.oldVersion < 3) {
+                    if (db.objectStoreNames.contains('pieces')) {
+                        db.deleteObjectStore('pieces');
+                    }
+                    const pieceStore = db.createObjectStore('pieces', { keyPath: ['fileId', 'pieceIndex'] });
+                    pieceStore.createIndex('timestamp', 'timestamp', { unique: false });
+                }
+
+                Logger.info('IndexedDB upgraded to v3');
             };
         });
+    }
+
+    /**
+     * All piece records for one file.
+     *
+     * The store's key path is ['fileId', 'pieceIndex'], so a bound range over the
+     * compound key selects exactly one file's pieces. Previously every lookup
+     * opened a cursor over the whole store and filtered in JS, which grew with
+     * every other download ever started.
+     *
+     * @param {string} fileId - File ID
+     * @returns {IDBKeyRange}
+     */
+    pieceKeyRange(fileId) {
+        return IDBKeyRange.bound([fileId, -Infinity], [fileId, Infinity]);
     }
 
     /**
@@ -377,13 +412,13 @@ class MediaController {
                 const PIECE_SIZE = ${CONFIG.PIECE_SIZE};
                 const pieceHashes = [];
                 
-                const arrayBuffer = await fileData.arrayBuffer();
-                const bytes = new Uint8Array(arrayBuffer);
-                
-                // Process file in chunks
-                for (let offset = 0; offset < bytes.length; offset += PIECE_SIZE) {
-                    const chunk = bytes.slice(offset, Math.min(offset + PIECE_SIZE, bytes.length));
-                    const hash = await calculateSHA256(chunk.buffer);
+                // Hash one slice at a time. Reading the whole file into an ArrayBuffer
+                // here meant a 500MB upload allocated 500MB in the worker before the
+                // transfer even started; Blob.slice() reads only the piece it needs.
+                for (let offset = 0; offset < fileData.size; offset += PIECE_SIZE) {
+                    const end = Math.min(offset + PIECE_SIZE, fileData.size);
+                    const slice = fileData.slice(offset, end);
+                    const hash = await calculateSHA256(await slice.arrayBuffer());
                     pieceHashes.push(hash);
                 }
 
@@ -1551,7 +1586,15 @@ class MediaController {
         if (!transfer) return null;
         const { receivedCount, metadata } = transfer;
         const percent = metadata.pieceCount > 0 ? Math.round(receivedCount / metadata.pieceCount * 100) : 0;
-        return { percent, received: receivedCount, total: metadata.pieceCount, fileSize: metadata.fileSize };
+        // Recomputed against the current clock, so a re-render during a stall shows
+        // the rate decaying rather than the value frozen at the last delivery
+        return {
+            percent,
+            received: receivedCount,
+            total: metadata.pieceCount,
+            fileSize: metadata.fileSize,
+            bytesPerSec: this.getTransferRate(transfer)
+        };
     }
 
     /**
@@ -1590,6 +1633,28 @@ class MediaController {
         return false;
     }
 
+    /**
+     * Whether any DM conversation still has an active transfer.
+     *
+     * Every DM shares one ephemeral stream (derived from our own address), so this
+     * guard has to span conversations rather than take a stream id like
+     * hasActiveMediaTransfers() does. Asking "is *this* conversation idle?" would
+     * tear the stream down and cut seeding for every other DM at the same time.
+     *
+     * @returns {boolean}
+     */
+    hasActiveDMTransfers() {
+        const isDM = (streamId) => channelManager.getChannel(streamId)?.type === 'dm';
+
+        for (const [, transfer] of this.incomingFiles) {
+            if (isDM(transfer.streamId)) return true;
+        }
+        for (const [, fileInfo] of this.localFiles) {
+            if (isDM(fileInfo.streamId)) return true;
+        }
+        return false;
+    }
+
     // ==================== VIDEO/FILE HANDLING ====================
 
     /**
@@ -1600,14 +1665,32 @@ class MediaController {
      * @returns {Promise<Object>} - File metadata
      */
     async sendVideo(messageStreamId, file, password = null) {
-        // Validate file type
+        // Only the type check is video-specific; everything downstream — hashing,
+        // pieces, announce, seeding — has always been type-agnostic.
         if (!CONFIG.ALLOWED_VIDEO_TYPES.includes(file.type)) {
             throw new Error(`Invalid video type. Allowed: ${CONFIG.ALLOWED_VIDEO_TYPES.join(', ')}`);
         }
-        
+
+        return this.sendFile(messageStreamId, file, password);
+    }
+
+    /**
+     * Share a file of any type (chunked P2P transfer)
+     * @param {string} messageStreamId - Channel message stream ID
+     * @param {File} file - File to share
+     * @param {string} password - Channel password (optional)
+     * @returns {Promise<Object>} - File metadata
+     */
+    async sendFile(messageStreamId, file, password = null) {
         // Validate file size
         if (file.size > CONFIG.MAX_FILE_SIZE) {
             throw new Error(`File too large. Max: ${CONFIG.MAX_FILE_SIZE / 1024 / 1024}MB`);
+        }
+
+        // A zero-byte file hashes to zero pieces, which would announce a transfer
+        // that can never complete
+        if (file.size === 0) {
+            throw new Error('File is empty');
         }
 
         return new Promise((resolve, reject) => {
@@ -1621,12 +1704,14 @@ class MediaController {
                 isPrivateChannel: isPrivateChannel,
                 callback: async (metadata) => {
                     try {
-                        // Create file announcement message
-                        const announcement = await identityManager.createSignedMessage('', messageStreamId);
-                        announcement.type = 'video_announce';
-                        announcement.metadata = metadata;
-                        // Keep the id from createSignedMessage (signed)
-                        
+                        // Sign the manifest itself: every downloader verifies pieces
+                        // against metadata.pieceHashes, so those hashes must be inside
+                        // the signature rather than attached to it afterwards.
+                        const announcement = await identityManager.createSignedFileManifest({
+                            channelId: messageStreamId,
+                            metadata
+                        });
+
                         // Add verification info for local display
                         announcement.verified = {
                             valid: true,
@@ -1646,6 +1731,28 @@ class MediaController {
                         // Persist locally for write-only channels
                         if (channel?.writeOnly) {
                             await secureStorage.addSentMessage(messageStreamId, announcement);
+                        }
+
+                        // A DM cannot be replayed from the peer's inbox, so the
+                        // announcement is dropped on the next loadDMTimeline() and the
+                        // conversation keeps no trace of what we shared.
+                        //
+                        // Persist it, minus the piece hashes: those exist only to verify
+                        // a download and would put ~160KB into a single sync message for
+                        // a 500MB file. What remains (id, name, size, type) is ~100 bytes
+                        // and is enough for this device to re-render the real bubble
+                        // while it still holds the file, and for any other device to show
+                        // a placeholder. Their absence is what marks the record as lean.
+                        //
+                        // The signature is dropped with them: it covers pieceHashes, so
+                        // keeping it would store one that can never verify.
+                        if (channel?.type === 'dm') {
+                            const { pieceHashes, ...leanMetadata } = metadata;
+                            await secureStorage.addSentMessage(messageStreamId, {
+                                ...announcement,
+                                metadata: leanMetadata,
+                                signature: null
+                            });
                         }
                         
                         Logger.info('Video announced:', metadata.fileId, metadata.fileName);
@@ -1729,6 +1836,13 @@ class MediaController {
             isPrivateChannel: !!password, // Password presence indicates private channel
             pieceStatus: new Array(pieceCount).fill('pending'),
             requestsInFlight: new Map(),
+            pieceFailures: new Map(),
+            // Seeders that already served a given piece corrupt, and a running tally
+            // per seeder across the whole transfer
+            pieceExclusions: new Map(),
+            seederStrikes: new Map(),
+            // Survives across manageDownload() calls so retries actually rotate
+            seederCursor: 0,
             receivedCount: 0,
             pieces: new Array(pieceCount).fill(null),
             useIndexedDB: this.db && fileSize > 10 * 1024 * 1024, // Use IndexedDB for files > 10MB
@@ -1736,15 +1850,42 @@ class MediaController {
             seederRequestCount: 0,
             lastSeederRequest: 0,
             seederDiscoveryTimer: null,
-            downloadStarted: false
+            noSeederRetryTimer: null,
+            downloadStarted: false,
+            // Adaptive request window (AIMD): grows per delivered piece, halves on timeout
+            window: CONFIG.PIECE_WINDOW_START,
+            lastWindowBackoffAt: 0
         };
         
         this.incomingFiles.set(fileId, transfer);
         this.fileSeeders.set(fileId, new Set());
-        
+
+        // Resume: pieces from a previous session survive in IndexedDB (reset() keeps
+        // them deliberately — only cancelDownload clears them). Rehydrate the piece
+        // index so we request just what is missing instead of re-downloading everything.
+        if (transfer.useIndexedDB) {
+            const restored = await this.restorePiecesFromIndexedDB(fileId, transfer);
+
+            if (restored > 0) {
+                Logger.info(`Resuming ${fileId.slice(0, 8)}: ${restored}/${pieceCount} pieces already local`);
+
+                if (this.handlers.onFileProgress) {
+                    const progress = Math.round((restored / pieceCount) * 100);
+                    this.handlers.onFileProgress(fileId, progress, restored, pieceCount, fileSize);
+                }
+
+                // Fully downloaded last session but never assembled — no network needed.
+                if (restored === pieceCount) {
+                    Logger.info('All pieces already local, assembling without download:', fileId);
+                    await this.assembleFile(fileId);
+                    return;
+                }
+            }
+        }
+
         // Start parallel seeder discovery
         this.startSeederDiscovery(fileId);
-        
+
         Logger.info('Started download:', fileId, fileName);
     }
 
@@ -1807,6 +1948,199 @@ class MediaController {
     }
 
     /**
+     * Append a delivery sample for rate measurement.
+     *
+     * The rate is measured, never derived from the request window. window * pieceSize
+     * / RTT models what the protocol *should* achieve and diverges from reality
+     * exactly when it matters — retries, duplicate deliveries from several seeders,
+     * or a sender-side bottleneck. index.storage.html reaches the same conclusion:
+     * it computes the modelled figure but labels it "theoretical" and keeps it well
+     * away from the measured speed.
+     *
+     * @param {Object} transfer - Transfer state
+     * @param {number} byteCount - Bytes just delivered
+     */
+    recordThroughput(transfer, byteCount) {
+        transfer.bytesTransferred = (transfer.bytesTransferred || 0) + byteCount;
+        transfer.speedSamples = transfer.speedSamples || [];
+        transfer.speedSamples.push({ at: Date.now(), bytes: transfer.bytesTransferred });
+    }
+
+    /**
+     * Per-file upload bookkeeping, created on first use.
+     * @param {string} fileId - File ID
+     * @returns {Object} { speedSamples, bytesTransferred, leechers }
+     */
+    uploadStateFor(fileId) {
+        let state = this.uploads.get(fileId);
+        if (!state) {
+            state = { speedSamples: [], bytesTransferred: 0, leechers: new Map() };
+            this.uploads.set(fileId, state);
+        }
+        return state;
+    }
+
+    /**
+     * Note that a peer asked us for a piece.
+     *
+     * There is no join or leave on a swarm, so a leecher is simply someone who has
+     * asked recently — the count ages out rather than being explicitly removed.
+     *
+     * @param {string} fileId - File ID
+     * @param {string} peerId - Requesting peer address
+     */
+    recordLeecher(fileId, peerId) {
+        if (!peerId) return;
+        this.uploadStateFor(fileId).leechers.set(peerId.toLowerCase(), Date.now());
+    }
+
+    /**
+     * Upload rate and current leecher count for a file we are serving.
+     *
+     * @param {string} fileId - File ID
+     * @param {number} [now] - Clock override, for tests
+     * @returns {{bytesPerSec: number|null, leechers: number}}
+     */
+    getUploadStats(fileId, now = Date.now()) {
+        const state = this.uploads.get(fileId);
+        if (!state) return { bytesPerSec: null, leechers: 0 };
+
+        const cutoff = now - CONFIG.LEECHER_TIMEOUT_MS;
+        for (const [peer, lastAt] of state.leechers) {
+            if (lastAt < cutoff) state.leechers.delete(peer);
+        }
+
+        return {
+            bytesPerSec: this.getTransferRate(state, now),
+            leechers: state.leechers.size
+        };
+    }
+
+    /**
+     * Sliding-window transfer rate in bytes per second.
+     *
+     * The span is capped by `now` rather than by the newest sample, so a stall drags
+     * the rate toward zero instead of freezing it at whatever was flowing before
+     * everything stopped — samples only arrive on delivery, so without this the
+     * display would keep reporting a healthy rate for a dead transfer.
+     *
+     * @param {Object} transfer - Transfer state
+     * @param {number} [now] - Clock override, for tests
+     * @returns {number|null} Bytes per second, or null until there is a second to measure
+     */
+    getTransferRate(transfer, now = Date.now()) {
+        const samples = transfer?.speedSamples;
+        if (!samples || samples.length < 2) return null;
+
+        // Prune against the second sample so the window still spans the full period
+        const cutoff = now - CONFIG.SPEED_WINDOW_MS;
+        while (samples.length > 2 && samples[1].at <= cutoff) samples.shift();
+
+        const first = samples[0];
+        const last = samples[samples.length - 1];
+        const span = (Math.max(now, last.at) - first.at) / 1000;
+        if (span < 1) return null;
+
+        return Math.round((last.bytes - first.bytes) / span);
+    }
+
+    /**
+     * Widen the request window after a successful delivery (additive increase).
+     * @param {Object} transfer - Transfer state
+     */
+    growWindow(transfer) {
+        transfer.window = Math.min(CONFIG.PIECE_WINDOW_MAX, transfer.window + 1);
+    }
+
+    /**
+     * Halve the request window after a timeout (multiplicative decrease).
+     *
+     * The cooldown matters: every outstanding request expires at roughly the same
+     * moment, so a single stall produces a burst of timeouts. Without it the window
+     * would collapse to the floor on the first hiccup instead of backing off once.
+     *
+     * @param {Object} transfer - Transfer state
+     */
+    shrinkWindow(transfer) {
+        const now = Date.now();
+        if (now - (transfer.lastWindowBackoffAt || 0) < CONFIG.PIECE_WINDOW_BACKOFF_COOLDOWN) {
+            return;
+        }
+
+        transfer.lastWindowBackoffAt = now;
+        transfer.window = Math.max(CONFIG.PIECE_WINDOW_MIN, Math.floor(transfer.window / 2));
+        Logger.debug(`Request window backed off to ${transfer.window}`);
+    }
+
+    /**
+     * Choose a seeder for a piece, skipping any that already served it corrupt.
+     *
+     * The cursor lives on the transfer rather than being reset per call. It used to
+     * restart at zero every time, which meant a retried piece — usually the only
+     * pending one, since the window is otherwise full — went back to the same peer
+     * every time. A bad seeder at the head of the set could never be rotated away
+     * from, so the failure cap fired instead of the transfer healing itself.
+     *
+     * @param {Object} transfer - Transfer state
+     * @param {string[]} seederArray - Known seeders
+     * @param {number} pieceIndex - Piece to request
+     * @returns {string|null} null when every known seeder is excluded for this piece
+     */
+    pickSeederFor(transfer, seederArray, pieceIndex) {
+        if (seederArray.length === 0) return null;
+
+        const excluded = transfer.pieceExclusions?.get(pieceIndex);
+        transfer.seederCursor = transfer.seederCursor || 0;
+
+        for (let attempt = 0; attempt < seederArray.length; attempt++) {
+            const candidate = seederArray[transfer.seederCursor % seederArray.length];
+            transfer.seederCursor++;
+
+            if (!excluded || !excluded.has(candidate)) return candidate;
+        }
+
+        return null;
+    }
+
+    /**
+     * Attribute a corrupt piece to the peer that served it.
+     *
+     * Two levels, because they solve different problems. The per-piece exclusion
+     * makes the retry land somewhere else by construction rather than by luck. The
+     * strike count catches a peer that is broken rather than unlucky — exclusion
+     * alone would let it ruin every other piece in turn, one at a time.
+     *
+     * @param {Object} transfer - Transfer state
+     * @param {string} fileId - File ID
+     * @param {number} pieceIndex - Piece that failed
+     * @param {string} senderId - Peer that published the bad piece
+     */
+    blameSeeder(transfer, fileId, pieceIndex, senderId) {
+        const seederId = senderId.toLowerCase();
+
+        let excluded = transfer.pieceExclusions?.get(pieceIndex);
+        if (!excluded) {
+            excluded = new Set();
+            transfer.pieceExclusions?.set(pieceIndex, excluded);
+        }
+        excluded.add(seederId);
+
+        const strikes = (transfer.seederStrikes?.get(seederId) || 0) + 1;
+        transfer.seederStrikes?.set(seederId, strikes);
+
+        if (strikes < CONFIG.MAX_SEEDER_STRIKES) return;
+
+        const seeders = this.fileSeeders.get(fileId);
+        if (seeders?.delete(seederId)) {
+            Logger.warn(`Dropped seeder ${seederId.slice(0, 10)} after ${strikes} bad pieces`);
+
+            if (this.handlers.onSeederUpdate) {
+                this.handlers.onSeederUpdate(fileId, seeders.size);
+            }
+        }
+    }
+
+    /**
      * Manage download - request missing pieces with round-robin load balancing
      */
     manageDownload(fileId) {
@@ -1821,25 +2155,39 @@ class MediaController {
                 Logger.debug(`Lost all seeders for ${fileId}, requesting more...`);
                 this.requestFileSources(transfer.streamId, fileId, transfer.password);
             }
-            setTimeout(() => this.manageDownload(fileId), 1000);
+            // Keep a single pending retry. manageDownload() is re-entered on every
+            // delivery and every timeout, so scheduling one timer per call would
+            // pile up hundreds of them while we wait for a seeder.
+            if (!transfer.noSeederRetryTimer) {
+                transfer.noSeederRetryTimer = setTimeout(() => {
+                    transfer.noSeederRetryTimer = null;
+                    this.manageDownload(fileId);
+                }, 1000);
+            }
             return;
         }
-        
+
         const seederArray = Array.from(seeders);
-        let seederIndex = 0;
-        
-        // In push-mode retries: use same cap (watchdog handles scheduling)
-        // In request-mode: respect MAX_CONCURRENT_REQUESTS
-        const maxInFlight = CONFIG.MAX_CONCURRENT_REQUESTS;
-        
-        // Find pieces to request using round-robin across seeders
+
+        // Fill the adaptive window. requestPiece() marks the piece and registers it
+        // in requestsInFlight synchronously, so this bound holds even though the
+        // publish itself is async.
         for (let i = 0; i < transfer.pieceStatus.length; i++) {
-            if (transfer.requestsInFlight.size >= maxInFlight) break;
-            
+            if (transfer.requestsInFlight.size >= transfer.window) break;
+
             if (transfer.pieceStatus[i] === 'pending') {
-                // Round-robin seeder selection for better load distribution
-                const seederId = seederArray[seederIndex % seederArray.length];
-                seederIndex++;
+                const seederId = this.pickSeederFor(transfer, seederArray, i);
+
+                if (!seederId) {
+                    // Every known seeder has served this piece corrupt. Forgetting the
+                    // exclusions beats deadlocking on it, and a wider search may turn
+                    // up a peer that can actually serve it.
+                    Logger.warn(`All seeders excluded for piece ${i}, retrying them and widening the search`);
+                    transfer.pieceExclusions?.delete(i);
+                    this.requestFileSources(transfer.streamId, fileId, transfer.password);
+                    continue;
+                }
+
                 this.requestPiece(fileId, i, seederId);
             }
         }
@@ -1874,10 +2222,9 @@ class MediaController {
                 Logger.debug(`Piece ${pieceIndex} timed out (was ${status})`);
                 transfer.pieceStatus[pieceIndex] = 'pending';
                 transfer.requestsInFlight.delete(pieceIndex);
-                // In push-mode, watchdog handles retries — don't cascade
-                if (!transfer.pushMode) {
-                    this.manageDownload(fileId);
-                }
+                // A timeout is the congestion signal: back off, then retry
+                this.shrinkWindow(transfer);
+                this.manageDownload(fileId);
             }
         }, CONFIG.PIECE_REQUEST_TIMEOUT);
         
@@ -1924,6 +2271,9 @@ class MediaController {
             return;
         }
         
+        // The request's publisher is the leecher pulling from us
+        this.recordLeecher(data.fileId, data.senderId);
+
         Logger.debug('Sending piece', data.pieceIndex, 'of', data.fileId?.slice(0, 8));
         await this.sendPiece(messageStreamId, data.fileId, data.pieceIndex);
     }
@@ -2006,6 +2356,61 @@ class MediaController {
             await streamrController.publishMediaData(ephemeralStreamId, binaryPayload, password);
             Logger.debug('Sent piece (binary)', pieceIndex, 'of', fileId, password ? '(encrypted)' : '');
         }
+
+        this.recordThroughput(this.uploadStateFor(fileId), arrayBuffer.byteLength);
+        this.emitUploadStats(fileId);
+    }
+
+    /**
+     * Publish serving stats, throttled.
+     *
+     * A piece leaves every few milliseconds under a wide window, so emitting per
+     * piece would repaint the bubble far faster than anyone can read it.
+     *
+     * @param {string} fileId - File ID
+     */
+    emitUploadStats(fileId) {
+        if (!this.handlers.onUploadProgress) return;
+
+        const state = this.uploadStateFor(fileId);
+        const now = Date.now();
+
+        // Throttled per file — serving two files at once should not starve one of them
+        if (now - (state.lastEmitAt || 0) >= CONFIG.UPLOAD_STATS_INTERVAL_MS) {
+            state.lastEmitAt = now;
+            const { bytesPerSec, leechers } = this.getUploadStats(fileId, now);
+            this.handlers.onUploadProgress(fileId, bytesPerSec, leechers);
+        }
+
+        this.scheduleUploadDecay(fileId);
+    }
+
+    /**
+     * Keep republishing serving stats after the last piece goes out.
+     *
+     * The rate decays with the clock, but only if something recomputes it. Pieces
+     * stop the moment a leecher finishes, so without this the bubble would keep
+     * displaying whatever was flowing at that instant, forever.
+     *
+     * @param {string} fileId - File ID
+     */
+    scheduleUploadDecay(fileId) {
+        const state = this.uploadStateFor(fileId);
+        if (state.decayTimer) return;
+
+        state.decayTimer = setInterval(() => {
+            const { bytesPerSec, leechers } = this.getUploadStats(fileId);
+
+            if (this.handlers.onUploadProgress) {
+                this.handlers.onUploadProgress(fileId, bytesPerSec, leechers);
+            }
+
+            // Idle: nothing flowing and nobody asking. Stop until a piece goes out again.
+            if (!bytesPerSec && leechers === 0) {
+                clearInterval(state.decayTimer);
+                state.decayTimer = null;
+            }
+        }, CONFIG.UPLOAD_STATS_INTERVAL_MS);
     }
 
     /**
@@ -2054,18 +2459,14 @@ class MediaController {
             pieceBuffer = this.base64ToArrayBuffer(data.data);
         }
         if (!pieceBuffer) {
-            Logger.error('Failed to decode piece:', pieceIndex);
-            transfer.pieceStatus[pieceIndex] = 'pending';
-            this.manageDownload(fileId);
+            this.registerPieceFailure(transfer, fileId, pieceIndex, 'decode failed', data.senderId);
             return;
         }
-        
+
         // Verify hash
         const receivedHash = await this.sha256(pieceBuffer);
         if (receivedHash !== transfer.metadata.pieceHashes[pieceIndex]) {
-            Logger.error('Hash mismatch for piece:', pieceIndex);
-            transfer.pieceStatus[pieceIndex] = 'pending';
-            this.manageDownload(fileId);
+            this.registerPieceFailure(transfer, fileId, pieceIndex, 'hash mismatch', data.senderId);
             return;
         }
         
@@ -2085,27 +2486,25 @@ class MediaController {
         
         transfer.pieceStatus[pieceIndex] = 'done';
         transfer.receivedCount++;
-        transfer.lastPieceReceivedAt = Date.now();
-        
+
+        this.recordThroughput(transfer, pieceBuffer.byteLength);
+        const bytesPerSec = this.getTransferRate(transfer);
+
         // Notify progress with file size for MB display
         const progress = Math.round((transfer.receivedCount / transfer.metadata.pieceCount) * 100);
         if (this.handlers.onFileProgress) {
-            this.handlers.onFileProgress(fileId, progress, transfer.receivedCount, transfer.metadata.pieceCount, transfer.metadata.fileSize);
+            this.handlers.onFileProgress(fileId, progress, transfer.receivedCount, transfer.metadata.pieceCount, transfer.metadata.fileSize, bytesPerSec);
         }
         
         // Check if complete - verify all pieces are done
         const doneCount = transfer.pieceStatus.filter(s => s === 'done').length;
         if (doneCount === transfer.metadata.pieceCount) {
-            // Clear watchdog timer on completion
-            if (transfer.pushWatchdogTimer) {
-                clearTimeout(transfer.pushWatchdogTimer);
-            }
             await this.assembleFile(fileId);
-        } else if (!transfer.pushMode) {
-            // Request-mode: request next pieces
+        } else {
+            // Delivery succeeded: widen the window, then top the requests back up
+            this.growWindow(transfer);
             this.manageDownload(fileId);
         }
-        // Push-mode: watchdog handles retries for missing pieces
     }
 
     /**
@@ -2135,54 +2534,61 @@ class MediaController {
         } else {
             // Combine all pieces in order
             const totalSize = transfer.pieces.reduce((sum, p) => sum + (p?.length || 0), 0);
-            
+
             // Verify total size matches expected
             if (totalSize !== transfer.metadata.fileSize) {
                 Logger.warn(`Size mismatch: got ${totalSize}, expected ${transfer.metadata.fileSize}`);
             }
-            
-            const combined = new Uint8Array(totalSize);
-            let offset = 0;
-            
+
             for (let i = 0; i < transfer.pieces.length; i++) {
-                const piece = transfer.pieces[i];
-                if (piece) {
-                    combined.set(piece, offset);
-                    offset += piece.length;
-                } else {
+                if (!transfer.pieces[i]) {
                     Logger.error(`Missing piece at index ${i} during assembly!`);
                 }
             }
-            
-            blob = new Blob([combined], { type: transfer.metadata.fileType });
+
+            // Blob concatenates the parts itself, so we never allocate a contiguous
+            // copy of the whole file (peak RAM used to be ~2x the file size).
+            // filter() drops missing pieces, matching the old skip-and-continue behaviour;
+            // a null left in the array would be stringified to "null" and corrupt the file.
+            blob = new Blob(transfer.pieces.filter(Boolean), { type: transfer.metadata.fileType });
         }
         
-        // Verify blob size
-        if (blob.size !== transfer.metadata.fileSize) {
-            Logger.error(`Final blob size mismatch: got ${blob.size}, expected ${transfer.metadata.fileSize}`);
-        } else {
-            Logger.info(`File assembled correctly: ${blob.size} bytes`);
+        // Every piece was hash-verified on arrival, so a size mismatch here means
+        // pieces went missing between verification and assembly — the file is not
+        // what the sender announced. Refuse it instead of handing the UI a blob
+        // that looks fine and plays as a truncated or corrupt file.
+        if (!blob || blob.size !== transfer.metadata.fileSize) {
+            this.failDownload(
+                fileId,
+                `Assembled file is ${blob?.size ?? 0} bytes, expected ${transfer.metadata.fileSize}`
+            );
+            return;
         }
-        
+
+        Logger.info(`File assembled correctly: ${blob.size} bytes`);
+
         // Create object URL
         const url = URL.createObjectURL(blob);
         
         // Cache the download URL for later access
         this.downloadedUrls.set(fileId, url);
         
-        // Notify completion
-        if (this.handlers.onFileComplete) {
-            this.handlers.onFileComplete(fileId, transfer.metadata, url, blob);
-        }
-        
-        // Now we can seed this file
+        // Register as a local file *before* notifying: the completion handler paints
+        // the bubble, and it asks isSeeding() to decide on the green icon, the serving
+        // statistics and the "seeding..." line. Setting this afterwards left the fresh
+        // bubble looking like a plain download until something re-rendered it.
         this.localFiles.set(fileId, {
             file: blob,
             metadata: transfer.metadata,
             streamId: transfer.streamId,
             persisted: false
         });
-        
+
+        // Notify completion
+        if (this.handlers.onFileComplete) {
+            this.handlers.onFileComplete(fileId, transfer.metadata, url, blob);
+        }
+
         // Announce as seeder
         await this.announceFileSource(transfer.streamId, fileId, transfer.password);
         
@@ -2203,7 +2609,10 @@ class MediaController {
         if (transfer.seederDiscoveryTimer) {
             clearTimeout(transfer.seederDiscoveryTimer);
         }
-        
+        if (transfer.noSeederRetryTimer) {
+            clearTimeout(transfer.noSeederRetryTimer);
+        }
+
         // Clean up transfer state
         this.incomingFiles.delete(fileId);
         if (this.db) {
@@ -2222,8 +2631,7 @@ class MediaController {
         const ephemeralStreamId = deriveEphemeralId(messageStreamId);
         const request = {
             type: 'source_request',
-            fileId,
-            wantPush: true
+            fileId
         };
 
         // DM channels: encrypt signal with ECDH shared key
@@ -2248,36 +2656,6 @@ class MediaController {
             const channel = channelManager.getChannel(messageStreamId);
             const password = channel?.password || null;
             await this.announceFileSource(messageStreamId, data.fileId, password);
-            
-            // Push-first: proactively send ALL pieces
-            if (data.wantPush) {
-                this.pushAllPieces(messageStreamId, data.fileId);
-            }
-        }
-    }
-
-    /**
-     * Push all pieces proactively (seeder-side)
-     * Queues every piece into the existing send queue with throttling
-     * @param {string} messageStreamId - Channel message stream ID
-     * @param {string} fileId - File ID
-     */
-    pushAllPieces(messageStreamId, fileId) {
-        const localFile = this.localFiles.get(fileId);
-        if (!localFile) return;
-        
-        // Prevent duplicate pushes for the same file
-        if (this.activePushes.has(fileId)) {
-            Logger.debug(`Already pushing ${fileId.slice(0, 8)}, skipping duplicate`);
-            return;
-        }
-        this.activePushes.add(fileId);
-        
-        const pieceCount = localFile.metadata.pieceCount;
-        Logger.info(`Push-sending all ${pieceCount} pieces for ${fileId.slice(0, 8)}`);
-        
-        for (let i = 0; i < pieceCount; i++) {
-            this.sendPiece(messageStreamId, fileId, i);
         }
     }
 
@@ -2292,8 +2670,7 @@ class MediaController {
         const announce = {
             type: 'source_announce',
             fileId,
-            pieceCount: localFile?.metadata?.pieceCount || 0,
-            pushMode: true
+            pieceCount: localFile?.metadata?.pieceCount || 0
         };
 
         // DM channels: encrypt signal with ECDH shared key
@@ -2329,62 +2706,65 @@ class MediaController {
             if (transfer && !transfer.downloadStarted && transfer.pieceStatus && seeders.size >= CONFIG.MIN_SEEDERS) {
                 transfer.downloadStarted = true;
                 
-                // Stop discovery loop — we have a seeder, no need for more source_requests
+                // Stop discovery loop — we have a seeder. manageDownload() keeps
+                // topping the seeder set up while the transfer runs.
                 if (transfer.seederDiscoveryTimer) {
                     clearTimeout(transfer.seederDiscoveryTimer);
                     transfer.seederDiscoveryTimer = null;
                 }
-                
-                if (data.pushMode) {
-                    // Push-mode: seeder is sending all pieces proactively
-                    // Just start watchdog to detect and retry missing pieces
-                    Logger.info(`Push-mode download started for ${data.fileId} (${data.pieceCount} pieces)`);
-                    transfer.pushMode = true;
-                    transfer.lastPieceReceivedAt = Date.now();
-                    this.startPushWatchdog(data.fileId);
-                } else {
-                    // Legacy request-response mode
-                    Logger.info(`Request-mode download started for ${data.fileId}`);
-                    this.manageDownload(data.fileId);
-                }
+
+                Logger.info(`Download started for ${data.fileId} (${data.pieceCount} pieces)`);
+                this.manageDownload(data.fileId);
             }
         }
     }
 
     /**
-     * Push-mode watchdog: periodically check for missing pieces and request retries
+     * Record a bad delivery of a piece and either retry it or give up.
+     *
+     * Without a cap, a seeder serving corrupt data for one piece keeps the
+     * transfer retrying that piece forever — the piece is reset to 'pending' and
+     * immediately re-requested, with nothing tracking that it already failed.
+     *
+     * @param {Object} transfer - Transfer state
      * @param {string} fileId - File ID
+     * @param {number} pieceIndex - Piece that failed
+     * @param {string} reason - Why it failed (for the log)
      */
-    startPushWatchdog(fileId) {
-        const check = () => {
-            const transfer = this.incomingFiles.get(fileId);
-            if (!transfer) return; // Download completed or cancelled
-            
-            const done = transfer.pieceStatus.filter(s => s === 'done').length;
-            const total = transfer.pieceStatus.length;
-            
-            if (done === total) return; // Complete
-            
-            const timeSinceLastPiece = Date.now() - (transfer.lastPieceReceivedAt || transfer.downloadStartTime);
-            
-            // Count pieces that are still pending (not received, not already in-flight)
-            const pending = transfer.pieceStatus.filter(s => s === 'pending').length;
-            
-            if (pending > 0 && timeSinceLastPiece > CONFIG.PUSH_STALL_TIMEOUT) {
-                // Stall detected — request only the missing pieces
-                Logger.info(`Push watchdog: ${pending} missing, ${done}/${total} done — requesting retries`);
-                this.manageDownload(fileId);
-            }
-            
-            // Continue watchdog if transfer still active
-            if (this.incomingFiles.has(fileId)) {
-                transfer.pushWatchdogTimer = setTimeout(check, CONFIG.PUSH_WATCHDOG_INTERVAL);
-            }
-        };
-        
-        const transfer = this.incomingFiles.get(fileId);
-        if (transfer) {
-            transfer.pushWatchdogTimer = setTimeout(check, CONFIG.PUSH_WATCHDOG_START_DELAY);
+    registerPieceFailure(transfer, fileId, pieceIndex, reason, senderId = null) {
+        const failures = (transfer.pieceFailures?.get(pieceIndex) || 0) + 1;
+        transfer.pieceFailures?.set(pieceIndex, failures);
+
+        Logger.error(`Piece ${pieceIndex} failed (${reason}), attempt ${failures}`);
+
+        // Blame the publisher of the bad bytes, not whoever we happened to ask: a late
+        // reply from a previous seeder can land after we already retried elsewhere.
+        if (senderId) {
+            this.blameSeeder(transfer, fileId, pieceIndex, senderId);
+        }
+
+        if (failures >= CONFIG.MAX_PIECE_FAILURES) {
+            this.failDownload(fileId, `Piece ${pieceIndex} could not be verified after ${failures} attempts`);
+            return;
+        }
+
+        transfer.pieceStatus[pieceIndex] = 'pending';
+        this.manageDownload(fileId);
+    }
+
+    /**
+     * Abort a download that cannot complete, and tell the UI why.
+     * Tears down the same state as a user-initiated cancel, so a retry starts clean.
+     *
+     * @param {string} fileId - File ID
+     * @param {string} message - Human-readable reason
+     */
+    failDownload(fileId, message) {
+        Logger.error(`Download failed for ${fileId}: ${message}`);
+        this.cancelDownload(fileId);
+
+        if (this.handlers.onFileError) {
+            this.handlers.onFileError(fileId, message);
         }
     }
 
@@ -2400,14 +2780,17 @@ class MediaController {
             clearTimeout(transfer.seederDiscoveryTimer);
         }
         
-        // Clear push watchdog timer
-        if (transfer.pushWatchdogTimer) {
-            clearTimeout(transfer.pushWatchdogTimer);
+        // Clear the pending no-seeder retry
+        if (transfer.noSeederRetryTimer) {
+            clearTimeout(transfer.noSeederRetryTimer);
         }
         
-        // Clear all piece request timeouts
-        for (const [, request] of transfer.requestsInFlight) {
-            clearTimeout(request.timeoutId);
+        // Clear all piece request timeouts. Guarded because failDownload() can
+        // route here from any stage of a transfer, including before requests start.
+        if (transfer.requestsInFlight) {
+            for (const [, request] of transfer.requestsInFlight) {
+                clearTimeout(request.timeoutId);
+            }
         }
         
         this.incomingFiles.delete(fileId);
@@ -2429,9 +2812,74 @@ class MediaController {
         return new Promise((resolve, reject) => {
             const tx = this.db.transaction('pieces', 'readwrite');
             const store = tx.objectStore('pieces');
-            const request = store.put({ fileId, pieceIndex, data });
+            // timestamp drives the stale-download sweep (see cleanupStalePieces)
+            const request = store.put({ fileId, pieceIndex, data, timestamp: Date.now() });
             request.onsuccess = () => resolve();
             request.onerror = () => reject(request.error);
+        });
+    }
+
+    /**
+     * Restore already-downloaded pieces for a transfer from IndexedDB (resume).
+     *
+     * Pieces are hash-verified in handleFilePiece() *before* being stored, so a stored
+     * piece was valid when written. We only re-check that each one still has the length
+     * the manifest implies — enough to reject a stale or truncated store without
+     * re-hashing the entire file on every resume.
+     *
+     * @param {string} fileId - File ID being resumed
+     * @param {Object} transfer - Transfer state; pieceStatus/receivedCount are mutated
+     * @returns {Promise<number>} Number of pieces restored
+     */
+    async restorePiecesFromIndexedDB(fileId, transfer) {
+        if (!this.db) return 0;
+
+        const { pieceCount, fileSize } = transfer.metadata;
+
+        return new Promise((resolve) => {
+            let restored = 0;
+
+            // Keep the caller's progress counter in sync on every exit path
+            const done = () => {
+                transfer.receivedCount = restored;
+                resolve(restored);
+            };
+
+            try {
+                const tx = this.db.transaction('pieces', 'readonly');
+                const store = tx.objectStore('pieces');
+                const request = store.getAll(this.pieceKeyRange(fileId));
+
+                request.onsuccess = () => {
+                    for (const record of request.result || []) {
+                        const idx = record.pieceIndex;
+                        if (idx < 0 || idx >= pieceCount || transfer.pieceStatus[idx] !== 'pending') {
+                            continue;
+                        }
+
+                        // Every piece is PIECE_SIZE except the last one
+                        const expectedLength = Math.min(CONFIG.PIECE_SIZE, fileSize - idx * CONFIG.PIECE_SIZE);
+
+                        if (record.data?.length === expectedLength) {
+                            transfer.pieceStatus[idx] = 'done';
+                            restored++;
+                        } else {
+                            Logger.warn(`Discarding stale piece ${idx} of ${fileId.slice(0, 8)}: got ${record.data?.length} bytes, expected ${expectedLength}`);
+                        }
+                    }
+
+                    done();
+                };
+
+                // A failed read is not fatal — fall back to downloading from scratch
+                request.onerror = () => {
+                    Logger.warn('Failed to read persisted pieces, starting from scratch:', request.error);
+                    done();
+                };
+            } catch (error) {
+                Logger.warn('Failed to open pieces store for resume:', error);
+                done();
+            }
         });
     }
 
@@ -2443,48 +2891,39 @@ class MediaController {
             const store = tx.objectStore('pieces');
             const pieces = new Array(metadata.pieceCount).fill(null);
             let foundCount = 0;
-            
-            const request = store.openCursor();
-            request.onsuccess = (event) => {
-                const cursor = event.target.result;
-                if (cursor) {
-                    if (cursor.value.fileId === fileId) {
-                        const idx = cursor.value.pieceIndex;
-                        if (idx >= 0 && idx < metadata.pieceCount) {
-                            pieces[idx] = cursor.value.data;
-                            foundCount++;
-                        }
+
+            const request = store.getAll(this.pieceKeyRange(fileId));
+            request.onsuccess = () => {
+                for (const record of request.result || []) {
+                    const idx = record.pieceIndex;
+                    if (idx >= 0 && idx < metadata.pieceCount) {
+                        pieces[idx] = record.data;
+                        foundCount++;
                     }
-                    cursor.continue();
-                } else {
-                    // All pieces collected - verify we have them all
-                    if (foundCount !== metadata.pieceCount) {
-                        Logger.error(`IndexedDB assembly: found ${foundCount}/${metadata.pieceCount} pieces`);
-                    }
-                    
-                    // Calculate total size and assemble
-                    const totalSize = pieces.reduce((sum, p) => sum + (p?.length || 0), 0);
-                    
-                    if (totalSize !== metadata.fileSize) {
-                        Logger.warn(`IndexedDB size mismatch: got ${totalSize}, expected ${metadata.fileSize}`);
-                    }
-                    
-                    const combined = new Uint8Array(totalSize);
-                    let offset = 0;
-                    
-                    for (let i = 0; i < pieces.length; i++) {
-                        const piece = pieces[i];
-                        if (piece) {
-                            combined.set(piece, offset);
-                            offset += piece.length;
-                        } else {
-                            Logger.error(`Missing piece at index ${i} in IndexedDB!`);
-                        }
-                    }
-                    
-                    Logger.info(`Assembled from IndexedDB: ${totalSize} bytes, ${foundCount} pieces`);
-                    resolve(new Blob([combined], { type: metadata.fileType }));
                 }
+
+                // All pieces collected - verify we have them all
+                if (foundCount !== metadata.pieceCount) {
+                    Logger.error(`IndexedDB assembly: found ${foundCount}/${metadata.pieceCount} pieces`);
+                }
+
+                // Calculate total size and assemble
+                const totalSize = pieces.reduce((sum, p) => sum + (p?.length || 0), 0);
+
+                if (totalSize !== metadata.fileSize) {
+                    Logger.warn(`IndexedDB size mismatch: got ${totalSize}, expected ${metadata.fileSize}`);
+                }
+
+                for (let i = 0; i < pieces.length; i++) {
+                    if (!pieces[i]) {
+                        Logger.error(`Missing piece at index ${i} in IndexedDB!`);
+                    }
+                }
+
+                Logger.info(`Assembled from IndexedDB: ${totalSize} bytes, ${foundCount} pieces`);
+                // Built straight from the parts — no contiguous full-file copy.
+                // See assembleFile() for why missing pieces must be filtered out.
+                resolve(new Blob(pieces.filter(Boolean), { type: metadata.fileType }));
             };
             request.onerror = () => reject(request.error);
         });
@@ -2497,19 +2936,56 @@ class MediaController {
             const tx = this.db.transaction('pieces', 'readwrite');
             const store = tx.objectStore('pieces');
             
-            const request = store.openCursor();
-            request.onsuccess = (event) => {
-                const cursor = event.target.result;
-                if (cursor) {
-                    if (cursor.value.fileId === fileId) {
-                        cursor.delete();
-                    }
-                    cursor.continue();
-                } else {
-                    resolve();
-                }
-            };
+            // Scoped to this file's key range instead of walking every stored piece
+            const request = store.delete(this.pieceKeyRange(fileId));
+            request.onsuccess = () => resolve();
             request.onerror = () => reject(request.error);
+        });
+    }
+
+    /**
+     * Delete piece records left behind by downloads that were never finished.
+     *
+     * Pieces are only cleared on completion or explicit cancel, so a transfer
+     * abandoned by closing the tab leaves its pieces behind forever. Resume made
+     * these load-bearing, which makes sweeping them necessary rather than tidy.
+     */
+    async cleanupStalePieces() {
+        if (!this.db) return;
+
+        const cutoff = Date.now() - CONFIG.PIECE_EXPIRE_DAYS * 24 * 60 * 60 * 1000;
+
+        return new Promise((resolve) => {
+            try {
+                const tx = this.db.transaction('pieces', 'readwrite');
+                const store = tx.objectStore('pieces');
+                const index = store.index('timestamp');
+                const request = index.openCursor(IDBKeyRange.upperBound(cutoff));
+
+                let removed = 0;
+                request.onsuccess = (event) => {
+                    const cursor = event.target.result;
+                    if (!cursor) {
+                        if (removed > 0) {
+                            Logger.info(`Cleaned up ${removed} stale piece(s) from abandoned downloads`);
+                        }
+                        resolve();
+                        return;
+                    }
+
+                    cursor.delete();
+                    removed++;
+                    cursor.continue();
+                };
+
+                request.onerror = () => {
+                    Logger.warn('Stale piece cleanup failed:', request.error);
+                    resolve();
+                };
+            } catch (error) {
+                Logger.warn('Stale piece cleanup unavailable:', error);
+                resolve();
+            }
         });
     }
 
@@ -2914,6 +3390,22 @@ class MediaController {
      */
     onFileComplete(handler) {
         this.handlers.onFileComplete = handler;
+    }
+
+    /**
+     * Set handler for unrecoverable download failure
+     * @param {Function} handler - (fileId, message) => void
+     */
+    onFileError(handler) {
+        this.handlers.onFileError = handler;
+    }
+
+    /**
+     * Set handler for serving stats while we seed a file
+     * @param {Function} handler - (fileId, bytesPerSec, leechers) => void
+     */
+    onUploadProgress(handler) {
+        this.handlers.onUploadProgress = handler;
     }
 
     /**

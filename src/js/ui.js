@@ -1811,7 +1811,7 @@ class UIController {
         }
         
         // File progress - update progress overlay and bar
-        mediaController.onFileProgress((fileId, percent, received, total, fileSize) => {
+        mediaController.onFileProgress((fileId, percent, received, total, fileSize, bytesPerSec) => {
             // Show new video panel progress overlay
             const progressOverlay = document.querySelector(`[data-progress-overlay="${CSS.escape(fileId)}"]`);
             if (progressOverlay) {
@@ -1830,12 +1830,13 @@ class UIController {
                 progressFill.style.width = `${percent}%`;
             }
             
-            // Update progress text with MB
+            // Update progress text with transferred size and current rate
             const progressText = document.querySelector(`[data-progress-text="${CSS.escape(fileId)}"]`);
             if (progressText) {
-                const receivedMB = ((received / total) * fileSize / (1024 * 1024)).toFixed(1);
-                const totalMB = (fileSize / (1024 * 1024)).toFixed(1);
-                progressText.textContent = `${receivedMB} / ${totalMB} MB`;
+                const transferred = messageRenderer.formatFileSize((received / total) * fileSize);
+                const totalSize = messageRenderer.formatFileSize(fileSize);
+                const speed = messageRenderer.formatSpeed(bytesPerSec);
+                progressText.textContent = `${transferred} of ${totalSize}${speed ? ` · ${speed}` : ''}`;
             }
             
             // Update download button to show loading state
@@ -1970,13 +1971,32 @@ class UIController {
                         `;
                     }
                 } else {
-                    container.innerHTML = `
-                        <a href="${url}" download="${safeFileName}" class="text-blue-400 hover:underline">${safeFileName}</a>
-                    `;
+                    // Same bubble the renderer produces, so a finished download looks
+                    // exactly like a file we are seeding rather than a bare link
+                    container.outerHTML = messageRenderer.renderFileBubble({ metadata });
                 }
             }
         });
         
+        // Serving stats - upload rate and how many peers are pulling from us
+        mediaController.onUploadProgress((fileId, bytesPerSec, leechers) => {
+            const speedEl = document.querySelector(`[data-upload-speed="${CSS.escape(fileId)}"]`);
+            if (speedEl) {
+                speedEl.textContent = messageRenderer.formatSpeed(bytesPerSec) || '—';
+            }
+
+            const leecherEl = document.querySelector(`[data-leecher-count="${CSS.escape(fileId)}"]`);
+            if (leecherEl) {
+                leecherEl.textContent = String(leechers);
+            }
+        });
+
+        // Download failed unrecoverably - drop the spinner and say why
+        mediaController.onFileError((fileId, message) => {
+            mediaHandler.resetDownloadUI(fileId);
+            this.showNotification('Download failed: ' + message, 'error');
+        });
+
         // Seeder update
         mediaController.onSeederUpdate((fileId, count) => {
             const seederEl = document.querySelector(`[data-seeder-count="${CSS.escape(fileId)}"]`);

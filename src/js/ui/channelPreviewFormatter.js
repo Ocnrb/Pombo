@@ -13,7 +13,7 @@
  * Format spec (decided 2026-04-28):
  *   - text          → "{sender}: {text}"          (text via sanitize+escape)
  *   - image         → "{sender}: [image]"         (literal italic tag)
- *   - video_announce→ "{sender}: [video]"
+ *   - file_announce→ "{sender}: [video]"
  *   - reaction add  → "{sender}: reacted with {emoji}"
  *   - reaction rem  → dropped at the manager level (never reaches the UI)
  *   - null entry    → "" (caller decides whether to show spinner / blank)
@@ -95,7 +95,7 @@ export function formatPreviewBody(entry) {
         }
         case 'image':
             return mute('[image]');
-        case 'video_announce':
+        case 'file_announce':
             return mute('[video]');
         case 'reaction': {
             // Reaction removals are filtered out upstream

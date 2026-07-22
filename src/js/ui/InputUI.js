@@ -269,9 +269,26 @@ class InputUI {
         this.attachBtn = document.getElementById('attach-btn');
         this.attachMenu = document.getElementById('attach-menu');
         const sendImageBtn = document.getElementById('send-image-btn');
-        const sendVideoBtn = document.getElementById('send-video-btn');
         const imageInput = document.getElementById('image-input');
         const videoInput = document.getElementById('video-input');
+        const fileInput = document.getElementById('file-input');
+
+        // File and Video each open a transport submenu (Mesh / Persistent)
+        const submenus = [
+            { parent: 'attach-file-btn', menu: 'attach-file-submenu' },
+            { parent: 'attach-video-btn', menu: 'attach-video-submenu' }
+        ].map(({ parent, menu }) => ({
+            parent: document.getElementById(parent),
+            menu: document.getElementById(menu)
+        }));
+
+        const closeSubmenus = () => {
+            for (const { parent, menu } of submenus) {
+                menu?.classList.add('hidden');
+                parent?.setAttribute('aria-expanded', 'false');
+            }
+        };
+        this.closeAttachSubmenus = closeSubmenus;
         
         // File confirm modal buttons
         const cancelFileBtn = document.getElementById('cancel-file-btn');
@@ -279,24 +296,36 @@ class InputUI {
         
         if (!this.attachBtn || !this.attachMenu) return;
         
-        // Toggle attach menu
+        // Toggle attach menu — always reopens with submenus collapsed
         this.attachBtn.addEventListener('click', (e) => {
             e.stopPropagation();
+            closeSubmenus();
             this.attachMenu.classList.toggle('hidden');
         });
-        
-        // Image button
-        sendImageBtn?.addEventListener('click', () => {
+
+        // Parent entries only expand their submenu; they never pick a file themselves
+        for (const { parent, menu } of submenus) {
+            parent?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const willOpen = menu?.classList.contains('hidden');
+                closeSubmenus();
+                if (willOpen) {
+                    menu?.classList.remove('hidden');
+                    parent.setAttribute('aria-expanded', 'true');
+                }
+            });
+        }
+
+        const pick = (input) => {
+            closeSubmenus();
             this.attachMenu.classList.add('hidden');
-            imageInput?.click();
-        });
-        
-        // Video button
-        sendVideoBtn?.addEventListener('click', () => {
-            this.attachMenu.classList.add('hidden');
-            videoInput?.click();
-        });
-        
+            input?.click();
+        };
+
+        document.getElementById('send-file-mesh-btn')?.addEventListener('click', () => pick(fileInput));
+        document.getElementById('send-video-mesh-btn')?.addEventListener('click', () => pick(videoInput));
+        sendImageBtn?.addEventListener('click', () => pick(imageInput));
+
         // Image file selected
         imageInput?.addEventListener('change', (e) => {
             const file = e.target.files?.[0];
@@ -305,12 +334,21 @@ class InputUI {
             }
             e.target.value = '';
         });
-        
+
         // Video file selected
         videoInput?.addEventListener('change', (e) => {
             const file = e.target.files?.[0];
             if (file) {
                 this.showFileConfirmModal(file, 'video');
+            }
+            e.target.value = '';
+        });
+
+        // Any other file type
+        fileInput?.addEventListener('change', (e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+                this.showFileConfirmModal(file, 'file');
             }
             e.target.value = '';
         });
@@ -367,6 +405,12 @@ class InputUI {
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"/>
                 </svg>
             `;
+        } else {
+            previewIcon.innerHTML = `
+                <svg class="w-6 h-6 text-white/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5A3.375 3.375 0 0 0 10.125 2.25H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z"/>
+                </svg>
+            `;
         }
         
         modalManager.show('file-confirm-modal');
@@ -387,7 +431,8 @@ class InputUI {
         }
         
         try {
-            showLoading?.(type === 'image' ? 'Sending image...' : 'Processing video...');
+            const label = { image: 'Sending image...', video: 'Processing video...' }[type] || 'Processing file...';
+            showLoading?.(label);
             
             if (type === 'image') {
                 const result = await mediaController.sendImage(currentChannel.streamId, file, currentChannel.password);
@@ -400,6 +445,9 @@ class InputUI {
             } else if (type === 'video') {
                 await mediaController.sendVideo(currentChannel.streamId, file, currentChannel.password);
                 showNotification?.('Video shared!', 'success');
+            } else {
+                await mediaController.sendFile(currentChannel.streamId, file, currentChannel.password);
+                showNotification?.('File shared!', 'success');
             }
         } catch (error) {
             showNotification?.('Failed to send: ' + error.message, 'error');

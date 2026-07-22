@@ -632,7 +632,7 @@ class PreviewModeUI {
         // Validate message has required properties
         const isTextMessage = message?.text;
         const isImageMessage = message?.type === 'image' && message?.imageId;
-        const isVideoMessage = message?.type === 'video_announce' && message?.metadata;
+        const isVideoMessage = message?.type === 'file_announce' && message?.metadata;
 
         if (!message?.id || !message?.sender || !message?.timestamp) {
             return;

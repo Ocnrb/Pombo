@@ -151,7 +151,7 @@ export const CONFIG = {
         maxEnsCacheSize: 500,                          // Max cached ENS entries
         messageTimestampToleranceMs: 5 * 60 * 1000,    // 5min replay-attack window
         providerCooldownMs: 5 * 60 * 1000,             // Skip failed ENS provider for 5min
-        ipfsGateway: 'https://cloudflare-ipfs.com/ipfs/' // Gateway for ipfs:// avatar URIs
+        ipfsGateway: 'https://ipfs.io/ipfs/' // Gateway for ipfs:// avatar URIs (cloudflare-ipfs.com is dead)
     },
 
     // Media / File Transfer
@@ -194,9 +194,21 @@ export const CONFIG = {
         legacyInlineImageWriteEnabled: false,
         pieceSize: 220 * 1024,                  // 220KB chunks
         pieceSendDelayMs: 5,                    // 5ms delay between piece sends
-        maxConcurrentRequests: 8,
         concurrentSends: 25,                     // Parallel Streamr publishes (bounded concurrency)
         pieceRequestTimeoutMs: 5000,            // 5s per piece retry timeout
+        maxPieceFailures: 5,                    // Give up on a piece after N bad deliveries (stops retry loops)
+        maxSeederStrikes: 3,                    // Drop a seeder from this transfer after N bad pieces
+        speedWindowMs: 10000,                   // Sliding window for the displayed transfer rate
+        leecherTimeoutMs: 15000,                // A leecher that has not asked for this long is dropped from the count
+        uploadStatsIntervalMs: 500,             // Throttle for upload stat updates (one per piece would be a flood)
+        // Adaptive request window (AIMD). Transfers are pull-based: the leecher
+        // asks each seeder for specific pieces, so the number of outstanding
+        // requests IS the flow control — the request is the credit. The window
+        // grows by one per delivered piece and halves on a timeout.
+        pieceWindowStart: 8,                    // Initial outstanding piece requests
+        pieceWindowMin: 4,                      // Never back off below this
+        pieceWindowMax: 64,                     // ~14MB in flight at 220KB pieces
+        pieceWindowBackoffCooldownMs: 5000,     // Treat a burst of timeouts as one stall
         maxFileSize: 500 * 1024 * 1024,        // 500MB max upload
         minSeeders: 1,
         preferredSeeders: 3,
@@ -206,9 +218,7 @@ export const CONFIG = {
         maxSeederRequests: 10,
         maxSeedStorage: 700 * 1024 * 1024,     // 700MB persistent storage
         seedFilesExpireDays: 7,
-        pushWatchdogIntervalMs: 3000,           // Check for missing pieces every 3s
-        pushWatchdogStartDelayMs: 2000,         // Wait 2s before first watchdog check
-        pushStallTimeoutMs: 5000                // If no new pieces in 5s, request missing
+        pieceExpireDays: 3                      // Sweep pieces of downloads abandoned this long ago
     },
 
     // Subscription Manager / Polling

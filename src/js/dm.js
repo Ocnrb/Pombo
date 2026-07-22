@@ -278,8 +278,9 @@ class DMManager {
         }
         this.inboxSubscription = null;
         this.inboxNotificationSub = null;
-        // Also tear down ephemeral if active
-        await this.unsubscribeDMEphemeral();
+        // Also tear down ephemeral if active. Forced: this path is disconnect, not
+        // navigation, so nothing should survive it.
+        await this.unsubscribeDMEphemeral({ force: true });
     }
 
     /**
@@ -346,21 +347,32 @@ class DMManager {
                 null
             );
 
+            // Partitions 1 and 2 may still be live: unsubscribeDMEphemeral() keeps them
+            // when transfers are in flight, and subscribeToPartition() does not dedupe.
+
             // Partition 1: Media signals (piece_request, source_request, etc.)
-            await streamrController.subscribeToPartition(
-                this.inboxEphemeralStreamId,
-                STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_SIGNALS,
-                (data) => this.routeInboxMedia(data),
-                null
-            );
+            if (!streamrController.isSubscribedToPartition(
+                this.inboxEphemeralStreamId, STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_SIGNALS
+            )) {
+                await streamrController.subscribeToPartition(
+                    this.inboxEphemeralStreamId,
+                    STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_SIGNALS,
+                    (data) => this.routeInboxMedia(data),
+                    null
+                );
+            }
 
             // Partition 2: Media data (file_piece — binary)
-            await streamrController.subscribeToPartition(
-                this.inboxEphemeralStreamId,
-                STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_DATA,
-                (data, senderId) => this.routeInboxMedia(data, senderId),
-                null
-            );
+            if (!streamrController.isSubscribedToPartition(
+                this.inboxEphemeralStreamId, STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_DATA
+            )) {
+                await streamrController.subscribeToPartition(
+                    this.inboxEphemeralStreamId,
+                    STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_DATA,
+                    (data, senderId) => this.routeInboxMedia(data, senderId),
+                    null
+                );
+            }
 
             Logger.info('DM: Ephemeral subscription active (control + media signals + media data)');
         } catch (error) {
@@ -372,12 +384,30 @@ class DMManager {
     /**
      * Unsubscribe from DM-2 ephemeral — called when user leaves DM conversation.
      */
-    async unsubscribeDMEphemeral() {
+    /**
+     * @param {Object} [options]
+     * @param {boolean} [options.force=false] - Drop the whole stream even when transfers
+     *   are active. Used on disconnect, where preserving partitions would leak them.
+     */
+    async unsubscribeDMEphemeral({ force = false } = {}) {
         if (!this.inboxEphemeralSubscription) return;
 
         try {
-            await streamrController.unsubscribe(this.inboxEphemeralStreamId);
-            Logger.info('DM: Ephemeral unsubscribed');
+            // Mirrors the non-DM path in subscriptionManager.downgradeToBackground():
+            // presence/typing on P0 are only meaningful while a conversation is open,
+            // but P1/P2 are how a seeder hears piece requests. Dropping the whole
+            // stream stopped every DM transfer the instant the user navigated away —
+            // the peer's download stalled and only resumed on coming back.
+            if (!force && mediaController.hasActiveDMTransfers()) {
+                await streamrController.unsubscribeFromPartition(
+                    this.inboxEphemeralStreamId,
+                    STREAM_CONFIG.EPHEMERAL_STREAM.CONTROL
+                );
+                Logger.info('DM: Ephemeral control unsubscribed — media partitions kept alive for active transfers');
+            } else {
+                await streamrController.unsubscribe(this.inboxEphemeralStreamId);
+                Logger.info('DM: Ephemeral unsubscribed');
+            }
         } catch (error) {
             Logger.warn('DM: Error unsubscribing ephemeral:', error.message);
         }

@@ -858,7 +858,7 @@ class SecureStorage {
 
     /**
      * Add a sent message to local storage (for write-only channels)
-     * Stores text, image, and video_announce messages
+     * Stores text, image, and file_announce messages
      * Keeps last 200 messages per channel to avoid storage bloat
      * @param {string} streamId - Stream ID
      * @param {Object} message - Message object to store
@@ -894,8 +894,8 @@ class SecureStorage {
             stored.preservedOriginal = typeof message.preservedOriginal === 'boolean' ? message.preservedOriginal : null;
             stored.convertedTo = message.convertedTo || null;
             stored.qualityUsed = Number.isFinite(message.qualityUsed) ? message.qualityUsed : null;
-        } else if (message.type === 'video_announce') {
-            stored.type = 'video_announce';
+        } else if (message.type === 'file_announce') {
+            stored.type = 'file_announce';
             stored.metadata = message.metadata;
         } else {
             // Text message

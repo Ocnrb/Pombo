@@ -2447,7 +2447,7 @@ class StreamrController {
      * a renderable preview type:
      *   - text
      *   - image
-     *   - video_announce
+     *   - file_announce
      *   - reaction 
      *
      *
@@ -2512,7 +2512,7 @@ class StreamrController {
                     // Skip overrides for the preview path
                     if (t === 'edit' || t === 'delete') continue;
                     // Only accept known preview-renderable types
-                    if (t !== 'text' && t !== 'image' && t !== 'video_announce' && t !== 'reaction') {
+                    if (t !== 'text' && t !== 'image' && t !== 'file_announce' && t !== 'reaction') {
                         continue;
                     }
 
@@ -3199,7 +3199,7 @@ class StreamrController {
             if (msg?.type === 'reaction') return true;
             if (msg?.type === 'image' && msg?.imageId) return true;
             if (msg?.type === 'image_chunk' && msg?.imageId && Number.isInteger(msg?.chunkIndex) && typeof msg?.data === 'string') return true;
-            if (msg?.type === 'video_announce' && msg?.metadata) return true;
+            if (msg?.type === 'file_announce' && msg?.metadata) return true;
             if (allowOverridesInContentPartition && msg?.type === 'edit' && msg?.targetId) return true;
             if (allowOverridesInContentPartition && msg?.type === 'delete' && msg?.targetId) return true;
             return false;
@@ -3637,7 +3637,7 @@ class StreamrController {
             };
             
             // Helper to check if message is a video announcement
-            const isVideoMessage = (msg) => msg?.type === 'video_announce' && msg?.metadata;
+            const isVideoMessage = (msg) => msg?.type === 'file_announce' && msg?.metadata;
             
             // Helper to check if message is an E2E encrypted envelope (DM messages)
             // These are decrypted downstream by routeInboxMessage, not here

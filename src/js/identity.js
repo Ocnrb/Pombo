@@ -247,6 +247,82 @@ class IdentityManager {
     }
 
     /**
+     * Create a signed file (file_announce) manifest.
+     *
+     * The announcement carries the piece hashes every downloader verifies against,
+     * so those hashes must be covered by the signature. Signing an empty-text
+     * message and attaching the metadata afterwards authenticates nothing about
+     * the file.
+     *
+     * Note there is deliberately no whole-file hash: pieceHashes + pieceCount +
+     * fileSize already commit to the content, and crypto.subtle.digest cannot be
+     * fed incrementally, so a whole-file digest would force the entire file into
+     * memory on the sender.
+     *
+     * @param {Object} input
+     * @param {string} input.channelId - Channel ID
+     * @param {Object} input.metadata - File metadata from the hashing worker
+     * @returns {Promise<Object>}
+     */
+    async createSignedFileManifest({ channelId, metadata }) {
+        const sender = authManager.getAddress();
+        const timestamp = Date.now();
+        const messageId = this.generateMessageId();
+
+        const messageHash = this.createFileManifestHash({
+            id: messageId,
+            sender,
+            timestamp,
+            channelId,
+            metadata
+        });
+
+        const signature = await authManager.signMessage(messageHash);
+
+        return {
+            type: 'file_announce',
+            v: 2,
+            id: messageId,
+            sender,
+            senderName: this.username || null,
+            timestamp,
+            channelId,
+            metadata,
+            signature,
+            replyTo: null
+        };
+    }
+
+    /**
+     * Create deterministic hash for file (file_announce) manifests.
+     *
+     * Fields are listed explicitly rather than hashing the metadata object whole:
+     * it fixes the canonical order (so other clients can reproduce it byte for
+     * byte) and stops a future field from silently changing the hash.
+     *
+     * @param {Object} input
+     * @returns {string}
+     */
+    createFileManifestHash({ id, sender, timestamp, channelId, metadata }) {
+        const data = JSON.stringify({
+            protocol: 'POMBO',
+            version: 2,
+            type: 'file_announce',
+            id,
+            sender: sender.toLowerCase(),
+            timestamp,
+            channelId,
+            fileId: metadata?.fileId ?? null,
+            fileName: metadata?.fileName ?? null,
+            fileSize: metadata?.fileSize ?? null,
+            fileType: metadata?.fileType ?? null,
+            pieceCount: metadata?.pieceCount ?? null,
+            pieceHashes: metadata?.pieceHashes ?? []
+        });
+        return ethers.keccak256(ethers.toUtf8Bytes(data));
+    }
+
+    /**
      * Create deterministic message hash for signing/verification
      * Uses keccak256 for cryptographic security and collision resistance
      * @param {string} id - Message ID
@@ -379,7 +455,17 @@ class IdentityManager {
 
             // Create message hash (fast, main thread)
             const isChunkedImageManifest = message?.type === 'image' && message?.transport === 'chunked';
-            const messageHash = isChunkedImageManifest
+            const isFileManifest = message?.type === 'file_announce' && !!message?.metadata;
+
+            const messageHash = isFileManifest
+                ? this.createFileManifestHash({
+                    id: message.id,
+                    sender: message.sender,
+                    timestamp: message.timestamp,
+                    channelId: message.channelId,
+                    metadata: message.metadata
+                })
+                : isChunkedImageManifest
                 ? this.createImageManifestHash({
                     id: message.id,
                     imageId: message.imageId,
