@@ -192,19 +192,8 @@ class PieceRtoEstimator {
         this.srtt = -1;        // smoothed round-trip time
         this.rttvar = 0;       // round-trip time variation
         this.backoff = 1;
-        // Windowed round-trip floor (BBR keeps ~10s; a LIFETIME minimum
-        // latches: one sample taken while the queue happened to be empty pins
-        // the baseline forever, every later sustained transfer reads as
-        // congested, and the window parks on its floor — measured live on 5G,
-        // ~200KB/s on a ~500KB/s link). Two rotating 5s buckets give the same
-        // memory in O(1). Port of the Android PieceTimeout — keep in sync.
-        this.curMin = Infinity;
-        this.prevMin = Infinity;
-        this.bucketStart = -1;
+        this.minRtt = Infinity;
     }
-
-    /** Half of the ~10s memory: a sample is forgotten after 5-10s. */
-    static MIN_RTT_BUCKET_MS = 5000;
 
     /** Current timeout to arm a request with. */
     currentMs() {
@@ -218,18 +207,7 @@ class PieceRtoEstimator {
      */
     onSample(rttMs) {
         if (rttMs <= 0) return;
-        const t = Date.now();
-        if (this.bucketStart < 0) this.bucketStart = t;
-        // Rotate: the previous bucket keeps serving as baseline while the
-        // current one refills, so the floor never blinks empty mid-transfer.
-        // A gap longer than a full bucket means BOTH stored minima are stale.
-        if (t - this.bucketStart >= PieceRtoEstimator.MIN_RTT_BUCKET_MS) {
-            this.prevMin = (t - this.bucketStart >= 2 * PieceRtoEstimator.MIN_RTT_BUCKET_MS)
-                ? Infinity : this.curMin;
-            this.curMin = Infinity;
-            this.bucketStart = t;
-        }
-        if (rttMs < this.curMin) this.curMin = rttMs;
+        if (rttMs < this.minRtt) this.minRtt = rttMs;
         if (this.srtt < 0) {
             // First measurement seeds the estimator (RFC 6298 rule 2.2)
             this.srtt = rttMs;
@@ -260,10 +238,8 @@ class PieceRtoEstimator {
      * The loose factor keeps normal jitter from reading as congestion.
      */
     isCongested(factor = 2.0) {
-        if (this.srtt < 0) return false;
-        const floor = Math.min(this.curMin, this.prevMin);
-        if (floor === Infinity) return false;
-        return this.srtt > floor * factor;
+        if (this.srtt < 0 || this.minRtt === Infinity) return false;
+        return this.srtt > this.minRtt * factor;
     }
 }
 
