@@ -339,10 +339,11 @@ class ReactionManager {
     /**
      * Attach reaction listeners to message buttons
      * @param {Function} onReply - Callback for reply button
-     * @param {Function} onFileDownload - Callback for file download
+     * @param {Function} onFileDownload - Callback for mesh file download
      * @param {Function} onScrollToMessage - Callback to scroll to message
+     * @param {Function} onStorageFileDownload - Callback for storage (persistent) file download
      */
-    attachReactionListeners(onReply, onFileDownload, onScrollToMessage) {
+    attachReactionListeners(onReply, onFileDownload, onScrollToMessage, onStorageFileDownload) {
         // React buttons
         document.querySelectorAll('.react-btn').forEach(btn => {
             const newBtn = btn.cloneNode(true);
@@ -393,12 +394,20 @@ class ReactionManager {
             });
         });
         
-        // Download buttons
+        // Download buttons (mesh swarm)
         document.querySelectorAll('.download-file-btn').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const fileId = btn.dataset.fileId;
                 if (onFileDownload) await onFileDownload(fileId);
+            });
+        });
+
+        // Download buttons (persistent, storage nodes)
+        document.querySelectorAll('.storage-download-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                if (onStorageFileDownload) await onStorageFileDownload(btn.dataset.fileId, btn.dataset.msgId);
             });
         });
     }

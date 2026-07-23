@@ -2,6 +2,7 @@ import { escapeHtml as _escapeHtml, escapeAttr as _escapeAttr } from './utils.js
 import { getAvatarHtml } from './AvatarGenerator.js';
 import { GasEstimator } from './GasEstimator.js';
 import { CONFIG, getNetworkParams } from '../config.js';
+import { MESSAGE_STREAM } from '../streamConstants.js';
 
 /**
  * Settings UI Manager
@@ -2410,7 +2411,12 @@ class SettingsUI {
             const issues = [];
             if (!diagnosis.messageStream.exists) issues.push('message stream');
             if (!diagnosis.ephemeralStream.exists) issues.push('ephemeral stream');
-            if (diagnosis.messageStream.exists && !diagnosis.messageStream.partitionsCorrect) issues.push('partition count');
+            // Partition check inherits the protocol constant (13 since Persistent
+            // File Sharing added 9 chunk partitions) — show actual/expected so an
+            // old 4-partition inbox reads as such at a glance.
+            if (diagnosis.messageStream.exists && !diagnosis.messageStream.partitionsCorrect) {
+                issues.push(`partition count (${diagnosis.messageStream.partitions ?? '?'}/${MESSAGE_STREAM.DM_PARTITIONS})`);
+            }
             if (diagnosis.messageStream.exists && !diagnosis.messageStream.publicKeyPresent) issues.push('public key');
             if (!diagnosis.permissions.messagePublicPublish) issues.push('message permissions');
             if (!diagnosis.permissions.ephemeralPublicPublish) issues.push('ephemeral permissions');

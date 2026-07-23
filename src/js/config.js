@@ -221,6 +221,32 @@ export const CONFIG = {
         pieceExpireDays: 3                      // Sweep pieces of downloads abandoned this long ago
     },
 
+    // Persistent File Sharing via storage nodes (engine ported from index.storage.html)
+    storageMedia: {
+        // Max 240 KB: node-to-node the transport limit is 1 MiB, but publishing FROM
+        // THE BROWSER goes over WebRTC/SCTP whose negotiated maxMessageSize is
+        // typically 256 KiB — above that the send fails or is silently dropped.
+        chunkKB: 240,
+        faststart: true,               // Remux MP4-likes (moov first) before chunking — flip off if it misbehaves
+        throttleMs: 100,               // Base send spacing when auto-tune is off
+        parallel: 1,                   // Publish workers (auto-tune drives the real rate)
+        autotune: true,                // Dynamic rate oscillator (search/cut/drain/climb/hold)
+        verify: true,                  // Incremental verify & repair after publish
+        secondChance: true,            // Pre-repair drain loop while the cluster catches up
+        warmUpWaitMs: 2000,            // Wait after 1-byte pings before first real publish
+        rateWindowMs: 10000,           // Sliding window for displayed transfer rates
+        endpointCacheTtlMs: 10 * 60 * 1000,  // On-chain storage endpoint cache TTL
+        nodeFailureLimit: 3,           // Consecutive failures before a node leaves the rotation
+        // Download
+        downloadConcurrencyDesktop: 5,
+        downloadConcurrencyMobile: 3,
+        writeBackpressureDesktopMB: 48,
+        writeBackpressureMobileMB: 12,
+        downloadRetryPasses: 3,
+        resendIdleTimeoutMs: 20000,    // SDK-resend fallback inactivity cutoff
+        directFetchTimeoutMs: 120000   // Direct HTTP read inactivity watchdog
+    },
+
     // Subscription Manager / Polling
     subscriptions: {
         pollIntervalMs: 30000,         // 30s between background polls

@@ -2826,7 +2826,7 @@ class ChannelManager {
         // Video messages need: id, metadata, sender, timestamp
         const isTextMessage = data?.text;
         const isImageMessage = data?.type === 'image' && data?.imageId;
-        const isVideoMessage = data?.type === 'file_announce' && data?.metadata;
+        const isVideoMessage = (data?.type === 'file_announce' || data?.type === 'storage_file_announce') && data?.metadata;
         
         if (!data?.id || !data?.sender || !data?.timestamp) {
             return;
@@ -4437,7 +4437,7 @@ class ChannelManager {
                 if (!m) continue;
                 if (m._deleted) continue;
                 if (m.type === 'edit' || m.type === 'delete') continue;
-                if (m.type === 'text' || m.type === 'image' || m.type === 'file_announce' || m.type === 'reaction') {
+                if (m.type === 'text' || m.type === 'image' || m.type === 'file_announce' || m.type === 'storage_file_announce' || m.type === 'reaction') {
                     channelLatestMessageManager.setFromLocal(streamId, m);
                     return;
                 }

@@ -11,6 +11,7 @@ import { graphAPI } from './graph.js';
 import { secureStorage } from './secureStorage.js';
 import { Logger } from './logger.js';
 import { mediaController } from './media.js';
+import { storageMediaController } from './storageMedia.js';
 import { streamrController } from './streamr.js';
 import { subscriptionManager } from './subscriptionManager.js';
 import { historyManager } from './historyManager.js';
@@ -127,7 +128,13 @@ class UIController {
             isDownloading: (fileId) => mediaController.isDownloading(fileId),
             getDownloadProgress: (fileId) => mediaController.getDownloadProgress(fileId),
             isVideoPlayable: (fileType) => mediaController.isVideoPlayable(fileType),
-            getYouTubeEmbedsEnabled: () => secureStorage.getYouTubeEmbedsEnabled()
+            getYouTubeEmbedsEnabled: () => secureStorage.getYouTubeEmbedsEnabled(),
+            // Persistent (storage-node) transfers
+            getStorageFileUrl: (tid) => storageMediaController.getFileUrl(tid),
+            isStorageDownloading: (tid) => storageMediaController.isDownloading(tid),
+            getStorageDownloadProgress: (tid) => storageMediaController.getDownloadProgress(tid),
+            getStorageUploadState: (tid) => storageMediaController.getUploadState(tid),
+            getStorageResumePercent: (tid) => storageMediaController.getResumePercent(tid)
         });
         
         // SettingsUI - All settings functionality
@@ -464,6 +471,9 @@ class UIController {
             authManager,
             secureStorage,
             Logger,
+            mediaController,
+            storageMediaController,
+            showNotification: (msg, type) => this.showNotification(msg, type),
             getActiveChannel: () => this.getActiveChannel()
         });
         chatAreaUI.init({
@@ -478,6 +488,7 @@ class UIController {
         inputUI.setDependencies({
             channelManager,
             mediaController,
+            storageMediaController,
             Logger,
             showNotification: (msg, type) => this.showNotification(msg, type),
             showLoading: (msg) => this.showLoading(msg),
@@ -1680,10 +1691,11 @@ class UIController {
                 this.replyingTo = chatAreaUI.getReplyingTo();
             },
             (fileId) => this.handleFileDownload(fileId),
-            (msgId) => chatAreaUI.scrollToMessage(msgId)
+            (msgId) => chatAreaUI.scrollToMessage(msgId),
+            (transferId, msgId) => this.handleStorageFileDownload(transferId, msgId)
         );
     }
-    
+
     /**
      * Handle file download button click
      */
@@ -1694,6 +1706,40 @@ class UIController {
             return;
         }
         await mediaHandler.handleFileDownload(fileId, channel, mediaController);
+    }
+
+    /**
+     * Handle storage (persistent) file download button click.
+     * The chunks come from the channel's storage nodes, not a live swarm.
+     */
+    async handleStorageFileDownload(transferId, msgId) {
+        const channel = this.getActiveChannel();
+        if (!channel) {
+            this.showNotification('No active channel', 'error');
+            return;
+        }
+        const msg = channel.messages.find(m =>
+            (msgId && m.id === msgId) || m.metadata?.transferId === transferId);
+        if (!msg || !msg.metadata) {
+            this.showNotification('File announce not found', 'error');
+            return;
+        }
+        // Spinner on the button while the transfer spins up
+        const btn = document.querySelector(`.storage-download-btn[data-file-id="${CSS.escape(transferId)}"]`);
+        if (btn) {
+            btn.querySelector('.download-play-icon')?.classList.add('hidden');
+            const loading = btn.querySelector('.download-loading-icon');
+            if (loading) {
+                loading.classList.remove('hidden');
+                loading.innerHTML = '<div class="w-4 h-4 border-2 border-white/60 border-t-transparent rounded-full animate-spin"></div>';
+            }
+            btn.disabled = true;
+        }
+        try {
+            await storageMediaController.downloadFile(channel.streamId, msg, channel.password);
+        } catch (error) {
+            this.showNotification('Download failed: ' + error.message, 'error');
+        }
     }
 
     /**
@@ -1995,6 +2041,77 @@ class UIController {
         mediaController.onFileError((fileId, message) => {
             mediaHandler.resetDownloadUI(fileId);
             this.showNotification('Download failed: ' + message, 'error');
+        });
+
+        // ===== Persistent (storage-node) transfers =====
+        // Storage bubbles share the mesh data-* DOM contract, so the progress
+        // plumbing mirrors the handlers above, keyed by transferId.
+        storageMediaController.onFileProgress((tid, percent) => {
+            const progressOverlay = document.querySelector(`[data-progress-overlay="${CSS.escape(tid)}"]`);
+            if (progressOverlay) progressOverlay.classList.remove('hidden');
+
+            const progressPercent = document.querySelector(`[data-progress-percent="${CSS.escape(tid)}"]`);
+            if (progressPercent) progressPercent.textContent = `${percent}%`;
+
+            const progressFill = document.querySelector(`[data-progress-fill="${CSS.escape(tid)}"]`);
+            if (progressFill) progressFill.style.width = `${percent}%`;
+
+            // Downloads: full POC-parity stats (%, transferred/total, speed on
+            // line 1; ETA on line 2) composed by the shared renderer formatter.
+            if (storageMediaController.isDownloading(tid)) {
+                const p = storageMediaController.getDownloadProgress(tid);
+                const d = messageRenderer.formatStorageDownloadDetail(p);
+                const progressText = document.querySelector(`[data-progress-text="${CSS.escape(tid)}"]`);
+                if (progressText && d.line1) progressText.textContent = d.line1;
+                const progressEta = document.querySelector(`[data-progress-eta="${CSS.escape(tid)}"]`);
+                if (progressEta) progressEta.textContent = d.line2;
+            }
+        });
+
+        // Sender bubble: stats snapshot per tick (sending gets %, bytes, speed,
+        // ETA; other stages show the engine's phase label — verify/repair/announce)
+        storageMediaController.onUploadStats((tid, stats) => {
+            const d = messageRenderer.formatStorageUploadDetail(stats);
+            const progressText = document.querySelector(`[data-progress-text="${CSS.escape(tid)}"]`);
+            if (progressText && d.line1) progressText.textContent = d.line1;
+            const progressEta = document.querySelector(`[data-progress-eta="${CSS.escape(tid)}"]`);
+            if (progressEta) progressEta.textContent = d.line2;
+            const progressOverlay = document.querySelector(`[data-progress-overlay="${CSS.escape(tid)}"]`);
+            if (progressOverlay) progressOverlay.classList.remove('hidden');
+            const progressFill = document.querySelector(`[data-progress-fill="${CSS.escape(tid)}"]`);
+            if (progressFill) progressFill.style.width = `${stats.percent || 0}%`;
+        });
+
+        // Upload finished (announce published) — swap the optimistic bubble for
+        // the final one
+        storageMediaController.onUploadComplete((tid, message) => {
+            const container = document.querySelector(`[data-file-id="${CSS.escape(tid)}"]`);
+            if (container) {
+                container.outerHTML = messageRenderer.renderStorageFileBubble(message);
+                this.attachReactionListeners();
+            }
+        });
+
+        // Download finished — re-render as the completed card (save link /
+        // inline player); the controller's deps now report the blob URL
+        storageMediaController.onFileComplete((tid, metadata) => {
+            const container = document.querySelector(`[data-file-id="${CSS.escape(tid)}"]`);
+            if (container) {
+                container.outerHTML = messageRenderer.renderStorageFileBubble({ metadata });
+                this.attachReactionListeners();
+            }
+        });
+
+        storageMediaController.onFileError((tid, message) => {
+            const progressOverlay = document.querySelector(`[data-progress-overlay="${CSS.escape(tid)}"]`);
+            if (progressOverlay) progressOverlay.classList.add('hidden');
+            const btn = document.querySelector(`.storage-download-btn[data-file-id="${CSS.escape(tid)}"]`);
+            if (btn) {
+                btn.querySelector('.download-play-icon')?.classList.remove('hidden');
+                btn.querySelector('.download-loading-icon')?.classList.add('hidden');
+                btn.disabled = false;
+            }
+            this.showNotification('Storage transfer failed: ' + message, 'error');
         });
 
         // Seeder update

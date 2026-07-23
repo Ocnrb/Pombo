@@ -290,11 +290,11 @@ class ChannelLatestMessageManager {
                 senderName
             };
         }
-        if (t === 'file_announce') {
+        if (t === 'file_announce' || t === 'storage_file_announce') {
             return {
                 id: raw.id || null,
                 ts,
-                type: 'file_announce',
+                type: t,
                 sender: senderText,
                 senderName
             };
@@ -338,7 +338,7 @@ class ChannelLatestMessageManager {
     setFromLocal(messageStreamId, message) {
         if (!messageStreamId || !message || typeof message !== 'object') return null;
         const t = message.type;
-        if (t !== 'text' && t !== 'image' && t !== 'file_announce' && t !== 'reaction') {
+        if (t !== 'text' && t !== 'image' && t !== 'file_announce' && t !== 'storage_file_announce' && t !== 'reaction') {
             return null;
         }
         // Reaction removals never enter the preview — see _normalizeRemoteEntry.
@@ -362,8 +362,8 @@ class ChannelLatestMessageManager {
             };
         } else if (t === 'image') {
             entry = { id: message.id || null, ts, type: 'image', sender: senderText, senderName };
-        } else if (t === 'file_announce') {
-            entry = { id: message.id || null, ts, type: 'file_announce', sender: senderText, senderName };
+        } else if (t === 'file_announce' || t === 'storage_file_announce') {
+            entry = { id: message.id || null, ts, type: t, sender: senderText, senderName };
         } else {
             entry = {
                 id: null,

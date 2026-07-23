@@ -46,7 +46,7 @@
 
     <!-- Performance & Offline Support -->
     <link rel="prefetch" href="./js/app.bundle.js">
-    <link rel="prefetch" href="./js/vendor.bundle.js?v=20260723d">
+    <link rel="prefetch" href="./js/vendor.bundle.js?v=20260723p">
 
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -59,11 +59,11 @@
     <link href="./css/components.css" rel="stylesheet">
 
     <!-- Vendor Bundle: Streamr Client + Ethers.js + QRCode -->
-    <script src="./js/vendor.bundle.js?v=20260723d"></script>
+    <script src="./js/vendor.bundle.js?v=20260723p"></script>
 </head>
 <body class="h-screen overflow-hidden">
     <!-- Global header spans full width -->
-    <header class="bg-[#09090b] border-b border-white/[0.01] h-14 flex items-center justify-between px-5 flex-shrink-0 relative z-10">
+    <header class="bg-[#09090b] border-b border-white/[0.01] h-14 flex items-center justify-between px-5 flex-shrink-0 relative z-[60]">
         <!-- Left side: Logo and brand -->
         <div class="flex items-center gap-3">
             <!-- Logo -->
@@ -93,6 +93,25 @@
             <div id="global-sync-indicator" class="global-sync-indicator hidden" aria-live="polite" aria-hidden="true">
                 <span class="global-sync-spinner" aria-hidden="true"></span>
                 <span id="global-sync-text" class="global-sync-text">Syncing your data</span>
+            </div>
+            <!-- Notification bell: channel invites + active transfers.
+                 Desktop: beside the account button. Mobile: the header slot
+                 Create Channel uses in Explore, but shown in the Chats view
+                 instead (components.css owns the visibility rules). -->
+            <div id="notif-bell-wrapper" class="hidden relative">
+                <button id="notif-bell-btn" class="relative w-9 h-9 bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] rounded-xl flex items-center justify-center transition" title="Notifications">
+                    <svg class="w-[18px] h-[18px] text-white/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0"/>
+                    </svg>
+                    <span id="notif-bell-badge" class="hidden absolute -top-1 -right-1 min-w-[16px] h-4 px-1 bg-[#F6851B] rounded-full text-[9px] font-bold text-white flex items-center justify-center">0</span>
+                </button>
+                <div id="notif-bell-dropdown" class="hidden absolute top-full right-0 mt-1.5 w-[300px] bg-[#16161b] border border-white/[0.1] rounded-xl py-1 shadow-2xl z-50">
+                    <div class="px-3.5 py-2 text-[10px] font-semibold tracking-widest text-white/35">CHANNEL INVITES</div>
+                    <div id="notif-invites-list"></div>
+                    <div class="mx-3 my-1 border-t border-white/[0.08]"></div>
+                    <div class="px-3.5 py-2 text-[10px] font-semibold tracking-widest text-white/35">ACTIVE TRANSFERS</div>
+                    <div id="notif-transfers-list" class="pb-1"></div>
+                </div>
             </div>
             <!-- Desktop: Unified account dropdown (hidden on mobile) -->
             <div id="desktop-account-wrapper" class="hidden md:relative">
@@ -485,7 +504,7 @@
                             </button>
                             <div id="attach-file-submenu" class="hidden absolute left-full top-0 ml-1 bg-[#16161b] border border-white/10 rounded-xl py-1 shadow-xl min-w-[150px] z-50">
                                 <button id="send-file-mesh-btn" class="w-full text-left px-4 py-2 hover:bg-white/[0.08] text-sm text-white">Mesh</button>
-                                <button class="w-full text-left px-4 py-2 text-sm text-white/25 cursor-not-allowed" disabled>Persistent (soon)</button>
+                                <button id="send-file-storage-btn" class="w-full text-left px-4 py-2 hover:bg-white/[0.08] text-sm text-white">Persistent</button>
                             </div>
                             </div>
 
@@ -502,7 +521,7 @@
                             </button>
                             <div id="attach-video-submenu" class="hidden absolute left-full top-0 ml-1 bg-[#16161b] border border-white/10 rounded-xl py-1 shadow-xl min-w-[150px] z-50">
                                 <button id="send-video-mesh-btn" class="w-full text-left px-4 py-2 hover:bg-white/[0.08] text-sm text-white">Mesh</button>
-                                <button class="w-full text-left px-4 py-2 text-sm text-white/25 cursor-not-allowed" disabled>Persistent (soon)</button>
+                                <button id="send-video-storage-btn" class="w-full text-left px-4 py-2 hover:bg-white/[0.08] text-sm text-white">Persistent</button>
                             </div>
                             </div>
 
@@ -2989,7 +3008,7 @@
     <script src="./js/install-pre.js"></script>
 
     <!-- App Bundle (built from src/js/) -->
-    <script src="./js/app.bundle.js?v=20260723d"></script>
+    <script src="./js/app.bundle.js?v=20260723p"></script>
 
     <!-- Install modal logic -->
     <script src="./js/install-modal.js"></script>

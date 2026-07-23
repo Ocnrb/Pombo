@@ -97,6 +97,8 @@ export function formatPreviewBody(entry) {
             return mute('[image]');
         case 'file_announce':
             return mute('[video]');
+        case 'storage_file_announce':
+            return mute('[file]');
         case 'reaction': {
             // Reaction removals are filtered out upstream
             // (channelLatestMessageManager). Defensive fallthrough only.

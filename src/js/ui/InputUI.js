@@ -316,15 +316,20 @@ class InputUI {
             });
         }
 
-        const pick = (input) => {
+        // Transport ('mesh' | 'storage') is chosen at pick time and carried
+        // through the confirm modal to sendMediaFile.
+        const pick = (input, transport = 'mesh') => {
             closeSubmenus();
             this.attachMenu.classList.add('hidden');
+            this.pendingTransport = transport;
             input?.click();
         };
 
-        document.getElementById('send-file-mesh-btn')?.addEventListener('click', () => pick(fileInput));
-        document.getElementById('send-video-mesh-btn')?.addEventListener('click', () => pick(videoInput));
-        sendImageBtn?.addEventListener('click', () => pick(imageInput));
+        document.getElementById('send-file-mesh-btn')?.addEventListener('click', () => pick(fileInput, 'mesh'));
+        document.getElementById('send-file-storage-btn')?.addEventListener('click', () => pick(fileInput, 'storage'));
+        document.getElementById('send-video-mesh-btn')?.addEventListener('click', () => pick(videoInput, 'mesh'));
+        document.getElementById('send-video-storage-btn')?.addEventListener('click', () => pick(videoInput, 'storage'));
+        sendImageBtn?.addEventListener('click', () => pick(imageInput, 'mesh'));
 
         // Image file selected
         imageInput?.addEventListener('change', (e) => {
@@ -362,14 +367,15 @@ class InputUI {
         // Confirm file send
         confirmFileBtn?.addEventListener('click', async () => {
             if (!this.pendingFile) return;
-            
+
             const file = this.pendingFile;
             const type = this.pendingFileType;
-            
+            const transport = this.pendingTransport || 'mesh';
+
             this.clearPendingFile();
             modalManager.hide('file-confirm-modal');
-            
-            await this.sendMediaFile(file, type);
+
+            await this.sendMediaFile(file, type, transport);
         });
     }
     
@@ -419,17 +425,27 @@ class InputUI {
     /**
      * Send media file to current channel
      * @param {File} file - File to send
-     * @param {string} type - 'image' or 'video'
+     * @param {string} type - 'image', 'video' or 'file'
+     * @param {string} transport - 'mesh' (live P2P swarm) or 'storage' (persistent, storage nodes)
      */
-    async sendMediaFile(file, type) {
-        const { channelManager, mediaController, showNotification, showLoading, hideLoading } = this.deps;
-        
+    async sendMediaFile(file, type, transport = 'mesh') {
+        const { channelManager, mediaController, storageMediaController, showNotification, showLoading, hideLoading } = this.deps;
+
         const currentChannel = channelManager?.getCurrentChannel();
         if (!currentChannel) {
             showNotification?.('No channel selected', 'error');
             return;
         }
-        
+
+        // Persistent transport: no blocking overlay — the optimistic bubble in
+        // the timeline carries live progress; completion/failure lands as a toast.
+        if (transport === 'storage' && type !== 'image') {
+            storageMediaController.sendFile(currentChannel.streamId, file, currentChannel.password)
+                .then(() => showNotification?.('File stored ✓', 'success'))
+                .catch((error) => showNotification?.('Storage upload failed: ' + error.message, 'error'));
+            return;
+        }
+
         try {
             const label = { image: 'Sending image...', video: 'Processing video...' }[type] || 'Processing file...';
             showLoading?.(label);
@@ -462,6 +478,7 @@ class InputUI {
     clearPendingFile() {
         this.pendingFile = null;
         this.pendingFileType = null;
+        this.pendingTransport = null;
     }
 
     /**

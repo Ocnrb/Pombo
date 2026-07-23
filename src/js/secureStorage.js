@@ -897,6 +897,10 @@ class SecureStorage {
         } else if (message.type === 'file_announce') {
             stored.type = 'file_announce';
             stored.metadata = message.metadata;
+        } else if (message.type === 'storage_file_announce') {
+            stored.type = 'storage_file_announce';
+            stored.metadata = message.metadata;
+            stored.signature = message.signature || null;
         } else {
             // Text message
             stored.text = message.text;

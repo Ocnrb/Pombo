@@ -386,9 +386,23 @@ class App {
     async onWalletConnected(address, signer) {
         try {
             const isGuest = authManager.isGuestMode();
-            
+
             headerUI.updateWalletInfo(address, isGuest);
             headerUI.updateNetworkStatus('Connecting to Streamr...', false);
+
+            // Bell menu (invites + active transfers): shown the moment the
+            // connected UI paints. It used to init at the END of this flow,
+            // after Streamr/DM/sync setup — on a slow connect the bell only
+            // materialised once all of that finished, which read as "appears
+            // when I leave Chats and come back". It only READS from its
+            // managers on open, so wiring it before they finish is safe
+            // (pending invites are already loaded from storage).
+            try {
+                const { notificationBellUI } = await import('./ui/NotificationBellUI.js');
+                notificationBellUI.init({ notificationManager, mediaController });
+            } catch (bellError) {
+                Logger.warn('Failed to init notification bell (non-critical):', bellError);
+            }
 
             const savedWallets = authManager.listSavedWallets();
             headerUI.updateSwitchWalletButton(savedWallets.length > 1);
@@ -538,6 +552,7 @@ class App {
             } catch (notifError) {
                 Logger.warn('Failed to init notifications (non-critical):', notifError);
             }
+
 
             try {
                 await relayManager.init(address);

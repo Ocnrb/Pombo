@@ -611,17 +611,22 @@ body {
 }
 
 /* ----- Video & Image Message Styles ----- */
-.message-entry[data-type="file_announce"] .message-bubble {
+/* File bubbles (mesh + storage) render bare: the card IS the element, no chat-bubble frame */
+.message-entry[data-type="file_announce"] .message-bubble,
+.message-entry[data-type="storage_file_announce"] .message-bubble {
     padding: 0.25rem;
     background: transparent;
 }
 
-.message-entry[data-type="file_announce"] .message-content {
+.message-entry[data-type="file_announce"] .message-content,
+.message-entry[data-type="storage_file_announce"] .message-content {
     font-size: inherit;
 }
 
 .message-entry[data-type="file_announce"].own-message .message-bubble,
-.message-entry[data-type="file_announce"].other-message .message-bubble {
+.message-entry[data-type="file_announce"].other-message .message-bubble,
+.message-entry[data-type="storage_file_announce"].own-message .message-bubble,
+.message-entry[data-type="storage_file_announce"].other-message .message-bubble {
     background-color: transparent;
 }
 
@@ -637,6 +642,21 @@ body {
 
 .video-container {
     max-width: 480px;
+}
+
+/* ----- File-card action slot (mesh + storage bubbles) -----
+   The single download/save button sits on the AVATAR side of the card:
+   - other-message: avatar left → button left (all viewports)
+   - own-message mobile: avatar right (row-reverse groups) → button right
+   - own-message desktop (≥768px): avatar flips back left → button left */
+.other-message .file-card-action {
+    order: -1;
+}
+
+@media (min-width: 768px) {
+    .own-message .file-card-action {
+        order: -1;
+    }
 }
 
 /* ----- YouTube Embed ----- */
@@ -2933,3 +2953,37 @@ body.explore-open #browse-channels-btn {
     color: rgba(255, 255, 255, 0.5);
     pointer-events: none;
 }
+
+/* ==== Notification bell (channel invites + active transfers) ====
+   Desktop: sits beside the account button, top right — no rules needed
+   beyond the JS unhiding it. Mobile: it takes the header slot the Create
+   Channel button occupies in Explore, but shows in the CHATS view instead —
+   the two never appear together. :not(.hidden) keeps it invisible until the
+   bell UI initialises (connected app), mirroring the create button's gating. */
+@media (max-width: 767px) {
+    /* Anchored exactly like the sync spinner: absolute against the header,
+       right edge, vertically centred — not a flex child the row can push
+       around. The spinner itself steps to right: 4.5rem when the bell shows. */
+    #notif-bell-wrapper {
+        display: none !important;
+        position: absolute;
+        right: 1.25rem;
+        top: 50%;
+        transform: translateY(-50%);
+    }
+    /* Keyed on chat-open ALONE, deliberately not explore-open: the REAL
+       Explore always sets chat-open too (openExploreView pushes the chat
+       area first), while the boot path leaves a stale explore-open on the
+       body with the user looking at the chats list — keying on it made the
+       bell vanish until the next navigation cleaned the class up. */
+    body:not(.chat-open):not(.settings-open):not(.contacts-open) #notif-bell-wrapper:not(.hidden) {
+        display: block !important;
+    }
+    /* The sync spinner docks at this same right edge (absolute, right:
+       1.25rem); whenever the bell is showing, step the spinner to its left
+       instead of letting the two stack. */
+    body:not(.chat-open):not(.settings-open):not(.contacts-open) .global-sync-indicator {
+        right: 4.5rem;
+    }
+}
+

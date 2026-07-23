@@ -323,6 +323,90 @@ class IdentityManager {
     }
 
     /**
+     * Create a signed storage-file (storage_file_announce) manifest.
+     *
+     * Persistent File Sharing: chunks already live on the channel's storage
+     * nodes when this is published; the manifest is what receivers trust to
+     * locate them (partition layout, timestamps window) and to decrypt them
+     * (encSalt on password channels), so all of it is under the signature.
+     *
+     * Unlike the mesh manifest there are no piece hashes: integrity comes from
+     * AES-GCM authentication on sealed channels. transferId + sizes + chunk
+     * layout are signed so a forged announce cannot redirect a download.
+     *
+     * @param {Object} input
+     * @param {string} input.channelId - Channel ID
+     * @param {Object} input.metadata - Storage transfer metadata
+     * @param {string|null} [input.id] - Reuse a message id (the sender's optimistic
+     *   bubble is pushed at upload start; signing at completion must keep the same
+     *   id so the published echo dedupes against it)
+     * @returns {Promise<Object>}
+     */
+    async createSignedStorageFileManifest({ channelId, metadata, id = null }) {
+        const sender = authManager.getAddress();
+        const timestamp = Date.now();
+        const messageId = id || this.generateMessageId();
+
+        const messageHash = this.createStorageFileManifestHash({
+            id: messageId,
+            sender,
+            timestamp,
+            channelId,
+            metadata
+        });
+
+        const signature = await authManager.signMessage(messageHash);
+
+        return {
+            type: 'storage_file_announce',
+            v: 1,
+            id: messageId,
+            sender,
+            senderName: this.username || null,
+            timestamp,
+            channelId,
+            metadata,
+            signature,
+            replyTo: null
+        };
+    }
+
+    /**
+     * Deterministic hash for storage-file (storage_file_announce) manifests.
+     * Fields listed explicitly to fix the canonical order — same rule as
+     * createFileManifestHash.
+     *
+     * @param {Object} input
+     * @returns {string}
+     */
+    createStorageFileManifestHash({ id, sender, timestamp, channelId, metadata }) {
+        const data = JSON.stringify({
+            protocol: 'POMBO',
+            version: 1,
+            type: 'storage_file_announce',
+            id,
+            sender: sender.toLowerCase(),
+            timestamp,
+            channelId,
+            transferId: metadata?.transferId ?? null,
+            fileName: metadata?.fileName ?? null,
+            fileType: metadata?.fileType ?? null,
+            originalSize: metadata?.originalSize ?? null,
+            compressedSize: metadata?.compressedSize ?? null,
+            compression: metadata?.compression ?? null,
+            totalChunks: metadata?.totalChunks ?? null,
+            chunkDataSize: metadata?.chunkDataSize ?? null,
+            chunkPartitions: metadata?.chunkPartitions ?? null,
+            firstChunkPartition: metadata?.firstChunkPartition ?? null,
+            firstChunkTs: metadata?.firstChunkTs ?? null,
+            lastChunkTs: metadata?.lastChunkTs ?? null,
+            storedChunks: metadata?.storedChunks ?? null,
+            encSalt: metadata?.encSalt ?? null
+        });
+        return ethers.keccak256(ethers.toUtf8Bytes(data));
+    }
+
+    /**
      * Create deterministic message hash for signing/verification
      * Uses keccak256 for cryptographic security and collision resistance
      * @param {string} id - Message ID
@@ -456,8 +540,17 @@ class IdentityManager {
             // Create message hash (fast, main thread)
             const isChunkedImageManifest = message?.type === 'image' && message?.transport === 'chunked';
             const isFileManifest = message?.type === 'file_announce' && !!message?.metadata;
+            const isStorageFileManifest = message?.type === 'storage_file_announce' && !!message?.metadata;
 
-            const messageHash = isFileManifest
+            const messageHash = isStorageFileManifest
+                ? this.createStorageFileManifestHash({
+                    id: message.id,
+                    sender: message.sender,
+                    timestamp: message.timestamp,
+                    channelId: message.channelId,
+                    metadata: message.metadata
+                })
+                : isFileManifest
                 ? this.createFileManifestHash({
                     id: message.id,
                     sender: message.sender,

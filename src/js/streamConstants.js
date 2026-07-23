@@ -13,8 +13,16 @@
  *     -3  → Admin stream     (WITH storage) — admin-only writes (moderation state)
  *
  * MESSAGE STREAM (-1):
- *   Regular channels use 2 partitions (content + control overrides).
- *   DM inboxes use 4 partitions (messages + sync + sync_blobs + notifications).
+ *   Regular channels use 11 partitions:
+ *     P0 content, P1 control overrides, P2-P10 storage-file chunks.
+ *   DM inboxes use 13 partitions:
+ *     P0 messages, P1 sync, P2 sync_blobs, P3 notifications, P4-P12 storage-file chunks.
+ *
+ *   The 9 chunk partitions carry Persistent File Sharing payloads (uploaded to the
+ *   channel's storage nodes, downloaded via storage resend/HTTP — never subscribed
+ *   live). Chunk i goes to partition first + (i % 9). Nine partitions exist for
+ *   storage-node resend efficiency (small buckets, parallel per-partition reads),
+ *   NOT for throughput — a single partition already saturates the publish path.
  *
  * EPHEMERAL STREAM (-2):
  *   3 partitions: control (presence/typing), media signals, media data.
@@ -36,16 +44,42 @@ export const STREAM_SUFFIX = Object.freeze({
 
 export const MESSAGE_STREAM = Object.freeze({
     SUFFIX: STREAM_SUFFIX.MESSAGE,
-    PARTITIONS: 2,        // Regular channels: content + control overrides
-    DM_PARTITIONS: 4,     // DM inboxes: messages + sync + sync_blobs + notifications
+    PARTITIONS: 11,       // Regular channels: content + control + 9 storage-file chunk partitions
+    DM_PARTITIONS: 13,    // DM inboxes: messages + sync + sync_blobs + notifications + 9 chunk partitions
 
     // Partition indexes
-    MESSAGES: 0,          // Text, reactions, images, video announcements
+    MESSAGES: 0,          // Text, reactions, images, video/file announcements
     CONTROL: 1,           // Edit/Delete overrides (regular channels)
     SYNC: 1,              // Cross-device sync payloads (self → self, DM inbox only)
     SYNC_BLOBS: 2,        // Image blobs sync (DM inbox only)
     NOTIFICATIONS: 3      // Channel invites / notifications (DM inbox only)
 });
+
+/**
+ * Persistent File Sharing over storage nodes (message stream -1, chunk partitions).
+ *
+ * Chunks are round-robined over 9 partitions starting right after the last
+ * "classic" partition of the stream flavor: P2 on regular channels, P4 on DM
+ * inboxes. The announcement is a normal signed chat message on P0
+ * (type 'storage_file_announce') and carries firstChunkPartition/chunkPartitions,
+ * so readers follow the announce, not these local constants.
+ */
+export const STORAGE_FILE = Object.freeze({
+    CHUNK_PARTITIONS: 9,
+    FIRST_CHUNK_PARTITION: 2,     // Regular channels (after P0 messages + P1 control)
+    DM_FIRST_CHUNK_PARTITION: 4   // DM inboxes (after P0-P3)
+});
+
+/**
+ * Partition for storage-file chunk i.
+ * @param {number} i - Chunk index
+ * @param {number} firstPartition - First chunk partition (2 regular / 4 DM, or from announce)
+ * @param {number} [count] - Number of chunk partitions (default 9, or from announce)
+ * @returns {number}
+ */
+export function storageChunkPartition(i, firstPartition, count = STORAGE_FILE.CHUNK_PARTITIONS) {
+    return firstPartition + (i % count);
+}
 
 export const EPHEMERAL_STREAM = Object.freeze({
     SUFFIX: STREAM_SUFFIX.EPHEMERAL,

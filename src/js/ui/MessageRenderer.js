@@ -216,11 +216,39 @@ class MessageRenderer {
     }
 
     /**
+     * Shared file-card glyphs (mesh + storage): download arrow, upload arrow,
+     * floppy (save). One drawing each so the two transports stay visually
+     * consistent.
+     */
+    iconArrowDown(cls) {
+        return `<svg class="${cls}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4.5v9.75m0 0 3.75-3.75M12 14.25 8.25 10.5M4.5 19.5h15"/></svg>`;
+    }
+
+    iconArrowUp(cls) {
+        return `<svg class="${cls}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 19.5V9.75m0 0 3.75 3.75M12 9.75 8.25 13.5M4.5 4.5h15"/></svg>`;
+    }
+
+    iconFloppy(cls) {
+        return `<svg class="${cls}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17.25 3H5.25A2.25 2.25 0 0 0 3 5.25v13.5A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V6.75L17.25 3Z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7.5 3v4.5h8.25V3"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7.5 21v-6.75h9V21"/></svg>`;
+    }
+
+    /**
+     * Tiny transport pill ("mesh" / "storage") — the action glyphs are unified
+     * now, so this is what tells the two transports apart at a glance.
+     */
+    transportBadge(label) {
+        return `<span class="inline-block text-[9px] uppercase tracking-wider px-1.5 py-px mr-1.5 rounded bg-white/[0.08] text-white/40 align-middle">${label}</span>`;
+    }
+
+    /**
      * Render the bubble for a non-video file.
      *
      * Three states share one shell so the row does not jump around as a transfer
      * moves between them: idle (download button), transferring (bar + statistics),
      * and available (open/save).
+     *
+     * The single action slot (`.file-card-action`) sits on the AVATAR side —
+     * CSS order rules flip it per own/other message and viewport.
      *
      * @param {Object} msg - Message object
      * @param {Object} view - Precomputed view state from renderVideoContent
@@ -273,38 +301,43 @@ class MessageRenderer {
             </span>
         ` : '';
 
-        // No spinner while transferring: the bar underneath already says it is moving,
-        // and the freed width is what keeps the statistics on one line.
-        const action = (!fileUrl && canDownload && !active) ? `
-            <button class="download-file-btn flex-shrink-0 w-8 h-8 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] flex items-center justify-center transition"
+        // One action slot on the avatar side: arrow = download, dimmed arrow =
+        // transfer running (no spinner — the bar carries the busy state), floppy
+        // = the bytes are here, save. Green marks ready-to-save.
+        let action = '';
+        if (fileUrl) {
+            action = `
+            <a href="${fileUrl}" download="${attrFileName}" title="Save file"
+               class="file-card-action flex-shrink-0 w-10 h-10 rounded-lg bg-white/[0.06] hover:bg-white/[0.14] flex items-center justify-center transition">
+                ${this.iconFloppy('w-5 h-5 text-green-400/70')}
+            </a>`;
+        } else if (active) {
+            action = `
+            <div class="file-card-action flex-shrink-0 w-10 h-10 rounded-lg bg-white/[0.04] flex items-center justify-center">
+                ${this.iconArrowDown('w-5 h-5 text-white/25 animate-pulse')}
+            </div>`;
+        } else if (canDownload) {
+            action = `
+            <button class="download-file-btn file-card-action flex-shrink-0 w-10 h-10 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] flex items-center justify-center transition"
                     data-file-id="${safeFileId}" title="Download">
-                <svg class="w-4 h-4 text-white/60 download-play-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3"/>
-                </svg>
+                <span class="download-play-icon">${this.iconArrowDown('w-5 h-5 text-white/60')}</span>
                 <div class="download-loading-icon hidden"></div>
-            </button>
-        ` : '';
+            </button>`;
+        }
 
-        // Once the file is here the name is the link; a separate Save button is noise
+        // The name stays a link once the file is here (the floppy is the obvious
+        // target; the title link costs nothing)
         const title = fileUrl
             ? `<a href="${fileUrl}" download="${attrFileName}" class="text-[12px] text-white/80 hover:text-white truncate block" title="${attrFileName}">${safeFileName}</a>`
             : `<div class="text-[12px] text-white/80 truncate" title="${attrFileName}">${safeFileName}</div>`;
 
-        // Green outline once the bytes are here: the file is ready to save, whether we
-        // originated it or just finished pulling it
-        const iconColour = fileUrl ? 'text-green-400/70' : 'text-white/40';
-
         return `
-            <div data-file-id="${safeFileId}" class="rounded-xl bg-white/[0.05] overflow-hidden" style="max-width: 300px;">
+            <div data-file-id="${safeFileId}" class="rounded-xl bg-white/[0.05] overflow-hidden" style="width: 300px; max-width: 100%;">
                 <div class="flex items-center gap-2.5 px-3 py-2.5">
-                    <div class="flex-shrink-0 w-9 h-9 rounded-lg bg-white/[0.06] flex items-center justify-center">
-                        <svg class="w-4 h-4 ${iconColour}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5A3.375 3.375 0 0 0 10.125 2.25H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z"/>
-                        </svg>
-                    </div>
                     <div class="min-w-0 flex-1">
                         ${title}
                         <div class="text-[10px] text-white/35 mt-0.5 flex items-center whitespace-nowrap">
+                            ${this.transportBadge('mesh')}
                             <span data-progress-text="${safeFileId}">${detail}</span>
                             ${seedingStats}
                         </div>
@@ -312,11 +345,200 @@ class MessageRenderer {
                     </div>
                     ${action}
                 </div>
-                <div class="h-1 bg-white/[0.06] ${active ? '' : 'hidden'}" data-progress-overlay="${safeFileId}">
-                    <div class="h-full bg-blue-500 transition-all duration-300"
+                <div class="h-1.5 bg-white/[0.06] ${active ? '' : 'hidden'}" data-progress-overlay="${safeFileId}">
+                    <div class="h-full bg-blue-500 rounded-r-full transition-all duration-300"
                          data-progress-fill="${safeFileId}" style="width: ${percent}%"></div>
                 </div>
                 <span class="hidden" data-progress-percent="${safeFileId}">${percent}%</span>
+            </div>
+        `;
+    }
+
+    /**
+     * Format a remaining-time estimate ("42s", "2m 05s", "1h 12m").
+     * @param {number} sec
+     * @returns {string} Empty when there is no finite estimate
+     */
+    formatETA(sec) {
+        if (!Number.isFinite(sec) || sec < 0) return '';
+        if (sec < 60) return `${Math.ceil(sec)}s`;
+        const m = Math.floor(sec / 60), s = Math.round(sec % 60);
+        if (m < 60) return `${m}m ${String(s).padStart(2, '0')}s`;
+        const h = Math.floor(m / 60);
+        return `${h}h ${String(m % 60).padStart(2, '0')}m`;
+    }
+
+    /**
+     * Compose the sender-bubble stats from a storage upload snapshot, as TWO
+     * lines so nothing truncates in a 300px card:
+     *   line1: "38% · 42.1 of 113 MB · 1.2 MB/s"
+     *   line2: "~1m 10s left · processing 64%"
+     * Non-sending stages put the engine's phase label on line1
+     * (Verifying: 512/1200 confirmed…). Used for the initial render AND the
+     * live DOM updates in ui.js — one source for the format.
+     * @param {Object} s - storageMediaController.getUploadState() snapshot
+     * @returns {{line1: string, line2: string}}
+     */
+    formatStorageUploadDetail(s) {
+        if (!s) return { line1: '', line2: '' };
+        if (s.stage && s.stage !== 'sending') return { line1: s.phase || '', line2: '' };
+        // line1 = progress only (always fits at 300px); speed + ETA live on line2
+        const parts = [`${s.percent || 0}%`];
+        const sent = this.formatFileSize(s.bytesSent || 0);
+        parts.push(s.totalBytes ? `${sent} of ${this.formatFileSize(s.totalBytes)}` : sent);
+        const sub = [];
+        const speed = this.formatSpeed(s.instBps ?? s.avgBps);
+        if (speed) sub.push(speed);
+        const eta = this.formatETA(s.etaSec);
+        if (eta) sub.push(`~${eta} left`);
+        if (Number.isFinite(s.processingPct) && s.processingPct < 100) sub.push(`processing ${s.processingPct}%`);
+        return { line1: parts.join(' · '), line2: sub.join(' · ') };
+    }
+
+    /**
+     * Compose the receiver-bubble stats from a storage download snapshot,
+     * two-line like the upload variant (ETA on line2). Assembly phases
+     * (Finishing write / Extracting) replace line1.
+     * @param {Object} p - storageMediaController.getDownloadProgress() snapshot
+     * @returns {{line1: string, line2: string}}
+     */
+    formatStorageDownloadDetail(p) {
+        if (!p) return { line1: '', line2: '' };
+        if (p.phase) return { line1: p.phase, line2: '' };
+        // line1 = progress only (always fits at 300px); speed + ETA live on line2
+        const transferred = p.total > 0
+            ? this.formatFileSize((p.received / p.total) * p.fileSize)
+            : '0 B';
+        const parts = [`${p.percent}%`, `${transferred} of ${this.formatFileSize(p.fileSize)}`];
+        const sub = [];
+        const speed = this.formatSpeed(p.instBps ?? p.bytesPerSec);
+        if (speed) sub.push(speed);
+        const eta = this.formatETA(p.etaSec);
+        if (eta) sub.push(`~${eta} left`);
+        return { line1: parts.join(' · '), line2: sub.join(' · ') };
+    }
+
+    /**
+     * Render the bubble for a storage-shared file (storage_file_announce).
+     *
+     * Persistent transport: the file lives on the channel's storage nodes, so
+     * the bubble has no seeder/swarm state. Five states share one shell:
+     * uploading (own, pending), idle (download button), downloading (bar +
+     * stats), complete (name is the save link; inline player for playable
+     * video), and a warning badge when the sender's verify ended incomplete.
+     *
+     * DOM contract matches the mesh bubble (data-file-id + data-progress-*),
+     * so the shared progress handlers in ui.js drive both transports.
+     *
+     * @param {Object} msg - storage_file_announce message
+     * @returns {string}
+     */
+    renderStorageFileBubble(msg) {
+        const metadata = msg.metadata;
+        if (!metadata?.transferId) return escapeHtml(msg.text || '');
+        const tid = metadata.transferId;
+        const safeTid = escapeAttr(tid);
+        const safeFileName = escapeHtml(sanitizeText(metadata.fileName));
+        const attrFileName = escapeAttr(sanitizeText(metadata.fileName));
+
+        const uploadState = msg.pending ? this.deps.getStorageUploadState?.(tid) : null;
+        const fileUrl = this.deps.getStorageFileUrl?.(tid);
+        const isDownloading = this.deps.isStorageDownloading?.(tid);
+        const downloadProgress = isDownloading ? this.deps.getStorageDownloadProgress?.(tid) : null;
+        const resumePct = (!fileUrl && !isDownloading && !msg.pending) ? this.deps.getStorageResumePercent?.(tid) : null;
+
+        const totalSize = this.formatFileSize(metadata.fileSize ?? metadata.originalSize ?? 0);
+        const active = !!(isDownloading && downloadProgress) || !!uploadState;
+        const percent = uploadState ? (uploadState.percent || 0) : (downloadProgress ? downloadProgress.percent : 0);
+
+        let detail = { line1: totalSize, line2: '' };
+        if (uploadState) {
+            const d = this.formatStorageUploadDetail(uploadState);
+            detail = { line1: escapeHtml(d.line1 || 'Uploading…'), line2: escapeHtml(d.line2) };
+        } else if (downloadProgress) {
+            const d = this.formatStorageDownloadDetail(downloadProgress);
+            detail = { line1: escapeHtml(d.line1), line2: escapeHtml(d.line2) };
+        } else if (resumePct) {
+            detail = { line1: totalSize, line2: `resumable ${resumePct}%` };
+        }
+
+        const incomplete = Number.isFinite(metadata.storedChunks) && Number.isFinite(metadata.totalChunks)
+            && metadata.storedChunks !== null && metadata.storedChunks < metadata.totalChunks;
+        const incompleteBadge = incomplete
+            ? `<div class="text-[10px] text-amber-400/70 mt-0.5">&#9888; incomplete on storage (${metadata.storedChunks}/${metadata.totalChunks})</div>`
+            : '';
+
+        // One action slot on the avatar side, unified with the mesh card:
+        // arrow = download, up-arrow dimmed = own upload running, arrow dimmed =
+        // download running, floppy = saved bytes ready.
+        const canDownload = !fileUrl && !active && !msg.pending && Number.isFinite(metadata.totalChunks);
+        let action = '';
+        if (fileUrl) {
+            action = `
+            <a href="${fileUrl}" download="${attrFileName}" title="Save file"
+               class="file-card-action flex-shrink-0 w-10 h-10 rounded-lg bg-white/[0.06] hover:bg-white/[0.14] flex items-center justify-center transition">
+                ${this.iconFloppy('w-5 h-5 text-green-400/70')}
+            </a>`;
+        } else if (uploadState) {
+            action = `
+            <div class="file-card-action flex-shrink-0 w-10 h-10 rounded-lg bg-white/[0.04] flex items-center justify-center">
+                ${this.iconArrowUp('w-5 h-5 text-white/25 animate-pulse')}
+            </div>`;
+        } else if (active) {
+            action = `
+            <div class="file-card-action flex-shrink-0 w-10 h-10 rounded-lg bg-white/[0.04] flex items-center justify-center">
+                ${this.iconArrowDown('w-5 h-5 text-white/25 animate-pulse')}
+            </div>`;
+        } else if (canDownload) {
+            action = `
+            <button class="storage-download-btn file-card-action flex-shrink-0 w-10 h-10 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] flex items-center justify-center transition"
+                    data-file-id="${safeTid}" data-msg-id="${escapeAttr(msg.id || '')}" title="Download from storage">
+                <span class="download-play-icon">${this.iconArrowDown('w-5 h-5 text-white/60')}</span>
+                <div class="download-loading-icon hidden"></div>
+            </button>`;
+        }
+
+        // Completed playable video → inline player above the file row
+        let playerHtml = '';
+        if (fileUrl && (metadata.fileType || '').startsWith('video/') && this.deps.isVideoPlayable?.(metadata.fileType)) {
+            playerHtml = `
+                <div class="relative rounded-t-xl overflow-hidden bg-black">
+                    <video src="${fileUrl}" class="max-w-full max-h-60" controls preload="metadata" playsinline></video>
+                </div>
+            `;
+        }
+
+        const title = fileUrl
+            ? `<a href="${fileUrl}" download="${attrFileName}" class="text-[12px] text-white/80 hover:text-white truncate block" title="${attrFileName}">${safeFileName}</a>`
+            : `<div class="text-[12px] text-white/80 truncate" title="${attrFileName}">${safeFileName}</div>`;
+
+        return `
+            <div data-file-id="${safeTid}" class="rounded-xl bg-white/[0.05] overflow-hidden" style="width: 300px; max-width: 100%;">
+                ${playerHtml}
+                <div class="flex items-center gap-2.5 px-3 py-2.5">
+                    <div class="min-w-0 flex-1">
+                        ${title}
+                        <div class="mt-0.5 flex items-start whitespace-nowrap">
+                            ${this.transportBadge('storage')}
+                            <div class="min-w-0 flex-1">
+                                <div class="text-[10px] ${active ? 'text-white/55' : 'text-white/35'} overflow-hidden text-ellipsis">
+                                    <span data-progress-text="${safeTid}">${detail.line1}</span>
+                                </div>
+                                <div class="text-[10px] ${active ? 'text-white/45' : 'text-white/30'} overflow-hidden text-ellipsis">
+                                    <span data-progress-eta="${safeTid}">${detail.line2}</span>
+                                </div>
+                            </div>
+                        </div>
+                        ${incompleteBadge}
+                    </div>
+                    ${action}
+                </div>
+                <div class="h-1.5 bg-white/[0.06] ${active ? '' : 'hidden'}" data-progress-overlay="${safeTid}">
+                    <div class="h-full rounded-r-full transition-all duration-300"
+                         style="width: ${percent}%; background: linear-gradient(90deg, #6366f1, #8b5cf6);"
+                         data-progress-fill="${safeTid}"></div>
+                </div>
+                <span class="hidden" data-progress-percent="${safeTid}">${percent}%</span>
             </div>
         `;
     }
@@ -507,7 +729,10 @@ class MessageRenderer {
                 
             case 'file_announce':
                 return this.renderVideoContent(msg);
-                
+
+            case 'storage_file_announce':
+                return this.renderStorageFileBubble(msg);
+
             default:
                 const escapedText = escapeHtml(msg.text || '');
                 const withLinks = linkify(escapedText);

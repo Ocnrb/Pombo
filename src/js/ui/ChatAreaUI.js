@@ -489,9 +489,9 @@ class ChatAreaUI {
      * @private
      */
     _attachMessageListeners() {
-        const { mediaController } = this.deps;
+        const { mediaController, storageMediaController, showNotification } = this.deps;
         const channel = this.deps.channelManager?.getCurrentChannel() || previewModeUI.getPreviewChannel();
-        
+
         reactionManager.attachReactionListeners(
             (msgId) => this.startReply(msgId),
             async (fileId) => {
@@ -499,7 +499,18 @@ class ChatAreaUI {
                     await mediaHandler.handleFileDownload(fileId, channel, mediaController);
                 }
             },
-            (msgId) => this.scrollToMessage(msgId)
+            (msgId) => this.scrollToMessage(msgId),
+            async (transferId, msgId) => {
+                if (!channel || !storageMediaController) return;
+                const msg = channel.messages.find(m =>
+                    (msgId && m.id === msgId) || m.metadata?.transferId === transferId);
+                if (!msg?.metadata) return;
+                try {
+                    await storageMediaController.downloadFile(channel.streamId, msg, channel.password);
+                } catch (error) {
+                    showNotification?.('Download failed: ' + error.message, 'error');
+                }
+            }
         );
         mediaHandler.attachLightboxListeners();
     }

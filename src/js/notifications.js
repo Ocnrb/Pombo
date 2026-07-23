@@ -146,6 +146,8 @@ class NotificationManager {
         // P3 is only subscribed when not muted, so receiving means invites are active
         this.pendingInvites.set(invite.inviteId, invite);
         this.savePendingInvites();
+        // The bell badge tracks this list; the toast below is transient.
+        this.onChanged?.();
         this.showInviteNotification(invite);
     }
 
@@ -250,6 +252,7 @@ class NotificationManager {
             // Remove from pending
             this.pendingInvites.delete(inviteId);
             this.savePendingInvites();
+            this.onChanged?.();
 
             Logger.info('Invite accepted:', inviteId);
             
@@ -272,6 +275,7 @@ class NotificationManager {
     dismissInvite(inviteId) {
         this.pendingInvites.delete(inviteId);
         this.savePendingInvites();
+        this.onChanged?.();
         Logger.info('Invite dismissed:', inviteId);
     }
 

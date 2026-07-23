@@ -272,6 +272,47 @@ class CryptoManager {
     }
 
     /**
+     * Encrypt binary data with a pre-derived AES-GCM key.
+     *
+     * Used by Persistent File Sharing: the per-message salt of encryptBinary()
+     * would force one PBKDF2 derivation (310k iterations) per chunk — minutes of
+     * pure key derivation on a large file. Instead the engine derives ONE key per
+     * file via deriveKey(password, fileSalt) (the salt travels in the signed
+     * announce) and seals every chunk with it. IV stays random per chunk.
+     *
+     * Wire format: [12B iv][ciphertext+authTag] — no salt on the wire, matching
+     * the DM binary format in dmCrypto.js.
+     *
+     * @param {Uint8Array} data - Binary data to encrypt
+     * @param {CryptoKey} key - AES-GCM key from deriveKey()
+     * @returns {Promise<Uint8Array>} - iv + ciphertext
+     */
+    async encryptBinaryWithKey(data, key) {
+        const iv = this.generateIV();
+        const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
+        const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+        combined.set(iv, 0);
+        combined.set(new Uint8Array(ciphertext), iv.length);
+        return combined;
+    }
+
+    /**
+     * Decrypt binary data sealed by encryptBinaryWithKey.
+     * @param {Uint8Array} encrypted - [12B iv][ciphertext+authTag]
+     * @param {CryptoKey} key - AES-GCM key from deriveKey()
+     * @returns {Promise<Uint8Array>} - Decrypted binary data
+     */
+    async decryptBinaryWithKey(encrypted, key) {
+        if (!(encrypted instanceof Uint8Array) || encrypted.byteLength < 28) {
+            throw new Error(`Invalid encrypted binary: expected ≥28 bytes (12B IV + 16B tag), got ${encrypted?.byteLength ?? 0}`);
+        }
+        const iv = encrypted.slice(0, 12);
+        const ciphertext = encrypted.slice(12);
+        const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+        return new Uint8Array(plaintext);
+    }
+
+    /**
      * Convert ArrayBuffer to Base64
      * @param {ArrayBuffer|Uint8Array} buffer - Buffer to convert
      * @returns {string} - Base64 string

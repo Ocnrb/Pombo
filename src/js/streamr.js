@@ -110,7 +110,7 @@ const isIpLiteralHost = (hostname) => {
     return hostname.includes(':');
 };
 
-const isWebSafeStorageNodeUrl = (value) => {
+export const isWebSafeStorageNodeUrl = (value) => {
     try {
         const url = new URL(value);
         const hostname = url.hostname.toLowerCase();
@@ -394,7 +394,7 @@ class StreamrController {
             Logger.info('Creating message stream...');
             const startTime = Date.now();
             
-            const messageStream = await createStreamWithRetry(messageStreamId, metadata, 'message', STREAM_CONFIG.MESSAGE_STREAM.PARTITIONS);  // 2 partitions for channels (content + control)
+            const messageStream = await createStreamWithRetry(messageStreamId, metadata, 'message', STREAM_CONFIG.MESSAGE_STREAM.PARTITIONS);  // 11 partitions for channels (content + control + 9 storage-file chunks)
             try { onProgress(); } catch (_) { /* progress callback errors must not break creation */ }
             
             // Step 2: Create EPHEMERAL STREAM (3 partitions: control + media signals + media data)
@@ -1053,7 +1053,7 @@ class StreamrController {
         const messageStream = await getOrCreate(
             messageStreamId,
             metadata,
-            STREAM_CONFIG.MESSAGE_STREAM.DM_PARTITIONS  // 4 partitions: messages + sync + sync_blobs + notifications
+            STREAM_CONFIG.MESSAGE_STREAM.DM_PARTITIONS  // 13 partitions: messages + sync + sync_blobs + notifications + 9 storage-file chunks
         );
         try { onProgress(); } catch (_) { /* progress callback errors must not break flow */ }
 
@@ -1971,16 +1971,44 @@ class StreamrController {
                 }
             }
 
-            await this.client.publish({
+            const pubMsg = await this.client.publish({
                 streamId: streamId,
                 partition: partition
             }, payload);
 
             Logger.debug(`Published to ${streamId} partition ${partition}`);
+            // The SDK message carries the publish timestamp — storage verify
+            // reads match stored messages by it.
+            return pubMsg;
         } catch (error) {
             Logger.error('Failed to publish:', error);
             throw error;
         }
+    }
+
+    /**
+     * Publish a storage-file chunk to a message-stream chunk partition.
+     *
+     * Chunks are pre-sealed by the storage engine with a per-file key (one
+     * PBKDF2/ECDH derivation per file, random IV per chunk) — the documented
+     * exception to the publish() sealing rule, which derives a fresh key per
+     * message and would spend minutes of pure PBKDF2 on a large file.
+     * Payload goes out as a bare Uint8Array with binary contentType.
+     *
+     * @param {string} messageStreamId - Message stream ID (ends with -1)
+     * @param {number} partition - Chunk partition
+     * @param {Uint8Array} data - Sealed (or public-plaintext) chunk payload
+     * @returns {Promise<Object>} - SDK publish result (carries .timestamp)
+     */
+    async publishStorageChunk(messageStreamId, partition, data) {
+        if (!this.client) {
+            throw new Error('Streamr client not initialized');
+        }
+        return await this.client.publish(
+            { streamId: messageStreamId, partition },
+            data,
+            { contentType: 'binary' }
+        );
     }
 
     /**
@@ -2512,7 +2540,7 @@ class StreamrController {
                     // Skip overrides for the preview path
                     if (t === 'edit' || t === 'delete') continue;
                     // Only accept known preview-renderable types
-                    if (t !== 'text' && t !== 'image' && t !== 'file_announce' && t !== 'reaction') {
+                    if (t !== 'text' && t !== 'image' && t !== 'file_announce' && t !== 'storage_file_announce' && t !== 'reaction') {
                         continue;
                     }
 
@@ -3200,6 +3228,7 @@ class StreamrController {
             if (msg?.type === 'image' && msg?.imageId) return true;
             if (msg?.type === 'image_chunk' && msg?.imageId && Number.isInteger(msg?.chunkIndex) && typeof msg?.data === 'string') return true;
             if (msg?.type === 'file_announce' && msg?.metadata) return true;
+            if (msg?.type === 'storage_file_announce' && msg?.metadata) return true;
             if (allowOverridesInContentPartition && msg?.type === 'edit' && msg?.targetId) return true;
             if (allowOverridesInContentPartition && msg?.type === 'delete' && msg?.targetId) return true;
             return false;
@@ -3636,8 +3665,8 @@ class StreamrController {
                     && typeof msg?.data === 'string';
             };
             
-            // Helper to check if message is a video announcement
-            const isVideoMessage = (msg) => msg?.type === 'file_announce' && msg?.metadata;
+            // Helper to check if message is a file/video announcement (mesh or storage)
+            const isVideoMessage = (msg) => (msg?.type === 'file_announce' || msg?.type === 'storage_file_announce') && msg?.metadata;
             
             // Helper to check if message is an E2E encrypted envelope (DM messages)
             // These are decrypted downstream by routeInboxMessage, not here

@@ -918,6 +918,7 @@ class SubscriptionManager {
                 if (type === 'reaction' || type === 'edit' || type === 'delete') return false;
                 if (type === 'image' && msg.imageId) return true;
                 if (type === 'file_announce' && msg.metadata) return true;
+                if (type === 'storage_file_announce' && msg.metadata) return true;
                 if (type === 'text' || type === 'message') return true;
                 if (!type && msg.id && msg.text && msg.sender && msg.timestamp) return true;
                 return false;
