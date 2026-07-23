@@ -1797,9 +1797,32 @@ class MediaController {
                             channelManager.notifyHandlers('message', { streamId: messageStreamId, message: announcement });
                         }
                         
-                        // Publish announcement to messageStream (stored)
-                        await streamrController.publishMessage(messageStreamId, announcement, password);
-                        
+                        // Publish announcement to messageStream (stored).
+                        //
+                        // DM: EVERYTHING on a DM channel travels inside the
+                        // pair's ECDH envelope — the peer's inbox is a
+                        // public-publish stream, and this announce was the one
+                        // DM payload still going out unsealed, leaking the
+                        // file's name, size and piece hashes to anyone
+                        // watching. Same sealing as dm.js sendDMMessage; both
+                        // receivers (web decryptDMEnvelope, Android
+                        // routeInboxMessage) accept plain AND sealed, so this
+                        // breaks nothing in flight.
+                        if (channel?.type === 'dm' && channel.peerAddress) {
+                            const privateKey = authManager.wallet?.privateKey;
+                            const peerPubKey = await dmManager.getPeerPublicKey(channel.peerAddress);
+                            if (!privateKey || !peerPubKey) {
+                                throw new Error('Cannot send DM file: encryption keys unavailable');
+                            }
+                            const aesKey = await dmCrypto.getSharedKey(privateKey, channel.peerAddress, peerPubKey);
+                            const { verified, ...cleanAnnouncement } = announcement;
+                            const sealed = await dmCrypto.encrypt(cleanAnnouncement, aesKey);
+                            await streamrController.setDMPublishKey(messageStreamId);
+                            await streamrController.publishMessage(messageStreamId, sealed, null);
+                        } else {
+                            await streamrController.publishMessage(messageStreamId, announcement, password);
+                        }
+
                         // Persist locally for write-only channels
                         if (channel?.writeOnly) {
                             await secureStorage.addSentMessage(messageStreamId, announcement);
