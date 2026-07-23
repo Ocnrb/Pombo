@@ -110,9 +110,12 @@ class StorageEndpointResolver {
     }
 
     /**
-     * Flat rotation list of healthy base URLs for a stream (one URL per node —
-     * the first healthy one; extra URLs of the same node are fallbacks, not
-     * extra rotation slots).
+     * Flat rotation list of healthy base URLs for a stream. EVERY healthy URL
+     * is a rotation slot — the Pombo cluster registers one node address with
+     * two URLs, and taking only the first per node pinned all direct reads to
+     * a single server (halved download throughput vs the POC, which
+     * round-robined windows across every cluster URL). Slots interleave by URL
+     * index so multi-URL nodes and multi-node sets both spread fairly.
      *
      * @param {string} streamId
      * @returns {Promise<string[]>} May be empty (no storage / no web-safe URL / all ejected)
@@ -121,9 +124,15 @@ class StorageEndpointResolver {
         const nodes = await this.resolve(streamId);
         const limit = CONFIG.storageMedia.nodeFailureLimit;
         const out = [];
-        for (const node of nodes) {
-            const healthy = node.urls.find((u) => (this.failures.get(u) || 0) < limit);
-            if (healthy) out.push(healthy);
+        for (let i = 0; ; i++) {
+            let any = false;
+            for (const node of nodes) {
+                const u = node.urls[i];
+                if (u === undefined) continue;
+                any = true;
+                if ((this.failures.get(u) || 0) < limit) out.push(u);
+            }
+            if (!any) break;
         }
         return out;
     }

@@ -1258,6 +1258,8 @@ class StorageMediaController {
         if (!bases.length) {
             if (isDM) throw new Error('No reachable storage endpoint for this inbox — persistent DM sharing needs one');
             Logger.warn('No storage HTTP endpoints — verify will use SDK resend reads (slower)');
+        } else {
+            Logger.info(`Storage upload verify endpoints (${bases.length}): ${bases.join(', ')}`);
         }
 
         const sealer = await this.makeSealer(channel, password);
@@ -2110,7 +2112,13 @@ class StorageMediaController {
         // DM inbox streams are private at the Streamr layer → direct HTTP would
         // return SDK ciphertext. SDK resend it is (we own the inbox, keys are
         // registered by the DM subsystem).
-        const bases = isDM ? [] : await storageEndpoints.rotation(chunkStreamId).catch(() => []);
+        const bases = isDM ? [] : await storageEndpoints.rotation(chunkStreamId).catch((e) => {
+            Logger.warn('storage endpoint resolution failed — download falls back to SDK resend:', e.message);
+            return [];
+        });
+        if (!isDM) {
+            Logger.info(`Storage download endpoints (${bases.length}): ${bases.join(', ') || 'none — SDK resend fallback'}`);
+        }
 
         const sealer = await this.makeSealer(channel, password, {
             encSaltB64: meta.encSalt,
