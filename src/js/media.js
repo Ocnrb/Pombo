@@ -171,6 +171,78 @@ function decodeBinaryMedia(buf) {
     }
 }
 
+/**
+ * Adaptive retransmission timeout for piece requests, following the shape of
+ * TCP's RTO estimator (RFC 6298): a smoothed round-trip time plus four times
+ * its variance, doubled on every timeout and re-measured from every success.
+ * Port of the Android PieceTimeout (core/PieceTimeout.kt) — keep in sync.
+ *
+ * A FIXED timeout is the wrong tool here and measurably so. 5s suits two desktops
+ * on a LAN; on a mobile path where a 220KB piece legitimately takes 3-4.5s, that
+ * constant declares failure on pieces still in flight. The damage compounds — the
+ * window halves, the piece is asked for again, and the duplicate answer competes
+ * with the pieces still coming, on the very link that is already the bottleneck
+ * (measured live: a seeder sending the same piece six times over 5G).
+ */
+class PieceRtoEstimator {
+    constructor(initialMs = 5000, minMs = 3000, maxMs = 60000) {
+        this.initialMs = initialMs;
+        this.minMs = minMs;
+        this.maxMs = maxMs;
+        this.srtt = -1;        // smoothed round-trip time
+        this.rttvar = 0;       // round-trip time variation
+        this.backoff = 1;
+        this.minRtt = Infinity;
+    }
+
+    /** Current timeout to arm a request with. */
+    currentMs() {
+        const base = this.srtt < 0 ? this.initialMs : this.srtt + 4 * this.rttvar;
+        return Math.min(this.maxMs, Math.max(this.minMs, Math.round(base * this.backoff)));
+    }
+
+    /**
+     * A piece arrived after rttMs. Clears the backoff — the path is working,
+     * so whatever made us double the timeout has passed.
+     */
+    onSample(rttMs) {
+        if (rttMs <= 0) return;
+        if (rttMs < this.minRtt) this.minRtt = rttMs;
+        if (this.srtt < 0) {
+            // First measurement seeds the estimator (RFC 6298 rule 2.2)
+            this.srtt = rttMs;
+            this.rttvar = rttMs / 2;
+        } else {
+            // Variance FIRST and from the OLD srtt; updating srtt first would make
+            // the estimator track its own output and collapse the variance
+            this.rttvar = 0.75 * this.rttvar + 0.25 * Math.abs(this.srtt - rttMs);
+            this.srtt = 0.875 * this.srtt + 0.125 * rttMs;
+        }
+        this.backoff = 1;
+    }
+
+    /**
+     * A request timed out: double the wait, up to the ceiling. A timeout gives no
+     * round-trip sample (the answer may be late or never coming), so the only
+     * honest response is to wait longer next time.
+     */
+    onTimeout() {
+        if (this.currentMs() < this.maxMs) this.backoff = Math.min(this.backoff * 2, 64);
+    }
+
+    /**
+     * Whether the round-trip has inflated well past the path's best — the
+     * delay-based congestion signal (Vegas/BBR style). Needed because once the
+     * timeout is measured rather than fixed, timeouts become rare by construction
+     * and nothing else would stop the window inflating into a self-made queue.
+     * The loose factor keeps normal jitter from reading as congestion.
+     */
+    isCongested(factor = 2.0) {
+        if (this.srtt < 0 || this.minRtt === Infinity) return false;
+        return this.srtt > this.minRtt * factor;
+    }
+}
+
 class MediaController {
     constructor() {
         // Image cache: imageId -> base64 data (LRU eviction when over byte limit)
@@ -1854,7 +1926,9 @@ class MediaController {
             downloadStarted: false,
             // Adaptive request window (AIMD): grows per delivered piece, halves on timeout
             window: CONFIG.PIECE_WINDOW_START,
-            lastWindowBackoffAt: 0
+            lastWindowBackoffAt: 0,
+            // Measured per transfer: paths differ per peer and per network
+            rto: new PieceRtoEstimator(CONFIG.PIECE_REQUEST_TIMEOUT)
         };
         
         this.incomingFiles.set(fileId, transfer);
@@ -2219,16 +2293,18 @@ class MediaController {
             // Request timed out - reset if still waiting or processing
             const status = transfer.pieceStatus[pieceIndex];
             if (status === 'requested' || status === 'processing') {
-                Logger.debug(`Piece ${pieceIndex} timed out (was ${status})`);
+                transfer.rto.onTimeout();
+                Logger.debug(`Piece ${pieceIndex} timed out (was ${status}), ` +
+                    `next wait ${transfer.rto.currentMs()}ms`);
                 transfer.pieceStatus[pieceIndex] = 'pending';
                 transfer.requestsInFlight.delete(pieceIndex);
                 // A timeout is the congestion signal: back off, then retry
                 this.shrinkWindow(transfer);
                 this.manageDownload(fileId);
             }
-        }, CONFIG.PIECE_REQUEST_TIMEOUT);
-        
-        transfer.requestsInFlight.set(pieceIndex, { seederId, timeoutId });
+        }, transfer.rto.currentMs());
+
+        transfer.requestsInFlight.set(pieceIndex, { seederId, timeoutId, sentAt: Date.now() });
         
         // Derive ephemeral stream ID for P2P request
         const ephemeralStreamId = deriveEphemeralId(transfer.streamId);
@@ -2356,7 +2432,6 @@ class MediaController {
             await streamrController.publishMediaData(ephemeralStreamId, binaryPayload, password);
             Logger.debug('Sent piece (binary)', pieceIndex, 'of', fileId, password ? '(encrypted)' : '');
         }
-
         this.recordThroughput(this.uploadStateFor(fileId), arrayBuffer.byteLength);
         this.emitUploadStats(fileId);
     }
@@ -2475,6 +2550,13 @@ class MediaController {
         if (request) {
             clearTimeout(request.timeoutId);
             transfer.requestsInFlight.delete(pieceIndex);
+            // Feed the RTT estimator. Only pieces still marked in flight count: one
+            // that already timed out has no honest round-trip to report (we stopped
+            // waiting), and folding a late arrival in as a sample would teach the
+            // estimator the very delay it is meant to detect.
+            if (request.sentAt) {
+                transfer.rto.onSample(Date.now() - request.sentAt);
+            }
         }
         
         // Store piece
@@ -2501,8 +2583,16 @@ class MediaController {
         if (doneCount === transfer.metadata.pieceCount) {
             await this.assembleFile(fileId);
         } else {
-            // Delivery succeeded: widen the window, then top the requests back up
-            this.growWindow(transfer);
+            // Grow only while the path is not already queueing. Growing on every
+            // delivery regardless is how the window inflates past what the link can
+            // carry: throughput stops improving, round-trips triple, and the only
+            // thing that would pull it back — a timeout — has been tuned out of
+            // existence by the RTO estimator. Rising delay is the earlier signal.
+            if (transfer.rto.isCongested()) {
+                transfer.window = Math.max(CONFIG.PIECE_WINDOW_MIN, transfer.window - 1);
+            } else {
+                this.growWindow(transfer);
+            }
             this.manageDownload(fileId);
         }
     }
@@ -3503,4 +3593,4 @@ class MediaController {
 
 // Export singleton instance
 export const mediaController = new MediaController();
-export { CONFIG as MEDIA_CONFIG };
+export { CONFIG as MEDIA_CONFIG, PieceRtoEstimator };
