@@ -1069,20 +1069,20 @@ describe('secureStorage', () => {
                 expect(stored[0].imageId).toBe('img-abc');
             });
 
-            it('should store a video_announce message', async () => {
+            it('should store a file_announce message', async () => {
                 const msg = {
                     id: 'vid-1',
                     sender: '0xabc',
                     timestamp: Date.now(),
                     signature: '0xsig',
                     channelId: 'stream-1',
-                    type: 'video_announce',
+                    type: 'file_announce',
                     metadata: { duration: 120 }
                 };
                 await secureStorage.addSentMessage('stream-1', msg);
 
                 const stored = secureStorage.getSentMessages('stream-1');
-                expect(stored[0].type).toBe('video_announce');
+                expect(stored[0].type).toBe('file_announce');
                 expect(stored[0].metadata.duration).toBe(120);
             });
 

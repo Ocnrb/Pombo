@@ -1390,7 +1390,7 @@ describe('StreamrController Core', () => {
                 createMockMessage({ id: '1', text: 'hi', sender: '0x1', timestamp: 100, type: 'text' }),
                 createMockMessage({ type: 'reaction', messageId: 'm1', emoji: '👍' }),
                 createMockMessage({ type: 'image', imageId: 'img1' }),
-                createMockMessage({ type: 'video_announce', metadata: {} })
+                createMockMessage({ type: 'file_announce', metadata: {} })
             ];
             mockClient.resend.mockResolvedValue(createMockAsyncIterator(msgs));
             await streamrController.fetchHistoryAsync('stream-1', 0, 10, handler);

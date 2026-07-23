@@ -56,6 +56,7 @@ globalThis.ethers = mockEthers;
 import { identityManager } from '../../src/js/identity.js';
 import { secureStorage } from '../../src/js/secureStorage.js';
 import { authManager } from '../../src/js/auth.js';
+import { cryptoWorkerPool } from '../../src/js/workers/cryptoWorkerPool.js';
 
 describe('IdentityManager', () => {
     beforeEach(() => {
@@ -616,6 +617,103 @@ describe('IdentityManager', () => {
             const verification = { valid: true, signer: '0xSIGNER' };
             const info = await identityManager.getIdentityInfo('0xADDR', verification);
             expect(info).toBeDefined();
+        });
+    });
+
+    // File (file_announce) manifests carry the piece hashes every downloader
+    // verifies against, so the signature has to cover them. keccak256 is mocked to a
+    // constant, but toUtf8Bytes receives the canonical JSON — so we assert on exactly
+    // what gets signed, which is the property that matters.
+    describe('file manifest signing', () => {
+        const metadata = {
+            fileId: 'f-1',
+            fileName: 'clip.mp4',
+            fileSize: 1000,
+            fileType: 'video/mp4',
+            pieceCount: 2,
+            pieceHashes: ['h0', 'h1']
+        };
+
+        const lastSignedPayload = () => JSON.parse(mockEthers.toUtf8Bytes.mock.calls.at(-1)[0]);
+
+        beforeEach(() => {
+            mockEthers.toUtf8Bytes.mockClear();
+        });
+
+        it('signs over the piece hashes, count and size', () => {
+            identityManager.createFileManifestHash({
+                id: 'm1', sender: '0xAbC', timestamp: 123, channelId: 'c1', metadata
+            });
+
+            const payload = lastSignedPayload();
+            expect(payload.type).toBe('file_announce');
+            expect(payload.pieceHashes).toEqual(['h0', 'h1']);
+            expect(payload.pieceCount).toBe(2);
+            expect(payload.fileSize).toBe(1000);
+            expect(payload.fileId).toBe('f-1');
+        });
+
+        it('lowercases the sender so verification is case-insensitive', () => {
+            identityManager.createFileManifestHash({
+                id: 'm1', sender: '0xAbC', timestamp: 123, channelId: 'c1', metadata
+            });
+
+            expect(lastSignedPayload().sender).toBe('0xabc');
+        });
+
+        it('produces a different signed payload if a piece hash is tampered with', () => {
+            identityManager.createFileManifestHash({
+                id: 'm1', sender: '0xAbC', timestamp: 123, channelId: 'c1', metadata
+            });
+            const original = mockEthers.toUtf8Bytes.mock.calls.at(-1)[0];
+
+            identityManager.createFileManifestHash({
+                id: 'm1', sender: '0xAbC', timestamp: 123, channelId: 'c1',
+                metadata: { ...metadata, pieceHashes: ['h0', 'TAMPERED'] }
+            });
+
+            expect(mockEthers.toUtf8Bytes.mock.calls.at(-1)[0]).not.toBe(original);
+        });
+
+        it('tolerates missing metadata fields without throwing', () => {
+            expect(() => identityManager.createFileManifestHash({
+                id: 'm1', sender: '0xAbC', timestamp: 123, channelId: 'c1', metadata: {}
+            })).not.toThrow();
+
+            expect(lastSignedPayload().pieceHashes).toEqual([]);
+        });
+
+        it('createSignedFileManifest returns a signed file_announce', async () => {
+            const manifest = await identityManager.createSignedFileManifest({
+                channelId: 'c1',
+                metadata
+            });
+
+            expect(manifest.type).toBe('file_announce');
+            expect(manifest.metadata).toBe(metadata);
+            expect(manifest.signature).toBe('0xMockSignature');
+            expect(manifest.channelId).toBe('c1');
+            expect(manifest.sender).toBe('0xTestUser');
+        });
+
+        it('verifies a file_announce against the manifest hash, not the empty-text hash', async () => {
+            cryptoWorkerPool.execute.mockResolvedValue({ valid: true, recoveredAddress: '0xTestUser' });
+
+            await identityManager.verifyMessage({
+                type: 'file_announce',
+                id: 'm1',
+                sender: '0xTestUser',
+                timestamp: Date.now(),
+                channelId: 'c1',
+                signature: '0xsig',
+                metadata
+            }, 'c1');
+
+            // The old path hashed { text: '' } and never touched the file metadata
+            const payload = JSON.parse(mockEthers.toUtf8Bytes.mock.calls[0][0]);
+            expect(payload.type).toBe('file_announce');
+            expect(payload.pieceHashes).toEqual(['h0', 'h1']);
+            expect(payload).not.toHaveProperty('text');
         });
     });
 

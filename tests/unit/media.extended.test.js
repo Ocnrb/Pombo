@@ -391,6 +391,10 @@ describe('media.js extended', () => {
     describe('IndexedDB operations', () => {
         let mockDB;
 
+        // pieces records use a compound key; seedFiles records key on fileId alone
+        const recordKey = (record) =>
+            record.pieceIndex === undefined ? record.fileId : [record.fileId, record.pieceIndex];
+
         function createMockObjectStore(data = []) {
             const store = {
                 put: vi.fn((record) => {
@@ -398,14 +402,24 @@ describe('media.js extended', () => {
                     setTimeout(() => req.onsuccess?.(), 0);
                     return req;
                 }),
-                delete: vi.fn((key) => {
+                delete: vi.fn((keyOrRange) => {
                     const req = { onsuccess: null, onerror: null };
+                    if (keyOrRange && typeof keyOrRange.includes === 'function') {
+                        for (let i = data.length - 1; i >= 0; i--) {
+                            if (keyOrRange.includes(recordKey(data[i]))) data.splice(i, 1);
+                        }
+                    }
                     setTimeout(() => { req.result = undefined; req.onsuccess?.(); }, 0);
                     return req;
                 }),
-                getAll: vi.fn(() => {
+                getAll: vi.fn((range) => {
                     const req = { onsuccess: null, onerror: null, result: null };
-                    setTimeout(() => { req.result = [...data]; req.onsuccess?.(); }, 0);
+                    // The pieces store is keyed ['fileId', 'pieceIndex']; honouring the
+                    // range here is what makes range-scoped reads actually testable
+                    const result = range
+                        ? data.filter(r => range.includes(recordKey(r)))
+                        : [...data];
+                    setTimeout(() => { req.result = result; req.onsuccess?.(); }, 0);
                     return req;
                 }),
                 openCursor: vi.fn(() => {
@@ -421,11 +435,37 @@ describe('media.js extended', () => {
                     }, 0);
                     return req;
                 }),
-                index: vi.fn(() => ({
+                index: vi.fn((name) => ({
                     getAll: vi.fn((streamId) => {
                         const req = { onsuccess: null, onerror: null, result: null };
                         const filtered = data.filter(d => d.streamId === streamId);
                         setTimeout(() => { req.result = filtered; req.onsuccess?.(); }, 0);
+                        return req;
+                    }),
+                    // Cursor over the named index, honouring a key range on that field
+                    openCursor: vi.fn((range) => {
+                        const req = { onsuccess: null, onerror: null };
+                        const matching = data.filter(r => !range || range.includes(r[name]));
+                        let idx = 0;
+                        setTimeout(function fire() {
+                            if (idx < matching.length) {
+                                const value = matching[idx++];
+                                req.onsuccess?.({
+                                    target: {
+                                        result: {
+                                            value,
+                                            delete: () => {
+                                                const at = data.indexOf(value);
+                                                if (at >= 0) data.splice(at, 1);
+                                            },
+                                            continue: () => setTimeout(fire, 0)
+                                        }
+                                    }
+                                });
+                            } else {
+                                req.onsuccess?.({ target: { result: null } });
+                            }
+                        }, 0);
                         return req;
                     })
                 }))
@@ -456,6 +496,148 @@ describe('media.js extended', () => {
 
                 await mediaController.savePieceToIndexedDB('f1', 0, new Uint8Array(10));
                 expect(store.put).toHaveBeenCalled();
+            });
+        });
+
+        describe('cleanupStalePieces()', () => {
+            const DAY_MS = 24 * 60 * 60 * 1000;
+
+            it('should do nothing without a db', async () => {
+                mediaController.db = null;
+                await expect(mediaController.cleanupStalePieces()).resolves.toBeUndefined();
+            });
+
+            // Pieces are only cleared on completion or cancel, so a transfer abandoned
+            // by closing the tab would otherwise keep its pieces forever
+            it('should delete pieces from downloads abandoned past the expiry window', async () => {
+                const fresh = { fileId: 'f1', pieceIndex: 0, data: new Uint8Array(1), timestamp: Date.now() };
+                const stale = {
+                    fileId: 'old', pieceIndex: 0, data: new Uint8Array(1),
+                    timestamp: Date.now() - (MEDIA_CONFIG.PIECE_EXPIRE_DAYS + 1) * DAY_MS
+                };
+                const records = [fresh, stale];
+                mockDB.transaction.mockReturnValue({
+                    objectStore: vi.fn().mockReturnValue(createMockObjectStore(records))
+                });
+
+                await mediaController.cleanupStalePieces();
+
+                expect(records).toEqual([fresh]);
+            });
+
+            it('should keep pieces from downloads still inside the window', async () => {
+                const recent = {
+                    fileId: 'f1', pieceIndex: 0, data: new Uint8Array(1),
+                    timestamp: Date.now() - DAY_MS
+                };
+                const records = [recent];
+                mockDB.transaction.mockReturnValue({
+                    objectStore: vi.fn().mockReturnValue(createMockObjectStore(records))
+                });
+
+                await mediaController.cleanupStalePieces();
+
+                expect(records).toEqual([recent]);
+            });
+        });
+
+        describe('clearFileFromIndexedDB()', () => {
+            it('should remove only the target file pieces', async () => {
+                const mine = { fileId: 'f1', pieceIndex: 0, data: new Uint8Array(1), timestamp: Date.now() };
+                const other = { fileId: 'f2', pieceIndex: 0, data: new Uint8Array(1), timestamp: Date.now() };
+                const records = [mine, other];
+                mockDB.transaction.mockReturnValue({
+                    objectStore: vi.fn().mockReturnValue(createMockObjectStore(records))
+                });
+
+                await mediaController.clearFileFromIndexedDB('f1');
+
+                expect(records).toEqual([other]);
+            });
+        });
+
+        describe('restorePiecesFromIndexedDB()', () => {
+            const PIECE_SIZE = MEDIA_CONFIG.PIECE_SIZE;
+
+            function makeTransfer(pieceCount, fileSize) {
+                return {
+                    metadata: { pieceCount, fileSize },
+                    pieceStatus: new Array(pieceCount).fill('pending'),
+                    receivedCount: 0
+                };
+            }
+
+            function withRecords(records) {
+                mockDB.transaction.mockReturnValue({
+                    objectStore: vi.fn().mockReturnValue(createMockObjectStore(records))
+                });
+            }
+
+            it('should return 0 if no db', async () => {
+                mediaController.db = null;
+                const transfer = makeTransfer(2, PIECE_SIZE * 2);
+                expect(await mediaController.restorePiecesFromIndexedDB('f1', transfer)).toBe(0);
+            });
+
+            it('should restore pieces and mark them done', async () => {
+                withRecords([
+                    { fileId: 'f1', pieceIndex: 0, data: new Uint8Array(PIECE_SIZE) },
+                    { fileId: 'f1', pieceIndex: 1, data: new Uint8Array(PIECE_SIZE) }
+                ]);
+
+                const transfer = makeTransfer(3, PIECE_SIZE * 3);
+                const restored = await mediaController.restorePiecesFromIndexedDB('f1', transfer);
+
+                expect(restored).toBe(2);
+                expect(transfer.pieceStatus).toEqual(['done', 'done', 'pending']);
+                expect(transfer.receivedCount).toBe(2);
+            });
+
+            it('should accept a shorter final piece', async () => {
+                const lastLength = 123;
+                withRecords([
+                    { fileId: 'f1', pieceIndex: 0, data: new Uint8Array(PIECE_SIZE) },
+                    { fileId: 'f1', pieceIndex: 1, data: new Uint8Array(lastLength) }
+                ]);
+
+                const transfer = makeTransfer(2, PIECE_SIZE + lastLength);
+                expect(await mediaController.restorePiecesFromIndexedDB('f1', transfer)).toBe(2);
+            });
+
+            it('should discard stale pieces whose length does not match the manifest', async () => {
+                withRecords([
+                    { fileId: 'f1', pieceIndex: 0, data: new Uint8Array(PIECE_SIZE) },
+                    { fileId: 'f1', pieceIndex: 1, data: new Uint8Array(17) } // truncated leftover
+                ]);
+
+                const transfer = makeTransfer(2, PIECE_SIZE * 2);
+                const restored = await mediaController.restorePiecesFromIndexedDB('f1', transfer);
+
+                expect(restored).toBe(1);
+                expect(transfer.pieceStatus).toEqual(['done', 'pending']);
+            });
+
+            it('should ignore pieces belonging to other files', async () => {
+                withRecords([
+                    { fileId: 'other-file', pieceIndex: 0, data: new Uint8Array(PIECE_SIZE) },
+                    { fileId: 'f1', pieceIndex: 1, data: new Uint8Array(PIECE_SIZE) }
+                ]);
+
+                const transfer = makeTransfer(2, PIECE_SIZE * 2);
+                const restored = await mediaController.restorePiecesFromIndexedDB('f1', transfer);
+
+                expect(restored).toBe(1);
+                expect(transfer.pieceStatus).toEqual(['pending', 'done']);
+            });
+
+            it('should ignore out-of-range piece indices', async () => {
+                withRecords([
+                    { fileId: 'f1', pieceIndex: 99, data: new Uint8Array(PIECE_SIZE) }
+                ]);
+
+                const transfer = makeTransfer(2, PIECE_SIZE * 2);
+                expect(await mediaController.restorePiecesFromIndexedDB('f1', transfer)).toBe(0);
+                expect(transfer.pieceStatus).toEqual(['pending', 'pending']);
             });
         });
 
@@ -746,10 +928,16 @@ describe('media.js extended', () => {
             expect(mediaController.incomingFiles.has('asm-1')).toBe(false);
         });
 
-        it('should warn on size mismatch', async () => {
+        // A size mismatch means pieces went missing after they were hash-verified.
+        // The file is not what the sender announced, so it must not be delivered.
+        it('should refuse to deliver a file whose assembled size is wrong', async () => {
             const piece1 = new Uint8Array([1, 2, 3]);
-            const announceSpy = vi.spyOn(mediaController, 'announceFileSource').mockResolvedValue(undefined);
-            const persistSpy = vi.spyOn(mediaController, 'persistSeedFile').mockResolvedValue(false);
+            const completeCb = vi.fn();
+            const errorCb = vi.fn();
+            mediaController.handlers.onFileComplete = completeCb;
+            mediaController.handlers.onFileError = errorCb;
+            vi.spyOn(mediaController, 'announceFileSource').mockResolvedValue(undefined);
+            vi.spyOn(mediaController, 'persistSeedFile').mockResolvedValue(false);
 
             mediaController.incomingFiles.set('mismatch-1', {
                 metadata: {
@@ -758,13 +946,17 @@ describe('media.js extended', () => {
                 },
                 streamId: 'stream-1', password: null, isPrivateChannel: false,
                 pieceStatus: ['done'], pieces: [piece1], useIndexedDB: false,
-                receivedCount: 1, seederDiscoveryTimer: null
+                receivedCount: 1, seederDiscoveryTimer: null,
+                requestsInFlight: new Map()
             });
 
             await mediaController.assembleFile('mismatch-1');
 
-            // Should warn about size mismatch
-            expect(Logger.warn).toHaveBeenCalledWith(expect.stringContaining('Size mismatch'));
+            expect(completeCb).not.toHaveBeenCalled();
+            expect(errorCb).toHaveBeenCalledWith('mismatch-1', expect.stringContaining('999'));
+            // Must not be offered to other peers as a valid copy
+            expect(mediaController.localFiles.has('mismatch-1')).toBe(false);
+            expect(mediaController.incomingFiles.has('mismatch-1')).toBe(false);
         });
     });
 
@@ -962,6 +1154,44 @@ describe('media.js extended', () => {
             mediaController.handleSourceAnnounce({ fileId: 'f1' });
 
             expect(mediaController.fileSeeders.get('f1').size).toBe(0);
+        });
+
+        // Transfers are pull-based: an announce is what kicks the request loop off.
+        it('should start the pull loop once a seeder announces', () => {
+            mediaController.fileSeeders.set('f1', new Set());
+            mediaController.incomingFiles.set('f1', {
+                metadata: { pieceCount: 2 },
+                pieceStatus: ['pending', 'pending'],
+                requestsInFlight: new Map(),
+                downloadStarted: false,
+                seederDiscoveryTimer: null
+            });
+            const manageSpy = vi.spyOn(mediaController, 'manageDownload').mockImplementation(() => {});
+
+            mediaController.handleSourceAnnounce({ fileId: 'f1', senderId: '0xA', pieceCount: 2 });
+
+            expect(manageSpy).toHaveBeenCalledWith('f1');
+            expect(mediaController.incomingFiles.get('f1').downloadStarted).toBe(true);
+            manageSpy.mockRestore();
+        });
+
+        it('should not restart the pull loop for an already-started transfer', () => {
+            mediaController.fileSeeders.set('f1', new Set());
+            mediaController.incomingFiles.set('f1', {
+                metadata: { pieceCount: 2 },
+                pieceStatus: ['pending', 'pending'],
+                requestsInFlight: new Map(),
+                downloadStarted: true,
+                seederDiscoveryTimer: null
+            });
+            const manageSpy = vi.spyOn(mediaController, 'manageDownload').mockImplementation(() => {});
+
+            mediaController.handleSourceAnnounce({ fileId: 'f1', senderId: '0xB', pieceCount: 2 });
+
+            // The new seeder still joins the set, but no second start
+            expect(mediaController.fileSeeders.get('f1').has('0xb')).toBe(true);
+            expect(manageSpy).not.toHaveBeenCalled();
+            manageSpy.mockRestore();
         });
     });
 

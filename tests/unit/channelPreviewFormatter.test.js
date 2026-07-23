@@ -39,7 +39,7 @@ describe('channelPreviewFormatter', () => {
 
     it('renders [image] / [video] tags for media types', () => {
         expect(formatPreviewBody({ type: 'image' })).toContain('[image]');
-        expect(formatPreviewBody({ type: 'video_announce' })).toContain('[video]');
+        expect(formatPreviewBody({ type: 'file_announce' })).toContain('[video]');
     });
 
     it('renders reactions with emoji and "reacted with" verb', () => {

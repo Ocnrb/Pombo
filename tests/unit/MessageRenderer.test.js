@@ -661,9 +661,159 @@ describe('MessageRenderer', () => {
         });
     });
 
+    describe('renderFileBubble()', () => {
+        const pdf = (extra = {}) => ({
+            type: 'file_announce',
+            metadata: {
+                fileId: 'doc-1',
+                fileName: 'report.pdf',
+                fileType: 'application/pdf',
+                fileSize: 5 * 1024 * 1024,
+                pieceHashes: ['h0'],
+                ...extra
+            }
+        });
+
+        it('renders a file row rather than the video panel', () => {
+            messageRenderer.setDependencies({
+                getFileUrl: () => null, getCurrentAddress: () => '0x1', isSeeding: () => false
+            });
+
+            const result = messageRenderer.renderVideoContent(pdf());
+
+            expect(result).toContain('report.pdf');
+            expect(result).toContain('download-file-btn');
+            // The 16:9 player shell belongs to videos only
+            expect(result).not.toContain('aspect-ratio: 16/9');
+        });
+
+        it('shows transferred, total and speed while downloading', () => {
+            messageRenderer.setDependencies({
+                getFileUrl: () => null,
+                getCurrentAddress: () => '0x1',
+                isSeeding: () => false,
+                isDownloading: () => true,
+                getDownloadProgress: () => ({
+                    percent: 40, received: 4, total: 10,
+                    fileSize: 5 * 1024 * 1024, bytesPerSec: 348160
+                })
+            });
+
+            const result = messageRenderer.renderVideoContent(pdf());
+
+            expect(result).toContain('2.00 MB of 5.00 MB');
+            expect(result).toContain('340.0 KB/s');
+            expect(result).toContain('width: 40%');
+            // The bar carries the busy state now: the spinner is gone and the
+            // download button is withdrawn entirely while a transfer runs
+            expect(result).not.toContain('download-file-btn');
+            expect(result).not.toContain('animate-spin');
+        });
+
+        it('omits the rate until one is measured', () => {
+            messageRenderer.setDependencies({
+                getFileUrl: () => null,
+                getCurrentAddress: () => '0x1',
+                isSeeding: () => false,
+                isDownloading: () => true,
+                getDownloadProgress: () => ({
+                    percent: 10, received: 1, total: 10,
+                    fileSize: 5 * 1024 * 1024, bytesPerSec: null
+                })
+            });
+
+            const result = messageRenderer.renderVideoContent(pdf());
+
+            expect(result).toContain('of 5.00 MB');
+            expect(result).not.toContain('B/s');
+        });
+
+        it('makes the filename the link once the file is held locally', () => {
+            messageRenderer.setDependencies({
+                getFileUrl: () => 'blob:doc', getCurrentAddress: () => '0x1', isSeeding: () => true
+            });
+
+            const result = messageRenderer.renderVideoContent(pdf());
+
+            // The name itself is the link; a separate Save button is noise
+            expect(result).toContain('blob:doc');
+            expect(result).toContain('download="report.pdf"');
+            expect(result).not.toContain('>Save<');
+            expect(result).not.toContain('download-file-btn');
+        });
+
+        it('marks the icon green and says seeding once the file is here', () => {
+            messageRenderer.setDependencies({
+                getFileUrl: () => 'blob:doc', getCurrentAddress: () => '0x1', isSeeding: () => true
+            });
+
+            const result = messageRenderer.renderVideoContent(pdf());
+
+            expect(result).toContain('text-green-400/70');
+            expect(result).toContain('seeding...');
+        });
+
+        it('leaves the icon neutral and says nothing about seeding while unavailable', () => {
+            messageRenderer.setDependencies({
+                getFileUrl: () => null, getCurrentAddress: () => '0x1', isSeeding: () => false
+            });
+
+            const result = messageRenderer.renderVideoContent(pdf());
+
+            expect(result).not.toContain('text-green-400/70');
+            expect(result).not.toContain('seeding...');
+        });
+
+        it('shows upload rate and leecher count while seeding', () => {
+            messageRenderer.setDependencies({
+                getFileUrl: () => 'blob:doc', getCurrentAddress: () => '0x1', isSeeding: () => true
+            });
+
+            const result = messageRenderer.renderVideoContent(pdf());
+
+            expect(result).toContain('data-upload-speed="doc-1"');
+            expect(result).toContain('data-leecher-count="doc-1"');
+        });
+
+        it('omits serving stats when we do not hold the file', () => {
+            messageRenderer.setDependencies({
+                getFileUrl: () => null, getCurrentAddress: () => '0x1', isSeeding: () => false
+            });
+
+            const result = messageRenderer.renderVideoContent(pdf());
+
+            expect(result).not.toContain('data-upload-speed');
+            expect(result).not.toContain('data-leecher-count');
+        });
+
+        it('escapes quotes in the download filename attribute', () => {
+            messageRenderer.setDependencies({
+                getFileUrl: () => 'blob:doc', getCurrentAddress: () => '0x1', isSeeding: () => false
+            });
+
+            const result = messageRenderer.renderVideoContent(pdf({ fileName: 'a" onload="alert(1)' }));
+
+            expect(result).not.toContain('onload="alert(1)"');
+        });
+    });
+
+    describe('formatSpeed()', () => {
+        it('scales the unit to the rate', () => {
+            expect(messageRenderer.formatSpeed(512)).toBe('512 B/s');
+            expect(messageRenderer.formatSpeed(2048)).toBe('2.0 KB/s');
+            expect(messageRenderer.formatSpeed(5 * 1048576)).toBe('5.00 MB/s');
+        });
+
+        it('renders nothing when there is no rate to show', () => {
+            expect(messageRenderer.formatSpeed(null)).toBe('');
+            expect(messageRenderer.formatSpeed(0)).toBe('');
+            expect(messageRenderer.formatSpeed(undefined)).toBe('');
+        });
+    });
+
     describe('renderVideoContent()', () => {
         it('should return escaped text if no metadata', () => {
-            const msg = { type: 'video_announce', text: 'Video shared' };
+            const msg = { type: 'file_announce', text: 'Video shared' };
             const result = messageRenderer.renderVideoContent(msg);
             expect(result).toBe('Video shared');
         });
@@ -675,7 +825,7 @@ describe('MessageRenderer', () => {
             });
             
             const msg = {
-                type: 'video_announce',
+                type: 'file_announce',
                 metadata: {
                     fileId: 'file-123',
                     fileName: '<script>hack</script>.mp4',
@@ -688,6 +838,102 @@ describe('MessageRenderer', () => {
             expect(result).not.toContain('<script>');
         });
         
+        // A lean record restored from our own sync: naming only, no piece hashes, so
+        // there is nothing to fetch and the download affordance must not be offered.
+        it('should show the placeholder when there are no piece hashes', () => {
+            messageRenderer.setDependencies({
+                getFileUrl: () => null,
+                getCurrentAddress: () => '0x123',
+                isSeeding: () => false
+            });
+
+            const result = messageRenderer.renderVideoContent({
+                type: 'file_announce',
+                metadata: {
+                    fileId: 'file-lean-1',
+                    fileName: 'holiday.mp4',
+                    fileType: 'video/mp4',
+                    fileSize: 5000000
+                }
+            });
+
+            expect(result).toContain('not on this device');
+            expect(result).toContain('holiday.mp4');
+            expect(result).toContain('data-file-id="file-lean-1"');
+            // Must not offer an action that could only fail
+            expect(result).not.toContain('download-file-btn');
+            expect(result).not.toContain('data-progress-overlay');
+        });
+
+        // Non-video types go to the file bubble in every state, including this one —
+        // it renders its own unavailable treatment rather than the video placeholder
+        it('should route unavailable non-video files to the file bubble', () => {
+            messageRenderer.setDependencies({
+                getFileUrl: () => null,
+                getCurrentAddress: () => '0x123',
+                isSeeding: () => false
+            });
+
+            const result = messageRenderer.renderVideoContent({
+                type: 'file_announce',
+                metadata: {
+                    fileId: 'file-lean-2',
+                    fileName: 'report.pdf',
+                    fileType: 'application/pdf',
+                    fileSize: 2048
+                }
+            });
+
+            expect(result).toContain('report.pdf');
+            expect(result).toContain('not on this device');
+            expect(result).not.toContain('download-file-btn');
+        });
+
+        // The same device still holding the file must get the real bubble back,
+        // not the placeholder — that is the whole point of keeping the naming.
+        it('should prefer the real player over the placeholder when the file is local', () => {
+            messageRenderer.setDependencies({
+                getFileUrl: () => 'blob:local-copy',
+                getCurrentAddress: () => '0x123',
+                isSeeding: () => true,
+                isVideoPlayable: () => true,
+                registerMedia: () => 'media-1'
+            });
+
+            const result = messageRenderer.renderVideoContent({
+                type: 'file_announce',
+                metadata: {
+                    fileId: 'file-lean-3',
+                    fileName: 'holiday.mp4',
+                    fileType: 'video/mp4',
+                    fileSize: 5000000
+                }
+            });
+
+            expect(result).toContain('blob:local-copy');
+            expect(result).not.toContain('not on this device');
+        });
+
+        it('should escape quotes in the placeholder filename attribute', () => {
+            messageRenderer.setDependencies({
+                getFileUrl: () => null,
+                getCurrentAddress: () => '0x123',
+                isSeeding: () => false
+            });
+
+            const result = messageRenderer.renderVideoContent({
+                type: 'file_announce',
+                metadata: {
+                    fileId: 'file-lean-4',
+                    fileName: 'a" onmouseover="alert(1)',
+                    fileType: 'video/mp4',
+                    fileSize: 10
+                }
+            });
+
+            expect(result).not.toContain('onmouseover="alert(1)"');
+        });
+
         it('should show download panel when video not available', () => {
             messageRenderer.setDependencies({
                 getFileUrl: () => null,
@@ -696,9 +942,10 @@ describe('MessageRenderer', () => {
             });
             
             const msg = {
-                type: 'video_announce',
+                type: 'file_announce',
                 metadata: {
                     fileId: 'file-456',
+                    pieceHashes: ['h0'],
                     fileName: 'video.mp4',
                     fileType: 'video/mp4',
                     fileSize: 5000000
@@ -721,9 +968,10 @@ describe('MessageRenderer', () => {
             });
             
             const msg = {
-                type: 'video_announce',
+                type: 'file_announce',
                 metadata: {
                     fileId: 'file-dl-1',
+                    pieceHashes: ['h0'],
                     fileName: 'movie.mp4',
                     fileType: 'video/mp4',
                     fileSize: 10485760
@@ -757,9 +1005,10 @@ describe('MessageRenderer', () => {
             });
             
             const msg = {
-                type: 'video_announce',
+                type: 'file_announce',
                 metadata: {
                     fileId: 'file-idle-1',
+                    pieceHashes: ['h0'],
                     fileName: 'clip.mp4',
                     fileType: 'video/mp4',
                     fileSize: 2048000
@@ -786,9 +1035,10 @@ describe('MessageRenderer', () => {
             });
             
             const msg = {
-                type: 'video_announce',
+                type: 'file_announce',
                 metadata: {
                     fileId: 'file-compat-1',
+                    pieceHashes: ['h0'],
                     fileName: 'old.mp4',
                     fileType: 'video/mp4',
                     fileSize: 1024000

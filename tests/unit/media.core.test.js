@@ -45,6 +45,13 @@ vi.mock('../../src/js/identity.js', () => ({
             sender: '0xmyaddress',
             timestamp: Date.now()
         }),
+        createSignedFileManifest: vi.fn().mockResolvedValue({
+            type: 'file_announce',
+            id: 'msg-123',
+            sender: '0xmyaddress',
+            timestamp: Date.now(),
+            signature: '0xsig'
+        }),
         getTrustLevel: vi.fn().mockResolvedValue('verified')
     }
 }));
@@ -78,7 +85,7 @@ vi.mock('../../src/js/dmCrypto.js', () => ({
 }));
 
 // Import after mocks
-import { mediaController, MEDIA_CONFIG } from '../../src/js/media.js';
+import { mediaController, MEDIA_CONFIG, PieceRtoEstimator } from '../../src/js/media.js';
 import { streamrController, deriveEphemeralId } from '../../src/js/streamr.js';
 import { authManager } from '../../src/js/auth.js';
 import { channelManager } from '../../src/js/channels.js';
@@ -492,7 +499,10 @@ describe('media.js core', () => {
             requestsInFlight: new Map(),
             receivedCount: 0,
             pieces: new Array(pieceCount).fill(null),
-            useIndexedDB: false
+            useIndexedDB: false,
+            window: MEDIA_CONFIG.PIECE_WINDOW_START,
+            lastWindowBackoffAt: 0,
+            rto: new PieceRtoEstimator(MEDIA_CONFIG.PIECE_REQUEST_TIMEOUT)
         });
 
         it('skips own pieces (self-filtering)', async () => {
@@ -645,7 +655,9 @@ describe('media.js core', () => {
                 data: 'data'
             });
 
-            expect(handler).toHaveBeenCalledWith('file-1', 20, 1, 5, 500);
+            // Sixth argument is the measured rate; null on the first piece, since a
+            // rate needs at least two samples and a second of span
+            expect(handler).toHaveBeenCalledWith('file-1', 20, 1, 5, 500, null);
         });
 
         it('calls assembleFile when all pieces done', async () => {
@@ -671,6 +683,55 @@ describe('media.js core', () => {
 
             expect(assembleSpy).toHaveBeenCalledWith('file-1');
             assembleSpy.mockRestore();
+        });
+
+        // The delivery feedback loop: a good piece widens the window and immediately
+        // tops the outstanding requests back up. This is what replaces push mode.
+        it('widens the window and tops up requests on a delivered piece', async () => {
+            authManager.getAddress.mockReturnValue('0xme');
+            const transfer = createTransfer(5);
+            transfer.pieceStatus[1] = 'requested';
+            transfer.metadata.pieceHashes[1] = 'hash2';
+            const windowBefore = transfer.window;
+            mediaController.incomingFiles.set('file-1', transfer);
+
+            vi.spyOn(mediaController, 'base64ToArrayBuffer').mockReturnValue(new ArrayBuffer(8));
+            vi.spyOn(mediaController, 'sha256').mockResolvedValue('hash2');
+            const manageSpy = vi.spyOn(mediaController, 'manageDownload').mockImplementation(() => {});
+
+            await mediaController.handleFilePiece('stream-1', {
+                fileId: 'file-1',
+                pieceIndex: 1,
+                senderId: '0xother',
+                data: 'data'
+            });
+
+            expect(transfer.window).toBe(windowBefore + 1);
+            expect(manageSpy).toHaveBeenCalledWith('file-1');
+            manageSpy.mockRestore();
+        });
+
+        it('does not widen the window past the maximum', async () => {
+            authManager.getAddress.mockReturnValue('0xme');
+            const transfer = createTransfer(5);
+            transfer.window = MEDIA_CONFIG.PIECE_WINDOW_MAX;
+            transfer.pieceStatus[1] = 'requested';
+            transfer.metadata.pieceHashes[1] = 'hash2';
+            mediaController.incomingFiles.set('file-1', transfer);
+
+            vi.spyOn(mediaController, 'base64ToArrayBuffer').mockReturnValue(new ArrayBuffer(8));
+            vi.spyOn(mediaController, 'sha256').mockResolvedValue('hash2');
+            const manageSpy = vi.spyOn(mediaController, 'manageDownload').mockImplementation(() => {});
+
+            await mediaController.handleFilePiece('stream-1', {
+                fileId: 'file-1',
+                pieceIndex: 1,
+                senderId: '0xother',
+                data: 'data'
+            });
+
+            expect(transfer.window).toBe(MEDIA_CONFIG.PIECE_WINDOW_MAX);
+            manageSpy.mockRestore();
         });
     });
 
@@ -785,6 +846,36 @@ describe('media.js core', () => {
             expect(clearSpy).toHaveBeenCalledWith(timer);
             clearSpy.mockRestore();
         });
+
+        // The blob is built straight from the piece array (no contiguous copy),
+        // so guard the thing that would break silently: order and exact bytes.
+        it('preserves piece order and byte content in the assembled blob', async () => {
+            const transfer = {
+                metadata: {
+                    fileId: 'file-bytes', fileName: 'a.bin', fileSize: 6,
+                    fileType: 'application/octet-stream', pieceCount: 2, pieceHashes: ['h1', 'h2']
+                },
+                streamId: 'stream-1',
+                password: null,
+                isPrivateChannel: false,
+                pieceStatus: ['done', 'done'],
+                pieces: [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])],
+                receivedCount: 2,
+                useIndexedDB: false,
+                seederDiscoveryTimer: null
+            };
+            mediaController.incomingFiles.set('file-bytes', transfer);
+
+            let captured;
+            mediaController.handlers.onFileComplete = (id, meta, url, blob) => { captured = blob; };
+            vi.spyOn(mediaController, 'announceFileSource').mockResolvedValue(undefined);
+            vi.spyOn(mediaController, 'persistSeedFile').mockResolvedValue(false);
+
+            await mediaController.assembleFile('file-bytes');
+
+            expect(captured.size).toBe(6);
+            expect(new Uint8Array(await captured.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4, 5, 6]));
+        });
     });
 
     // ==================== handlePieceRequest ====================
@@ -891,7 +982,7 @@ describe('media.js core', () => {
 
             expect(streamrController.publishMediaSignal).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
-                { type: 'source_request', fileId: 'file-1', wantPush: true },
+                { type: 'source_request', fileId: 'file-1' },
                 null
             );
         });
@@ -901,7 +992,7 @@ describe('media.js core', () => {
 
             expect(streamrController.publishMediaSignal).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
-                { type: 'source_request', fileId: 'file-1', wantPush: true },
+                { type: 'source_request', fileId: 'file-1' },
                 'pwd'
             );
         });
@@ -948,7 +1039,7 @@ describe('media.js core', () => {
 
             expect(streamrController.publishMediaSignal).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
-                { type: 'source_announce', fileId: 'file-1', pieceCount: 0, pushMode: true },
+                { type: 'source_announce', fileId: 'file-1', pieceCount: 0 },
                 null
             );
         });
@@ -958,7 +1049,7 @@ describe('media.js core', () => {
 
             expect(streamrController.publishMediaSignal).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
-                { type: 'source_announce', fileId: 'file-1', pieceCount: 0, pushMode: true },
+                { type: 'source_announce', fileId: 'file-1', pieceCount: 0 },
                 'pwd'
             );
         });
@@ -1016,6 +1107,80 @@ describe('media.js core', () => {
             expect(spy).toHaveBeenCalledWith('file-dl-4');
             spy.mockRestore();
         });
+
+        // Resume: pieces persist in IndexedDB across sessions, so a restarted
+        // download must only ask the network for what is actually missing.
+        it('resumes from persisted pieces and skips the network when already complete', async () => {
+            const previousDb = mediaController.db;
+            mediaController.db = {}; // truthy => transfer opts into IndexedDB
+            const discoverySpy = vi.spyOn(mediaController, 'startSeederDiscovery').mockImplementation(() => {});
+            const assembleSpy = vi.spyOn(mediaController, 'assembleFile').mockResolvedValue(undefined);
+            const restoreSpy = vi.spyOn(mediaController, 'restorePiecesFromIndexedDB')
+                .mockImplementation(async (id, transfer) => {
+                    transfer.pieceStatus.fill('done');
+                    transfer.receivedCount = 4;
+                    return 4;
+                });
+
+            await mediaController.startDownload('stream-1', {
+                fileId: 'file-resume-1', fileName: 'big.mp4', fileSize: 20 * 1024 * 1024,
+                fileType: 'video/mp4', pieceCount: 4, pieceHashes: ['a', 'b', 'c', 'd']
+            });
+
+            expect(assembleSpy).toHaveBeenCalledWith('file-resume-1');
+            expect(discoverySpy).not.toHaveBeenCalled();
+
+            discoverySpy.mockRestore();
+            assembleSpy.mockRestore();
+            restoreSpy.mockRestore();
+            mediaController.db = previousDb;
+        });
+
+        it('resumes partially and still discovers seeders for the missing pieces', async () => {
+            const previousDb = mediaController.db;
+            mediaController.db = {};
+            const discoverySpy = vi.spyOn(mediaController, 'startSeederDiscovery').mockImplementation(() => {});
+            const assembleSpy = vi.spyOn(mediaController, 'assembleFile').mockResolvedValue(undefined);
+            const restoreSpy = vi.spyOn(mediaController, 'restorePiecesFromIndexedDB')
+                .mockImplementation(async (id, transfer) => {
+                    transfer.pieceStatus[0] = 'done';
+                    transfer.receivedCount = 1;
+                    return 1;
+                });
+
+            await mediaController.startDownload('stream-1', {
+                fileId: 'file-resume-2', fileName: 'big.mp4', fileSize: 20 * 1024 * 1024,
+                fileType: 'video/mp4', pieceCount: 4, pieceHashes: ['a', 'b', 'c', 'd']
+            });
+
+            expect(assembleSpy).not.toHaveBeenCalled();
+            expect(discoverySpy).toHaveBeenCalledWith('file-resume-2');
+            expect(mediaController.incomingFiles.get('file-resume-2').pieceStatus)
+                .toEqual(['done', 'pending', 'pending', 'pending']);
+
+            discoverySpy.mockRestore();
+            assembleSpy.mockRestore();
+            restoreSpy.mockRestore();
+            mediaController.db = previousDb;
+        });
+
+        it('does not look for persisted pieces on small files (RAM-only path)', async () => {
+            const previousDb = mediaController.db;
+            mediaController.db = {};
+            const discoverySpy = vi.spyOn(mediaController, 'startSeederDiscovery').mockImplementation(() => {});
+            const restoreSpy = vi.spyOn(mediaController, 'restorePiecesFromIndexedDB');
+
+            await mediaController.startDownload('stream-1', {
+                fileId: 'file-small-1', fileName: 'small.mp4', fileSize: 1024,
+                fileType: 'video/mp4', pieceCount: 1, pieceHashes: ['h']
+            });
+
+            expect(restoreSpy).not.toHaveBeenCalled();
+
+            discoverySpy.mockRestore();
+            restoreSpy.mockRestore();
+            mediaController.db = previousDb;
+        });
     });
 
     // ==================== requestPiece ====================
@@ -1026,7 +1191,8 @@ describe('media.js core', () => {
                 streamId: 'stream-1',
                 password: null,
                 pieceStatus: ['pending', 'pending', 'pending'],
-                requestsInFlight: new Map()
+                requestsInFlight: new Map(),
+                rto: new PieceRtoEstimator(MEDIA_CONFIG.PIECE_REQUEST_TIMEOUT)
             };
             mediaController.incomingFiles.set('file-1', transfer);
 
@@ -1041,7 +1207,8 @@ describe('media.js core', () => {
                 streamId: 'stream-1',
                 password: null,
                 pieceStatus: ['pending', 'pending', 'pending'],
-                requestsInFlight: new Map()
+                requestsInFlight: new Map(),
+                rto: new PieceRtoEstimator(MEDIA_CONFIG.PIECE_REQUEST_TIMEOUT)
             };
             mediaController.incomingFiles.set('file-1', transfer);
 
@@ -1057,7 +1224,8 @@ describe('media.js core', () => {
                 streamId: 'stream-1',
                 password: null,
                 pieceStatus: ['pending'],
-                requestsInFlight: new Map()
+                requestsInFlight: new Map(),
+                rto: new PieceRtoEstimator(MEDIA_CONFIG.PIECE_REQUEST_TIMEOUT)
             };
             mediaController.incomingFiles.set('file-1', transfer);
 
@@ -1076,6 +1244,80 @@ describe('media.js core', () => {
         });
     });
 
+    // ==================== PieceRtoEstimator ====================
+    // Mirror of the Android PieceTimeout behaviors (core/PieceTimeoutTest.kt).
+    describe('PieceRtoEstimator', () => {
+        it('starts at the initial timeout before any sample', () => {
+            const rto = new PieceRtoEstimator(5000);
+            expect(rto.currentMs()).toBe(5000);
+        });
+
+        it('adapts the timeout to the measured round-trip', () => {
+            const rto = new PieceRtoEstimator(5000);
+            rto.onSample(2000);
+            // First sample seeds srtt=2000, rttvar=1000 → 2000 + 4×1000
+            expect(rto.currentMs()).toBe(6000);
+        });
+
+        it('never arms below the floor or above the ceiling', () => {
+            const fast = new PieceRtoEstimator(5000, 3000, 60000);
+            fast.onSample(10); // srtt+4·rttvar = 30, far below the floor
+            expect(fast.currentMs()).toBe(3000);
+
+            const slow = new PieceRtoEstimator(5000, 3000, 60000);
+            slow.onSample(2000); // base 6000; repeated backoff must clamp at the ceiling
+            for (let i = 0; i < 10; i++) slow.onTimeout();
+            expect(slow.currentMs()).toBe(60000);
+        });
+
+        it('doubles the wait on every timeout', () => {
+            const rto = new PieceRtoEstimator(5000, 3000, 60000);
+            rto.onSample(2000);       // currentMs 6000
+            rto.onTimeout();
+            expect(rto.currentMs()).toBe(12000);
+            rto.onTimeout();
+            expect(rto.currentMs()).toBe(24000);
+        });
+
+        it('clears the backoff once a piece arrives', () => {
+            const rto = new PieceRtoEstimator(5000, 3000, 60000);
+            rto.onSample(2000);
+            rto.onTimeout();
+            expect(rto.currentMs()).toBe(12000);
+            // A steady second sample clears the ×2 backoff AND tightens the
+            // variance (rttvar 1000 → 750): 2000 + 4×750
+            rto.onSample(2000);
+            expect(rto.currentMs()).toBe(5000);
+        });
+
+        it('reads a clear multiple of the best round-trip as congestion', () => {
+            const rto = new PieceRtoEstimator(5000);
+            rto.onSample(500); // establishes minRtt
+            for (let i = 0; i < 20; i++) rto.onSample(4000);
+            expect(rto.isCongested()).toBe(true);
+        });
+
+        it('does not read normal jitter as congestion', () => {
+            const rto = new PieceRtoEstimator(5000);
+            rto.onSample(500);
+            rto.onSample(600);
+            rto.onSample(700);
+            expect(rto.isCongested()).toBe(false);
+        });
+
+        it('is never congested before any measurement', () => {
+            const rto = new PieceRtoEstimator(5000);
+            expect(rto.isCongested()).toBe(false);
+        });
+
+        it('ignores non-positive samples', () => {
+            const rto = new PieceRtoEstimator(5000);
+            rto.onSample(0);
+            rto.onSample(-100);
+            expect(rto.currentMs()).toBe(5000);
+        });
+    });
+
     // ==================== manageDownload ====================
     describe('manageDownload', () => {
         it('requests pending pieces from available seeders', () => {
@@ -1088,7 +1330,8 @@ describe('media.js core', () => {
                 requestsInFlight: new Map(),
                 downloadStarted: true,
                 lastSeederRequest: Date.now(),
-                seederRequestCount: 1
+                seederRequestCount: 1,
+                window: MEDIA_CONFIG.PIECE_WINDOW_START
             };
             mediaController.incomingFiles.set('file-1', transfer);
             mediaController.fileSeeders.set('file-1', new Set(['0xseeder1']));
@@ -1101,20 +1344,22 @@ describe('media.js core', () => {
             vi.useRealTimers();
         });
 
-        it('respects MAX_CONCURRENT_REQUESTS', () => {
+        it('does not exceed the adaptive request window', () => {
             vi.useFakeTimers();
+            const window = MEDIA_CONFIG.PIECE_WINDOW_START;
             const transfer = {
-                metadata: { pieceCount: 10 },
+                metadata: { pieceCount: window + 2 },
                 streamId: 'stream-1',
                 password: null,
-                pieceStatus: new Array(10).fill('pending'),
+                pieceStatus: new Array(window + 2).fill('pending'),
                 requestsInFlight: new Map(),
                 downloadStarted: true,
                 lastSeederRequest: Date.now(),
-                seederRequestCount: 1
+                seederRequestCount: 1,
+                window
             };
-            // Fill up to max-1 concurrent requests
-            for (let i = 0; i < MEDIA_CONFIG.MAX_CONCURRENT_REQUESTS; i++) {
+            // Saturate the window; the two remaining pieces must stay unrequested
+            for (let i = 0; i < window; i++) {
                 transfer.requestsInFlight.set(i, { seederId: '0x1' });
                 transfer.pieceStatus[i] = 'requested';
             }
@@ -1129,6 +1374,36 @@ describe('media.js core', () => {
             vi.useRealTimers();
         });
 
+        it('fills up to the window when it has been widened', () => {
+            vi.useFakeTimers();
+            const transfer = {
+                metadata: { pieceCount: 20 },
+                streamId: 'stream-1',
+                password: null,
+                pieceStatus: new Array(20).fill('pending'),
+                requestsInFlight: new Map(),
+                downloadStarted: true,
+                lastSeederRequest: Date.now(),
+                seederRequestCount: 1,
+                window: 12
+            };
+            mediaController.incomingFiles.set('file-1', transfer);
+            mediaController.fileSeeders.set('file-1', new Set(['0xseeder1']));
+            // Real requestPiece registers in-flight synchronously; the mock does not,
+            // so emulate that bookkeeping to exercise the window bound honestly.
+            const requestSpy = vi.spyOn(mediaController, 'requestPiece')
+                .mockImplementation((id, pieceIndex) => {
+                    transfer.requestsInFlight.set(pieceIndex, { seederId: '0x1' });
+                    transfer.pieceStatus[pieceIndex] = 'requested';
+                });
+
+            mediaController.manageDownload('file-1');
+
+            expect(requestSpy).toHaveBeenCalledTimes(12);
+            requestSpy.mockRestore();
+            vi.useRealTimers();
+        });
+
         it('uses round-robin across seeders', () => {
             vi.useFakeTimers();
             const transfer = {
@@ -1139,7 +1414,8 @@ describe('media.js core', () => {
                 requestsInFlight: new Map(),
                 downloadStarted: true,
                 lastSeederRequest: Date.now(),
-                seederRequestCount: 1
+                seederRequestCount: 1,
+                window: MEDIA_CONFIG.PIECE_WINDOW_START
             };
             mediaController.incomingFiles.set('file-1', transfer);
             mediaController.fileSeeders.set('file-1', new Set(['0xseeder1', '0xseeder2']));
@@ -1167,7 +1443,8 @@ describe('media.js core', () => {
                 requestsInFlight: new Map(),
                 downloadStarted: true,
                 lastSeederRequest: Date.now(),
-                seederRequestCount: 1
+                seederRequestCount: 1,
+                window: MEDIA_CONFIG.PIECE_WINDOW_START
             };
             mediaController.incomingFiles.set('file-1', transfer);
             mediaController.fileSeeders.set('file-1', new Set()); // empty
@@ -1179,6 +1456,528 @@ describe('media.js core', () => {
             expect(spy).not.toHaveBeenCalled();
             spy.mockRestore();
             vi.useRealTimers();
+        });
+
+        // A piece every known seeder has ruined must not deadlock: forget the grudge
+        // and go looking for peers we do not know about yet
+        it('clears exclusions and widens the search when every seeder is excluded', () => {
+            vi.useFakeTimers();
+            const transfer = {
+                metadata: { pieceCount: 1 },
+                streamId: 'stream-1',
+                password: null,
+                pieceStatus: ['pending'],
+                requestsInFlight: new Map(),
+                pieceExclusions: new Map([[0, new Set(['0xseeder1'])]]),
+                seederStrikes: new Map(),
+                seederCursor: 0,
+                downloadStarted: true,
+                lastSeederRequest: Date.now(),
+                seederRequestCount: 1,
+                window: MEDIA_CONFIG.PIECE_WINDOW_START
+            };
+            mediaController.incomingFiles.set('file-1', transfer);
+            mediaController.fileSeeders.set('file-1', new Set(['0xseeder1']));
+            const requestSpy = vi.spyOn(mediaController, 'requestPiece').mockImplementation(() => {});
+            const sourcesSpy = vi.spyOn(mediaController, 'requestFileSources').mockResolvedValue(undefined);
+
+            mediaController.manageDownload('file-1');
+
+            expect(requestSpy).not.toHaveBeenCalled();
+            expect(sourcesSpy).toHaveBeenCalled();
+            // The grudge is dropped, so the next pass can try that seeder again
+            expect(transfer.pieceExclusions.has(0)).toBe(false);
+
+            requestSpy.mockRestore();
+            sourcesSpy.mockRestore();
+            vi.useRealTimers();
+        });
+
+        // manageDownload is re-entered on every delivery and every timeout, so the
+        // no-seeder branch must not schedule a fresh timer on each call.
+        it('keeps a single pending retry while there are no seeders', () => {
+            vi.useFakeTimers();
+            const transfer = {
+                metadata: { pieceCount: 1 },
+                streamId: 'stream-1',
+                password: null,
+                pieceStatus: ['pending'],
+                requestsInFlight: new Map(),
+                downloadStarted: true,
+                lastSeederRequest: Date.now(),
+                seederRequestCount: 1,
+                window: MEDIA_CONFIG.PIECE_WINDOW_START,
+                noSeederRetryTimer: null
+            };
+            mediaController.incomingFiles.set('file-1', transfer);
+            mediaController.fileSeeders.set('file-1', new Set()); // empty
+
+            mediaController.manageDownload('file-1');
+            const firstTimer = transfer.noSeederRetryTimer;
+            mediaController.manageDownload('file-1');
+            mediaController.manageDownload('file-1');
+
+            expect(firstTimer).toBeTruthy();
+            expect(transfer.noSeederRetryTimer).toBe(firstTimer);
+            expect(vi.getTimerCount()).toBe(1);
+
+            vi.useRealTimers();
+        });
+    });
+
+    // ==================== adaptive request window (AIMD) ====================
+    describe('adaptive request window', () => {
+        it('grows by one per delivered piece, capped at the max', () => {
+            const transfer = { window: MEDIA_CONFIG.PIECE_WINDOW_MAX - 1 };
+
+            mediaController.growWindow(transfer);
+            expect(transfer.window).toBe(MEDIA_CONFIG.PIECE_WINDOW_MAX);
+
+            mediaController.growWindow(transfer);
+            expect(transfer.window).toBe(MEDIA_CONFIG.PIECE_WINDOW_MAX);
+        });
+
+        it('halves on a timeout', () => {
+            const transfer = { window: 32, lastWindowBackoffAt: 0 };
+
+            mediaController.shrinkWindow(transfer);
+
+            expect(transfer.window).toBe(16);
+        });
+
+        it('never backs off below the floor', () => {
+            const transfer = { window: MEDIA_CONFIG.PIECE_WINDOW_MIN, lastWindowBackoffAt: 0 };
+
+            mediaController.shrinkWindow(transfer);
+
+            expect(transfer.window).toBe(MEDIA_CONFIG.PIECE_WINDOW_MIN);
+        });
+
+        it('treats a burst of simultaneous timeouts as one stall', () => {
+            const transfer = { window: 32, lastWindowBackoffAt: 0 };
+
+            // Every outstanding request expires at roughly the same moment
+            mediaController.shrinkWindow(transfer);
+            mediaController.shrinkWindow(transfer);
+            mediaController.shrinkWindow(transfer);
+
+            expect(transfer.window).toBe(16);
+        });
+
+        it('backs off again once the cooldown has passed', () => {
+            const transfer = { window: 32, lastWindowBackoffAt: 0 };
+
+            mediaController.shrinkWindow(transfer);
+            expect(transfer.window).toBe(16);
+
+            transfer.lastWindowBackoffAt = Date.now() - MEDIA_CONFIG.PIECE_WINDOW_BACKOFF_COOLDOWN - 1;
+            mediaController.shrinkWindow(transfer);
+
+            expect(transfer.window).toBe(8);
+        });
+    });
+
+    // ==================== piece failure cap ====================
+    describe('piece failure cap', () => {
+        const makeTransfer = () => ({
+            metadata: { pieceCount: 3, fileSize: 300, pieceHashes: ['a', 'b', 'c'] },
+            pieceStatus: ['pending', 'pending', 'pending'],
+            pieceFailures: new Map(),
+            requestsInFlight: new Map(),
+            window: MEDIA_CONFIG.PIECE_WINDOW_START
+        });
+
+        it('retries a piece while it is under the cap', () => {
+            const transfer = makeTransfer();
+            mediaController.incomingFiles.set('f1', transfer);
+            const manageSpy = vi.spyOn(mediaController, 'manageDownload').mockImplementation(() => {});
+
+            mediaController.registerPieceFailure(transfer, 'f1', 1, 'hash mismatch');
+
+            expect(transfer.pieceStatus[1]).toBe('pending');
+            expect(manageSpy).toHaveBeenCalledWith('f1');
+            expect(mediaController.incomingFiles.has('f1')).toBe(true);
+            manageSpy.mockRestore();
+        });
+
+        it('aborts the download once a piece exceeds the cap', () => {
+            const transfer = makeTransfer();
+            mediaController.incomingFiles.set('f1', transfer);
+            mediaController.fileSeeders.set('f1', new Set(['0xa']));
+            const errorCb = vi.fn();
+            mediaController.handlers.onFileError = errorCb;
+            const manageSpy = vi.spyOn(mediaController, 'manageDownload').mockImplementation(() => {});
+
+            for (let i = 0; i < MEDIA_CONFIG.MAX_PIECE_FAILURES; i++) {
+                mediaController.registerPieceFailure(transfer, 'f1', 1, 'hash mismatch');
+            }
+
+            expect(errorCb).toHaveBeenCalledWith('f1', expect.stringContaining('Piece 1'));
+            expect(mediaController.incomingFiles.has('f1')).toBe(false);
+            manageSpy.mockRestore();
+        });
+
+        // A bad piece must not poison the budget of every other piece
+        it('counts failures per piece, not per transfer', () => {
+            const transfer = makeTransfer();
+            mediaController.incomingFiles.set('f1', transfer);
+            const manageSpy = vi.spyOn(mediaController, 'manageDownload').mockImplementation(() => {});
+
+            for (let i = 0; i < MEDIA_CONFIG.MAX_PIECE_FAILURES - 1; i++) {
+                mediaController.registerPieceFailure(transfer, 'f1', 0, 'hash mismatch');
+                mediaController.registerPieceFailure(transfer, 'f1', 1, 'hash mismatch');
+            }
+
+            expect(mediaController.incomingFiles.has('f1')).toBe(true);
+            manageSpy.mockRestore();
+        });
+
+        it('gives up through handleFilePiece when a seeder keeps sending bad data', async () => {
+            authManager.getAddress.mockReturnValue('0xme');
+            mediaController.incomingFiles.set('file-1', {
+                metadata: {
+                    fileId: 'file-1', fileSize: 300, pieceCount: 3,
+                    pieceHashes: ['want-a', 'want-b', 'want-c']
+                },
+                streamId: 'stream-1',
+                password: null,
+                pieceStatus: ['pending', 'pending', 'pending'],
+                pieceFailures: new Map(),
+                requestsInFlight: new Map(),
+                receivedCount: 0,
+                pieces: [null, null, null],
+                useIndexedDB: false,
+                window: MEDIA_CONFIG.PIECE_WINDOW_START
+            });
+            const errorCb = vi.fn();
+            mediaController.handlers.onFileError = errorCb;
+
+            vi.spyOn(mediaController, 'base64ToArrayBuffer').mockReturnValue(new ArrayBuffer(8));
+            vi.spyOn(mediaController, 'sha256').mockResolvedValue('wrong-hash');
+            vi.spyOn(mediaController, 'manageDownload').mockImplementation(() => {});
+
+            // The last delivery trips the cap; handleFilePiece no-ops after that
+            for (let i = 0; i < MEDIA_CONFIG.MAX_PIECE_FAILURES; i++) {
+                await mediaController.handleFilePiece('stream-1', {
+                    fileId: 'file-1',
+                    pieceIndex: 0,
+                    senderId: '0xother',
+                    data: 'data'
+                });
+            }
+
+            expect(errorCb).toHaveBeenCalledWith('file-1', expect.stringContaining('Piece 0'));
+            expect(mediaController.incomingFiles.has('file-1')).toBe(false);
+        });
+    });
+
+    // ==================== transfer rate ====================
+    describe('transfer rate', () => {
+        const at = (t) => 1_000_000 + t;
+
+        // Samples are pushed with the real clock, so build them directly to control time
+        const withSamples = (samples) => ({ speedSamples: samples.map(([t, bytes]) => ({ at: at(t), bytes })) });
+
+        it('returns null with fewer than two samples', () => {
+            expect(mediaController.getTransferRate({ speedSamples: [] })).toBeNull();
+            expect(mediaController.getTransferRate(withSamples([[0, 100]]))).toBeNull();
+        });
+
+        it('returns null until a second has been measured', () => {
+            const transfer = withSamples([[0, 0], [500, 500_000]]);
+            expect(mediaController.getTransferRate(transfer, at(500))).toBeNull();
+        });
+
+        it('measures bytes over the elapsed span', () => {
+            const transfer = withSamples([[0, 0], [2000, 200_000]]);
+            expect(mediaController.getTransferRate(transfer, at(2000))).toBe(100_000);
+        });
+
+        // The bug the storage POC surfaced: samples only arrive on delivery, so
+        // dividing by the newest sample would freeze the rate on a dead transfer
+        it('decays toward zero while a transfer is stalled', () => {
+            const transfer = withSamples([[0, 0], [2000, 200_000]]);
+
+            const atDelivery = mediaController.getTransferRate(transfer, at(2000));
+            const afterStall = mediaController.getTransferRate(transfer, at(8000));
+
+            expect(afterStall).toBeLessThan(atDelivery);
+            expect(afterStall).toBe(25_000); // 200KB spread over 8s, not 2s
+        });
+
+        it('drops samples that fall out of the window', () => {
+            const transfer = withSamples([[0, 0], [1000, 100_000], [20_000, 500_000]]);
+
+            mediaController.getTransferRate(transfer, at(20_000));
+
+            // The first sample is older than the 10s window and is pruned
+            expect(transfer.speedSamples).toHaveLength(2);
+            expect(transfer.speedSamples[0].bytes).toBe(100_000);
+        });
+
+        it('accumulates delivered bytes across pieces', () => {
+            const transfer = {};
+            mediaController.recordThroughput(transfer, 1000);
+            mediaController.recordThroughput(transfer, 500);
+
+            expect(transfer.bytesTransferred).toBe(1500);
+            expect(transfer.speedSamples).toHaveLength(2);
+        });
+    });
+
+    // ==================== seeder selection and eviction ====================
+    describe('seeder selection', () => {
+        const transferWith = (overrides = {}) => ({
+            metadata: { pieceCount: 4, pieceHashes: ['a', 'b', 'c', 'd'] },
+            pieceStatus: ['pending', 'pending', 'pending', 'pending'],
+            pieceFailures: new Map(),
+            pieceExclusions: new Map(),
+            seederStrikes: new Map(),
+            seederCursor: 0,
+            requestsInFlight: new Map(),
+            window: MEDIA_CONFIG.PIECE_WINDOW_START,
+            ...overrides
+        });
+
+        // The cursor used to reset per call, so a retried piece — usually the only
+        // pending one — went back to the same peer forever
+        it('advances the cursor across calls so retries rotate', () => {
+            const transfer = transferWith();
+            const seeders = ['0xa', '0xb', '0xc'];
+
+            const picks = [
+                mediaController.pickSeederFor(transfer, seeders, 0),
+                mediaController.pickSeederFor(transfer, seeders, 0),
+                mediaController.pickSeederFor(transfer, seeders, 0)
+            ];
+
+            expect(picks).toEqual(['0xa', '0xb', '0xc']);
+        });
+
+        it('skips a seeder that already served this piece corrupt', () => {
+            const transfer = transferWith();
+            transfer.pieceExclusions.set(1, new Set(['0xa']));
+
+            const pick = mediaController.pickSeederFor(transfer, ['0xa', '0xb'], 1);
+
+            expect(pick).toBe('0xb');
+        });
+
+        it('excludes per piece, not globally', () => {
+            const transfer = transferWith();
+            transfer.pieceExclusions.set(1, new Set(['0xa']));
+
+            // Piece 2 carries no grudge, so 0xa is still eligible for it
+            const picks = new Set([
+                mediaController.pickSeederFor(transfer, ['0xa', '0xb'], 2),
+                mediaController.pickSeederFor(transfer, ['0xa', '0xb'], 2)
+            ]);
+
+            expect(picks.has('0xa')).toBe(true);
+        });
+
+        it('reports no candidate when every seeder is excluded', () => {
+            const transfer = transferWith();
+            transfer.pieceExclusions.set(0, new Set(['0xa', '0xb']));
+
+            expect(mediaController.pickSeederFor(transfer, ['0xa', '0xb'], 0)).toBeNull();
+        });
+
+        it('reports no candidate when there are no seeders at all', () => {
+            expect(mediaController.pickSeederFor(transferWith(), [], 0)).toBeNull();
+        });
+    });
+
+    describe('seeder eviction', () => {
+        const transferWith = () => ({
+            metadata: { pieceCount: 4, pieceHashes: ['a', 'b', 'c', 'd'] },
+            pieceStatus: ['pending', 'pending', 'pending', 'pending'],
+            pieceFailures: new Map(),
+            pieceExclusions: new Map(),
+            seederStrikes: new Map(),
+            seederCursor: 0,
+            requestsInFlight: new Map(),
+            window: MEDIA_CONFIG.PIECE_WINDOW_START
+        });
+
+        it('excludes the blamed peer from that piece', () => {
+            const transfer = transferWith();
+            mediaController.fileSeeders.set('f-blame', new Set(['0xbad', '0xgood']));
+
+            mediaController.blameSeeder(transfer, 'f-blame', 2, '0xBAD');
+
+            expect(transfer.pieceExclusions.get(2).has('0xbad')).toBe(true);
+        });
+
+        it('keeps a peer in the swarm below the strike limit', () => {
+            const transfer = transferWith();
+            mediaController.fileSeeders.set('f-strikes', new Set(['0xbad', '0xgood']));
+
+            for (let i = 0; i < MEDIA_CONFIG.MAX_SEEDER_STRIKES - 1; i++) {
+                mediaController.blameSeeder(transfer, 'f-strikes', i, '0xbad');
+            }
+
+            expect(mediaController.fileSeeders.get('f-strikes').has('0xbad')).toBe(true);
+        });
+
+        // Per-piece exclusion alone would let a broken peer ruin every piece in turn
+        it('drops a peer that keeps serving corrupt pieces', () => {
+            const transfer = transferWith();
+            mediaController.fileSeeders.set('f-evict', new Set(['0xbad', '0xgood']));
+            const seederUpdate = vi.fn();
+            mediaController.handlers.onSeederUpdate = seederUpdate;
+
+            for (let i = 0; i < MEDIA_CONFIG.MAX_SEEDER_STRIKES; i++) {
+                mediaController.blameSeeder(transfer, 'f-evict', i, '0xbad');
+            }
+
+            const seeders = mediaController.fileSeeders.get('f-evict');
+            expect(seeders.has('0xbad')).toBe(false);
+            expect(seeders.has('0xgood')).toBe(true);
+            expect(seederUpdate).toHaveBeenCalledWith('f-evict', 1);
+        });
+
+        it('blames the publisher of the bad bytes through handleFilePiece', async () => {
+            authManager.getAddress.mockReturnValue('0xme');
+            const transfer = transferWith();
+            transfer.metadata.fileSize = 400;
+            transfer.pieces = [null, null, null, null];
+            transfer.useIndexedDB = false;
+            transfer.receivedCount = 0;
+            mediaController.incomingFiles.set('f-attr', transfer);
+            mediaController.fileSeeders.set('f-attr', new Set(['0xother']));
+
+            vi.spyOn(mediaController, 'base64ToArrayBuffer').mockReturnValue(new ArrayBuffer(8));
+            vi.spyOn(mediaController, 'sha256').mockResolvedValue('wrong');
+            vi.spyOn(mediaController, 'manageDownload').mockImplementation(() => {});
+
+            await mediaController.handleFilePiece('stream-1', {
+                fileId: 'f-attr', pieceIndex: 1, senderId: '0xOther', data: 'x'
+            });
+
+            expect(transfer.pieceExclusions.get(1).has('0xother')).toBe(true);
+        });
+    });
+
+    // ==================== upload stats ====================
+    describe('upload stats', () => {
+        it('reports nothing for a file we never served', () => {
+            expect(mediaController.getUploadStats('unknown')).toEqual({ bytesPerSec: null, leechers: 0 });
+        });
+
+        it('counts each requesting peer once', () => {
+            mediaController.recordLeecher('f-count', '0xAlice');
+            mediaController.recordLeecher('f-count', '0xALICE');
+            mediaController.recordLeecher('f-count', '0xBob');
+
+            expect(mediaController.getUploadStats('f-count').leechers).toBe(2);
+        });
+
+        it('ignores a request with no publisher', () => {
+            mediaController.recordLeecher('f-nopub', undefined);
+            expect(mediaController.getUploadStats('f-nopub').leechers).toBe(0);
+        });
+
+        // A swarm has no leave event, so the count has to age out on its own
+        it('drops leechers that have gone quiet', () => {
+            mediaController.recordLeecher('f-stale', '0xAlice');
+            const state = mediaController.uploads.get('f-stale');
+            state.leechers.set('0xalice', Date.now() - MEDIA_CONFIG.LEECHER_TIMEOUT_MS - 1);
+
+            expect(mediaController.getUploadStats('f-stale').leechers).toBe(0);
+        });
+
+        it('measures the serving rate from bytes sent', () => {
+            const state = mediaController.uploadStateFor('f-rate');
+            state.speedSamples = [
+                { at: 1_000_000, bytes: 0 },
+                { at: 1_002_000, bytes: 200_000 }
+            ];
+
+            expect(mediaController.getUploadStats('f-rate', 1_002_000).bytesPerSec).toBe(100_000);
+        });
+
+        it('throttles serving updates instead of firing per piece', () => {
+            const handler = vi.fn();
+            mediaController.handlers.onUploadProgress = handler;
+
+            mediaController.emitUploadStats('f-throttle');
+            mediaController.emitUploadStats('f-throttle');
+            mediaController.emitUploadStats('f-throttle');
+
+            expect(handler).toHaveBeenCalledTimes(1);
+
+            const state = mediaController.uploads.get('f-throttle');
+            if (state?.decayTimer) clearInterval(state.decayTimer);
+        });
+
+        // Pieces stop the instant a leecher finishes, so without a ticker the rate
+        // would stay frozen at whatever was flowing at that moment
+        it('keeps republishing after the last piece so the rate can decay', () => {
+            vi.useFakeTimers();
+            const handler = vi.fn();
+            mediaController.handlers.onUploadProgress = handler;
+
+            mediaController.emitUploadStats('f-decay');
+            const afterFirst = handler.mock.calls.length;
+
+            vi.advanceTimersByTime(MEDIA_CONFIG.UPLOAD_STATS_INTERVAL_MS * 2);
+
+            expect(handler.mock.calls.length).toBeGreaterThan(afterFirst);
+            vi.useRealTimers();
+        });
+
+        it('stops ticking once nothing is flowing and nobody is asking', () => {
+            vi.useFakeTimers();
+            mediaController.handlers.onUploadProgress = vi.fn();
+
+            mediaController.emitUploadStats('f-idle');
+            vi.advanceTimersByTime(MEDIA_CONFIG.UPLOAD_STATS_INTERVAL_MS * 2);
+
+            expect(mediaController.uploads.get('f-idle').decayTimer).toBeNull();
+            vi.useRealTimers();
+        });
+    });
+
+    // ==================== hasActiveDMTransfers ====================
+    // Guards the DM ephemeral stream teardown: all DMs share one stream, so this
+    // question has to span conversations rather than take a single stream id.
+    describe('hasActiveDMTransfers', () => {
+        it('returns false when nothing is in flight', () => {
+            expect(mediaController.hasActiveDMTransfers()).toBe(false);
+        });
+
+        it('detects a file being seeded for a DM', () => {
+            mediaController.localFiles.set('f1', { streamId: 'dm-stream', metadata: {} });
+            channelManager.getChannel.mockImplementation(
+                (id) => (id === 'dm-stream' ? { type: 'dm' } : { type: 'public' })
+            );
+
+            expect(mediaController.hasActiveDMTransfers()).toBe(true);
+        });
+
+        it('detects a download in progress in a DM', () => {
+            mediaController.incomingFiles.set('f1', { streamId: 'dm-stream' });
+            channelManager.getChannel.mockImplementation(
+                (id) => (id === 'dm-stream' ? { type: 'dm' } : { type: 'public' })
+            );
+
+            expect(mediaController.hasActiveDMTransfers()).toBe(true);
+        });
+
+        it('ignores transfers that belong to non-DM channels', () => {
+            mediaController.localFiles.set('f1', { streamId: 'public-stream', metadata: {} });
+            channelManager.getChannel.mockReturnValue({ type: 'public' });
+
+            expect(mediaController.hasActiveDMTransfers()).toBe(false);
+        });
+
+        // A file seeded for a DM we have since left has no channel worth holding for
+        it('ignores files whose channel no longer exists', () => {
+            mediaController.localFiles.set('f1', { streamId: 'gone', metadata: {} });
+            channelManager.getChannel.mockReturnValue(undefined);
+
+            expect(mediaController.hasActiveDMTransfers()).toBe(false);
         });
     });
 
@@ -1524,6 +2323,28 @@ describe('media.js core', () => {
             await expect(mediaController.sendVideo('stream-1', file)).rejects.toThrow('File too large');
         });
 
+        // sendFile is the general path; only sendVideo restricts the type
+        it('sendFile accepts a non-video type that sendVideo rejects', async () => {
+            mediaController.fileWorker = { postMessage: vi.fn() };
+            const file = new File(['%PDF-1.4'], 'doc.pdf', { type: 'application/pdf' });
+
+            await expect(mediaController.sendVideo('stream-1', file)).rejects.toThrow('Invalid video type');
+
+            const promise = mediaController.sendFile('stream-1', file);
+            expect(Array.from(mediaController.localFiles.keys()).some(k => k.startsWith('temp-'))).toBe(true);
+            promise.catch(() => {});
+        });
+
+        it('sendFile rejects an empty file', async () => {
+            const file = { type: 'application/pdf', size: 0, name: 'empty.pdf' };
+            await expect(mediaController.sendFile('stream-1', file)).rejects.toThrow('File is empty');
+        });
+
+        it('sendFile still enforces the size ceiling', async () => {
+            const file = { type: 'application/zip', size: 600 * 1024 * 1024, name: 'big.zip' };
+            await expect(mediaController.sendFile('stream-1', file)).rejects.toThrow('File too large');
+        });
+
         it('stores temp reference with callback', async () => {
             // Mock fileWorker since we can't create real workers in test
             mediaController.fileWorker = { postMessage: vi.fn() };
@@ -1543,7 +2364,104 @@ describe('media.js core', () => {
             // Clean up (resolve the hanging promise)
             promise.catch(() => {}); // suppress unhandled rejection
         });
+
+        // The announcement carries pieceHashes, so it must be signed as a manifest
+        // rather than signed empty and have the metadata bolted on afterwards.
+        it('signs the manifest itself and publishes the announcement', async () => {
+            mediaController.fileWorker = { postMessage: vi.fn() };
+            const metadata = {
+                fileId: 'f-1', fileName: 'clip.mp4', fileSize: 10,
+                fileType: 'video/mp4', pieceCount: 1, pieceHashes: ['h0']
+            };
+            identityManager.createSignedFileManifest.mockResolvedValue({
+                type: 'file_announce',
+                id: 'm1',
+                sender: '0xmyaddress',
+                timestamp: Date.now(),
+                channelId: 'stream-1',
+                metadata,
+                signature: '0xsig'
+            });
+            channelManager.getChannel.mockReturnValue({ messages: [] });
+
+            const file = new File(['videodata'], 'clip.mp4', { type: 'video/mp4' });
+            const promise = mediaController.sendVideo('stream-1', file);
+
+            const tempKey = Array.from(mediaController.localFiles.keys()).find(k => k.startsWith('temp-'));
+            await mediaController.localFiles.get(tempKey).callback(metadata);
+            await promise;
+
+            expect(identityManager.createSignedFileManifest).toHaveBeenCalledWith({
+                channelId: 'stream-1',
+                metadata
+            });
+            expect(streamrController.publishMessage).toHaveBeenCalled();
+        });
+
+        // A DM cannot be replayed from the peer's inbox, so the announcement is lost on
+        // the next timeline load. We persist a lean copy: enough naming to re-render the
+        // real bubble while this device still holds the file, without the piece hashes,
+        // which would put ~160KB into one sync message for a large file.
+        it('persists a DM announcement without its piece hashes', async () => {
+            mediaController.fileWorker = { postMessage: vi.fn() };
+            const metadata = {
+                fileId: 'f-1', fileName: 'clip.mp4', fileSize: 10,
+                fileType: 'video/mp4', pieceCount: 1, pieceHashes: ['h0', 'h1']
+            };
+            identityManager.createSignedFileManifest.mockResolvedValue({
+                type: 'file_announce', id: 'm1', sender: '0xmyaddress',
+                timestamp: Date.now(), channelId: 'stream-1', metadata, signature: '0xsig'
+            });
+            channelManager.getChannel.mockReturnValue({ messages: [], type: 'dm' });
+
+            const file = new File(['videodata'], 'clip.mp4', { type: 'video/mp4' });
+            const promise = mediaController.sendVideo('stream-1', file);
+            const tempKey = Array.from(mediaController.localFiles.keys()).find(k => k.startsWith('temp-'));
+            await mediaController.localFiles.get(tempKey).callback(metadata);
+            await promise;
+
+            const stored = secureStorage.addSentMessage.mock.calls.map(call => call[1]);
+            expect(stored).toHaveLength(1);
+            expect(stored[0].type).toBe('file_announce');
+
+            // Naming survives — it is what re-renders the bubble / placeholder
+            expect(stored[0].metadata.fileId).toBe('f-1');
+            expect(stored[0].metadata.fileName).toBe('clip.mp4');
+            expect(stored[0].metadata.fileSize).toBe(10);
+            expect(stored[0].metadata.fileType).toBe('video/mp4');
+
+            // The hashes must not reach the sync payload, and the signature covers
+            // them, so keeping it would store one that can never verify
+            expect(stored[0].metadata.pieceHashes).toBeUndefined();
+            expect(stored[0].signature).toBeNull();
+
+            // The announcement published to the network keeps its hashes
+            expect(metadata.pieceHashes).toEqual(['h0', 'h1']);
+        });
+
+        it('leaves no marker in a regular channel', async () => {
+            mediaController.fileWorker = { postMessage: vi.fn() };
+            const metadata = {
+                fileId: 'f-2', fileName: 'clip.mp4', fileSize: 10,
+                fileType: 'video/mp4', pieceCount: 1, pieceHashes: ['h0']
+            };
+            identityManager.createSignedFileManifest.mockResolvedValue({
+                type: 'file_announce', id: 'm2', sender: '0xmyaddress',
+                timestamp: Date.now(), channelId: 'stream-1', metadata, signature: '0xsig'
+            });
+            channelManager.getChannel.mockReturnValue({ messages: [], type: 'public' });
+
+            const file = new File(['videodata'], 'clip.mp4', { type: 'video/mp4' });
+            const promise = mediaController.sendVideo('stream-1', file);
+            const tempKey = Array.from(mediaController.localFiles.keys()).find(k => k.startsWith('temp-'));
+            await mediaController.localFiles.get(tempKey).callback(metadata);
+            await promise;
+
+            // The channel stream replays the announcement on its own
+            expect(secureStorage.addSentMessage).not.toHaveBeenCalled();
+        });
     });
+
 
     // ==================== handleWorkerMessage ====================
     describe('handleWorkerMessage', () => {

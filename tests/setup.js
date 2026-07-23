@@ -85,6 +85,49 @@ function createIndexedDBMock() {
         constructor(value) { this._value = value; }
         static only(value) { return new MockIDBKeyRange(value); }
         includes(val) { return val === this._value; }
+
+        /**
+         * Bounded range. Supports compound (array) keys, which IndexedDB orders
+         * element by element — the media 'pieces' store is keyed ['fileId', 'pieceIndex']
+         * and relies on that ordering to select one file's pieces.
+         */
+        static bound(lower, upper, lowerOpen = false, upperOpen = false) {
+            const range = new MockIDBKeyRange(undefined);
+            range.includes = (val) => {
+                const lo = MockIDBKeyRange._compare(val, lower);
+                const hi = MockIDBKeyRange._compare(val, upper);
+                if (lo < 0 || (lowerOpen && lo === 0)) return false;
+                if (hi > 0 || (upperOpen && hi === 0)) return false;
+                return true;
+            };
+            return range;
+        }
+
+        /** Everything at or below `upper` — used to sweep records by timestamp. */
+        static upperBound(upper, upperOpen = false) {
+            const range = new MockIDBKeyRange(undefined);
+            range.includes = (val) => {
+                const cmp = MockIDBKeyRange._compare(val, upper);
+                return upperOpen ? cmp < 0 : cmp <= 0;
+            };
+            return range;
+        }
+
+        static _compare(a, b) {
+            if (Array.isArray(a) || Array.isArray(b)) {
+                const arrA = Array.isArray(a) ? a : [a];
+                const arrB = Array.isArray(b) ? b : [b];
+                for (let i = 0; i < Math.max(arrA.length, arrB.length); i++) {
+                    const cmp = MockIDBKeyRange._compare(arrA[i], arrB[i]);
+                    if (cmp !== 0) return cmp;
+                }
+                return 0;
+            }
+            if (a === undefined && b === undefined) return 0;
+            if (a === undefined) return -1;
+            if (b === undefined) return 1;
+            return a < b ? -1 : a > b ? 1 : 0;
+        }
     }
     if (!globalThis.IDBKeyRange) {
         globalThis.IDBKeyRange = MockIDBKeyRange;

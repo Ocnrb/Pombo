@@ -91,6 +91,7 @@ vi.mock('../../src/js/streamr.js', () => ({
         }),
         subscribeWithHistory: vi.fn().mockResolvedValue({ id: 'mock-sub' }),
         subscribeToPartition: vi.fn().mockResolvedValue({ id: 'mock-partition-sub' }),
+        isSubscribedToPartition: vi.fn().mockReturnValue(false),
         unsubscribe: vi.fn().mockResolvedValue(undefined),
         publishMessage: vi.fn().mockResolvedValue(undefined),
         getDMPublicKey: vi.fn().mockResolvedValue('0x02peerpubkey'),
@@ -150,7 +151,8 @@ vi.mock('../../src/js/channels.js', () => ({
 
 vi.mock('../../src/js/media.js', () => ({
     mediaController: {
-        handleMediaMessage: vi.fn()
+        handleMediaMessage: vi.fn(),
+        hasActiveDMTransfers: vi.fn().mockReturnValue(false)
     }
 }));
 
@@ -351,6 +353,24 @@ describe('DMManager', () => {
         });
     });
 
+    describe('subscribeDMEphemeral() re-entry', () => {
+        // The media partitions can survive a teardown now, so re-opening a DM must not
+        // subscribe them a second time — subscribeToPartition does not dedupe.
+        it('should not re-subscribe media partitions that are still live', async () => {
+            dmManager.inboxEphemeralStreamId = '0xmy/Pombo-DM-2';
+            dmManager.inboxEphemeralSubscription = null;
+            streamrController.isSubscribedToPartition.mockReturnValue(true);
+
+            await dmManager.subscribeDMEphemeral();
+
+            // Control is always re-subscribed; the media partitions are not
+            expect(streamrController.subscribeWithHistory).toHaveBeenCalled();
+            expect(streamrController.subscribeToPartition).not.toHaveBeenCalled();
+
+            streamrController.isSubscribedToPartition.mockReturnValue(false);
+        });
+    });
+
     describe('unsubscribeDMEphemeral()', () => {
         it('should unsubscribe from DM-2', async () => {
             dmManager.inboxEphemeralStreamId = '0xmy/Pombo-DM-2';
@@ -368,6 +388,43 @@ describe('DMManager', () => {
             await dmManager.unsubscribeDMEphemeral();
 
             expect(streamrController.unsubscribe).not.toHaveBeenCalled();
+        });
+
+        // Navigating out of a DM used to drop the whole ephemeral stream, which is
+        // where a seeder hears piece requests — the peer's download stalled instantly
+        // and only resumed when the user came back to the conversation.
+        it('should keep the media partitions alive while a DM transfer is active', async () => {
+            dmManager.inboxEphemeralStreamId = '0xmy/Pombo-DM-2';
+            dmManager.inboxEphemeralSubscription = { id: 'sub' };
+            mediaController.hasActiveDMTransfers.mockReturnValueOnce(true);
+
+            await dmManager.unsubscribeDMEphemeral();
+
+            // Only control (presence/typing) goes; P1/P2 stay up
+            expect(streamrController.unsubscribeFromPartition).toHaveBeenCalledWith('0xmy/Pombo-DM-2', 0);
+            expect(streamrController.unsubscribe).not.toHaveBeenCalled();
+        });
+
+        it('should drop the whole stream when no DM transfer is active', async () => {
+            dmManager.inboxEphemeralStreamId = '0xmy/Pombo-DM-2';
+            dmManager.inboxEphemeralSubscription = { id: 'sub' };
+            mediaController.hasActiveDMTransfers.mockReturnValueOnce(false);
+
+            await dmManager.unsubscribeDMEphemeral();
+
+            expect(streamrController.unsubscribe).toHaveBeenCalledWith('0xmy/Pombo-DM-2');
+        });
+
+        // Disconnect is not navigation: preserving partitions there would leak them
+        it('should drop everything when forced, even with an active transfer', async () => {
+            dmManager.inboxEphemeralStreamId = '0xmy/Pombo-DM-2';
+            dmManager.inboxEphemeralSubscription = { id: 'sub' };
+            mediaController.hasActiveDMTransfers.mockReturnValueOnce(true);
+
+            await dmManager.unsubscribeDMEphemeral({ force: true });
+
+            expect(streamrController.unsubscribe).toHaveBeenCalledWith('0xmy/Pombo-DM-2');
+            expect(streamrController.unsubscribeFromPartition).not.toHaveBeenCalled();
         });
 
         it('should survive unsubscribe errors', async () => {
