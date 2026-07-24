@@ -2328,12 +2328,34 @@ class StorageMediaController {
                         let drainError = null;
                         const drain = (async () => {
                             const reader = ds.readable.getReader();
+                            // Batch the inflate output into ~8MB blocks before touching
+                            // the writable: DecompressionStream emits 16-64KB at a time,
+                            // and one main-thread createWritable() write per emission
+                            // costs a browser IPC round-trip apiece — extraction ran
+                            // slower than the download. The POC batched per input slice;
+                            // this bounds the batch by OUTPUT size instead (predictable
+                            // peak RAM even for highly compressible data).
+                            const FLUSH_BYTES = 8 * 1024 * 1024;
+                            let parts = [], pending = 0;
+                            const flush = async () => {
+                                if (!parts.length) return;
+                                const buf = new Uint8Array(pending);
+                                let o = 0;
+                                for (const p of parts) { buf.set(p, o); o += p.length; }
+                                parts = []; pending = 0;
+                                await out.writable.write(buf);
+                            };
                             try {
                                 for (;;) {
                                     const { done, value } = await reader.read();
                                     if (done) break;
-                                    if (value && value.length) await out.writable.write(value);
+                                    if (value && value.length) {
+                                        parts.push(value);
+                                        pending += value.length;
+                                        if (pending >= FLUSH_BYTES) await flush();
+                                    }
                                 }
+                                await flush();
                             } catch (e) { drainError = e; }
                         })();
                         for (let off = 0; off < stagedFile.size; off += SLICE) {
