@@ -79,9 +79,39 @@ describe('storageEndpoints', () => {
         expect(nodes).toHaveLength(1);
     });
 
-    it('rotation() lists one healthy URL per node', async () => {
+    it('rotation() lists every healthy URL as a slot', async () => {
         const rot = await storageEndpoints.rotation('0xchan/foo-1');
         expect(rot).toEqual(['https://node-a.example', 'https://node-b.example']);
+    });
+
+    it('rotation() expands ALL URLs of a multi-URL node (cluster behind one address)', async () => {
+        mockClient.getStream.mockResolvedValue({ getStorageNodes: () => Promise.resolve([NODE_A]) });
+        mockClient.getStorageNodeMetadata.mockResolvedValue({
+            urls: ['https://blob.example', 'https://vps2.blob.example']
+        });
+        const rot = await storageEndpoints.rotation('0xchan/cluster-1');
+        expect(rot).toEqual(['https://blob.example', 'https://vps2.blob.example']);
+    });
+
+    it('rotation() interleaves URLs across nodes by index', async () => {
+        mockClient.getStream.mockResolvedValue({ getStorageNodes: () => Promise.resolve([NODE_A, NODE_B]) });
+        mockClient.getStorageNodeMetadata.mockImplementation((addr) =>
+            addr === NODE_A
+                ? Promise.resolve({ urls: ['https://a1.example', 'https://a2.example'] })
+                : Promise.resolve({ urls: ['https://b1.example'] }));
+        const rot = await storageEndpoints.rotation('0xchan/multi-1');
+        expect(rot).toEqual(['https://a1.example', 'https://b1.example', 'https://a2.example']);
+    });
+
+    it('rotation() ejects a single URL of a multi-URL node, keeps the rest', async () => {
+        mockClient.getStream.mockResolvedValue({ getStorageNodes: () => Promise.resolve([NODE_A]) });
+        mockClient.getStorageNodeMetadata.mockResolvedValue({
+            urls: ['https://blob.example', 'https://vps2.blob.example']
+        });
+        const limit = CONFIG.storageMedia.nodeFailureLimit;
+        for (let i = 0; i < limit; i++) storageEndpoints.noteFailure('https://blob.example');
+        const rot = await storageEndpoints.rotation('0xchan/cluster-1');
+        expect(rot).toEqual(['https://vps2.blob.example']);
     });
 
     it('rotation() ejects a node after consecutive failures and restores on success', async () => {
