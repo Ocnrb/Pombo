@@ -346,10 +346,10 @@ function shouldCompress(file) {
 // Streamr publish() is fire-and-forget: resolving does NOT guarantee delivery
 // or persistence. This retry only covers local/connection errors; persistence
 // is confirmed later by verify & repair.
-async function publishChunkWithRetry(streamId, partition, payload, attempts = 3) {
+async function publishChunkWithRetry(streamId, partition, payload, attempts = 3, identity = null) {
     let lastErr;
     for (let a = 0; a < attempts; a++) {
-        try { return await streamrController.publishStorageChunk(streamId, partition, payload); }
+        try { return await streamrController.publishStorageChunk(streamId, partition, payload, identity); }
         catch (e) { lastErr = e; await sleep(500 * (a + 1)); }
     }
     throw lastErr;
@@ -1163,9 +1163,13 @@ class StorageMediaController {
      *   "read failed" — the auto-tune must NOT treat a failed read as loss.
      * @returns {Promise<Set<number>>}
      */
-    async readStoredIndices(sid, windows, tsIndex, bases, label, onProgress, stats = null) {
+    async readStoredIndices(sid, windows, tsIndex, bases, label, onProgress, stats = null, expectedPublisher = null) {
         const found = new Set();
-        const myAddress = (authManager.getAddress() || '').toLowerCase();
+        // Whose rows count as ours. Normally our wallet, but a DM transfer
+        // publishes its chunks under a throwaway identity — verify has to look
+        // for THAT address, or every chunk reads back as foreign and repair
+        // concludes the whole upload is missing.
+        const myAddress = (expectedPublisher || authManager.getAddress() || '').toLowerCase();
         let winsDone = 0;
         let next = 0;
         const matchTs = (partition, timestamp, publisherId) => {
@@ -1453,11 +1457,21 @@ class StorageMediaController {
                 })();
             }
 
-            // DMs: force the well-known Streamr-layer key before the first chunk
-            // publish so resends never depend on the publisher being online for
-            // a key exchange (same rule as every other DM publish).
+            // DMs: one throwaway publishing identity for the whole transfer, so
+            // the chunks do not carry our address. Chunks are already sealed
+            // with the per-file key, so the Streamr layer adds nothing and is
+            // switched off (publishAs uses encryptionType NONE) — which also
+            // drops the old dependency on the well-known key for resends.
+            let chunkIdentity = null;
+            let chunkPublisher = null;   // address the chunks are published under
             if (isDM) {
-                await streamrController.setDMPublishKey(messageStreamId);
+                const EthereumKeyPairIdentity = window.EthereumKeyPairIdentity;
+                if (!EthereumKeyPairIdentity) {
+                    throw new Error('EthereumKeyPairIdentity not exposed — check streamr-bundle.js');
+                }
+                chunkIdentity = EthereumKeyPairIdentity.fromPrivateKey(
+                    dmCrypto.generateEphemeralPrivateKey());
+                chunkPublisher = await chunkIdentity.getUserId();
             }
 
             await this.warmUpPartitions(messageStreamId, firstChunkPartition, () => emitPhase('Preparing network…', 'processing'));
@@ -1543,7 +1557,7 @@ class StorageMediaController {
             const publishOne = async (i, label) => {
                 const pay = await buildPayload(i);
                 await awaitSendSlot();
-                const pubMsg = await publishChunkWithRetry(messageStreamId, chunkPartition(i), pay);
+                const pubMsg = await publishChunkWithRetry(messageStreamId, chunkPartition(i), pay, 3, chunkIdentity);
                 chunkTs[i] = (pubMsg && typeof pubMsg.timestamp === 'number') ? pubMsg.timestamp : Date.now();
                 (chunkTsHist[i] = chunkTsHist[i] || []).push(chunkTs[i]);
                 return pay.length;
@@ -1686,7 +1700,7 @@ class StorageMediaController {
                         const step = Math.max(1, Math.floor(cand.length / 5));
                         for (let k = 0; k < cand.length && sample.length < 5; k += step) sample.push(cand[k]);
                         const probeStats = { winsOk: 0, winsFailed: 0, rows: 0, foreignRows: 0 };
-                        const found = await this.readStoredIndices(messageStreamId, windowsForIndices(sample), tsIndexForVerify(), bases, 'auto-tune probe', undefined, probeStats);
+                        const found = await this.readStoredIndices(messageStreamId, windowsForIndices(sample), tsIndexForVerify(), bases, 'auto-tune probe', undefined, probeStats, chunkPublisher);
                         found.forEach(x => stored.add(x));
                         const missed = sample.filter(i => !found.has(i));
                         if (missed.length > 0) {
@@ -1702,7 +1716,7 @@ class StorageMediaController {
                                 // Double-read before cutting: a chunk missing on
                                 // node A may simply not have replicated yet.
                                 await sleep(2500);
-                                const found2 = await this.readStoredIndices(messageStreamId, windowsForIndices(missed), tsIndexForVerify(), bases, 'cut confirmation');
+                                const found2 = await this.readStoredIndices(messageStreamId, windowsForIndices(missed), tsIndexForVerify(), bases, 'cut confirmation', undefined, null, chunkPublisher);
                                 found2.forEach(x => stored.add(x));
                                 const confirmed = missed.filter(i => !found2.has(i));
                                 if (confirmed.length === 0) return;
@@ -1855,7 +1869,9 @@ class StorageMediaController {
                             foundSoFar.forEach(x => stored.add(x));
                             updVerifyBar();
                             emitPhase(`Verifying: ${stored.size}/${tc} confirmed…`, 'verifying');
-                        }
+                        },
+                        null,
+                        chunkPublisher
                     );
                     found.forEach(x => stored.add(x));
                     missing = missingIdx();
@@ -1872,7 +1888,7 @@ class StorageMediaController {
                     while (missing.length > 0 && stalledReal < 2 && zeroProgress < 24 && performance.now() - scStart < 5 * 60000) {
                         await sleep(2500);
                         const before = missing.length;
-                        const found2 = await this.readStoredIndices(messageStreamId, windowsForIndices(missing), tsIndexForVerify(), bases, 'drain');
+                        const found2 = await this.readStoredIndices(messageStreamId, windowsForIndices(missing), tsIndexForVerify(), bases, 'drain', undefined, null, chunkPublisher);
                         found2.forEach(x => stored.add(x));
                         missing = missingIdx();
                         updVerifyBar();
@@ -1905,7 +1921,7 @@ class StorageMediaController {
                         const wait = r === 0 ? 2000 : Math.max(0, 2000 - lastRepairReadMs);
                         if (wait > 0) await sleep(wait);
                         const tRead2 = performance.now();
-                        const found = await this.readStoredIndices(messageStreamId, windowsForIndices(missing), tsIndexForVerify(), bases, `post-repair pass ${pass}`);
+                        const found = await this.readStoredIndices(messageStreamId, windowsForIndices(missing), tsIndexForVerify(), bases, `post-repair pass ${pass}`, undefined, null, chunkPublisher);
                         found.forEach(x => stored.add(x));
                         const before = missing.length;
                         missing = missingIdx();
@@ -1965,13 +1981,10 @@ class StorageMediaController {
                 // Same DM sealing as sendDMMessage / mesh announce: everything on a
                 // DM channel travels inside the pair's ECDH envelope.
                 const privateKey = authManager.wallet?.privateKey;
-                const peerPubKey = await dmManager.getPeerPublicKey(channel.peerAddress);
-                if (!privateKey || !peerPubKey) throw new Error('Cannot announce DM file: encryption keys unavailable');
-                const aesKey = await dmCrypto.getSharedKey(privateKey, channel.peerAddress, peerPubKey);
                 const { verified, pending, ...cleanAnnouncement } = announcement;
-                const sealed = await dmCrypto.encrypt(cleanAnnouncement, aesKey);
-                await streamrController.setDMPublishKey(messageStreamId);
-                const pub = await streamrController.publishMessage(messageStreamId, sealed, null);
+                // Sealed sender, same as any other DM message
+                const pub = await dmManager.sealAndPublish(
+                    messageStreamId, channel.peerAddress, cleanAnnouncement);
                 if (pub && typeof pub.timestamp === 'number') annTss.push(pub.timestamp);
             } else {
                 const pub = await streamrController.publishMessage(messageStreamId, announcement, password);
@@ -2004,12 +2017,13 @@ class StorageMediaController {
                     try {
                         let rp;
                         if (isDM && channel?.peerAddress) {
-                            const privateKey = authManager.wallet?.privateKey;
-                            const peerPubKey = await dmManager.getPeerPublicKey(channel.peerAddress);
-                            const aesKey = await dmCrypto.getSharedKey(privateKey, channel.peerAddress, peerPubKey);
+                            // Same sealing as the first publish. This path only
+                            // fires on the rare "announce not visible" retry,
+                            // which is exactly how it stayed on the v1 scheme
+                            // after everything around it had moved.
                             const { verified, pending, ...cleanAnnouncement } = announcement;
-                            const sealed = await dmCrypto.encrypt({ ...cleanAnnouncement }, aesKey);
-                            rp = await streamrController.publishMessage(messageStreamId, sealed, null);
+                            rp = await dmManager.sealAndPublish(
+                                messageStreamId, channel.peerAddress, cleanAnnouncement);
                         } else {
                             rp = await streamrController.publishMessage(messageStreamId, announcement, password);
                         }

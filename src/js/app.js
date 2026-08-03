@@ -56,6 +56,16 @@ class App {
             // Wire cross-module callbacks (avoids circular dependencies and window globals)
             channelManager.onChannelsSaved = () => syncManager.scheduleAutoPush();
             identityManager.onTrustedContactsChanged = () => syncManager.scheduleAutoPush();
+            // ENS is no longer resolved during message verification (that leaked
+            // the contact list to public RPCs, one lookup per message seen), so
+            // names arrive after render and the chat is patched in place.
+            identityManager.onENSResolved = (address, name) => {
+                try {
+                    chatAreaUI.patchSenderNames(address, name);
+                } catch (error) {
+                    Logger.debug('ENS patch failed (non-critical):', error.message);
+                }
+            };
             secureStorage.onBlockedPeersChanged = () => syncManager.scheduleAutoPush();
             // Sent DMs/messages/reactions and DM soft-leaves must sync promptly —
             // they have no other push trigger (short debounce)

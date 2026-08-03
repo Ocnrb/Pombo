@@ -16,6 +16,7 @@
 
 import { previewModeUI } from './PreviewModeUI.js';
 import { formatAddress } from './utils.js';
+import { identityManager } from '../identity.js';
 
 class PinnedBannerUI {
     constructor() {
@@ -165,7 +166,12 @@ class PinnedBannerUI {
             }
         }
 
+        // Cache-first, same as the message renderer. Both the pin snapshot and
+        // msg.verified.ensName are frozen at capture/verification time, so if
+        // the cache was cold then they stay empty forever. Reading the live
+        // cache lets the label fill in once ENS resolves.
         const senderLabel =
+            (sender ? identityManager.getCachedENS?.(sender) : null) ||
             ensName ||
             senderName ||
             (sender ? (formatAddress?.(sender) || String(sender).slice(0, 10)) : '');

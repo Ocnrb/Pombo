@@ -27,6 +27,12 @@ import { executeWithRetry, executeWithRetryAndVerify } from './utils/retry.js';
 import { isRpcError, createPermissionResult } from './utils/rpcErrors.js';
 import { authManager } from './auth.js';
 import {
+    recoverPublisherAccount, applyAccount, stripLocalFields, clearPublisherProofCache
+} from './publisherProof.js';
+import {
+    getChannelIdentity, dropChannelIdentity, clearChannelIdentities
+} from './channelIdentity.js';
+import {
     MESSAGE_STREAM as MESSAGE_STREAM_CONSTANTS,
     EPHEMERAL_STREAM as EPHEMERAL_STREAM_CONSTANTS,
     ADMIN_STREAM as ADMIN_STREAM_CONSTANTS,
@@ -85,7 +91,14 @@ const STREAM_CONFIG = {
 
     // History count to fetch when bootstrapping admin state on channel open.
     // Snapshot is `latest-wins`; a small window is sufficient.
-    ADMIN_HISTORY_COUNT: 10
+    ADMIN_HISTORY_COUNT: 10,
+
+    // publishAs(): how long to wait for the stream partition topology before
+    // broadcasting. Joining registers interest but does not imply anyone is
+    // connected yet — the smoke test caught a message published from a cold
+    // node never reaching a live subscriber (it did reach storage).
+    PUBLISH_MIN_NEIGHBORS: 1,
+    PUBLISH_NEIGHBOR_TIMEOUT_MS: 5000
 };
 
 // === ID DERIVATION FUNCTIONS ===
@@ -142,8 +155,6 @@ class StreamrController {
         this.mediaHandlers = new Map(); // ephemeralStreamId -> { handler, password }
         
         // DM decrypt key recovery tracking
-        this._dmKeyAddedForPublisher = new Set();  // Publishers we've added Pombo key for
-        this._dmPublishKeySet = new Set();  // Streams we've already set publish key for
     }
 
     async validateCustomStorageNodeAddress(nodeAddress) {
@@ -193,6 +204,13 @@ class StreamrController {
                 auth: {
                     privateKey: signer.privateKey
                 },
+                // Telemetry OFF. The SDK enables it by default whenever auth.ethereum is
+                // undefined — which is our case, since we pass a raw privateKey. Left on, the
+                // client publishes to streamr.eth/metrics/nodes/firehose/{min,hour,day} every
+                // 60s, signed with the user's real address, on a public indexed stream. That
+                // alone is enough for anyone to build a presence timeline of every Pombo user,
+                // and it would defeat every other privacy measure in this file.
+                metrics: false,
                 // Network layer tuning for media transfer
                 network: {
                     controlLayer: {
@@ -733,195 +751,6 @@ class StreamrController {
         }, { maxRetries: retries });
     }
 
-    /**
-     * Create Pombo DM encryption key object
-     * @private
-     * @returns {Object|null} EncryptionKey instance or null
-     */
-    _createPomboKey() {
-        if (!window.EncryptionKey) {
-            return null;
-        }
-        
-        let keyData;
-        if (typeof Buffer !== 'undefined') {
-            keyData = Buffer.from(CONFIG.dm.encryptionKeyHex, 'hex');
-        } else if (window.ethers?.getBytes) {
-            const bytes = window.ethers.getBytes('0x' + CONFIG.dm.encryptionKeyHex);
-            keyData = Object.assign(bytes, { type: 'Buffer' });
-        } else {
-            return null;
-        }
-        
-        return new window.EncryptionKey(CONFIG.dm.encryptionKeyId, keyData);
-    }
-
-    /**
-     * Set DM encryption key for PUBLISHING to a peer's inbox
-     * This makes our messages use the pre-agreed Pombo key
-     * @param {string} streamId - Target DM stream ID (peer's inbox)
-     */
-    async setDMPublishKey(streamId) {
-        if (!this.client) return;
-        
-        // Only apply to DM streams
-        if (!streamId.toLowerCase().includes('/pombo-dm-')) {
-            return;
-        }
-
-        // Skip if already set for this stream (avoids repeated rekey on heartbeat)
-        if (this._dmPublishKeySet.has(streamId)) {
-            return;
-        }
-        
-        try {
-            const key = this._createPomboKey();
-            if (!key) {
-                Logger.debug('EncryptionKey not available, skipping DM publish key');
-                return;
-            }
-            
-            // Publisher side: set which key to use when publishing
-            if (typeof this.client.updateEncryptionKey === 'function') {
-                await this.client.updateEncryptionKey({
-                    streamId: streamId,
-                    key: key,
-                    distributionMethod: 'rekey'
-                });
-                this._dmPublishKeySet.add(streamId);
-                Logger.debug('DM publish key set for', streamId);
-            }
-        } catch (e) {
-            // Non-fatal: may fail if already set
-            Logger.debug('DM publish key setup skipped:', e.message);
-        }
-    }
-
-    /**
-     * Add DM encryption key for RECEIVING from a specific peer
-     * This lets us decrypt messages from that peer
-     * @param {string} peerAddress - Peer's Ethereum address
-     */
-    async addDMDecryptKey(peerAddress) {
-        if (!this.client) return;
-        
-        try {
-            const key = this._createPomboKey();
-            if (!key) {
-                Logger.debug('EncryptionKey not available, skipping DM decrypt key');
-                return;
-            }
-            
-            // Normalize to lowercase address
-            const normalizedPeer = peerAddress.toLowerCase();
-            
-            // Subscriber side: add decryption key for this publisher
-            if (typeof this.client.addEncryptionKey === 'function') {
-                await this.client.addEncryptionKey(key, normalizedPeer);
-                Logger.debug('DM decrypt key added for peer', normalizedPeer);
-            }
-        } catch (e) {
-            // Non-fatal: may fail if already set
-            Logger.debug('DM decrypt key setup skipped:', e.message);
-        }
-    }
-
-    /**
-     * Handle a DECRYPT_ERROR by adding the Pombo key for the publisher and refetching
-     * @param {Error} error - The decrypt error with messageId containing publisherId
-     * @param {string} streamId - The stream where the error occurred
-     * @param {Function} handler - Message handler to receive refetched message
-     * @returns {Promise<boolean>} - True if recovery was attempted
-     */
-    async handleDMDecryptError(error, streamId, handler) {
-        // Only for DM streams
-        if (!streamId?.toLowerCase().includes('/pombo-dm-')) {
-            return false;
-        }
-        
-        // Extract messageId from error (SDK includes it in DECRYPT_ERROR)
-        let messageId = error.messageId;
-        
-        // Parse messageId if it's a string
-        if (typeof messageId === 'string') {
-            try {
-                messageId = JSON.parse(messageId);
-            } catch (e) {
-                // Try to extract from error message
-                const match = error.message?.match(/messageId=(\{[^}]+\})/);
-                if (match) {
-                    try {
-                        messageId = JSON.parse(match[1]);
-                    } catch (e2) {
-                        return false;
-                    }
-                }
-            }
-        }
-        
-        if (!messageId?.publisherId) {
-            Logger.debug('DM decrypt: no publisherId in error');
-            return false;
-        }
-        
-        const publisherId = messageId.publisherId.toLowerCase();
-        const timestamp = messageId.timestamp;
-        
-        // Skip if we've already tried adding key for this publisher
-        if (this._dmKeyAddedForPublisher.has(publisherId)) {
-            Logger.debug('DM decrypt: already tried key for', publisherId);
-            return false;
-        }
-        
-        Logger.info('DM decrypt recovery: adding key for new publisher', publisherId);
-        this._dmKeyAddedForPublisher.add(publisherId);
-        
-        // Add the Pombo key for this publisher
-        await this.addDMDecryptKey(publisherId);
-        
-        // Schedule refetch of recent messages from this publisher
-        // Use a small delay to let the key propagate
-        setTimeout(async () => {
-            try {
-                // Refetch recent messages around this timestamp
-                const rangeStart = timestamp - 60000; // 1 minute before
-                const rangeEnd = timestamp + 60000;   // 1 minute after
-                
-                Logger.debug('DM decrypt recovery: refetching messages', {
-                    streamId,
-                    publisherId,
-                    from: new Date(rangeStart).toISOString(),
-                    to: new Date(rangeEnd).toISOString()
-                });
-                
-                const resend = await this.client.resend(streamId, {
-                    from: { timestamp: rangeStart, publisherId },
-                    to: { timestamp: rangeEnd }
-                });
-                
-                let recovered = 0;
-                for await (const message of resend) {
-                    if (message.getPublisherId?.()?.toLowerCase() === publisherId) {
-                        const content = message.content || message;
-                        if (content && typeof content === 'object') {
-                            content.senderId = publisherId;
-                            content._recovered = true;
-                        }
-                        handler(content);
-                        recovered++;
-                    }
-                }
-                
-                if (recovered > 0) {
-                    Logger.info(`DM decrypt recovery: recovered ${recovered} messages from ${publisherId}`);
-                }
-            } catch (e) {
-                Logger.debug('DM decrypt recovery failed:', e.message);
-            }
-        }, 500);
-        
-        return true;
-    }
 
 
     /**
@@ -1987,6 +1816,225 @@ class StreamrController {
     }
 
     /**
+     * Stamp the resolved account onto a received payload.
+     *
+     * THE single place where "who sent this" is decided. Everything downstream —
+     * isOwn, message grouping, reaction dedup, edit/delete authorship, bans,
+     * presence — must read `data.account` and nothing else.
+     *
+     * The rule, and it lives here and nowhere else:
+     *
+     *     account = proof ? ecrecover(proof) : publisherId
+     *
+     * The fallback is what keeps pre-migration history working: old messages
+     * have no proof, and their publisherId is the wallet — so both formats land
+     * in the same identifier space and nothing needs migrating. See D10/D10b.
+     *
+     * A proof that does not recover falls back too, which is deliberate: it
+     * lands on the ephemeral address, an identity that owns nothing and matches
+     * nobody. Forging a proof therefore buys an attacker a name that no ban, no
+     * grouping and no ownership check will ever agree with.
+     *
+     * The field was deliberately RENAMED from `account` rather than
+     * dual-written. A consumer that still reads `account` now gets `undefined`
+     * and fails loudly, instead of silently comparing against an ephemeral key
+     * once Fase 4 lands.
+     *
+     * @param {Object} data - Received payload (mutated in place)
+     * @param {string} publisherId - On-wire publisher of the message
+     * @returns {Object} - The same object, for chaining
+     */
+    attachAccount(data, publisherId) {
+        if (!data || typeof data !== 'object' || !publisherId) return data;
+        const account = (data.proof && recoverPublisherAccount(publisherId, data.proof))
+            || publisherId;
+
+        // `sender` no longer travels on the wire (D6) — it duplicated the proof
+        // in the clear. It stays as a DERIVED alias because ~85 call sites read
+        // it, and rewriting them buys nothing: both names resolve to the same
+        // account. Unlike the `senderId` → `account` rename (D10), there is no
+        // silent-wrongness risk to protect against here, precisely because this
+        // is assigned FROM the verified account rather than from the transport.
+        //
+        // Legacy messages carry their own `sender`; overwriting it is a no-op,
+        // since back then publisherId WAS the wallet.
+        return applyAccount(data, account);
+    }
+
+    /**
+     * Publish channel traffic under the channel's ephemeral publisher (D1 + D2).
+     *
+     * THE single place where "who we appear to be" is decided, mirroring
+     * attachAccount on the way in. Every channel publish must come through here,
+     * or that stream's `publisherId` silently reverts to the user's wallet and
+     * the social-graph leak reopens for that message type alone.
+     *
+     * The proof goes INSIDE the payload, so in a password channel it is sealed
+     * by the channel's AES layer along with everything else — the receive path
+     * decrypts before calling attachAccount, so it is read at the right moment
+     * in both channel kinds.
+     *
+     * ⚠️ NOT for the admin stream. Publishing ADMIN_STATE or the password
+     * challenge is gated by the owner's on-chain permission, which a throwaway
+     * key does not have — those must keep publishing as the account (D3).
+     *
+     * @param {string} streamId - Channel stream to publish on
+     * @param {number} partition
+     * @param {Object} data - Payload; the proof is added here, not by callers
+     * @param {string|null} password - Channel password, when encrypted
+     * @returns {Promise<Object>} The published StreamMessage
+     */
+    async publishAsChannel(streamId, partition, data, password = null) {
+        if (isAdminStream(streamId)) {
+            throw new Error(
+                `publishAsChannel refuses the admin stream (${streamId}): ` +
+                'an ephemeral key holds no on-chain permission. See D3.');
+        }
+
+        const { identity, proof } = getChannelIdentity(streamId);
+
+        const payload = { ...stripLocalFields(data), proof };
+
+        const content = password
+            ? await cryptoManager.encryptJSON(payload, password)
+            : payload;
+
+        return this.publishAs(identity, streamId, partition, content);
+    }
+
+    /**
+     * Publish under an identity that is not the client's own.
+     *
+     * `client.publish()` bakes in two things this needs to override:
+     *
+     *   1. It derives `publisherId` from the client identity, so every message
+     *      carries the user's wallet address in the clear — the social-graph
+     *      leak this whole effort exists to close.
+     *   2. Its MessageFactory forces `EncryptionType.AES` whenever the stream
+     *      is not publicly subscribable, then needs a group key for it. The SDK
+     *      indexes those keys by `${publisherId}::${keyId}`, so an ephemeral
+     *      publisher would cost a decrypt-error round-trip per new key.
+     *
+     * Building the StreamMessage by hand sidesteps both. Encryption stays where
+     * it already effectively is — the app layer (dmCrypto / cryptoManager).
+     *
+     * ⚠️ `getNode()` is marked @deprecated/@hidden in the SDK. It is exported and
+     * typed, but carries no stability guarantee: pin the SDK version and let
+     * the smoke test fail loudly on upgrade.
+     *
+     * ⚠️ `broadcast()` does NOT join the stream partition — verified in the SDK
+     * source. Publishing to a stream we are not subscribed to (a peer's DM
+     * inbox) needs the explicit join below, or there are no neighbours to
+     * propagate to.
+     *
+     * @param {Object} identity - Streamr Identity that signs (e.g. EthereumKeyPairIdentity)
+     * @param {string} streamId - Target stream ID
+     * @param {number} partition - Target partition
+     * @param {Object|Uint8Array} data - Payload; encrypt before calling if needed
+     * @param {Object} [options]
+     * @param {string} [options.publisherId] - Override the on-wire publisher
+     *   (used by gated channels to publish as the gate contract). Defaults to
+     *   the signing identity's own user ID.
+     * @param {number} [options.signatureType] - Defaults to the identity's own.
+     *   Gated channels pass `SignatureType.ERC_1271`.
+     * @param {string} [options.msgChainId] - Defaults to a fresh random chain.
+     * @param {number} [options.timestamp] - Defaults to now.
+     * @returns {Promise<Object>} - The published StreamMessage
+     */
+    async publishAs(identity, streamId, partition, data, options = {}) {
+        if (!this.client) {
+            throw new Error('Streamr client not initialized');
+        }
+        const {
+            MessageID, MessageSigner, StreamMessageType, ContentType, EncryptionType
+        } = window;
+        if (!MessageID || !MessageSigner) {
+            throw new Error('SDK message primitives not exposed — check streamr-bundle.js');
+        }
+
+        const isBinary = data instanceof Uint8Array;
+        const content = isBinary ? data : new TextEncoder().encode(JSON.stringify(data));
+
+        const messageId = new MessageID(
+            streamId,
+            partition,
+            options.timestamp ?? Date.now(),
+            0,
+            options.publisherId ?? await identity.getUserId(),
+            options.msgChainId ?? cryptoManager.generateRandomHex(10)
+        );
+
+        const message = await new MessageSigner(identity).createSignedMessage({
+            messageId,
+            content,
+            contentType: isBinary ? ContentType.BINARY : ContentType.JSON,
+            // Never AES: the app already encrypts what needs encrypting, and the
+            // SDK's own layer would drag the group-key exchange back in.
+            encryptionType: EncryptionType.NONE,
+            messageType: StreamMessageType.MESSAGE
+        }, options.signatureType ?? identity.getSignatureType());
+
+        const node = this.client.getNode();
+        const streamPartId = messageId.getStreamPartID();
+
+        // Wait for at least one neighbour before broadcasting. Joining only
+        // registers interest in the stream part — it does not guarantee anyone
+        // is connected yet, so broadcasting straight after can shout into an
+        // empty room. This matters most for DMs, where we publish to a peer's
+        // inbox we never subscribe to and therefore have no standing topology.
+        //
+        // Best-effort: on timeout we publish anyway. The smoke test showed a
+        // message still reaching the storage node from a cold node, so giving
+        // up here would be worse than trying.
+        try {
+            await node.join(streamPartId, {
+                minCount: STREAM_CONFIG.PUBLISH_MIN_NEIGHBORS,
+                timeout: STREAM_CONFIG.PUBLISH_NEIGHBOR_TIMEOUT_MS
+            });
+        } catch (error) {
+            Logger.debug(`publishAs: no neighbours on ${streamPartId} yet (${error.message}) — publishing anyway`);
+        }
+
+        await node.broadcast(message);
+
+        Logger.debug(`publishAs → ${streamId} p${partition} as ${messageId.publisherId}`);
+
+        // Expose `.timestamp` like client.publish() does. Callers use it to
+        // locate what they just published in storage — announce confirmation
+        // and chunk verification both match on it. A StreamMessage only offers
+        // getTimestamp()/messageId.timestamp, so without this the checks read
+        // `undefined` and silently conclude nothing was stored.
+        try { message.timestamp = messageId.timestamp; } catch { /* frozen: callers fall back */ }
+        return message;
+    }
+
+    /**
+     * Publish to the shared push stream under a THROWAWAY key.
+     *
+     * Registration and wake signals used to go out under the account
+     * (`client.publish`), which pinned the wallet onto a public, indexed
+     * stream: "X uses Pombo" on every registration, and "X was active at T0"
+     * on every wake — a timing side-channel back onto the sealed DM that wake
+     * announces. The relay keys on (tag, token) and validates wake by PoW; it
+     * never reads the publisher, so a fresh ephemeral key per publish costs
+     * nothing and closes the leak. No proof, no identity in the payload — the
+     * push stream carries neither.
+     *
+     * @param {Object} payload - registration or wake-signal object
+     */
+    async publishToPushStream(payload) {
+        const EthereumKeyPairIdentity = window.EthereumKeyPairIdentity;
+        if (!EthereumKeyPairIdentity) {
+            throw new Error('EthereumKeyPairIdentity not exposed — check streamr-bundle.js');
+        }
+        const bytes = crypto.getRandomValues(new Uint8Array(32));
+        const ephemeralPrivateKey = '0x' + Array.from(bytes)
+            .map(b => b.toString(16).padStart(2, '0')).join('');
+        const identity = EthereumKeyPairIdentity.fromPrivateKey(ephemeralPrivateKey);
+        return this.publishAs(identity, CONFIG.push.pushStreamId, 0, payload);
+    }
+
+    /**
      * Publish a storage-file chunk to a message-stream chunk partition.
      *
      * Chunks are pre-sealed by the storage engine with a per-file key (one
@@ -2000,9 +2048,23 @@ class StreamrController {
      * @param {Uint8Array} data - Sealed (or public-plaintext) chunk payload
      * @returns {Promise<Object>} - SDK publish result (carries .timestamp)
      */
-    async publishStorageChunk(messageStreamId, partition, data) {
+    async publishStorageChunk(messageStreamId, partition, data, identity = null) {
         if (!this.client) {
             throw new Error('Streamr client not initialized');
+        }
+        // DM transfers pass a throwaway identity so the chunks do not carry the
+        // sender's address. One identity is reused for the whole transfer:
+        // chunks of a file are obviously related anyway (same partitions, same
+        // window), so a key per chunk would buy nothing and cost thousands of
+        // signatures.
+        if (identity) {
+            const msg = await this.publishAs(identity, messageStreamId, partition, data);
+            // Normalise to client.publish()'s shape. Callers read `.timestamp`
+            // to record the chunk's position, and the download path locates
+            // chunks by that timestamp window — a StreamMessage has no such
+            // property, so returning it raw would silently fall back to
+            // Date.now() and drift the window.
+            return { timestamp: msg.messageId.timestamp, message: msg };
         }
         return await this.client.publish(
             { streamId: messageStreamId, partition },
@@ -2036,14 +2098,8 @@ class StreamrController {
     async publishMessage(messageStreamId, message, password = null) {
         Logger.debug('publishMessage called - sending to messageStream partition 0:', { messageStreamId, messageId: message?.id });
         
-        // Strip local-only fields before publishing
-        // These are UI state that should not be sent over the network:
-        // - verified: each receiver must verify independently
-        // - pending: only meaningful to the sender
-        // - _dmSent: local DM tracking flag
-        const { verified, pending, _dmSent, ...networkMessage } = message;
-        
-        return await this.publish(messageStreamId, STREAM_CONFIG.MESSAGE_STREAM.MESSAGES, networkMessage, password);
+        return await this.publishAsChannel(
+            messageStreamId, STREAM_CONFIG.MESSAGE_STREAM.MESSAGES, message, password);
     }
 
     /**
@@ -2054,7 +2110,8 @@ class StreamrController {
      * @param {string} password - Password for encrypted channels (optional)
      */
     async publishControl(ephemeralStreamId, control, password = null) {
-        return await this.publish(ephemeralStreamId, STREAM_CONFIG.EPHEMERAL_STREAM.CONTROL, control, password);
+        return await this.publishAsChannel(
+            ephemeralStreamId, STREAM_CONFIG.EPHEMERAL_STREAM.CONTROL, control, password);
     }
 
     /**
@@ -2066,7 +2123,8 @@ class StreamrController {
      */
     async publishReaction(messageStreamId, reaction, password = null) {
         Logger.debug('publishReaction called - sending to messageStream partition 0:', { messageStreamId, messageId: reaction?.messageId });
-        return await this.publish(messageStreamId, STREAM_CONFIG.MESSAGE_STREAM.MESSAGES, reaction, password);
+        return await this.publishAsChannel(
+            messageStreamId, STREAM_CONFIG.MESSAGE_STREAM.MESSAGES, reaction, password);
     }
 
     /**
@@ -2077,7 +2135,8 @@ class StreamrController {
      * @param {string} password - Password for encrypted channels (optional)
      */
     async publishMediaSignal(ephemeralStreamId, signal, password = null) {
-        return await this.publish(ephemeralStreamId, STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_SIGNALS, signal, password);
+        return await this.publishAsChannel(
+            ephemeralStreamId, STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_SIGNALS, signal, password);
     }
 
     /**
@@ -2089,6 +2148,21 @@ class StreamrController {
      */
     async publishMediaData(ephemeralStreamId, data, password = null) {
         return await this.publish(ephemeralStreamId, STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_DATA, data, password);
+    }
+
+    /**
+     * Publish already-sealed binary media under a throwaway identity.
+     *
+     * The sealed envelope carries its own encryption and identity proof, so this
+     * takes no password: `publishAs` sends with encryptionType NONE.
+     *
+     * @param {string} ephemeralStreamId - Ephemeral Stream ID (ends with -2)
+     * @param {Uint8Array} data - Sealed binary payload
+     * @param {Object} identity - EthereumKeyPairIdentity for the transfer
+     */
+    async publishMediaDataAs(ephemeralStreamId, data, identity) {
+        return await this.publishAs(
+            identity, ephemeralStreamId, STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_DATA, data);
     }
 
     /**
@@ -2650,7 +2724,7 @@ class StreamrController {
                         ? streamMessage.getPublisherId() 
                         : streamMessage.publisherId;
                     if (publisherId) {
-                        data.senderId = publisherId;
+                        this.attachAccount(data, publisherId);
                     }
                 }
                 await handler(data);
@@ -2765,8 +2839,14 @@ class StreamrController {
         this.address = null;
         
         // Clear DM key tracking
-        this._dmKeyAddedForPublisher.clear();
-        this._dmPublishKeySet.clear();
+
+        // Recovered accounts are keyed by ephemeral publishers that die with the
+        // session — keeping them would only grow.
+        clearPublisherProofCache();
+
+        // Pseudonyms must never outlive a session, or yesterday's can be tied
+        // to today's (D2).
+        clearChannelIdentities();
     }
 
     /**
@@ -3304,7 +3384,7 @@ class StreamrController {
                         }
                     }
 
-                    // Inject senderId from StreamMessage metadata
+                    // Inject account from StreamMessage metadata
                     if (typeof content === 'object') {
                         const publisherId = typeof message.getPublisherId === 'function'
                             ? message.getPublisherId()
@@ -3313,7 +3393,7 @@ class StreamrController {
                             ? message.getTimestamp()
                             : message.timestamp;
                         if (publisherId) {
-                            content.senderId = publisherId;
+                            this.attachAccount(content, publisherId);
                             if (!content.sender) content.sender = publisherId;
                             content._publisherId = publisherId;
                         }
@@ -3356,7 +3436,7 @@ class StreamrController {
         // Dedup key for merging two passes — either pass may have holes.
         const msgKey = (m) => m?.id
             || (m?.type === 'image_chunk' && m?.imageId != null ? `chunk:${m.imageId}:${m.chunkIndex}` : null)
-            || `${m?.type}:${m?._timestamp || m?.timestamp || ''}:${m?.senderId || ''}:${m?.messageId || m?.targetId || ''}:${m?.emoji || ''}:${m?.action || ''}`;
+            || `${m?.type}:${m?._timestamp || m?.timestamp || ''}:${m?.account || ''}:${m?.messageId || m?.targetId || ''}:${m?.emoji || ''}:${m?.action || ''}`;
         
         try {
             Logger.debug(`Fetching ${count} older messages before ${new Date(beforeTimestamp).toISOString()}`);
@@ -3538,7 +3618,7 @@ class StreamrController {
                     if (password) {
                         data = await cryptoManager.decryptBinary(content, password);
                     }
-                    // Extract senderId and wrap binary with metadata
+                    // Extract account and wrap binary with metadata
                     const publisherId = streamMessage && (typeof streamMessage.getPublisherId === 'function' 
                         ? streamMessage.getPublisherId() 
                         : streamMessage.publisherId);
@@ -3558,7 +3638,7 @@ class StreamrController {
                         ? streamMessage.getPublisherId() 
                         : streamMessage.publisherId;
                     if (publisherId) {
-                        data.senderId = publisherId;
+                        this.attachAccount(data, publisherId);
                     }
                 }
                 
@@ -3570,11 +3650,12 @@ class StreamrController {
         const errorHandler = async (error) => {
             // Decrypt errors for missing GroupKeys
             if (error.code === 'DECRYPT_ERROR' || error.message?.includes('encryption key')) {
-                // Try DM decrypt recovery (add key and refetch)
-                const recovered = await this.handleDMDecryptError(error, streamId, handler);
-                if (!recovered) {
-                    Logger.debug('SDK decrypt error (likely old GroupKey):', error.message?.substring(0, 100));
-                }
+                // Nothing to recover any more. Everything Pombo publishes now
+                // goes out with encryptionType NONE and is sealed at the app
+                // layer, so a DECRYPT_ERROR means an SDK-encrypted message we
+                // have no key for — foreign traffic, or history from before the
+                // hardcoded key was removed. Both are correctly ignored.
+                Logger.debug('SDK decrypt error (not ours):', error.message?.substring(0, 100));
             } else {
                 Logger.warn('Subscription error:', error.message || error);
             }
@@ -3705,8 +3786,6 @@ class StreamrController {
                     // SDK decrypt error for missing GroupKey - try recovery for DM streams
                     if (iterError.code === 'DECRYPT_ERROR' || iterError.message?.includes('encryption key')) {
                         decryptErrors++;
-                        // Try DM decrypt recovery (add key and refetch)
-                        await this.handleDMDecryptError(iterError, streamId, handler);
                         if (decryptErrors <= 3) {
                             Logger.debug('History decrypt error (likely old GroupKey):', iterError.message?.substring(0, 80));
                         }
@@ -3735,7 +3814,7 @@ class StreamrController {
                         }
                     }
 
-                    // Inject senderId from StreamMessage (same as realtime handler)
+                    // Inject account from StreamMessage (same as realtime handler)
                     // Also surface broker timestamps (same as fetchOlderHistory) so
                     // consumers can rely on `timestamp`/`_timestamp` fallbacks.
                     if (typeof content === 'object') {
@@ -3746,7 +3825,7 @@ class StreamrController {
                             ? message.getTimestamp()
                             : message.timestamp;
                         if (publisherId) {
-                            content.senderId = publisherId;
+                            this.attachAccount(content, publisherId);
                         }
                         if (!content.timestamp && messageTimestamp) {
                             content.timestamp = messageTimestamp;
@@ -4026,11 +4105,22 @@ class StreamrController {
     async unsubscribeFromDualStream(messageStreamId, ephemeralStreamId) {
         // Clean up stored media handler
         this.mediaHandlers.delete(ephemeralStreamId);
-        
+
         await Promise.allSettled([
             this.unsubscribe(messageStreamId),
             this.unsubscribe(ephemeralStreamId)
         ]);
+
+        // Rotate the pseudonym (D2). THIS is the right place and the only one:
+        // it is where the channel is really left, both streams and all. Doing it
+        // from a UI handler would re-pseudonymise on a tab switch, mid-transfer,
+        // while peers still hold the publisher they were given.
+        //
+        // Deliberately NOT in unsubscribeMediaPartitions(): that keeps P0 alive
+        // for a backgrounded channel, which is exactly the case that must keep
+        // its identity.
+        dropChannelIdentity(messageStreamId);
+
         Logger.debug('Unsubscribed from dual-stream:', messageStreamId);
     }
 

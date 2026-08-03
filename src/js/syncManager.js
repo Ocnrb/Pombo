@@ -295,19 +295,19 @@ class SyncManager {
                 data: state
             };
 
-            // Encrypt with self-ECDH (app-layer E2E)
-            const myPubKey = dmCrypto.getMyPublicKey(privateKey);
-            const aesKey = await dmCrypto.deriveSharedKey(privateKey, myPubKey);
-            const encrypted = await dmCrypto.encrypt(payload, aesKey);
-
-            // Set Pombo key for Streamr-layer encryption (consistent with DM messages)
-            await streamrController.setDMPublishKey(inboxStreamId);
-
-            // Publish to Partition 1 (SYNC)
-            await streamrController.publish(
+            // Sealed to ourselves, published under a throwaway identity.
+            //
+            // The inbox stream ID already names us, so this hides less than it
+            // does for a real DM. What it does buy: our sync traffic becomes
+            // indistinguishable from an incoming message, so an observer can no
+            // longer read "this account is online and syncing right now" off
+            // the publisherId.
+            const myAddress = authManager.getAddress();
+            await dmManager.sealAndPublish(
                 inboxStreamId,
-                STREAM_CONFIG.MESSAGE_STREAM.SYNC,
-                encrypted
+                myAddress,
+                payload,
+                STREAM_CONFIG.MESSAGE_STREAM.SYNC
             );
 
             this.lastSyncTs = payload.ts;
@@ -371,11 +371,10 @@ class SyncManager {
 
         try {
             const pullStartedAt = getNow();
-            Logger.info('Sync: Pulling from storage nodes...', { streamId: inboxStreamId, partition: STREAM_CONFIG.MESSAGE_STREAM.SYNC });
-
-            // Add our own decrypt key for Streamr-layer encryption
-            // (we encrypted with Pombo key, need to add it to read our own messages)
-            await streamrController.addDMDecryptKey(myAddress);
+            Logger.info('Sync: Pulling from storage nodes...', {
+                streamId: inboxStreamId,
+                partition: STREAM_CONFIG.MESSAGE_STREAM.SYNC
+            });
 
             // Fetch history from Partition 1 (SYNC)
             const messages = await streamrController.fetchPartitionHistory(
@@ -400,25 +399,43 @@ class SyncManager {
             const decryptBatch = async (batch) => {
                 const out = [];
                 for (const msg of batch) {
-                    Logger.debug('Sync: Processing message', {
-                        publisherId: msg.publisherId,
-                        myAddress,
-                        match: msg.publisherId?.toLowerCase() === myAddress
-                    });
-
-                    // Verify sender is self (ignore spam from others)
-                    if (msg.publisherId?.toLowerCase() !== myAddress) {
-                        Logger.warn('Sync: Ignoring payload from unknown sender', msg.publisherId);
-                        continue;
-                    }
-
-                    if (!dmCrypto.isEncrypted(msg.content)) {
-                        Logger.debug('Sync: Message not encrypted, skipping');
-                        continue;
-                    }
-
+                    // No publisherId check. Sealed pushes carry a throwaway
+                    // publisher, so "is the publisher me?" is false for every
+                    // one of our own payloads — it rejected the whole sync.
+                    //
+                    // But opening is NOT the whole check for a v2 envelope:
+                    // it only proves the payload was ADDRESSED to us, and our
+                    // static public key is in the inbox stream metadata for
+                    // anyone to read. A stranger can seal {type:'sync'} to it
+                    // and inject channels/contacts/bans into our merge. What
+                    // proves AUTHORSHIP is the proof inside the ciphertext —
+                    // the recovered sender must be this very wallet. (v1
+                    // self-ECDH did not need this: deriving that key required
+                    // our PRIVATE key on the sealing side too.)
                     try {
-                        const payload = await dmCrypto.decrypt(msg.content, aesKey);
+                        // Sealed (v2) or legacy self-ECDH — both appear here
+                        // while old history is still in storage.
+                        let payload = null;
+                        if (dmCrypto.isSealed(msg.content)) {
+                            const opened = await dmCrypto.open(msg.content, {
+                                myPrivateKey: privateKey,
+                                myAddress: authManager.getAddress()
+                            });
+                            if (opened.sender?.toLowerCase() ===
+                                authManager.getAddress()?.toLowerCase()) {
+                                payload = opened.message;
+                            } else {
+                                Logger.warn('Sync: sealed payload not authored by this wallet — dropped',
+                                    { sender: opened.sender });
+                            }
+                        } else if (dmCrypto.isEncrypted(msg.content)) {
+                            payload = await dmCrypto.decrypt(msg.content, aesKey);
+                        }
+
+                        if (!payload) {
+                            Logger.debug('Sync: Message not encrypted, skipping');
+                            continue;
+                        }
                         Logger.debug('Sync: Decrypted payload', { type: payload.type, v: payload.v });
                         if (payload.type === 'sync' && payload.v === 1) {
                             out.push(payload);
@@ -611,21 +628,21 @@ class SyncManager {
         const inboxStreamId = this.getInboxStreamId();
         if (!inboxStreamId) return;
 
-        const myPubKey = dmCrypto.getMyPublicKey(privateKey);
-        const aesKey = await dmCrypto.deriveSharedKey(privateKey, myPubKey);
-
-        await streamrController.setDMPublishKey(inboxStreamId);
+        const myAddress = authManager.getAddress();
 
         // Match the chat-image protocol's raw chunk budget so each encrypted
         // sync_blob_chunk envelope stays under media.imagePayloadMaxBytes.
         const chunkChars = Math.max(1024, CONFIG?.media?.imageChunkInitialRawBytes || 150 * 1024);
 
+        // Sealed to ourselves — see pushState. One ECDH per chunk rather than
+        // one per push; blobs are chunked at ~150KB, so this is tens of
+        // operations per image, not thousands.
         const publishPayload = async (payload) => {
-            const encrypted = await dmCrypto.encrypt(payload, aesKey);
-            await streamrController.publish(
+            await dmManager.sealAndPublish(
                 inboxStreamId,
-                STREAM_CONFIG.MESSAGE_STREAM.SYNC_BLOBS,
-                encrypted
+                myAddress,
+                payload,
+                STREAM_CONFIG.MESSAGE_STREAM.SYNC_BLOBS
             );
         };
 
@@ -717,8 +734,6 @@ class SyncManager {
         const inboxStreamId = this.getInboxStreamId();
         if (!inboxStreamId) return;
 
-        await streamrController.addDMDecryptKey(myAddress);
-
         const messages = await streamrController.fetchPartitionHistory(
             inboxStreamId,
             STREAM_CONFIG.MESSAGE_STREAM.SYNC_BLOBS,
@@ -746,13 +761,32 @@ class SyncManager {
         // Two-pass: gather chunks first, then resolve manifests against them.
         const decoded = [];
         for (const msg of messages) {
-            if (msg.publisherId?.toLowerCase() !== myAddress) continue;
-            if (!dmCrypto.isEncrypted(msg.content)) continue;
+            // No publisherId filter: sealed blobs carry a throwaway publisher,
+            // so `publisherId === me` would drop every one of our own. Opening
+            // proves the blob was addressed to us; authorship comes from the
+            // proof inside — the recovered sender must be this wallet, or a
+            // stranger could plant image blobs in our synced state (same rule
+            // as decryptBatch above; our static pubkey is public).
             try {
-                const payload = await dmCrypto.decrypt(msg.content, aesKey);
+                let payload = null;
+                if (dmCrypto.isSealed(msg.content)) {
+                    const opened = await dmCrypto.open(msg.content, {
+                        myPrivateKey: privateKey,
+                        myAddress: authManager.getAddress()
+                    });
+                    if (opened.sender?.toLowerCase() === myAddress) {
+                        payload = opened.message;
+                    } else {
+                        Logger.warn('Sync: sealed blob not authored by this wallet — dropped',
+                            { sender: opened.sender });
+                    }
+                } else if (msg.publisherId?.toLowerCase() === myAddress && dmCrypto.isEncrypted(msg.content)) {
+                    payload = await dmCrypto.decrypt(msg.content, aesKey);
+                }
+
                 if (payload && payload.v === 2) decoded.push(payload);
             } catch (err) {
-                Logger.warn('Sync: Failed to decrypt blob payload', err.message);
+                Logger.debug('Sync: Could not open blob payload', err.message);
             }
         }
 

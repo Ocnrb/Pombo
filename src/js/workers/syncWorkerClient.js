@@ -29,7 +29,8 @@ class SyncWorkerClient {
         }
 
         try {
-            const worker = new Worker('/js/sync.worker.bundle.js');
+            // Document-relative, not server-root — see cryptoWorkerPool for why
+            const worker = new Worker(new URL('js/sync.worker.bundle.js', document.baseURI));
             worker.onmessage = (event) => this.handleMessage(event.data);
             worker.onerror = (error) => this.handleError(error);
 

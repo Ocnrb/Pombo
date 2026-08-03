@@ -141,9 +141,15 @@ class RelayManager {
      */
     async registerServiceWorker() {
         try {
-            const registration = await navigator.serviceWorker.register('/sw.js', {
-                scope: '/'
-            });
+            // Same server-root problem as the Web Workers. At a root deploy this
+            // resolves to '/sw.js' with scope '/' — identical to before. Served
+            // from a subfolder it now actually registers, instead of 404ing.
+            // (A Service Worker cannot claim a scope broader than its own path,
+            // so the folder scope is the only valid one there anyway.)
+            const registration = await navigator.serviceWorker.register(
+                new URL('sw.js', document.baseURI),
+                { scope: new URL('./', document.baseURI).pathname }
+            );
             
             Logger.info('Service Worker registered');
             
@@ -314,7 +320,7 @@ class RelayManager {
                 await withCircuitBreaker('relay-refresh', async () => {
                     const channelTag = calculateChannelTag(streamId);
                     const payload = createRegistrationPayload(channelTag, this.pushSubscription);
-                    await streamrController.client.publish(CONFIG.pushStreamId, payload);
+                    await streamrController.publishToPushStream(payload);
                 }, cbOpts);
             } catch (error) {
                 Logger.warn('Failed to refresh public channel subscription:', streamId.slice(0, 20) + '...');
@@ -331,7 +337,7 @@ class RelayManager {
                 await withCircuitBreaker('relay-refresh', async () => {
                     const channelTag = calculateNativeChannelTag(streamId);
                     const payload = createRegistrationPayload(channelTag, this.pushSubscription);
-                    await streamrController.client.publish(CONFIG.pushStreamId, payload);
+                    await streamrController.publishToPushStream(payload);
                 }, cbOpts);
             } catch (error) {
                 Logger.warn('Failed to refresh native channel subscription:', streamId.slice(0, 20) + '...');
@@ -403,24 +409,17 @@ class RelayManager {
         }
         
         const channels = [];
-        const dmPeers = []; // Mapping of peer addresses to names for DM notifications
-        
+        // DM peer address→name map is no longer shipped to the SW: sealed
+        // sender makes the SW unable to identify a DM's sender, so it would be
+        // unused peer-identity data sitting in the SW's IndexedDB. The push
+        // notification for a DM is deliberately generic (see sw.js).
+
         // Default storage endpoints - Pombo official storage node (July 2026)
         const DEFAULT_STORAGE_ENDPOINTS = [
             'https://blob-storage-streamr.online',
             'https://vps2.blob-storage-streamr.online',
         ];
-        
-        // Build DM peers mapping from all DM channels
-        for (const [streamId, channel] of channelManager.channels) {
-            if (channel.type === 'dm' && channel.peerAddress && channel.name) {
-                dmPeers.push({
-                    address: channel.peerAddress.toLowerCase(),
-                    name: channel.name
-                });
-            }
-        }
-        
+
         // Public/password channels (and DM inboxes)
         for (const streamId of this.subscribedChannels) {
             const channelInfo = channelManager.channels.get(streamId);
@@ -486,11 +485,10 @@ class RelayManager {
         
         navigator.serviceWorker.controller.postMessage({
             type: 'SYNC_CHANNELS',
-            channels,
-            dmPeers
+            channels
         });
-        
-        Logger.debug('Synced', channels.length, 'channels and', dmPeers.length, 'DM peers to Service Worker');
+
+        Logger.debug('Synced', channels.length, 'channels to Service Worker');
     }
     
     /**
@@ -517,7 +515,7 @@ class RelayManager {
             );
             
             // Publish to push stream
-            await streamrController.client.publish(CONFIG.pushStreamId, payload);
+            await streamrController.publishToPushStream(payload);
             
             // Save locally
             this.subscribedChannels.add(streamId);
@@ -577,7 +575,7 @@ class RelayManager {
             );
             
             // Publish to stream
-            await streamrController.client.publish(CONFIG.pushStreamId, payload);
+            await streamrController.publishToPushStream(payload);
             
             Logger.debug('Public channel wake signal sent, tag:', payload.tag);
             return true;
@@ -616,7 +614,7 @@ class RelayManager {
             );
             
             // Publish to push stream
-            await streamrController.client.publish(CONFIG.pushStreamId, payload);
+            await streamrController.publishToPushStream(payload);
             
             // Save locally
             this.subscribedNativeChannels.add(streamId);
@@ -675,7 +673,7 @@ class RelayManager {
             );
             
             // Publish to stream
-            await streamrController.client.publish(CONFIG.pushStreamId, payload);
+            await streamrController.publishToPushStream(payload);
             
             Logger.debug('Native channel wake signal sent, tag:', payload.tag);
             return true;

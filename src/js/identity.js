@@ -14,6 +14,7 @@ import { secureStorage } from './secureStorage.js';
 import { Logger } from './logger.js';
 import { cryptoWorkerPool } from './workers/cryptoWorkerPool.js';
 import { CONFIG } from './config.js';
+import { applyAccount } from './publisherProof.js';
 
 // ENS cache duration
 const ENS_CACHE_DURATION = CONFIG.identity.ensCacheDurationMs;
@@ -30,6 +31,9 @@ const ENS_PROVIDER_URLS = CONFIG.network.ensProviderUrls;
 // How long to skip a provider after it fails
 const PROVIDER_COOLDOWN_MS = CONFIG.identity.providerCooldownMs;
 
+// Gap between background queue lookups — keeps a busy channel from bursting
+const ENS_QUEUE_GAP_MS = CONFIG.identity.ensQueueGapMs;
+
 class IdentityManager {
     constructor() {
         this.ensCache = new Map();
@@ -42,6 +46,12 @@ class IdentityManager {
         this.pendingAvatarLookups = new Map(); // address -> Promise (in-flight dedup)
         this.username = null;
         this.MAX_ENS_CACHE_SIZE = CONFIG.identity.maxEnsCacheSize;
+
+        // Background ENS resolution (see queueENSResolution). Kept out of the
+        // verification path so seeing a message never triggers an RPC call.
+        this._ensQueue = new Set();     // pending addresses (lowercased)
+        this._ensQueueRunning = false;
+        this.onENSResolved = null;      // (address, name) => void — UI patch hook
     }
 
     /**
@@ -145,30 +155,14 @@ class IdentityManager {
      * @returns {Promise<Object>} - Signed message object
      */
     async createSignedMessage(text, channelId, replyTo = null) {
-        const sender = authManager.getAddress();
-        const timestamp = Date.now();
-        const messageId = this.generateMessageId();
-        
-        // Create deterministic message hash for signing
-        // Note: replyTo is NOT included in hash (it's metadata, not signed content)
-        const messageHash = this.createMessageHash(messageId, text, sender, timestamp, channelId);
-        
-        // Sign the hash
-        const signature = await authManager.signMessage(messageHash);
-        
-        const message = {
+        return applyAccount({
             type: 'text', // Explicit type for history filtering
-            id: messageId,
+            id: this.generateMessageId(),
             text: text,
-            sender: sender,
             senderName: this.username || null,
-            timestamp: timestamp,
-            channelId: channelId,
-            signature: signature,
+            timestamp: Date.now(),
             replyTo: replyTo // Reply context (null if not a reply)
-        };
-        
-        return message;
+        }, authManager.getAddress());
     }
 
     /**
@@ -200,39 +194,14 @@ class IdentityManager {
         convertedTo = null,
         qualityUsed = null
     }) {
-        const sender = authManager.getAddress();
-        const timestamp = Date.now();
-        const messageId = this.generateMessageId();
-
-        const messageHash = this.createImageManifestHash({
-            id: messageId,
-            imageId,
-            sender,
-            timestamp,
-            channelId,
-            originalMime,
-            finalMime,
-            finalSizeBytes,
-            chunkCount,
-            chunkHashes,
-            assembledSha256,
-            preservedOriginal,
-            convertedTo,
-            qualityUsed
-        });
-
-        const signature = await authManager.signMessage(messageHash);
-
-        return {
+        return applyAccount({
             type: 'image',
             transport: 'chunked',
             v: 2,
-            id: messageId,
+            id: this.generateMessageId(),
             imageId,
-            sender,
             senderName: this.username || null,
-            timestamp,
-            channelId,
+            timestamp: Date.now(),
             originalMime,
             finalMime,
             finalSizeBytes,
@@ -241,9 +210,8 @@ class IdentityManager {
             assembledSha256,
             preservedOriginal: !!preservedOriginal,
             convertedTo: convertedTo || null,
-            qualityUsed: Number.isFinite(qualityUsed) ? qualityUsed : null,
-            signature
-        };
+            qualityUsed: Number.isFinite(qualityUsed) ? qualityUsed : null
+        }, authManager.getAddress());
     }
 
     /**
@@ -265,32 +233,15 @@ class IdentityManager {
      * @returns {Promise<Object>}
      */
     async createSignedFileManifest({ channelId, metadata }) {
-        const sender = authManager.getAddress();
-        const timestamp = Date.now();
-        const messageId = this.generateMessageId();
-
-        const messageHash = this.createFileManifestHash({
-            id: messageId,
-            sender,
-            timestamp,
-            channelId,
-            metadata
-        });
-
-        const signature = await authManager.signMessage(messageHash);
-
-        return {
+        return applyAccount({
             type: 'file_announce',
             v: 2,
-            id: messageId,
-            sender,
+            id: this.generateMessageId(),
             senderName: this.username || null,
-            timestamp,
-            channelId,
+            timestamp: Date.now(),
             metadata,
-            signature,
             replyTo: null
-        };
+        }, authManager.getAddress());
     }
 
     /**
@@ -343,32 +294,15 @@ class IdentityManager {
      * @returns {Promise<Object>}
      */
     async createSignedStorageFileManifest({ channelId, metadata, id = null }) {
-        const sender = authManager.getAddress();
-        const timestamp = Date.now();
-        const messageId = id || this.generateMessageId();
-
-        const messageHash = this.createStorageFileManifestHash({
-            id: messageId,
-            sender,
-            timestamp,
-            channelId,
-            metadata
-        });
-
-        const signature = await authManager.signMessage(messageHash);
-
-        return {
+        return applyAccount({
             type: 'storage_file_announce',
             v: 1,
-            id: messageId,
-            sender,
+            id: id || this.generateMessageId(),
             senderName: this.username || null,
-            timestamp,
-            channelId,
+            timestamp: Date.now(),
             metadata,
-            signature,
             replyTo: null
-        };
+        }, authManager.getAddress());
     }
 
     /**
@@ -516,13 +450,47 @@ class IdentityManager {
         const { skipTimestampCheck = false } = options;
         
         try {
+            // No app-layer signature is the CURRENT format, not a failure (D6).
+            //
+            // Two signatures used to cover the same claim. Streamr signs the
+            // envelope, authenticating the ephemeral publisher; the proof in the
+            // payload authenticates the account behind it, and streamr.js
+            // verified it at ingest before this message reached anyone. Signing
+            // the body a third time added no authority — it only put `sender`
+            // and `signature` in the clear, re-exposing the very address the
+            // ephemeral publisher exists to hide.
+            //
+            // `account` is therefore already cryptographically established here.
+            // Trusting it is not a weakening: refusing it would reject every
+            // message the app now produces.
             if (!message.signature) {
-                return { 
-                    valid: false, 
-                    error: 'No signature',
-                    trustLevel: -1 
+                if (!message.account) {
+                    return { valid: false, error: 'No account', trustLevel: -1 };
+                }
+
+                if (!skipTimestampCheck) {
+                    const timestampResult = this.validateTimestamp(message.timestamp);
+                    if (!timestampResult.valid) {
+                        return {
+                            valid: false,
+                            error: timestampResult.error,
+                            trustLevel: -1,
+                            isReplayAttempt: true
+                        };
+                    }
+                }
+
+                const ens = this.getCachedENS(message.account);
+                return {
+                    valid: true,
+                    recoveredAddress: message.account,
+                    trustLevel: this._getTrustLevelSync(message.account, ens),
+                    ensName: ens
                 };
             }
+
+            // Everything below is the legacy path: messages published before the
+            // migration, still readable from storage. Kept only for history.
 
             // Validate timestamp to prevent replay attacks (fast, main thread)
             if (!skipTimestampCheck) {
@@ -600,8 +568,18 @@ class IdentityManager {
                 };
             }
 
-            // Resolve ENS once and derive trust level from result (avoids double lookup)
-            const ensName = await this.resolveENS(verification.recoveredAddress);
+            // ENS is read from cache only — NEVER resolved here.
+            //
+            // This runs for every message the user sees, including history that
+            // may never be rendered. Resolving here meant handing the full list
+            // of people you talk to, in the clear, to whichever public RPC
+            // answered — a social-graph leak entirely outside Streamr's reach.
+            //
+            // Resolution is now lazy: the UI calls queueENSResolution() for the
+            // senders it actually paints, and re-renders when a name lands. The
+            // UI already tolerates ENS arriving late (see ChannelListUI's
+            // _resolvePreviewSenders and ChatAreaUI's _resolveMessageAvatars).
+            const ensName = this.getCachedENS(verification.recoveredAddress);
             const trustLevel = this._getTrustLevelSync(verification.recoveredAddress, ensName);
 
             return {
@@ -621,6 +599,149 @@ class IdentityManager {
     }
 
     // ==================== ENS RESOLUTION ====================
+
+    /**
+     * Read a still-valid ENS name from cache. Never touches the network.
+     *
+     * Used by the hot verification path, which must not make an RPC call per
+     * message seen. Honours the same TTLs as resolveENS (24h positive,
+     * 15min null) so a stale entry doesn't pin a wrong name forever.
+     *
+     * @param {string} address - Ethereum address
+     * @returns {string|null} - ENS name, or null if unknown / expired / absent
+     */
+    getCachedENS(address) {
+        if (!address || typeof address !== 'string') return null;
+        const cached = this.ensCache.get(address.toLowerCase());
+        if (!cached) return null;
+        const duration = cached.name ? ENS_CACHE_DURATION : ENS_NULL_CACHE_DURATION;
+        if (Date.now() - cached.timestamp >= duration) return null;
+        return cached.name;
+    }
+
+    /**
+     * Queue a low-priority background ENS resolution.
+     *
+     * The UI calls this for addresses it is actually painting. Requests are
+     * serialized with a small gap so that opening a busy channel doesn't fire
+     * fifty lookups at once — which, with decoys enabled, would be two hundred
+     * requests and would get the free RPC tiers to rate-limit us.
+     *
+     * Fire-and-forget: resolution lands in the cache and `onENSResolved` lets
+     * the UI patch what it already rendered.
+     *
+     * @param {string} address - Ethereum address
+     */
+    queueENSResolution(address) {
+        if (!address || typeof address !== 'string') return;
+        const normalized = address.toLowerCase();
+
+        // Skip anything already answered within its TTL — including a cached
+        // "no ENS", otherwise addresses without a name would be re-queried on
+        // every render.
+        const cached = this.ensCache.get(normalized);
+        if (cached) {
+            const duration = cached.name ? ENS_CACHE_DURATION : ENS_NULL_CACHE_DURATION;
+            if (Date.now() - cached.timestamp < duration) return;
+        }
+
+        if (this._ensQueue.has(normalized)) return;
+        this._ensQueue.add(normalized);
+        this._drainENSQueue();
+    }
+
+    /**
+     * Serialized drain of the background resolution queue.
+     * @private
+     */
+    async _drainENSQueue() {
+        if (this._ensQueueRunning) return;
+        this._ensQueueRunning = true;
+        try {
+            while (this._ensQueue.size > 0) {
+                const next = this._ensQueue.values().next().value;
+                this._ensQueue.delete(next);
+                let name = null;
+                try {
+                    name = await this.resolveENS(next);
+                } catch (error) {
+                    Logger.debug('ENS queue: lookup failed for', next, error.message);
+                }
+                if (name) {
+                    try {
+                        this.onENSResolved?.(next, name);
+                    } catch (error) {
+                        Logger.debug('ENS queue: handler threw (non-critical):', error.message);
+                    }
+                }
+                if (this._ensQueue.size > 0) {
+                    await new Promise(resolve => setTimeout(resolve, ENS_QUEUE_GAP_MS));
+                }
+            }
+        } finally {
+            this._ensQueueRunning = false;
+        }
+    }
+
+    /**
+     * Reverse-lookup `address`, buried among throwaway ones.
+     *
+     * The RPC operator sees N+1 addresses per query and cannot tell which one
+     * we care about — the same k-anonymity trick already used for push
+     * notification tags (see pushProtocol.js).
+     *
+     * All N+1 go out **concurrently and in shuffled order**. Issuing the real
+     * one first and the decoys after would leave the ordering as a giveaway,
+     * and the decoys would buy nothing.
+     *
+     * Decoys are inert: their results are discarded and their failures
+     * swallowed, so a dud decoy can never put a working provider into cooldown
+     * or land in ensCache. Only the real lookup's outcome propagates.
+     *
+     * @private
+     * @param {Object} provider - ethers provider to query
+     * @param {string} address - The address we actually care about
+     * @param {boolean} withCover - false to skip the decoys entirely
+     * @returns {Promise<string|null>} - ENS name for `address`, or null
+     */
+    async _lookupWithDecoys(provider, address, withCover = true) {
+        const count = withCover ? (CONFIG.identity.ensDecoyCount || 0) : 0;
+        if (count <= 0) {
+            return provider.lookupAddress(address);
+        }
+
+        const slots = [{ real: true, addr: address }];
+        try {
+            for (let i = 0; i < count; i++) {
+                slots.push({ real: false, addr: ethers.hexlify(ethers.randomBytes(20)) });
+            }
+        } catch {
+            // No RNG available — resolve without cover rather than not at all.
+            return provider.lookupAddress(address);
+        }
+
+        // Fisher-Yates with crypto randomness, so the position of the real
+        // address is not derivable from a predictable PRNG sequence.
+        const rand = crypto.getRandomValues(new Uint32Array(slots.length));
+        for (let i = slots.length - 1; i > 0; i--) {
+            const j = rand[i] % (i + 1);
+            [slots[i], slots[j]] = [slots[j], slots[i]];
+        }
+
+        let realResult = null;
+        let realError = null;
+        await Promise.all(slots.map(async (slot) => {
+            try {
+                const result = await provider.lookupAddress(slot.addr);
+                if (slot.real) realResult = result;
+            } catch (error) {
+                if (slot.real) realError = error;
+            }
+        }));
+
+        if (realError) throw realError;
+        return realResult;
+    }
 
     /**
      * Resolve ENS name for an address
@@ -670,6 +791,7 @@ class IdentityManager {
 
         const now = Date.now();
         const nullProviders = []; // track which providers returned null
+        let coverUsed = false;    // decoys are fired once per resolution, not per provider
 
         // Try ALL providers — some have broken ENS resolution (return null even for valid names)
         // A positive result from ANY provider wins immediately
@@ -681,8 +803,14 @@ class IdentityManager {
             }
 
             try {
-                const name = await provider.lookupAddress(address);
-                
+                // Cover traffic goes out ONCE per resolution, not once per
+                // provider. _doResolveENS walks all providers on a null result,
+                // so decoying every attempt meant 4x5 = 20 requests to answer
+                // "does this address have ENS?" — enough to get 429'd off the
+                // free tiers, which made real lookups fail at random.
+                const name = await this._lookupWithDecoys(provider, address, !coverUsed);
+                coverUsed = true;
+
                 // Provider worked — clear any cooldown
                 this.providerHealth.delete(url);
 

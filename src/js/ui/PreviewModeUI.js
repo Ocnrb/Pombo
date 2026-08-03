@@ -618,7 +618,7 @@ class PreviewModeUI {
 
         // Handle reactions in preview mode
         if (message?.type === 'reaction') {
-            const reactionUser = message.user || message.senderId;
+            const reactionUser = message.user || message.account;
             if (!reactionUser) return;
             reactionManager.handleIncomingReaction(
                 message.messageId,
@@ -760,7 +760,7 @@ class PreviewModeUI {
      * the timeline so the message disappears (delete) or updates (edit)
      * without waiting for `onHistoryComplete` — the SDK resend iterator
      * is unreliable on some streams and may never signal `done`.
-     * @param {Object} override - { type:'edit'|'delete', targetId, senderId, text?, timestamp }
+     * @param {Object} override - { type:'edit'|'delete', targetId, account, text?, timestamp }
      */
     handlePreviewOverride(override) {
         if (!this.previewChannel) return;
@@ -792,7 +792,7 @@ class PreviewModeUI {
         for (const [targetId, override] of this.previewChannel._pendingOverrides) {
             const msg = this.previewChannel.messages.find(m => m.id === targetId);
             if (!msg) continue;
-            if (msg.sender?.toLowerCase() !== override.senderId?.toLowerCase()) continue;
+            if (msg.sender?.toLowerCase() !== override.account?.toLowerCase()) continue;
             if (override.type === 'edit' && override.text) {
                 msg.text = override.text;
                 msg._edited = true;
@@ -812,7 +812,7 @@ class PreviewModeUI {
      * @private
      */
     _applyOrQueuePreviewOverride(override) {
-        if (!this.previewChannel || !override?.senderId || !override?.targetId) return;
+        if (!this.previewChannel || !override?.account || !override?.targetId) return;
 
         const original = this.previewChannel.messages.find(m => m.id === override.targetId);
         if (!original) {
@@ -826,7 +826,7 @@ class PreviewModeUI {
             return;
         }
 
-        if (original.sender?.toLowerCase() !== override.senderId.toLowerCase()) return;
+        if (original.sender?.toLowerCase() !== override.account.toLowerCase()) return;
 
         if (override.type === 'edit' && override.text) {
             original.text = override.text;
@@ -995,7 +995,7 @@ class PreviewModeUI {
                 }
 
                 if (msg?.type === 'reaction') {
-                    const reactionUser = msg.user || msg.senderId;
+                    const reactionUser = msg.user || msg.account;
                     if (reactionUser) {
                         reactionManager.handleIncomingReaction(
                             msg.messageId, msg.emoji, reactionUser, msg.action || 'add'

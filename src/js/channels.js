@@ -2216,7 +2216,7 @@ class ChannelManager {
                         : null,
                     allowOverridesInContentPartition: !hasControlPartition,
                     onControl: (data) => this.handleControlMessage(messageStreamId, data),
-                    onMedia: (data, senderId) => this.handleMediaMessage(messageStreamId, data, senderId)
+                    onMedia: (data, account) => this.handleMediaMessage(messageStreamId, data, account)
                 },
                 pwd,
                 STREAM_CONFIG.INITIAL_MESSAGES,
@@ -2304,17 +2304,17 @@ class ChannelManager {
 
     /**
      * Handle an edit or delete override message (real-time or from history)
-     * Validates senderId matches original message sender, then applies the override.
+     * Validates account matches original message sender, then applies the override.
      * @param {string} streamId - Stream ID
-     * @param {Object} data - Override message { type: 'edit'|'delete', targetId, text?, senderId, timestamp }
+     * @param {Object} data - Override message { type: 'edit'|'delete', targetId, text?, account, timestamp }
      * @param {boolean} [fromHistory=false] - Whether this is from history replay (skip notification)
      */
     handleOverrideMessage(streamId, data, fromHistory = false) {
         const channel = this.channels.get(streamId);
         if (!channel) return;
 
-        const senderId = data.senderId;
-        if (!senderId || !data.targetId) return;
+        const account = data.account;
+        if (!account || !data.targetId) return;
 
         // Find the original message
         const original = channel.messages.find(m => m.id === data.targetId);
@@ -2331,9 +2331,9 @@ class ChannelManager {
         }
 
         // SECURITY: Only the original sender can edit/delete their message
-        if (original.sender?.toLowerCase() !== senderId.toLowerCase()) {
+        if (original.sender?.toLowerCase() !== account.toLowerCase()) {
             Logger.warn('Override rejected: sender mismatch', { 
-                originalSender: original.sender, overrideSender: senderId 
+                originalSender: original.sender, overrideSender: account 
             });
             return;
         }
@@ -2372,7 +2372,7 @@ class ChannelManager {
             if (!msg) continue;
             
             // Verify sender match
-            if (msg.sender?.toLowerCase() !== override.senderId?.toLowerCase()) continue;
+            if (msg.sender?.toLowerCase() !== override.account?.toLowerCase()) continue;
             
             if (override.type === 'edit' && override.text) {
                 msg.text = override.text;
@@ -2574,8 +2574,8 @@ class ChannelManager {
             this.onlineUsers.set(streamId, new Map());
         }
         
-        // Use senderId from Streamr SDK (cryptographically guaranteed) over self-reported userId
-        const userId = presenceData.senderId || presenceData.userId;
+        // Use account from Streamr SDK (cryptographically guaranteed) over self-reported userId
+        const userId = presenceData.account || presenceData.userId;
         if (!userId) return;
 
         const users = this.onlineUsers.get(streamId);
@@ -2600,31 +2600,21 @@ class ChannelManager {
         // Use ephemeral stream for presence (not stored)
         const ephemeralStreamId = channel.ephemeralStreamId || deriveEphemeralId(messageStreamId);
         
-        // DM channels: E2E encrypt, minimal payload (senderId from SDK provides identity)
+        // DM channels: sealed sender, minimal payload (identity travels inside)
         if (channel.type === 'dm' && channel.peerAddress) {
-            const privateKey = authManager.wallet?.privateKey;
-            if (privateKey) {
-                const peerPubKey = await dmManager.getPeerPublicKey(channel.peerAddress);
-                if (peerPubKey) {
-                    try {
-                        const aesKey = await dmCrypto.getSharedKey(privateKey, channel.peerAddress, peerPubKey);
-                        const encrypted = await dmCrypto.encrypt({
-                            type: 'presence',
-                            nickname: identityManager.getUsername?.() || null,
-                            lastActive: Date.now()
-                        }, aesKey);
-                        // Set Pombo key for publishing to peer's ephemeral stream
-                        await streamrController.setDMPublishKey(ephemeralStreamId);
-                        await streamrController.publishControl(ephemeralStreamId, encrypted, null);
-                    } catch (e) {
-                        Logger.warn('Failed to publish DM presence:', e.message);
-                    }
-                }
+            try {
+                await dmManager.sealAndPublish(ephemeralStreamId, channel.peerAddress, {
+                    type: 'presence',
+                    nickname: identityManager.getUsername?.() || null,
+                    lastActive: Date.now()
+                }, STREAM_CONFIG.EPHEMERAL_STREAM.CONTROL);
+            } catch (e) {
+                Logger.warn('Failed to publish DM presence:', e.message);
             }
             return;
         }
         
-        // Non-DM channels: no self-reported userId/address (senderId from SDK provides identity)
+        // Non-DM channels: no self-reported userId/address (account from SDK provides identity)
         const myNickname = identityManager.getUsername?.() || null;
         
         const presenceData = {
@@ -2700,9 +2690,9 @@ class ChannelManager {
         if (!data || typeof data !== 'object') return;
         
         // Handle different control message types
-        // Use senderId from Streamr SDK (cryptographically guaranteed) instead of self-reported fields
+        // Use account from Streamr SDK (cryptographically guaranteed) instead of self-reported fields
         if (data.type === 'typing') {
-            this.notifyHandlers('typing', { streamId, user: data.senderId || data.user, nickname: data.nickname || null });
+            this.notifyHandlers('typing', { streamId, user: data.account || data.user, nickname: data.nickname || null });
         } else if (data.type === 'presence') {
             // Handle presence update
             this.handlePresenceMessage(streamId, data);
@@ -2717,7 +2707,7 @@ class ChannelManager {
             // itself cannot be used to inject state.
             const channel = this.channels.get(streamId);
             if (!channel) return;
-            const sender = (data.senderId || data.user || '').toLowerCase();
+            const sender = (data.account || data.user || '').toLowerCase();
             const owner = (channel.createdBy || '').toLowerCase();
             if (owner && sender && sender !== owner) {
                 Logger.debug('Ignoring admin_invalidate from non-admin:', sender);
@@ -2727,7 +2717,7 @@ class ChannelManager {
             if (incomingRev <= (channel.adminRev || 0)) return;
             if (!this._isValidAdminState(data.snapshot)) return;
 
-            // Sender authenticity is already validated above (senderId ===
+            // Sender authenticity is already validated above (account ===
             // channel.createdBy). Inject createdBy into the snapshot so
             // applyAdminState's owner check passes even if the publisher
             // omitted it from the body.
@@ -2742,7 +2732,7 @@ class ChannelManager {
             }
         } else if (data.type === 'reaction') {
             // Someone reacted to a message - store in memory only
-            const reactionUser = data.senderId || data.user;
+            const reactionUser = data.account || data.user;
             const channel = this.channels.get(streamId);
             if (channel && data.messageId && data.emoji && reactionUser) {
                 this.storeReaction(channel, data.messageId, data.emoji, reactionUser, data.action || 'add');
@@ -3106,9 +3096,9 @@ class ChannelManager {
      * Handle media message (JSON from MEDIA_SIGNALS or binary from MEDIA_DATA)
      * @param {string} streamId - Stream ID
      * @param {Object|Uint8Array} data - Media data (JSON object or binary)
-     * @param {string} [senderId] - Publisher ID (provided for binary messages)
+     * @param {string} [account] - Publisher ID (provided for binary messages)
      */
-    handleMediaMessage(streamId, data, senderId) {
+    handleMediaMessage(streamId, data, account) {
         // CRITICAL: Check if still connected before processing
         if (!authManager.isConnected()) {
             return;
@@ -3116,7 +3106,7 @@ class ChannelManager {
         
         // Binary data from MEDIA_DATA partition — delegate to mediaController for decoding
         if (data instanceof Uint8Array) {
-            mediaController.handleMediaMessage(streamId, data, senderId);
+            mediaController.handleMediaMessage(streamId, data, account);
             return;
         }
         
@@ -3475,7 +3465,7 @@ class ChannelManager {
 
                     // Route reactions to storeReaction (NOT channel.messages)
                     if (msg?.type === 'reaction') {
-                        const reactionUser = msg.senderId || msg.user;
+                        const reactionUser = msg.account || msg.user;
                         if (reactionUser && msg.messageId && msg.emoji) {
                             this.storeReaction(channel, msg.messageId, msg.emoji, reactionUser, msg.action || 'add');
                         }
@@ -3969,23 +3959,17 @@ class ChannelManager {
             // Use ephemeral stream for typing (not stored)
             const ephemeralStreamId = channel.ephemeralStreamId || deriveEphemeralId(messageStreamId);
 
-            // DM channels: E2E encrypt ephemeral, no user field (senderId from SDK provides identity)
+            // DM channels: sealed sender, no user field (identity travels inside)
             if (channel.type === 'dm' && channel.peerAddress) {
-                const privateKey = authManager.wallet?.privateKey;
-                if (privateKey) {
-                    const peerPubKey = await dmManager.getPeerPublicKey(channel.peerAddress);
-                    if (peerPubKey) {
-                        const aesKey = await dmCrypto.getSharedKey(privateKey, channel.peerAddress, peerPubKey);
-                        const encrypted = await dmCrypto.encrypt({ type: 'typing', nickname: identityManager.getUsername?.() || null, timestamp: Date.now() }, aesKey);
-                        // Set Pombo key for publishing to peer's ephemeral stream
-                        await streamrController.setDMPublishKey(ephemeralStreamId);
-                        await streamrController.publishControl(ephemeralStreamId, encrypted, null);
-                    }
-                }
+                await dmManager.sealAndPublish(ephemeralStreamId, channel.peerAddress, {
+                    type: 'typing',
+                    nickname: identityManager.getUsername?.() || null,
+                    timestamp: Date.now()
+                }, STREAM_CONFIG.EPHEMERAL_STREAM.CONTROL);
                 return;
             }
 
-            // Non-DM channels: no self-reported user field (senderId from SDK provides identity)
+            // Non-DM channels: no self-reported user field (account from SDK provides identity)
             await streamrController.publishControl(
                 ephemeralStreamId,
                 { type: 'typing', nickname: identityManager.getUsername?.() || null, timestamp: Date.now() },
@@ -4074,25 +4058,15 @@ class ChannelManager {
                 timestamp: Date.now()
             };
 
-            // DM channels: E2E encrypt reaction before publishing to peer's inbox
+            // DM channels: sealed sender before publishing to peer's inbox
             if (channel.type === 'dm' && channel.peerAddress) {
-                const privateKey = authManager.wallet?.privateKey;
                 const myAddress = authManager.getAddress();
-                if (privateKey) {
-                    const peerPubKey = await dmManager.getPeerPublicKey(channel.peerAddress);
-                    if (peerPubKey) {
-                        const aesKey = await dmCrypto.getSharedKey(privateKey, channel.peerAddress, peerPubKey);
-                        const encrypted = await dmCrypto.encrypt(reaction, aesKey);
-                        // Set Pombo key for publishing to peer's inbox
-                        await streamrController.setDMPublishKey(streamId);
-                        await streamrController.publishReaction(streamId, encrypted, null);
-                        
-                        // Persist locally — we won't receive our own reaction back from peer's inbox
-                        await secureStorage.addSentReaction(streamId, messageId, emoji, myAddress, action);
-                    } else {
-                        Logger.warn('DM reaction: peer public key not available');
-                    }
-                }
+                await dmManager.sealAndPublish(
+                    streamId, channel.peerAddress, reaction,
+                    STREAM_CONFIG.MESSAGE_STREAM.MESSAGES);
+
+                // Persist locally — we won't receive our own reaction back from peer's inbox
+                await secureStorage.addSentReaction(streamId, messageId, emoji, myAddress, action);
             } else {
                 // Regular channels: send to MESSAGE stream (stored) via publishReaction
                 await streamrController.publishReaction(

@@ -637,7 +637,12 @@ class ChatAreaUI {
             }
 
             const badge = this.getVerificationBadge(msg, isOwn);
-            let displayName = msg.verified?.ensName || msg.senderName;
+            // Read ENS from cache at render time, exactly like the avatar just
+            // below. `msg.verified.ensName` is filled once, at verification —
+            // if the cache was cold then, it stays null on the object forever,
+            // so relying on it alone loses the name on every re-render.
+            let displayName = identityManager.getCachedENS?.(msg.sender)
+                || msg.verified?.ensName || msg.senderName;
             if (!displayName) {
                 displayName = formatAddress(msg.sender);
             }
@@ -708,6 +713,64 @@ class ChatAreaUI {
         // now only the user's own avatar was ever resolved (app.js startup),
         // so other users' ENS avatars never appeared in the chat.
         this._resolveMessageAvatars(messagesForRender);
+
+        // And ENS names. Message verification no longer resolves ENS (it would
+        // leak the whole contact list to public RPCs, one lookup per message
+        // seen), so the only lookups that happen are for senders actually
+        // painted on screen.
+        this._resolveMessageNames(messagesForRender);
+    }
+
+    /**
+     * Queue background ENS name resolution for the senders just rendered.
+     *
+     * `renderMessages` reads the name synchronously from `msg.verified.ensName`,
+     * which identityManager now fills from cache only. Anything not yet cached
+     * renders as the payload `senderName` or a short address, and gets patched
+     * in place when the lookup lands.
+     *
+     * @private
+     * @param {Array} messages - Messages that were just rendered
+     */
+    _resolveMessageNames(messages) {
+        if (!Array.isArray(messages)) return;
+        const seen = new Set();
+        for (const msg of messages) {
+            const sender = msg?.sender;
+            if (typeof sender !== 'string' || !sender) continue;
+            const normalized = sender.toLowerCase();
+            if (seen.has(normalized)) continue;
+            seen.add(normalized);
+            try {
+                identityManager.queueENSResolution?.(sender);
+            } catch { /* non-critical */ }
+        }
+    }
+
+    /**
+     * Replace the display name of every rendered message from `normalizedSender`
+     * with a freshly resolved ENS name. Mirrors _patchSenderAvatars — patching
+     * in place avoids a full re-render just because a name arrived.
+     *
+     * ENS wins over the payload's self-reported `senderName`, matching the
+     * precedence in renderMessages.
+     *
+     * @private
+     * @param {string} normalizedSender - Lowercased sender address
+     * @param {string} name - Resolved ENS name
+     */
+    patchSenderNames(normalizedSender, name) {
+        if (!this.messagesArea || !name) return;
+        // Same truncation as MessageRenderer.buildMessageHTML — a patched name
+        // must not render longer than one that was there from the start.
+        const truncated = name.length > 18 ? name.substring(0, 18) + '...' : name;
+        const entries = this.messagesArea.querySelectorAll('.message-entry[data-sender]');
+        for (const entry of entries) {
+            const sender = entry.getAttribute('data-sender');
+            if (!sender || sender.toLowerCase() !== normalizedSender) continue;
+            const nameEl = entry.querySelector('.message-sender-name');
+            if (nameEl) nameEl.textContent = truncated;
+        }
     }
 
     /**
@@ -831,7 +894,9 @@ class ChatAreaUI {
         const msgDate = new Date(msg.timestamp);
         const time = msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         const badge = this.getVerificationBadge(msg, isOwn);
-        let displayName = msg.verified?.ensName || msg.senderName;
+        // Cache-first, same reason as in renderMessages
+        let displayName = identityManager.getCachedENS?.(msg.sender)
+            || msg.verified?.ensName || msg.senderName;
         if (!displayName) displayName = formatAddress(msg.sender);
 
         // Preserve existing grouping/spacing classes from the DOM so we don't
@@ -1027,7 +1092,8 @@ class ChatAreaUI {
         const msg = channel.messages.find(m => (m.id || m.timestamp) === msgId);
         if (!msg) return;
         
-        const displayName = msg.verified?.ensName || msg.senderName || formatAddress(msg.sender);
+        const displayName = identityManager.getCachedENS?.(msg.sender)
+            || msg.verified?.ensName || msg.senderName || formatAddress(msg.sender);
         
         this.replyingTo = {
             id: msgId,
@@ -1252,7 +1318,10 @@ class ChatAreaUI {
      */
     getVerificationBadge(msg, isOwn = false) {
         const trustLevel = msg.verified?.trustLevel ?? 0;
-        const hasENS = trustLevel === 1 || (trustLevel >= 1 && msg.verified?.ensName);
+        // Cache-first so the badge upgrades once ENS lands, instead of being
+        // frozen at whatever the cache held when the message was verified.
+        const ensName = identityManager.getCachedENS?.(msg.sender) || msg.verified?.ensName;
+        const hasENS = trustLevel === 1 || (trustLevel >= 1 && ensName);
 
         // ENS verified badge — green checkmark inside organic circle
         const ensBadgeSvg = `<svg class="inline-block" style="vertical-align: -1px" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="#4ade80" stroke-width="2" fill="none"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`;

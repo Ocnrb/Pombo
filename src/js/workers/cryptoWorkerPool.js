@@ -60,7 +60,13 @@ class CryptoWorkerPool {
             const workerPromises = [];
             
             for (let i = 0; i < this.poolSize; i++) {
-                const worker = new Worker('/js/crypto.worker.bundle.js');
+                // Resolve against the document, not the server root. An absolute
+                // '/js/...' only works when the app is deployed at the domain
+                // root; served from a subfolder (a local static server, a
+                // preview deploy, a reverse proxy) it 404s and the whole pool
+                // dies — taking signature verification down with it.
+                // index.html already loads its bundles as './js/...'.
+                const worker = new Worker(new URL('js/crypto.worker.bundle.js', document.baseURI));
                 
                 // Set up message handler
                 worker.onmessage = (e) => this.handleMessage(e.data, i);

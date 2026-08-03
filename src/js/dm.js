@@ -5,14 +5,17 @@
  * Architecture:
  * - Each user has a deterministic inbox: {address}/Pombo-DM-1 (stored) + {address}/Pombo-DM-2 (ephemeral)
  * - Permissions: public PUBLISH, owner-only SUBSCRIBE (protects social graph)
- * - Streamr-layer encryption uses pre-agreed "Pombo key" (allows history fetch when publisher offline)
- * - Real E2E security: app-layer ECDH + AES-256-GCM encryption per conversation
+ * - No Streamr-layer encryption (P6): everything publishes EncryptionType.NONE
+ *   under a throwaway key; E2E security is the sealed-sender v2 envelope
+ *   (dmCrypto.seal — ECDH against a per-message ephemeral key + AES-256-GCM)
  * - To DM Bob: Alice publishes to Bob's inbox. Bob reads from his own inbox.
- * - The senderId (Streamr publisherId) identifies who sent each message.
+ * - The sender is identified AFTER opening, from the proof inside the
+ *   ciphertext — the publisherId is a throwaway and names nobody.
  * - Conversations are keyed by peerAddress and stored locally.
  */
 
 import { Logger } from './logger.js';
+import { applyAccount, stripLocalFields } from './publisherProof.js';
 import { CONFIG } from './config.js';
 import { CryptoError } from './utils/errors.js';
 import { streamrController, STREAM_CONFIG } from './streamr.js';
@@ -219,12 +222,6 @@ class DMManager {
         try {
             Logger.info('DM: Subscribing to inbox', this.inboxMessageStreamId);
 
-            // Add decrypt keys for all known conversation peers
-            // This allows us to decrypt messages from senders who used the Pombo key
-            for (const peerAddress of this.conversations.keys()) {
-                await streamrController.addDMDecryptKey(peerAddress);
-            }
-
             // Subscribe to message stream (DM-1 partition 0) with history
             this.inboxSubscription = await streamrController.subscribeWithHistory(
                 this.inboxMessageStreamId,
@@ -333,11 +330,6 @@ class DMManager {
         }
 
         try {
-            // Add decrypt keys for known peers (for ephemeral control messages)
-            for (const peerAddress of this.conversations.keys()) {
-                await streamrController.addDMDecryptKey(peerAddress);
-            }
-
             // Partition 0: Control (presence, typing)
             this.inboxEphemeralSubscription = await streamrController.subscribeWithHistory(
                 this.inboxEphemeralStreamId,
@@ -369,7 +361,7 @@ class DMManager {
                 await streamrController.subscribeToPartition(
                     this.inboxEphemeralStreamId,
                     STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_DATA,
-                    (data, senderId) => this.routeInboxMedia(data, senderId),
+                    (data, account) => this.routeInboxMedia(data, account),
                     null
                 );
             }
@@ -415,10 +407,176 @@ class DMManager {
     }
 
     /**
+     * Seal a payload for a peer and publish it under a throwaway identity.
+     *
+     * The v1 path published with our own wallet as the Streamr publisher, so
+     * the (sender → recipient) edge sat in the clear on the inbox stream: the
+     * recipient is in the stream ID, and we were in the publisherId. Anyone
+     * running a storage node, or joining the partition topology, could read the
+     * social graph straight off the wire.
+     *
+     * Here the ephemeral key produced by `seal()` doubles as the Streamr
+     * publishing identity, so the publisherId is a throwaway address too. The
+     * real sender travels inside the ciphertext, where only the recipient
+     * reaches it.
+     *
+     * Published with `encryptionType: NONE` (see streamrController.publishAs):
+     * the SDK's own AES layer would drag the group-key exchange back in, and it
+     * was never protecting anything — its key is a constant in this repo.
+     *
+     * @param {string} peerInboxStreamId - Peer's inbox (message stream)
+     * @param {string} peerAddress - Peer's address
+     * @param {Object} payload - Plaintext payload to seal
+     * @param {number} [partition=0] - Message-stream partition
+     * @returns {Promise<Object>} - The published StreamMessage
+     */
+    async sealAndPublish(peerInboxStreamId, peerAddress, payload, partition = STREAM_CONFIG.MESSAGE_STREAM.MESSAGES) {
+        const sealed = await this.sealFor(peerAddress, payload);
+        return this.publishSealed(peerInboxStreamId, sealed, partition);
+    }
+
+    /**
+     * Seal a payload for a peer without publishing it.
+     *
+     * Split out of sealAndPublish for callers that must know the envelope's
+     * wire size before committing to it — the stored-image path has a hard
+     * per-payload byte limit, and sizing one envelope then sending a freshly
+     * sealed second one would measure a different ephemeral key than the one
+     * actually sent.
+     *
+     * @param {string} peerAddress - Peer's address
+     * @param {Object} payload - Plaintext payload to seal
+     * @returns {Promise<{envelope: Object, ephemeralPrivateKey: string}>}
+     */
+    async sealFor(peerAddress, payload) {
+        const privateKey = authManager.wallet?.privateKey;
+        if (!privateKey) throw new Error('Cannot send DM: no private key');
+
+        const peerPubKey = await this.getPeerPublicKey(peerAddress);
+        if (!peerPubKey) {
+            throw new Error('Cannot send DM: peer public key not available. The recipient may need to open Pombo first to create their inbox.');
+        }
+
+        // Same strip as the channel path (D6): the seal already proves who we
+        // are, so `sender`/`account` inside would be an unverified second copy
+        // of a claim the proof settles — and openDMEnvelope overwrites them from
+        // the proof on arrival regardless.
+        return dmCrypto.seal(stripLocalFields(payload), {
+            senderPrivateKey: privateKey,
+            recipientAddress: peerAddress,
+            recipientPublicKey: peerPubKey
+        });
+    }
+
+    /**
+     * Publish an already-sealed envelope under its own ephemeral identity.
+     *
+     * @param {string} peerInboxStreamId - Peer's inbox (message stream)
+     * @param {{envelope: Object, ephemeralPrivateKey: string}} sealed - From sealFor()
+     * @param {number} [partition=0] - Message-stream partition
+     * @returns {Promise<Object>} - The published StreamMessage
+     */
+    /**
+     * Build a binary sealer for one transfer to one peer.
+     *
+     * The caller must hold on to it for the whole transfer: it carries the
+     * single ephemeral identity every piece is published under, so creating one
+     * per piece would both waste an ECDH and hand an observer a fresh key to
+     * count pieces with.
+     *
+     * @param {string} peerAddress - Peer's address
+     * @returns {Promise<{ephemeralPublicKey: string, seal: Function}>}
+     */
+    async createBinarySealer(peerAddress) {
+        const privateKey = authManager.wallet?.privateKey;
+        if (!privateKey) throw new Error('Cannot send DM media: no private key');
+
+        const peerPubKey = await this.getPeerPublicKey(peerAddress);
+        if (!peerPubKey) {
+            throw new Error('Cannot send DM media: peer public key not available');
+        }
+
+        const sealer = await dmCrypto.createBinarySealer({
+            senderPrivateKey: privateKey,
+            recipientAddress: peerAddress,
+            recipientPublicKey: peerPubKey
+        });
+
+        // The same ephemeral key doubles as the Streamr publisher, exactly as in
+        // sealAndPublish. It costs nothing: `epk` already travels in the
+        // envelope's cleartext header, so the publisherId reveals no more.
+        const EthereumKeyPairIdentity = window.EthereumKeyPairIdentity;
+        if (!EthereumKeyPairIdentity) {
+            throw new Error('EthereumKeyPairIdentity not exposed — check streamr-bundle.js');
+        }
+
+        return {
+            seal: sealer.seal,
+            identity: EthereumKeyPairIdentity.fromPrivateKey(sealer.ephemeralPrivateKey)
+        };
+    }
+
+    async publishSealed(peerInboxStreamId, sealed, partition = STREAM_CONFIG.MESSAGE_STREAM.MESSAGES) {
+        const EthereumKeyPairIdentity = window.EthereumKeyPairIdentity;
+        if (!EthereumKeyPairIdentity) {
+            throw new Error('EthereumKeyPairIdentity not exposed — check streamr-bundle.js');
+        }
+        const ephemeralIdentity = EthereumKeyPairIdentity.fromPrivateKey(sealed.ephemeralPrivateKey);
+
+        return streamrController.publishAs(
+            ephemeralIdentity, peerInboxStreamId, partition, sealed.envelope);
+    }
+
+    /**
+     * Open an incoming DM envelope, whichever scheme it uses.
+     *
+     * v2 (sealed): the sender is unknown until the envelope is open — that is
+     * the point. `data.account`, stamped at ingest from the publisherId, is a
+     * throwaway address and gets REPLACED by the real sender recovered from the
+     * proof inside.
+     *
+     * v1 (legacy): the sender had to be known up front to pick the key, so
+     * `data.account` is already the real sender. Kept for history published
+     * before the migration.
+     *
+     * @param {Object} data - Raw payload from the inbox
+     * @returns {Promise<Object|null>} - Decrypted payload with `account` set to
+     *   the true sender, or null when it cannot be opened
+     */
+    async openDMEnvelope(data) {
+        if (dmCrypto.isSealed(data)) {
+            const privateKey = authManager.wallet?.privateKey;
+            const myAddress = authManager.getAddress();
+            if (!privateKey || !myAddress) {
+                Logger.warn('DM: Cannot open sealed envelope — no credentials');
+                return null;
+            }
+            try {
+                const { sender, message } = await dmCrypto.open(data, {
+                    myPrivateKey: privateKey,
+                    myAddress
+                });
+                // The transport-level account was the ephemeral key; the proof
+                // is authoritative.
+                applyAccount(message, sender.toLowerCase());
+                return message;
+            } catch (e) {
+                // Not addressed to us, or tampered with. Either way it is not
+                // actionable — and with sealed sender we cannot tell which,
+                // by design.
+                Logger.debug('DM: Could not open sealed envelope:', e.message);
+                return null;
+            }
+        }
+
+        return this.decryptDMEnvelope(data, data?.account);
+    }
+
+    /**
      * Decrypt an E2E encrypted DM envelope.
-     * @param {Object} data - Encrypted envelope { ct, iv, e } with senderId
+     * @param {Object} data - Encrypted envelope { ct, iv, e } with account
      * @param {string} senderAddress - Sender's address (lowercase)
-     * @returns {Promise<Object|null>} - Decrypted data with senderId restored, or null if not encrypted / missing keys
+     * @returns {Promise<Object|null>} - Decrypted data with account restored, or null if not encrypted / missing keys
      * @throws {CryptoError} If decryption fails on a genuinely encrypted envelope
      */
     async decryptDMEnvelope(data, senderAddress) {
@@ -442,8 +600,8 @@ class DMManager {
             const aesKey = await dmCrypto.getSharedKey(privateKey, senderAddress, peerPubKey);
             const decrypted = await dmCrypto.decrypt(data, aesKey);
             
-            // Restore senderId (not part of encrypted payload)
-            decrypted.senderId = senderAddress;
+            // Restore account (not part of encrypted payload)
+            applyAccount(decrypted, senderAddress);
             
             return decrypted;
         } catch (e) {
@@ -458,14 +616,25 @@ class DMManager {
 
     /**
      * Route an incoming ephemeral/control message (typing, presence) to the correct conversation.
-     * Messages arrive on MY DM-2, routed by senderId to the matching conversation.
+     * Messages arrive on MY DM-2, routed by account to the matching conversation.
      * E2E encrypted envelopes are decrypted before forwarding.
-     * @param {Object} data - Control data (possibly encrypted) with senderId from Streamr publisherId
+     * @param {Object} data - Control data (possibly encrypted) with account from Streamr publisherId
      */
     async routeInboxControl(data) {
-        if (!data || !data.senderId) return;
+        if (!data) return;
 
-        const senderAddress = data.senderId.toLowerCase();
+        // Sealed envelopes must be opened before the sender is known — see
+        // routeInboxMessage. Control traffic goes out sealed-sender v2 too
+        // (channels.js presence/typing → sealAndPublish); the legacy branch
+        // below only serves rows still sitting in storage.
+        try {
+            data = await this.openDMEnvelope(data);
+        } catch {
+            return;
+        }
+        if (!data || !data.account) return;
+
+        const senderAddress = data.account.toLowerCase();
         const myAddress = authManager.getAddress()?.toLowerCase();
         if (senderAddress === myAddress) return;
 
@@ -479,14 +648,7 @@ class DMManager {
         const channelStreamId = this.conversations.get(senderAddress);
         if (!channelStreamId) return;
 
-        // Decrypt E2E envelope if present
-        let controlData;
-        try {
-            controlData = await this.decryptDMEnvelope(data, senderAddress);
-        } catch {
-            return; // Decryption failed — already logged inside decryptDMEnvelope
-        }
-        if (!controlData) return;
+        const controlData = data;   // already opened above
 
         // Inject identity fields for control messages
         if (controlData.type === 'typing') {
@@ -503,62 +665,116 @@ class DMManager {
     /**
      * Route an incoming media message from DM inbox ephemeral to mediaController.
      * @param {Object|Uint8Array} data - Media data (JSON or binary)
-     * @param {string} [senderId] - Publisher ID (provided for binary messages)
+     * @param {string} [account] - Publisher ID (provided for binary messages)
      */
-    async routeInboxMedia(data, senderId) {
-        // For JSON messages, senderId is embedded in data.senderId
-        const sender = senderId || data?.senderId;
-        if (!sender) return;
+    async routeInboxMedia(data, account) {
+        if (!data) return;
 
-        const senderAddress = sender.toLowerCase();
+        let senderAddress = null;
+        let payload = data;
+        let opened = false;
+
+        if (dmCrypto.isSealedBinary(data)) {
+            // A legacy v1 binary starts with a random IV byte, so 1 in 256 of
+            // them also matches the version check. Failing to open is therefore
+            // not an error — it falls through to the legacy path below.
+            try {
+                const privateKey = authManager.wallet?.privateKey;
+                const myAddress = authManager.getAddress();
+                const result = await dmCrypto.openBinary(data, {
+                    myPrivateKey: privateKey, myAddress
+                });
+                senderAddress = result.sender.toLowerCase();
+                payload = result.bytes;
+                opened = true;
+            } catch {
+                Logger.debug('DM: binary did not open as sealed — trying legacy');
+            }
+        }
+
+        if (!opened && dmCrypto.isSealed(data)) {
+            // Open FIRST, identify after — same rule as routeInboxMessage. The
+            // publisherId on a sealed signal is a throwaway key, so resolving
+            // the conversation from it would find nothing and drop the signal
+            // silently. The sender only exists once the envelope is open.
+            payload = await this.openDMEnvelope(data);
+            if (!payload) return;
+            senderAddress = payload.account?.toLowerCase();
+            opened = true;
+        }
+
+        if (!opened) {
+            // Legacy v1: pieces and signals still travel under the real
+            // publisher, so the transport account is both the identity and the
+            // key selector.
+            senderAddress = (account || data?.account)?.toLowerCase();
+        }
+
+        if (!senderAddress) return;
+
         const myAddress = authManager.getAddress()?.toLowerCase();
         if (senderAddress === myAddress) return;
 
-        // Block check
         if (secureStorage.isBlocked(senderAddress)) return;
 
-        // Find conversation for this sender
         const channelStreamId = this.conversations.get(senderAddress);
         if (!channelStreamId) return;
 
-        // Decrypt media with ECDH shared key (Alice-Bob specific)
-        try {
-            const privateKey = authManager.wallet?.privateKey;
-            const peerPubKey = await this.getPeerPublicKey(senderAddress);
+        if (!opened) {
+            // Legacy path: decrypt with the static pair-wise ECDH key
+            try {
+                const privateKey = authManager.wallet?.privateKey;
+                const peerPubKey = await this.getPeerPublicKey(senderAddress);
 
-            if (privateKey && peerPubKey) {
-                const aesKey = await dmCrypto.getSharedKey(privateKey, senderAddress, peerPubKey);
+                if (privateKey && peerPubKey) {
+                    const aesKey = await dmCrypto.getSharedKey(privateKey, senderAddress, peerPubKey);
 
-                if (data instanceof Uint8Array) {
-                    // P2: Binary media — decrypt with ECDH key
-                    data = await dmCrypto.decryptBinary(data, aesKey);
-                } else if (dmCrypto.isEncrypted(data)) {
-                    // P1: JSON signal — decrypt envelope with ECDH key
-                    data = await dmCrypto.decrypt(data, aesKey);
-                    data.senderId = senderAddress;
+                    if (data instanceof Uint8Array) {
+                        payload = await dmCrypto.decryptBinary(data, aesKey);
+                    } else if (dmCrypto.isEncrypted(data)) {
+                        payload = await dmCrypto.decrypt(data, aesKey);
+                        applyAccount(payload, senderAddress);
+                    }
                 }
+            } catch (e) {
+                Logger.warn('DM: Media decryption failed from', senderAddress, e.message);
+                return;
             }
-        } catch (e) {
-            Logger.warn('DM: Media decryption failed from', senderAddress, e.message);
-            return;
         }
 
         // Forward to mediaController — it handles binary decode and dispatch
-        mediaController.handleMediaMessage(channelStreamId, data, senderId);
+        mediaController.handleMediaMessage(channelStreamId, payload, senderAddress);
     }
 
     /**
      * Route an incoming inbox message to the correct DM conversation.
      * If the sender has no conversation yet, auto-create one.
-     * @param {Object} data - Message with senderId from Streamr publisherId
+     * @param {Object} data - Message with account from Streamr publisherId
      */
     async routeInboxMessage(data) {
-        if (!data || !data.senderId) {
-            Logger.warn('DM: Received message without senderId, ignoring');
+        if (!data) return;
+
+        // Open FIRST, identify after.
+        //
+        // With sealed sender the publisherId is a throwaway key, so the account
+        // stamped at ingest says nothing about who wrote this. The real sender
+        // only exists once the envelope is open. Checking blocks or ownership
+        // before that would be checking a random address.
+        //
+        // The cost is that a blocked peer's message is decrypted before being
+        // dropped — one ECDH plus one AES-GCM, about a millisecond. That is the
+        // trade sealed sender makes, and it is a good one.
+        try {
+            data = await this.openDMEnvelope(data);
+        } catch {
+            return; // Already logged inside
+        }
+        if (!data || !data.account) {
+            Logger.debug('DM: Message could not be attributed, ignoring');
             return;
         }
 
-        const senderAddress = data.senderId.toLowerCase();
+        const senderAddress = data.account.toLowerCase();
         const myAddress = authManager.getAddress()?.toLowerCase();
 
         // Ignore our own messages (echoed back from inbox)
@@ -569,14 +785,6 @@ class DMManager {
             Logger.debug('DM: Ignoring message from blocked peer', senderAddress);
             return;
         }
-
-        // E2E decrypt if needed
-        try {
-            data = await this.decryptDMEnvelope(data, senderAddress);
-        } catch {
-            return; // Decryption failed — already logged inside decryptDMEnvelope
-        }
-        if (!data) return;
 
         // Soft-leave check: ignore messages older than the leave timestamp
         const leftAt = secureStorage.getDMLeftAt(senderAddress);
@@ -632,14 +840,14 @@ class DMManager {
 
         // Route reactions through handleControlMessage (not as text messages)
         if (data.type === 'reaction') {
-            data.senderId = senderAddress;
+            applyAccount(data, senderAddress);
             channelManager.handleControlMessage(channel.messageStreamId, data);
             return;
         }
 
         // Route edit/delete overrides
         if (data.type === 'edit' || data.type === 'delete') {
-            data.senderId = senderAddress;
+            applyAccount(data, senderAddress);
             channelManager.handleOverrideMessage(channel.messageStreamId, data);
             return;
         }
@@ -687,26 +895,28 @@ class DMManager {
     /**
      * Route an incoming notification from DM-1 partition 3.
      * Decrypts the E2E envelope and delegates to NotificationManager.
-     * @param {Object} data - Encrypted notification with senderId from Streamr publisherId
+     * @param {Object} data - Encrypted notification with account from Streamr publisherId
      */
     async routeNotification(data) {
-        if (!data || !data.senderId) {
-            Logger.warn('DM: Notification without senderId, ignoring');
+        if (!data) return;
+
+        // Open before identifying — see routeInboxMessage
+        try {
+            data = await this.openDMEnvelope(data);
+        } catch {
+            return;
+        }
+        if (!data || !data.account) {
+            Logger.debug('DM: Notification could not be attributed, ignoring');
             return;
         }
 
-        const senderAddress = data.senderId.toLowerCase();
+        const senderAddress = data.account.toLowerCase();
         const myAddress = authManager.getAddress()?.toLowerCase();
         if (senderAddress === myAddress) return;
         if (secureStorage.isBlocked(senderAddress)) return;
 
-        // E2E decrypt (same flow as DM messages)
-        try {
-            data = await this.decryptDMEnvelope(data, senderAddress);
-        } catch {
-            return; // Decryption failed — already logged inside decryptDMEnvelope
-        }
-        if (!data) return;
+        // Already opened above
 
         // Delegate to NotificationManager (lazy import to avoid circular dep)
         const { notificationManager } = await import('./notifications.js');
@@ -925,20 +1135,11 @@ class DMManager {
                 throw new Error('Cannot send DM: peer address not found');
             }
 
-            const peerPubKey = await this.getPeerPublicKey(peerAddress);
-            if (!peerPubKey) {
-                throw new Error('Cannot send DM: peer public key not available. The recipient may need to open Pombo first to create their inbox.');
-            }
-
-            const aesKey = await dmCrypto.getSharedKey(privateKey, peerAddress, peerPubKey);
             const { pending, _dmSent, verified, ...cleanMessage } = message;
-            const payload = await dmCrypto.encrypt(cleanMessage, aesKey);
 
-            // Set Pombo key for publishing (peer can decrypt if they have the key)
-            await streamrController.setDMPublishKey(peerInboxStreamId);
-
-            // Publish encrypted payload to peer's inbox (message stream, partition 0, no password)
-            await streamrController.publishMessage(peerInboxStreamId, payload, null);
+            // Sealed sender: published under a throwaway identity, so the inbox
+            // stream no longer carries the (sender → recipient) edge.
+            await this.sealAndPublish(peerInboxStreamId, peerAddress, cleanMessage);
 
             // Mark as sent
             message.pending = false;
@@ -999,13 +1200,7 @@ class DMManager {
         const peerAddress = channel.peerAddress;
         if (!privateKey || !peerAddress) throw new Error('Cannot send DM edit: missing credentials');
 
-        const peerPubKey = await this.getPeerPublicKey(peerAddress);
-        if (!peerPubKey) throw new Error('Cannot send DM edit: peer public key not available');
-
-        const aesKey = await dmCrypto.getSharedKey(privateKey, peerAddress, peerPubKey);
-        const payload = await dmCrypto.encrypt(override, aesKey);
-        await streamrController.setDMPublishKey(peerInboxStreamId);
-        await streamrController.publishMessage(peerInboxStreamId, payload, null);
+        await this.sealAndPublish(peerInboxStreamId, peerAddress, override);
 
         // Publish succeeded — apply locally and persist
         original.text = override.text;
@@ -1043,13 +1238,7 @@ class DMManager {
         const peerAddress = channel.peerAddress;
         if (!privateKey || !peerAddress) throw new Error('Cannot send DM delete: missing credentials');
 
-        const peerPubKey = await this.getPeerPublicKey(peerAddress);
-        if (!peerPubKey) throw new Error('Cannot send DM delete: peer public key not available');
-
-        const aesKey = await dmCrypto.getSharedKey(privateKey, peerAddress, peerPubKey);
-        const payload = await dmCrypto.encrypt(override, aesKey);
-        await streamrController.setDMPublishKey(peerInboxStreamId);
-        await streamrController.publishMessage(peerInboxStreamId, payload, null);
+        await this.sealAndPublish(peerInboxStreamId, peerAddress, override);
 
         // Publish succeeded — remove locally and from persisted copy
         const idx = channel.messages.indexOf(original);
@@ -1185,33 +1374,40 @@ class DMManager {
             for (const rawMsg of result.messages) {
                 if (signal?.aborted) break;
 
+                // Sealed messages cannot be filtered by publisherId — it is a
+                // throwaway key. Open everything in the window, then keep what
+                // turns out to be from this peer. Costs one ECDH + AES-GCM per
+                // message (~1ms); the alternative is not knowing who wrote what.
+                //
+                // Legacy v1 messages still carry the real sender as publisherId,
+                // and openDMEnvelope routes them to the old path.
                 const publisherId = rawMsg.publisherId?.toLowerCase();
-                if (!publisherId) continue;
+
+                let data;
+                try {
+                    const content = rawMsg.content;
+                    if (content && typeof content === 'object' && publisherId) {
+                        applyAccount(content, publisherId);
+                    }
+                    data = await this.openDMEnvelope(content);
+                } catch {
+                    continue; // Could not be opened — not ours, or corrupt
+                }
+                if (!data || !data.account) continue;
+
+                const sender = data.account.toLowerCase();
 
                 // Skip our own echoed messages
                 const myAddress = authManager.getAddress()?.toLowerCase();
-                if (publisherId === myAddress) continue;
+                if (sender === myAddress) continue;
 
                 // Only keep messages from the target peer
-                if (publisherId !== normalizedPeer) continue;
-
-                // Decrypt E2E envelope
-                let data;
-                try {
-                    let content = rawMsg.content;
-                    if (content && typeof content === 'object') {
-                        content.senderId = publisherId;
-                    }
-                    data = await this.decryptDMEnvelope(content, normalizedPeer);
-                } catch {
-                    continue; // Decryption failed
-                }
-                if (!data) continue;
+                if (sender !== normalizedPeer) continue;
 
                 // Skip reactions (they're handled separately)
                 if (data.type === 'reaction') {
                     if (data.messageId && data.emoji) {
-                        channelManager.storeReaction(channel, data.messageId, data.emoji, publisherId, data.action || 'add');
+                        channelManager.storeReaction(channel, data.messageId, data.emoji, sender, data.action || 'add');
                     }
                     continue;
                 }

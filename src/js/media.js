@@ -16,6 +16,8 @@ import { secureStorage } from './secureStorage.js';
 import { dmManager } from './dm.js';
 import { dmCrypto } from './dmCrypto.js';
 import { CONFIG as APP_CONFIG } from './config.js';
+import { getChannelIdentity } from './channelIdentity.js';
+import { recoverPublisherAccount } from './publisherProof.js';
 
 // === CONFIGURATION ===
 const CONFIG = {
@@ -87,8 +89,31 @@ const CONFIG = {
 // Binary encoding for MEDIA_DATA partition (partition 2)
 // Format: [1 byte type] [header bytes] [payload]
 const BINARY_MSG_TYPE = {
-    FILE_PIECE: 0x01
+    FILE_PIECE: 0x01,
+    // 0x02 is dmCrypto's sealed binary envelope — never reuse it here.
+    // A channel piece carries the publisher proof inline instead: there is no
+    // single recipient to seal to, and the channel password (or nothing, in a
+    // public channel) is already the confidentiality boundary.
+    FILE_PIECE_SIGNED: 0x03
 };
+
+// 65-byte serialized secp256k1 signature
+const PROOF_BYTES = 65;
+
+// Local hex conversion: pulling in ethers here would make the binary frame
+// depend on the wallet library for nothing more than slicing a hex string.
+function hexToBytes(hex) {
+    const clean = String(hex).replace(/^0x/, '');
+    const out = new Uint8Array(clean.length / 2);
+    for (let i = 0; i < out.length; i++) {
+        out[i] = parseInt(clean.substr(i * 2, 2), 16);
+    }
+    return out;
+}
+
+function bytesToHex(bytes) {
+    return '0x' + Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
 const STORED_IMAGE_PROTOCOL_VERSION = 2;
 const STORED_IMAGE_TRANSPORT = 'chunked';
@@ -163,10 +188,47 @@ function decodeFilePiece(buf) {
  * @param {Uint8Array} buf - Binary buffer
  * @returns {Object} Decoded message with type field
  */
+/**
+ * Encode a file_piece that names its publisher.
+ * Format: [1B type=0x03] [65B proof] [36B fileId] [4B pieceIndex] [N bytes data]
+ *
+ * The proof binds the ephemeral publisher to the real account exactly as the
+ * JSON `proof` field does — binary just has nowhere to put a field.
+ */
+function encodeSignedFilePiece(proof, fileId, pieceIndex, data) {
+    const proofBytes = hexToBytes(proof);
+    const piece = encodeFilePiece(fileId, pieceIndex, data);
+
+    const buf = new Uint8Array(1 + PROOF_BYTES + piece.byteLength - 1);
+    buf[0] = BINARY_MSG_TYPE.FILE_PIECE_SIGNED;
+    buf.set(proofBytes, 1);
+    buf.set(piece.subarray(1), 1 + PROOF_BYTES);
+    return buf;
+}
+
+function decodeSignedFilePiece(buf) {
+    if (buf.byteLength < 1 + PROOF_BYTES + 40) return null;
+
+    const proof = bytesToHex(buf.slice(1, 1 + PROOF_BYTES));
+
+    // Rebuild the unsigned frame so decoding stays in one place
+    const inner = new Uint8Array(buf.byteLength - PROOF_BYTES);
+    inner[0] = BINARY_MSG_TYPE.FILE_PIECE;
+    inner.set(buf.subarray(1 + PROOF_BYTES), 1);
+
+    return { ...decodeFilePiece(inner), proof };
+}
+
+/**
+ * Decode any binary media message.
+ * @param {Uint8Array} buf - Binary buffer
+ * @returns {Object} Decoded message with type field
+ */
 function decodeBinaryMedia(buf) {
     if (!buf || buf.length === 0) return null;
     switch (buf[0]) {
         case BINARY_MSG_TYPE.FILE_PIECE: return decodeFilePiece(buf);
+        case BINARY_MSG_TYPE.FILE_PIECE_SIGNED: return decodeSignedFilePiece(buf);
         default: return null;
     }
 }
@@ -395,17 +457,64 @@ class MediaController {
      * @param {string} messageStreamId - Channel message stream ID
      * @returns {Promise<CryptoKey|null>}
      */
-    async _getDMMediaKey(messageStreamId) {
+    /**
+     * The binary sealer for one transfer, created on first use.
+     *
+     * Cached on the localFile entry, keyed by channel: a seeder can serve the
+     * same file to several peers, and each needs its own sealer because the AES
+     * key is derived against THAT peer's public key. Living on the entry means
+     * it is discarded with the file, with no separate cleanup to forget.
+     *
+     * Concurrency: pieces are sent with bounded parallelism, so several sends
+     * can miss the cache at once. Storing the PROMISE rather than the resolved
+     * sealer makes them all wait on the same ECDH instead of racing to create
+     * one key each — which would silently break the per-transfer guarantee.
+     *
+     * @param {Object} localFile - Entry from this.localFiles
+     * @param {string} messageStreamId - Channel the pieces are going to
+     * @param {string} dmPeer - Peer address
+     */
+    _binarySealerFor(localFile, messageStreamId, dmPeer) {
+        if (!localFile.binarySealers) localFile.binarySealers = new Map();
+
+        let pending = localFile.binarySealers.get(messageStreamId);
+        if (!pending) {
+            pending = dmManager.createBinarySealer(dmPeer);
+            localFile.binarySealers.set(messageStreamId, pending);
+            // A failed sealer must not be cached, or the transfer never recovers
+            pending.catch(() => localFile.binarySealers.delete(messageStreamId));
+        }
+        return pending;
+    }
+
+    /**
+     * Run a P2P task that nobody awaits, turning a rejection into a log line.
+     *
+     * The signal handlers and the download loop dispatch without `await`, so an
+     * exception becomes an unhandled promise: the transfer stalls and nothing
+     * says why. That matters more since sealing replaced the old ECDH path —
+     * `sealFor` RAISES when the peer's public key is unavailable, where the old
+     * code returned null and quietly fell back to publishing in the clear.
+     * Raising is right; disappearing is not.
+     *
+     * @param {string} label - What was being attempted, for the log
+     * @param {Promise} promise - The unawaited task
+     */
+    fireAndForget(label, promise) {
+        Promise.resolve(promise).catch(error => {
+            Logger.warn(`Media P2P: ${label} failed —`, error?.message || error);
+        });
+    }
+
+    /**
+     * Peer address for a DM channel, or null when the channel is not a DM.
+     * The signal path needs the peer, not a precomputed key: sealing derives
+     * its own key from a throwaway ephemeral pair on every send.
+     */
+    _getDMPeer(messageStreamId) {
         const channel = channelManager.getChannel(messageStreamId);
         if (channel?.type !== 'dm' || !channel.peerAddress) return null;
-
-        const privateKey = authManager.wallet?.privateKey;
-        if (!privateKey) return null;
-
-        const peerPubKey = await dmManager.getPeerPublicKey(channel.peerAddress);
-        if (!peerPubKey) return null;
-
-        return dmCrypto.getSharedKey(privateKey, channel.peerAddress, peerPubKey);
+        return channel.peerAddress;
     }
 
     /**
@@ -595,21 +704,11 @@ class MediaController {
             throw new Error('Channel not found');
         }
 
-        let dmAesKey = null;
-        if (channel.type === 'dm' && channel.peerAddress) {
-            const privateKey = authManager.wallet?.privateKey;
-            if (!privateKey) {
-                throw new Error('Cannot send DM image: wallet private key not available');
-            }
-            const peerPubKey = await dmManager.getPeerPublicKey(channel.peerAddress);
-            if (!peerPubKey) {
-                throw new Error('Cannot send DM image: peer public key not available');
-            }
-            dmAesKey = await dmCrypto.getSharedKey(privateKey, channel.peerAddress, peerPubKey);
-            if (typeof streamrController.setDMPublishKey === 'function') {
-                await streamrController.setDMPublishKey(messageStreamId);
-            }
-        }
+        // Sealed sender: every chunk and the manifest leave under their own
+        // throwaway publisher. No shared key to precompute here, and no
+        // setDMPublishKey — publishAs sends with encryptionType NONE, so the
+        // SDK's group-key layer is never engaged.
+        const dmPeer = (channel.type === 'dm' && channel.peerAddress) ? channel.peerAddress : null;
 
         const prepared = await this.prepareImageForStoredTransport(file);
         const imageId = crypto.randomUUID();
@@ -618,7 +717,7 @@ class MediaController {
             imageId,
             blob: prepared.blob,
             password,
-            dmAesKey
+            dmPeer
         });
 
         const manifest = await this.createSignedStoredImageManifest({
@@ -635,12 +734,12 @@ class MediaController {
             qualityUsed: prepared.qualityUsed
         });
 
-        await this.assertStoredImagePayloadFits(manifest, password, dmAesKey, 'image manifest');
+        await this.assertStoredImagePayloadFits(manifest, password, dmPeer, 'image manifest');
 
         for (const chunkPayload of chunkPayloads) {
-            await this.publishStoredImagePayload(messageStreamId, chunkPayload, password, dmAesKey);
+            await this.publishStoredImagePayload(messageStreamId, chunkPayload, password, dmPeer);
         }
-        await this.publishStoredImagePayload(messageStreamId, manifest, password, dmAesKey);
+        await this.publishStoredImagePayload(messageStreamId, manifest, password, dmPeer);
 
         this.cacheImage(imageId, finalDataUrl);
 
@@ -721,18 +820,11 @@ class MediaController {
         
         // DM channels: E2E encrypt and always persist locally
         if (channel?.type === 'dm' && channel.peerAddress) {
-            const privateKey = authManager.wallet?.privateKey;
-            if (!privateKey) {
-                throw new Error('Cannot send DM image: wallet private key not available');
-            }
-            const peerPubKey = await dmManager.getPeerPublicKey(channel.peerAddress);
-            if (!peerPubKey) {
-                throw new Error('Cannot send DM image: peer public key not available');
-            }
-            const aesKey = await dmCrypto.getSharedKey(privateKey, channel.peerAddress, peerPubKey);
+            // Sealed sender: the announcement leaves under a throwaway publisher,
+            // with our real address proved inside the envelope. sealAndPublish
+            // raises on missing wallet key or unknown peer public key.
             const { verified, ...cleanAnnouncement } = announcement;
-            const encrypted = await dmCrypto.encrypt(cleanAnnouncement, aesKey);
-            await streamrController.publishMessage(messageStreamId, encrypted, null);
+            await dmManager.sealAndPublish(messageStreamId, channel.peerAddress, cleanAnnouncement);
             await secureStorage.addSentMessage(messageStreamId, announcement);
         } else {
             // Regular channels: publish with optional Streamr-level encryption
@@ -1090,7 +1182,7 @@ class MediaController {
         });
     }
 
-    async createStoredImageChunkPayloads({ imageId, blob, password = null, dmAesKey = null }) {
+    async createStoredImageChunkPayloads({ imageId, blob, password = null, dmPeer = null }) {
         const sourceBytes = new Uint8Array(await this.blobToArrayBuffer(blob));
         const payloadLimit = Math.max(
             1024,
@@ -1118,7 +1210,7 @@ class MediaController {
                     data: this.arrayBufferToBase64(chunkBytes)
                 };
 
-                const payloadBytes = await this.measureStoredImagePayloadBytes(candidate, password, dmAesKey);
+                const payloadBytes = await this.measureStoredImagePayloadBytes(candidate, password, dmPeer);
                 if (payloadBytes <= payloadLimit) {
                     payload = candidate;
                     offset += rawChunkBytes;
@@ -1150,10 +1242,14 @@ class MediaController {
         return chunkPayloads;
     }
 
-    async measureStoredImagePayloadBytes(payload, password = null, dmAesKey = null) {
-        if (dmAesKey) {
-            const encryptedPayload = await dmCrypto.encrypt(payload, dmAesKey);
-            return new TextEncoder().encode(JSON.stringify(encryptedPayload)).length;
+    async measureStoredImagePayloadBytes(payload, password = null, dmPeer = null) {
+        if (dmPeer) {
+            // Sealing is the only honest way to size this: the envelope carries
+            // an ephemeral public key and the sender proof on top of the
+            // ciphertext, and a hardcoded overhead constant would drift the
+            // moment the envelope format changes.
+            const { envelope } = await dmManager.sealFor(dmPeer, payload);
+            return new TextEncoder().encode(JSON.stringify(envelope)).length;
         }
 
         if (password) {
@@ -1164,23 +1260,32 @@ class MediaController {
         return new TextEncoder().encode(JSON.stringify(payload)).length;
     }
 
-    async assertStoredImagePayloadFits(payload, password = null, dmAesKey = null, label = 'image payload') {
-        const payloadBytes = await this.measureStoredImagePayloadBytes(payload, password, dmAesKey);
+    assertPayloadBytesFit(payloadBytes, label = 'image payload') {
         if (payloadBytes > CONFIG.IMAGE_PAYLOAD_MAX_BYTES) {
             throw new Error(`${label} exceeds ${Math.round(CONFIG.IMAGE_PAYLOAD_MAX_BYTES / 1024)}KB payload limit`);
         }
         return payloadBytes;
     }
 
-    async publishStoredImagePayload(messageStreamId, payload, password = null, dmAesKey = null) {
-        await this.assertStoredImagePayloadFits(payload, password, dmAesKey);
+    async assertStoredImagePayloadFits(payload, password = null, dmPeer = null, label = 'image payload') {
+        const payloadBytes = await this.measureStoredImagePayloadBytes(payload, password, dmPeer);
+        return this.assertPayloadBytesFit(payloadBytes, label);
+    }
 
-        if (dmAesKey) {
-            const encryptedPayload = await dmCrypto.encrypt(payload, dmAesKey);
-            await streamrController.publishMessage(messageStreamId, encryptedPayload, null);
+    async publishStoredImagePayload(messageStreamId, payload, password = null, dmPeer = null) {
+        if (dmPeer) {
+            // Seal ONCE and publish that exact envelope. Sizing one envelope and
+            // sending a freshly sealed second one would measure a different
+            // ephemeral key than the one that goes on the wire.
+            const sealed = await dmManager.sealFor(dmPeer, payload);
+            this.assertPayloadBytesFit(
+                new TextEncoder().encode(JSON.stringify(sealed.envelope)).length
+            );
+            await dmManager.publishSealed(messageStreamId, sealed);
             return;
         }
 
+        await this.assertStoredImagePayloadFits(payload, password, null);
         await streamrController.publishMessage(messageStreamId, payload, password);
     }
 
@@ -1809,16 +1914,9 @@ class MediaController {
                         // routeInboxMessage) accept plain AND sealed, so this
                         // breaks nothing in flight.
                         if (channel?.type === 'dm' && channel.peerAddress) {
-                            const privateKey = authManager.wallet?.privateKey;
-                            const peerPubKey = await dmManager.getPeerPublicKey(channel.peerAddress);
-                            if (!privateKey || !peerPubKey) {
-                                throw new Error('Cannot send DM file: encryption keys unavailable');
-                            }
-                            const aesKey = await dmCrypto.getSharedKey(privateKey, channel.peerAddress, peerPubKey);
                             const { verified, ...cleanAnnouncement } = announcement;
-                            const sealed = await dmCrypto.encrypt(cleanAnnouncement, aesKey);
-                            await streamrController.setDMPublishKey(messageStreamId);
-                            await streamrController.publishMessage(messageStreamId, sealed, null);
+                            await dmManager.sealAndPublish(
+                                messageStreamId, channel.peerAddress, cleanAnnouncement);
                         } else {
                             await streamrController.publishMessage(messageStreamId, announcement, password);
                         }
@@ -1869,7 +1967,7 @@ class MediaController {
      * @param {string} messageStreamId - Channel message stream ID
      * @param {Object} data - Media data
      */
-    handleMediaMessage(messageStreamId, data, senderId) {
+    handleMediaMessage(messageStreamId, data, account) {
         // Handle binary data from MEDIA_DATA partition
         if (data instanceof Uint8Array) {
             const decoded = decodeBinaryMedia(data);
@@ -1877,25 +1975,36 @@ class MediaController {
                 Logger.debug('Unknown binary media message');
                 return;
             }
-            if (senderId) decoded.senderId = senderId;
+            // Same rule as streamr.attachAccount, applied where binary forced the
+            // proof out of the payload and into the frame: a proof that recovers
+            // names the account, anything else falls back to the transport.
+            // A DM piece arrives already opened, with `account` proved — it has
+            // no inline proof and must not be second-guessed here.
+            if (account) {
+                decoded.account = (decoded.proof
+                    && recoverPublisherAccount(account, decoded.proof)) || account;
+            }
             return this.handleMediaMessage(messageStreamId, decoded);
         }
         
         if (!data || !data.type) return;
-        
+
         switch (data.type) {
             case 'piece_request':
-                this.handlePieceRequest(messageStreamId, data);
+                this.fireAndForget('handlePieceRequest',
+                    this.handlePieceRequest(messageStreamId, data));
                 break;
-                
+
             case 'file_piece':
-                this.handleFilePiece(messageStreamId, data);
+                this.fireAndForget('handleFilePiece',
+                    this.handleFilePiece(messageStreamId, data));
                 break;
-                
+
             case 'source_request':
-                this.handleSourceRequest(messageStreamId, data);
+                this.fireAndForget('handleSourceRequest',
+                    this.handleSourceRequest(messageStreamId, data));
                 break;
-                
+
             case 'source_announce':
                 this.handleSourceAnnounce(data);
                 break;
@@ -2210,10 +2319,10 @@ class MediaController {
      * @param {Object} transfer - Transfer state
      * @param {string} fileId - File ID
      * @param {number} pieceIndex - Piece that failed
-     * @param {string} senderId - Peer that published the bad piece
+     * @param {string} account - Peer that published the bad piece
      */
-    blameSeeder(transfer, fileId, pieceIndex, senderId) {
-        const seederId = senderId.toLowerCase();
+    blameSeeder(transfer, fileId, pieceIndex, account) {
+        const seederId = account.toLowerCase();
 
         let excluded = transfer.pieceExclusions?.get(pieceIndex);
         if (!excluded) {
@@ -2250,7 +2359,8 @@ class MediaController {
             if (transfer.downloadStarted) {
                 // We had seeders but lost them - request more
                 Logger.debug(`Lost all seeders for ${fileId}, requesting more...`);
-                this.requestFileSources(transfer.streamId, fileId, transfer.password);
+                this.fireAndForget('requestFileSources (lost seeders)',
+                    this.requestFileSources(transfer.streamId, fileId, transfer.password));
             }
             // Keep a single pending retry. manageDownload() is re-entered on every
             // delivery and every timeout, so scheduling one timer per call would
@@ -2281,11 +2391,13 @@ class MediaController {
                     // up a peer that can actually serve it.
                     Logger.warn(`All seeders excluded for piece ${i}, retrying them and widening the search`);
                     transfer.pieceExclusions?.delete(i);
-                    this.requestFileSources(transfer.streamId, fileId, transfer.password);
+                    this.fireAndForget('requestFileSources (all seeders excluded)',
+                        this.requestFileSources(transfer.streamId, fileId, transfer.password));
                     continue;
                 }
 
-                this.requestPiece(fileId, i, seederId);
+                this.fireAndForget(`requestPiece ${i}`,
+                    this.requestPiece(fileId, i, seederId));
             }
         }
         
@@ -2296,7 +2408,8 @@ class MediaController {
             seeders.size < CONFIG.PREFERRED_SEEDERS &&
             transfer.seederRequestCount < CONFIG.MAX_SEEDER_REQUESTS) {
             Logger.debug(`Refreshing seeders for slow download ${fileId}`);
-            this.requestFileSources(transfer.streamId, fileId, transfer.password);
+            this.fireAndForget('requestFileSources (slow-download refresh)',
+                this.requestFileSources(transfer.streamId, fileId, transfer.password));
             transfer.seederRequestCount++;
             transfer.lastSeederRequest = now;
         }
@@ -2339,11 +2452,13 @@ class MediaController {
             targetSeederId: seederId
         };
         
-        // DM channels: encrypt signal with ECDH shared key
-        const dmKey = await this._getDMMediaKey(transfer.streamId);
-        if (dmKey) {
-            const encrypted = await dmCrypto.encrypt(request, dmKey);
-            await streamrController.publishMediaSignal(ephemeralStreamId, encrypted, null);
+        // DM channels: sealed sender — the signal goes out under a throwaway
+        // publisher, with our address proved inside the envelope.
+        const dmPeer = this._getDMPeer(transfer.streamId);
+        if (dmPeer) {
+            await dmManager.sealAndPublish(
+                ephemeralStreamId, dmPeer, request,
+                STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_SIGNALS);
         } else {
             await streamrController.publishMediaSignal(ephemeralStreamId, request, transfer.password);
         }
@@ -2371,7 +2486,7 @@ class MediaController {
         }
         
         // The request's publisher is the leecher pulling from us
-        this.recordLeecher(data.fileId, data.senderId);
+        this.recordLeecher(data.fileId, data.account);
 
         Logger.debug('Sending piece', data.pieceIndex, 'of', data.fileId?.slice(0, 8));
         await this.sendPiece(messageStreamId, data.fileId, data.pieceIndex);
@@ -2409,9 +2524,18 @@ class MediaController {
             
             // Launch send concurrently (don't await)
             this.activeSends++;
+            // The queue must drain either way, so a failed send still resolves —
+            // but it must not vanish. Silently swallowing here is what makes a
+            // stalled download unexplainable from BOTH sides: the leecher just
+            // times out, and the seeder shows nothing at all.
             this._sendPieceImmediate(messageStreamId, fileId, pieceIndex)
                 .then(() => resolve())
-                .catch(() => resolve())
+                .catch(error => {
+                    Logger.warn(
+                        `Media P2P: failed to send piece ${pieceIndex} of ${fileId} —`,
+                        error?.message || error);
+                    resolve();
+                })
                 .finally(() => {
                     this.activeSends--;
                     this.processPieceQueue(); // drain next from queue
@@ -2442,18 +2566,28 @@ class MediaController {
         // Derive ephemeral stream ID for P2P data
         const ephemeralStreamId = deriveEphemeralId(messageStreamId);
         
-        // Encode as binary for MEDIA_DATA partition (zero base64 overhead)
-        let binaryPayload = encodeFilePiece(fileId, pieceIndex, arrayBuffer);
-        
-        // DM channels: encrypt binary with ECDH shared key (Alice-Bob specific)
-        const dmKey = await this._getDMMediaKey(messageStreamId);
-        if (dmKey) {
-            binaryPayload = await dmCrypto.encryptBinary(binaryPayload, dmKey);
-            await streamrController.publishMediaData(ephemeralStreamId, binaryPayload, null);
-            Logger.debug('Sent piece (binary+ECDH)', pieceIndex, 'of', fileId);
+        // DM channels: sealed sender. The piece goes out under the transfer's
+        // throwaway publisher, with our address proved inside the ciphertext.
+        const dmPeer = this._getDMPeer(messageStreamId);
+        if (dmPeer) {
+            const sealer = await this._binarySealerFor(localFile, messageStreamId, dmPeer);
+            const sealed = await sealer.seal(
+                encodeFilePiece(fileId, pieceIndex, arrayBuffer));
+            await streamrController.publishMediaDataAs(
+                ephemeralStreamId, sealed, sealer.identity);
+            Logger.debug('Sent piece (binary sealed)', pieceIndex, 'of', fileId);
         } else {
-            await streamrController.publishMediaData(ephemeralStreamId, binaryPayload, password);
-            Logger.debug('Sent piece (binary)', pieceIndex, 'of', fileId, password ? '(encrypted)' : '');
+            // Channels: the piece carries the proof inline. There is no single
+            // recipient to seal to, and the channel password — or nothing, in a
+            // public channel — is already the confidentiality boundary.
+            const { identity, proof } = getChannelIdentity(ephemeralStreamId);
+            let payload = encodeSignedFilePiece(proof, fileId, pieceIndex, arrayBuffer);
+            if (password) {
+                payload = await cryptoManager.encryptBinary(payload, password);
+            }
+            await streamrController.publishMediaDataAs(ephemeralStreamId, payload, identity);
+            Logger.debug('Sent piece (binary signed)', pieceIndex, 'of', fileId,
+                password ? '(encrypted)' : '');
         }
         this.recordThroughput(this.uploadStateFor(fileId), arrayBuffer.byteLength);
         this.emitUploadStats(fileId);
@@ -2518,7 +2652,7 @@ class MediaController {
     async handleFilePiece(messageStreamId, data) {
         // Skip our own pieces (self-filtering)
         const myAddress = authManager.getAddress()?.toLowerCase();
-        const senderAddress = data.senderId?.toLowerCase();
+        const senderAddress = data.account?.toLowerCase();
         
         if (senderAddress === myAddress) {
             return;
@@ -2557,14 +2691,14 @@ class MediaController {
             pieceBuffer = this.base64ToArrayBuffer(data.data);
         }
         if (!pieceBuffer) {
-            this.registerPieceFailure(transfer, fileId, pieceIndex, 'decode failed', data.senderId);
+            this.registerPieceFailure(transfer, fileId, pieceIndex, 'decode failed', data.account);
             return;
         }
 
         // Verify hash
         const receivedHash = await this.sha256(pieceBuffer);
         if (receivedHash !== transfer.metadata.pieceHashes[pieceIndex]) {
-            this.registerPieceFailure(transfer, fileId, pieceIndex, 'hash mismatch', data.senderId);
+            this.registerPieceFailure(transfer, fileId, pieceIndex, 'hash mismatch', data.account);
             return;
         }
         
@@ -2747,11 +2881,12 @@ class MediaController {
             fileId
         };
 
-        // DM channels: encrypt signal with ECDH shared key
-        const dmKey = await this._getDMMediaKey(messageStreamId);
-        if (dmKey) {
-            const encrypted = await dmCrypto.encrypt(request, dmKey);
-            await streamrController.publishMediaSignal(ephemeralStreamId, encrypted, null);
+        // DM channels: sealed sender (see requestPiece)
+        const dmPeer = this._getDMPeer(messageStreamId);
+        if (dmPeer) {
+            await dmManager.sealAndPublish(
+                ephemeralStreamId, dmPeer, request,
+                STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_SIGNALS);
         } else {
             await streamrController.publishMediaSignal(ephemeralStreamId, request, password);
         }
@@ -2786,11 +2921,12 @@ class MediaController {
             pieceCount: localFile?.metadata?.pieceCount || 0
         };
 
-        // DM channels: encrypt signal with ECDH shared key
-        const dmKey = await this._getDMMediaKey(messageStreamId);
-        if (dmKey) {
-            const encrypted = await dmCrypto.encrypt(announce, dmKey);
-            await streamrController.publishMediaSignal(ephemeralStreamId, encrypted, null);
+        // DM channels: sealed sender (see requestPiece)
+        const dmPeer = this._getDMPeer(messageStreamId);
+        if (dmPeer) {
+            await dmManager.sealAndPublish(
+                ephemeralStreamId, dmPeer, announce,
+                STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_SIGNALS);
         } else {
             await streamrController.publishMediaSignal(ephemeralStreamId, announce, password);
         }
@@ -2799,13 +2935,13 @@ class MediaController {
 
     /**
      * Handle source announcement
-     * Note: Normalize senderId to lowercase for consistent comparison
+     * Note: Normalize account to lowercase for consistent comparison
      */
     handleSourceAnnounce(data) {
         const seeders = this.fileSeeders.get(data.fileId);
-        if (seeders && data.senderId) {
+        if (seeders && data.account) {
             // Normalize to lowercase for consistent address comparison
-            const normalizedSenderId = data.senderId.toLowerCase();
+            const normalizedSenderId = data.account.toLowerCase();
             seeders.add(normalizedSenderId);
             
             Logger.debug('Seeder announced for file:', data.fileId, 'seeder:', normalizedSenderId);
@@ -2844,7 +2980,7 @@ class MediaController {
      * @param {number} pieceIndex - Piece that failed
      * @param {string} reason - Why it failed (for the log)
      */
-    registerPieceFailure(transfer, fileId, pieceIndex, reason, senderId = null) {
+    registerPieceFailure(transfer, fileId, pieceIndex, reason, account = null) {
         const failures = (transfer.pieceFailures?.get(pieceIndex) || 0) + 1;
         transfer.pieceFailures?.set(pieceIndex, failures);
 
@@ -2852,8 +2988,8 @@ class MediaController {
 
         // Blame the publisher of the bad bytes, not whoever we happened to ask: a late
         // reply from a previous seeder can land after we already retried elsewhere.
-        if (senderId) {
-            this.blameSeeder(transfer, fileId, pieceIndex, senderId);
+        if (account) {
+            this.blameSeeder(transfer, fileId, pieceIndex, account);
         }
 
         if (failures >= CONFIG.MAX_PIECE_FAILURES) {

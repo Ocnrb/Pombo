@@ -108,19 +108,19 @@ class NotificationManager {
             }
         };
 
-        // 4. E2E encrypt with ECDH shared key (same as DMs)
-        const privateKey = authManager.wallet?.privateKey;
-        if (!privateKey) {
-            throw new Error('Cannot send invite: wallet private key not available');
-        }
-        const aesKey = await dmCrypto.getSharedKey(privateKey, recipientAddress, peerPubKey);
-        const encrypted = await dmCrypto.encrypt(inviteMessage, aesKey);
-
-        // 5. Set Pombo key for publishing
-        await streamrController.setDMPublishKey(peerInboxId);
-
-        // 6. Publish to recipient's DM inbox partition 3 (notifications)
-        await streamrController.publishNotification(peerInboxId, encrypted, null);
+        // 4-6. Seal and publish to the recipient's inbox, partition 3.
+        //
+        // Sealed sender, same as DM messages: the invite goes out under a
+        // throwaway publisher, so an observer of the inbox stream cannot tell
+        // who invited whom. An invite is a social edge like any other — arguably
+        // a stronger one, since it names a channel both parties are in.
+        const { dmManager } = await import('./dm.js');
+        await dmManager.sealAndPublish(
+            peerInboxId,
+            recipientAddress,
+            inviteMessage,
+            STREAM_CONFIG.MESSAGE_STREAM.NOTIFICATIONS
+        );
 
         Logger.info('Channel invite sent to:', recipientAddress);
         return inviteMessage.inviteId;

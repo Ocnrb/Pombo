@@ -328,7 +328,7 @@ class SubscriptionManager {
                     onMessage: (msg) => this._handlePreviewMessage(messageStreamId, msg),
                     onOverride: (msg) => this._handlePreviewOverride(messageStreamId, msg),
                     onControl: (ephMsg) => this._handlePreviewEphemeral(messageStreamId, ephMsg),
-                    onMedia: (mediaMsg, senderId) => this._handlePreviewMedia(messageStreamId, mediaMsg, senderId)
+                    onMedia: (mediaMsg, account) => this._handlePreviewMedia(messageStreamId, mediaMsg, account)
                 },
                 null, // password
                 STREAM_CONFIG.INITIAL_MESSAGES, // historyCount - load recent messages
@@ -502,10 +502,10 @@ class SubscriptionManager {
         if (msg.type === 'presence') {
             channelManager.handlePresenceMessage(streamId, msg);
         } else if (msg.type === 'typing') {
-            // Use senderId from Streamr SDK (cryptographically guaranteed)
+            // Use account from Streamr SDK (cryptographically guaranteed)
             channelManager.notifyHandlers('typing', { 
                 streamId: streamId, 
-                user: msg.senderId || msg.user 
+                user: msg.account || msg.user 
             });
         } else if (msg.type === 'admin_invalidate') {
             // Apply the canonical ADMIN_STATE snapshot embedded in the
@@ -513,9 +513,9 @@ class SubscriptionManager {
             // level by the -3/P0 publish permission (only the channel admin
             // can publish moderation), and the matching -2/P0 signal is
             // published by the same admin. We additionally inject createdBy
-            // from the senderId so applyAdminState's owner check passes.
+            // from the account so applyAdminState's owner check passes.
             if (!msg.snapshot || typeof msg.snapshot !== 'object') return;
-            const sender = (msg.senderId || msg.user || '').toLowerCase();
+            const sender = (msg.account || msg.user || '').toLowerCase();
             if (!msg.snapshot.createdBy && sender) {
                 msg.snapshot.createdBy = sender;
             }
@@ -534,7 +534,7 @@ class SubscriptionManager {
      * Essential for P2P file transfers to work in preview mode
      * @private
      */
-    _handlePreviewMedia(messageStreamId, msg, senderId) {
+    _handlePreviewMedia(messageStreamId, msg, account) {
         if (!msg?.type && !(msg instanceof Uint8Array)) return;
 
         // Drop media from stale preview subscriptions.
@@ -549,7 +549,7 @@ class SubscriptionManager {
         
         // Forward to mediaController for processing
         // This enables piece_request handling, file_piece reception, etc.
-        mediaController.handleMediaMessage(messageStreamId, msg, senderId);
+        mediaController.handleMediaMessage(messageStreamId, msg, account);
     }
 
     /**
@@ -961,7 +961,7 @@ class SubscriptionManager {
                     channelLatestMessageManager.setFromLocal(messageStreamId, {
                         ...latestPreviewCandidate,
                         sender: latestPreviewCandidate.sender
-                            || latestPreviewCandidate.senderId
+                            || latestPreviewCandidate.account
                             || latestPreviewCandidate._publisherId
                             || null,
                         timestamp: latestPreviewCandidate.timestamp

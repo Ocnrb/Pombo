@@ -4,7 +4,7 @@
 // to have scope over all pages.
 // ================================================
 
-const SW_VERSION = '2.3.0';
+const SW_VERSION = '2.4.0';
 
 // ================================================
 // INDEXEDDB CONFIGURATION
@@ -169,53 +169,10 @@ async function syncChannelsToIndexedDB(channels) {
     });
 }
 
-async function syncDMPeersToIndexedDB(dmPeers) {
-    if (!db) await openDatabase();
-    if (!dmPeers || dmPeers.length === 0) return;
-    
-    return new Promise((resolve, reject) => {
-        const tx = db.transaction(STORES.DM_PEERS, 'readwrite');
-        const store = tx.objectStore(STORES.DM_PEERS);
-        
-        // Clear old peers
-        const clearReq = store.clear();
-        
-        clearReq.onsuccess = () => {
-            // Add new peers
-            for (const peer of dmPeers) {
-                store.put({
-                    address: peer.address.toLowerCase(),
-                    name: peer.name
-                });
-            }
-        };
-        
-        tx.oncomplete = () => {
-            console.log('[SW] Synced', dmPeers.length, 'DM peers to IndexedDB');
-            resolve();
-        };
-        tx.onerror = () => reject(tx.error);
-    });
-}
-
-async function getDMPeerName(address) {
-    if (!db) await openDatabase();
-    if (!address) return null;
-    
-    return new Promise((resolve) => {
-        const tx = db.transaction(STORES.DM_PEERS, 'readonly');
-        const store = tx.objectStore(STORES.DM_PEERS);
-        
-        const request = store.get(address.toLowerCase());
-        
-        request.onsuccess = () => {
-            resolve(request.result?.name || null);
-        };
-        request.onerror = () => {
-            resolve(null);
-        };
-    });
-}
+// DM peer name sync/lookup removed: sealed sender makes the SW unable to
+// identify a DM's sender, so there was nothing left to look a name up for.
+// The empty DM_PEERS object store is left in place on existing installs
+// (harmless) rather than forcing an IndexedDB migration.
 
 // ================================================
 // HTTP VERIFICATION FUNCTIONS
@@ -425,16 +382,29 @@ async function handlePushWithVerification(pushData) {
 }
 
 async function showVerifiedNotification(channelWithNews) {
-    // For DM notifications, look up the sender's name
-    let title = channelWithNews.name || 'Pombo';
-    
-    if (channelWithNews.type === 'dm' && channelWithNews.publisherId) {
-        const senderName = await getDMPeerName(channelWithNews.publisherId);
-        if (senderName) {
-            title = senderName;
-        }
+    // Title. DMs are deliberately MINIMAL and never name the sender.
+    //
+    // Under sealed sender the row's publisherId is a throwaway key and the
+    // real sender lives inside the ECDH ciphertext — unreadable without the
+    // wallet private key, which the service worker does not have and must
+    // never hold (it lives behind the page's unlock-derived AES key, in page
+    // memory only). Attributing from the throwaway publisherId would be
+    // wrong, so we don't try: a DM notification says only that one arrived.
+    // Per-peer mute is unavailable here for the same reason — the sender
+    // cannot be known — so a muted peer may still produce this generic
+    // notification when no tab is open; the app-layer honours the mute
+    // whenever a tab is alive. See the port brief.
+    let title;
+    if (channelWithNews.type === 'dm' || channelWithNews.type === 'dm-inbox') {
+        title = 'Pombo';
+    } else if (channelWithNews.type === 'private' || channelWithNews.type === 'native') {
+        title = channelWithNews.name || 'Pombo';
+    } else {
+        // Public channel: content is public by design, so the channel name
+        // and a preview are not a disclosure.
+        title = channelWithNews.name || 'Pombo';
     }
-    
+
     const body = getMessagePreview(channelWithNews);
     
     const options = {
@@ -594,12 +564,9 @@ self.addEventListener('message', async (event) => {
     if (type === 'SYNC_CHANNELS') {
         console.log('[SW] Syncing channels:', event.data.channels?.length || 0);
         await syncChannelsToIndexedDB(event.data.channels || []);
-        
-        // Also sync DM peer names if provided
-        if (event.data.dmPeers && event.data.dmPeers.length > 0) {
-            console.log('[SW] Syncing DM peers:', event.data.dmPeers.length);
-            await syncDMPeersToIndexedDB(event.data.dmPeers);
-        }
+        // DM peer names are no longer synced: under sealed sender the SW cannot
+        // know a DM's sender (see showVerifiedNotification), so a peer
+        // address→name map here would be unused identity data — dropped.
         return;
     }
     

@@ -125,11 +125,6 @@ export const CONFIG = {
         loadMoreCount: 100,
         // Time window (ms) per pagination search (7 days)
         searchWindowMs: 7 * 24 * 3600 * 1000,
-        // Pre-agreed encryption key for Streamr native layer (all Pombo DMs use this)
-        // Real E2E security comes from ECDH app-layer encryption, not this key
-        // This allows history/resend without key-exchange (publisher offline)
-        encryptionKeyId: 'pombo-dm-v1',
-        encryptionKeyHex: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2'
     },
 
     // Channel Settings
@@ -151,6 +146,16 @@ export const CONFIG = {
         maxEnsCacheSize: 500,                          // Max cached ENS entries
         messageTimestampToleranceMs: 5 * 60 * 1000,    // 5min replay-attack window
         providerCooldownMs: 5 * 60 * 1000,             // Skip failed ENS provider for 5min
+        // Privacy: every reverse lookup tells the RPC operator who you talk to.
+        // Each real lookup is accompanied by this many throwaway ones, so the
+        // operator sees N+1 addresses and cannot tell which is real. Same
+        // k-anonymity idea as push.tagBytes. Set to 0 to disable.
+        //
+        // Kept at 2 because the free ENS tiers 429 easily: cover is fired once
+        // per resolution (not per provider), but a null result still walks all
+        // providers, so the ceiling is N+numProviders requests.
+        ensDecoyCount: 2,
+        ensQueueGapMs: 250,                            // Gap between background ENS lookups
         ipfsGateway: 'https://ipfs.io/ipfs/' // Gateway for ipfs:// avatar URIs (cloudflare-ipfs.com is dead)
     },
 

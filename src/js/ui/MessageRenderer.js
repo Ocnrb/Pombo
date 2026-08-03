@@ -806,7 +806,7 @@ class MessageRenderer {
         const senderRowHtml = `
                     <div class="message-sender-row flex items-center gap-1 mb-0">
                         ${badge.html}
-                        <span class="text-[13px] font-medium" style="color: ${senderColor}">${escapeHtml(sanitizeText(truncatedName))}</span>
+                        <span class="message-sender-name text-[13px] font-medium" style="color: ${senderColor}">${escapeHtml(sanitizeText(truncatedName))}</span>
                     </div>`;
 
         return `
