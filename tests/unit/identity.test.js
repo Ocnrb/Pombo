@@ -691,9 +691,11 @@ describe('IdentityManager', () => {
 
             expect(manifest.type).toBe('file_announce');
             expect(manifest.metadata).toBe(metadata);
-            expect(manifest.signature).toBe('0xMockSignature');
-            expect(manifest.channelId).toBe('c1');
-            expect(manifest.sender).toBe('0xTestUser');
+            expect(manifest.sender).toBe('0xTestUser');  // local stamp, stripped at egress
+
+            // D6/D7: neither travels on the wire any more.
+            expect(manifest.signature).toBeUndefined();
+            expect(manifest.channelId).toBeUndefined();
         });
 
         it('verifies a file_announce against the manifest hash, not the empty-text hash', async () => {

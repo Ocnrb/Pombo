@@ -44,7 +44,8 @@ vi.mock('../../src/js/streamr.js', () => ({
 
 vi.mock('../../src/js/dm.js', () => ({
     dmManager: {
-        hasInbox: vi.fn().mockResolvedValue(true)
+        hasInbox: vi.fn().mockResolvedValue(true),
+        sealAndPublish: vi.fn().mockResolvedValue({ messageId: { publisherId: '0xEphemeral' } })
     }
 }));
 
@@ -100,7 +101,11 @@ vi.mock('../../src/js/dmCrypto.js', () => ({
         deriveSharedKey: vi.fn().mockResolvedValue({ type: 'secret' }),
         encrypt: vi.fn().mockResolvedValue({ ct: 'encrypted', iv: 'iv123', e: 'aes-256-gcm' }),
         decrypt: vi.fn().mockImplementation(async (env) => env._decrypted || { type: 'sync', v: 1, ts: Date.now(), data: {} }),
-        isEncrypted: vi.fn().mockReturnValue(true)
+        isEncrypted: vi.fn().mockReturnValue(true),
+        // Sealed sender (v2). Default off — legacy self-ECDH still has to work
+        // for sync history already in storage.
+        isSealed: vi.fn().mockReturnValue(false),
+        open: vi.fn().mockResolvedValue({ sender: '0xabc123', message: { type: 'sync', v: 1 } })
     }
 }));
 
@@ -268,11 +273,12 @@ describe('syncManager', () => {
             
             await syncManager.pushSync();
             
-            expect(dmCrypto.encrypt).toHaveBeenCalled();
-            expect(streamrController.publish).toHaveBeenCalledWith(
+            // Sealed to ourselves and published under a throwaway identity
+            expect(dmManager.sealAndPublish).toHaveBeenCalledWith(
                 expect.any(String),
-                1, // SYNC partition
-                expect.objectContaining({ ct: 'encrypted' })
+                expect.any(String),                          // our own address
+                expect.objectContaining({ type: 'sync' }),
+                1                                            // SYNC partition
             );
         });
 
@@ -287,7 +293,7 @@ describe('syncManager', () => {
 
         it('should reset isSyncing even on error', async () => {
             authManager.wallet = { privateKey: '0x1234' };
-            streamrController.publish.mockRejectedValue(new Error('Network error'));
+            dmManager.sealAndPublish.mockRejectedValueOnce(new Error("Network error"));
             
             await expect(syncManager.pushSync()).rejects.toThrow();
             
@@ -330,15 +336,21 @@ describe('syncManager', () => {
             expect(result).toBe(null);
         });
 
-        it('should ignore messages from other senders', async () => {
+        it('should ignore payloads it cannot open', async () => {
+            // The publisherId check is gone: sealed pushes carry a throwaway
+            // publisher, so "is the publisher me?" rejected our own sync.
+            // The guarantee is unchanged and arguably stronger — payloads are
+            // encrypted to our own key, so anything we cannot open is not ours.
+            // Anyone may drop junk in the inbox; nobody else can make it open.
             authManager.wallet = { privateKey: '0x1234' };
             authManager.getAddress.mockReturnValue('0xabc123');
             streamrController.fetchPartitionHistory.mockResolvedValue([
-                { content: { ct: 'enc' }, publisherId: '0xOTHER', timestamp: 1000 }
+                { content: { ct: 'junk from a stranger' }, publisherId: '0xOTHER', timestamp: 1000 }
             ]);
-            
+            dmCrypto.decrypt.mockRejectedValueOnce(new Error('bad auth tag'));
+
             const result = await syncManager.pullSync();
-            
+
             expect(result).toBe(null);
         });
 

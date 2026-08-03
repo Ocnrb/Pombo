@@ -94,6 +94,7 @@ vi.mock('../../src/js/streamr.js', () => ({
         isSubscribedToPartition: vi.fn().mockReturnValue(false),
         unsubscribe: vi.fn().mockResolvedValue(undefined),
         publishMessage: vi.fn().mockResolvedValue(undefined),
+        publishAs: vi.fn().mockResolvedValue({ messageId: { publisherId: '0xEphemeral' } }),
         getDMPublicKey: vi.fn().mockResolvedValue('0x02peerpubkey'),
         setDMEncryptionKey: vi.fn().mockResolvedValue(undefined),
         setDMPublishKey: vi.fn().mockResolvedValue(undefined),
@@ -111,6 +112,7 @@ vi.mock('../../src/js/streamr.js', () => ({
     },
     STREAM_CONFIG: {
         MESSAGE_STREAM: {
+            MESSAGES: 0,
             NOTIFICATIONS: 3
         },
         EPHEMERAL_STREAM: {
@@ -130,6 +132,28 @@ vi.mock('../../src/js/dmCrypto.js', () => ({
         encryptBinary: vi.fn().mockImplementation(async (data) => new Uint8Array([0xFF, ...data])),
         decryptBinary: vi.fn().mockImplementation(async (data) => data.slice(1)),
         isEncrypted: vi.fn().mockReturnValue(false),
+        // Sealed sender (v2). Defaults to false so these tests keep exercising
+        // the plaintext / v1 paths; individual tests flip it when they need v2.
+        isSealed: vi.fn().mockReturnValue(false),
+        // Sealed binary (P7). Same default: off unless a test opts in.
+        isSealedBinary: vi.fn().mockReturnValue(false),
+        openBinary: vi.fn().mockResolvedValue({
+            sender: '0xPeerSender',
+            bytes: new Uint8Array([10, 20, 30])
+        }),
+        createBinarySealer: vi.fn().mockResolvedValue({
+            ephemeralPublicKey: '0x02eph',
+            ephemeralPrivateKey: '0x' + '22'.repeat(32),
+            seal: vi.fn().mockImplementation(async (b) => new Uint8Array([0x02, ...b]))
+        }),
+        seal: vi.fn().mockImplementation(async (msg) => ({
+            envelope: { v: 2, epk: '0x02eph', ct: 'sealed', iv: 'iv', e: 'aes-256-gcm', _original: msg },
+            ephemeralPrivateKey: '0x' + '11'.repeat(32)
+        })),
+        open: vi.fn().mockImplementation(async (env) => ({
+            sender: '0xPeerSender',
+            message: env._original || { text: 'opened' }
+        })),
         peerPublicKeys: new Map(),
         sharedKeys: new Map(),
         clear: vi.fn()
@@ -162,6 +186,16 @@ vi.mock('../../src/js/notifications.js', () => ({
         isMuted: vi.fn().mockReturnValue(false)
     }
 }));
+
+// Exposed by streamr-bundle.js in the browser. sealAndPublish turns the
+// ephemeral private key from seal() into a Streamr signing identity.
+globalThis.EthereumKeyPairIdentity = {
+    fromPrivateKey: vi.fn((pk) => ({
+        getUserId: async () => '0xEphemeral',
+        getSignatureType: () => 2,
+        _privateKey: pk
+    }))
+};
 
 import { dmManager } from '../../src/js/dm.js';
 import { authManager } from '../../src/js/auth.js';
@@ -440,7 +474,7 @@ describe('DMManager', () => {
 
     // ==================== routeInboxMessage() ====================
     describe('routeInboxMessage()', () => {
-        it('should ignore messages without senderId', async () => {
+        it('should ignore messages without account', async () => {
             await dmManager.routeInboxMessage({});
             await dmManager.routeInboxMessage(null);
 
@@ -449,7 +483,7 @@ describe('DMManager', () => {
 
         it('should ignore messages from self', async () => {
             await dmManager.routeInboxMessage({
-                senderId: '0xmyaddress1234567890abcdef12345678',
+                account: '0xmyaddress1234567890abcdef12345678',
                 id: 'msg-1',
                 text: 'echo'
             });
@@ -470,7 +504,7 @@ describe('DMManager', () => {
             dmManager.conversations.set(peerAddress, streamId);
 
             await dmManager.routeInboxMessage({
-                senderId: peerAddress,
+                account: peerAddress,
                 id: 'msg-remote-1',
                 text: 'Hello!',
                 timestamp: Date.now()
@@ -495,7 +529,7 @@ describe('DMManager', () => {
             dmManager.conversations.set(peerAddress, streamId);
 
             await dmManager.routeInboxMessage({
-                senderId: peerAddress,
+                account: peerAddress,
                 id: 'dup-1',
                 text: 'Already here',
                 timestamp: 1
@@ -529,7 +563,7 @@ describe('DMManager', () => {
             });
 
             await dmManager.routeInboxMessage({
-                senderId: peerAddress,
+                account: peerAddress,
                 ct: 'ciphertext',
                 iv: 'iv',
                 e: 'aes-256-gcm'
@@ -542,8 +576,8 @@ describe('DMManager', () => {
             // Sender-side flags must be stripped
             expect(channel.messages[0]._dmSent).toBeUndefined();
             expect(channel.messages[0].pending).toBeUndefined();
-            // senderId must be restored from envelope
-            expect(channel.messages[0].senderId).toBe(peerAddress);
+            // account must be restored from envelope
+            expect(channel.messages[0].account).toBe(peerAddress);
         });
 
         it('should silently drop messages that fail to decrypt', async () => {
@@ -562,7 +596,7 @@ describe('DMManager', () => {
             dmCrypto.decrypt.mockRejectedValueOnce(new Error('Bad ciphertext'));
 
             await dmManager.routeInboxMessage({
-                senderId: peerAddress,
+                account: peerAddress,
                 ct: 'corrupt',
                 iv: 'iv',
                 e: 'aes-256-gcm'
@@ -584,7 +618,7 @@ describe('DMManager', () => {
             dmManager.conversations.set(peerAddress, `${peerAddress}/Pombo-DM-1`);
 
             await dmManager.routeInboxMessage({
-                senderId: peerAddress,
+                account: peerAddress,
                 type: 'reaction',
                 messageId: 'msg1',
                 emoji: '👍',
@@ -601,7 +635,7 @@ describe('DMManager', () => {
                     type: 'reaction',
                     messageId: 'msg1',
                     emoji: '👍',
-                    senderId: peerAddress
+                    account: peerAddress
                 })
             );
         });
@@ -621,7 +655,7 @@ describe('DMManager', () => {
             secureStorage.isBlocked.mockReturnValueOnce(true);
 
             await dmManager.routeInboxMessage({
-                senderId: peerAddress,
+                account: peerAddress,
                 id: 'blocked-msg-1',
                 text: 'You should not see this',
                 timestamp: Date.now()
@@ -647,7 +681,7 @@ describe('DMManager', () => {
             secureStorage.getDMLeftAt.mockReturnValueOnce(leaveTs);
 
             await dmManager.routeInboxMessage({
-                senderId: peerAddress,
+                account: peerAddress,
                 id: 'old-msg',
                 text: 'Old message',
                 timestamp: leaveTs - 100 // older than leave
@@ -673,7 +707,7 @@ describe('DMManager', () => {
             secureStorage.getDMLeftAt.mockReturnValueOnce(leaveTs);
 
             await dmManager.routeInboxMessage({
-                senderId: peerAddress,
+                account: peerAddress,
                 id: 'new-msg',
                 text: 'New message!',
                 timestamp: leaveTs + 500 // newer than leave
@@ -687,7 +721,7 @@ describe('DMManager', () => {
 
     // ==================== routeInboxControl() ====================
     describe('routeInboxControl()', () => {
-        it('should ignore messages without senderId', async () => {
+        it('should ignore messages without account', async () => {
             await dmManager.routeInboxControl({});
             await dmManager.routeInboxControl(null);
 
@@ -696,7 +730,7 @@ describe('DMManager', () => {
 
         it('should ignore messages from self', async () => {
             await dmManager.routeInboxControl({
-                senderId: '0xmyaddress1234567890abcdef12345678',
+                account: '0xmyaddress1234567890abcdef12345678',
                 type: 'typing'
             });
 
@@ -705,7 +739,7 @@ describe('DMManager', () => {
 
         it('should ignore messages from unknown senders', async () => {
             await dmManager.routeInboxControl({
-                senderId: '0xunknown',
+                account: '0xunknown',
                 type: 'typing'
             });
 
@@ -720,7 +754,7 @@ describe('DMManager', () => {
             secureStorage.isBlocked.mockReturnValueOnce(true);
 
             await dmManager.routeInboxControl({
-                senderId: peerAddress,
+                account: peerAddress,
                 type: 'typing',
                 isTyping: true
             });
@@ -736,7 +770,7 @@ describe('DMManager', () => {
             secureStorage.getDMLeftAt.mockReturnValueOnce(1000);
 
             await dmManager.routeInboxControl({
-                senderId: peerAddress,
+                account: peerAddress,
                 type: 'typing',
                 isTyping: true
             });
@@ -749,7 +783,7 @@ describe('DMManager', () => {
             const streamId = `${peerAddress}/Pombo-DM-1`;
             dmManager.conversations.set(peerAddress, streamId);
 
-            const data = { senderId: peerAddress, type: 'typing', isTyping: true };
+            const data = { account: peerAddress, type: 'typing', isTyping: true };
             await dmManager.routeInboxControl(data);
 
             expect(channelManager.handleControlMessage).toHaveBeenCalledWith(streamId, data);
@@ -764,7 +798,7 @@ describe('DMManager', () => {
             dmCrypto.decrypt.mockResolvedValueOnce({ type: 'typing', timestamp: 12345 });
 
             await dmManager.routeInboxControl({
-                senderId: peerAddress,
+                account: peerAddress,
                 ct: 'enc', iv: 'iv', e: 'aes-256-gcm'
             });
 
@@ -773,7 +807,7 @@ describe('DMManager', () => {
                 streamId,
                 expect.objectContaining({
                     type: 'typing',
-                    senderId: peerAddress,
+                    account: peerAddress,
                     user: peerAddress
                 })
             );
@@ -788,7 +822,7 @@ describe('DMManager', () => {
             dmCrypto.decrypt.mockResolvedValueOnce({ type: 'presence', nickname: 'Bob', lastActive: 99999 });
 
             await dmManager.routeInboxControl({
-                senderId: peerAddress,
+                account: peerAddress,
                 ct: 'enc', iv: 'iv', e: 'aes-256-gcm'
             });
 
@@ -796,7 +830,7 @@ describe('DMManager', () => {
                 streamId,
                 expect.objectContaining({
                     type: 'presence',
-                    senderId: peerAddress,
+                    account: peerAddress,
                     userId: peerAddress,
                     address: peerAddress,
                     nickname: 'Bob'
@@ -813,7 +847,7 @@ describe('DMManager', () => {
             dmCrypto.decrypt.mockRejectedValueOnce(new Error('Bad key'));
 
             await dmManager.routeInboxControl({
-                senderId: peerAddress,
+                account: peerAddress,
                 ct: 'corrupt', iv: 'iv', e: 'aes-256-gcm'
             });
 
@@ -875,14 +909,14 @@ describe('DMManager', () => {
 
     // ==================== routeNotification() ====================
     describe('routeNotification()', () => {
-        it('should ignore messages without senderId', async () => {
+        it('should ignore messages without account', async () => {
             await dmManager.routeNotification({});
             expect(notificationManager.handleNotification).not.toHaveBeenCalled();
         });
 
         it('should ignore own messages', async () => {
             await dmManager.routeNotification({
-                senderId: '0xmyaddress1234567890abcdef12345678'
+                account: '0xmyaddress1234567890abcdef12345678'
             });
             expect(notificationManager.handleNotification).not.toHaveBeenCalled();
         });
@@ -890,14 +924,14 @@ describe('DMManager', () => {
         it('should ignore blocked peers', async () => {
             secureStorage.isBlocked.mockReturnValueOnce(true);
             await dmManager.routeNotification({
-                senderId: '0xblockedpeer00000000000000000000000000000'
+                account: '0xblockedpeer00000000000000000000000000000'
             });
             expect(notificationManager.handleNotification).not.toHaveBeenCalled();
         });
 
         it('should decrypt and delegate to notificationManager', async () => {
             const data = {
-                senderId: '0xpeer111111111111111111111111111111111111',
+                account: '0xpeer111111111111111111111111111111111111',
                 type: 'CHANNEL_INVITE',
                 inviteId: 'inv_1'
             };
@@ -995,12 +1029,14 @@ describe('DMManager', () => {
 
             await dmManager.sendMessage(streamId, 'Hello peer!');
 
-            // Message is E2E encrypted before publish
-            expect(dmCrypto.encrypt).toHaveBeenCalled();
-            expect(streamrController.publishMessage).toHaveBeenCalledWith(
+            // Sealed sender: the envelope goes out under a throwaway identity,
+            // so the inbox stream no longer carries the sender-recipient edge.
+            expect(dmCrypto.seal).toHaveBeenCalled();
+            expect(streamrController.publishAs).toHaveBeenCalledWith(
+                expect.anything(),                                  // ephemeral identity
                 streamId,
-                expect.objectContaining({ ct: 'enc', iv: 'iv', e: 'aes-256-gcm' }),
-                null
+                expect.any(Number),
+                expect.objectContaining({ v: 2, epk: expect.any(String) })
             );
         });
 
@@ -1016,12 +1052,12 @@ describe('DMManager', () => {
 
             await dmManager.sendMessage(streamId, 'Clean payload');
 
-            // Verify encrypt was called with a clean message (no sender-only flags)
-            const encryptedInput = dmCrypto.encrypt.mock.calls[0][0];
-            expect(encryptedInput.text).toBe('Clean payload');
-            expect(encryptedInput.pending).toBeUndefined();
-            expect(encryptedInput._dmSent).toBeUndefined();
-            expect(encryptedInput.verified).toBeUndefined();
+            // Verify seal was called with a clean message (no sender-only flags)
+            const sealedInput = dmCrypto.seal.mock.calls[0][0];
+            expect(sealedInput.text).toBe('Clean payload');
+            expect(sealedInput.pending).toBeUndefined();
+            expect(sealedInput._dmSent).toBeUndefined();
+            expect(sealedInput.verified).toBeUndefined();
         });
 
         it('should persist sent message to secureStorage', async () => {
@@ -1076,7 +1112,7 @@ describe('DMManager', () => {
                 .rejects.toThrow('peer public key not available');
 
             // Must NOT have published anything
-            expect(streamrController.publishMessage).not.toHaveBeenCalled();
+            expect(streamrController.publishAs).not.toHaveBeenCalled();
         });
 
         it('should throw when wallet private key is missing', async () => {
@@ -1095,7 +1131,7 @@ describe('DMManager', () => {
             await expect(dmManager.sendMessage(streamId, 'Should fail'))
                 .rejects.toThrow('wallet private key not available');
 
-            expect(streamrController.publishMessage).not.toHaveBeenCalled();
+            expect(streamrController.publishAs).not.toHaveBeenCalled();
             authManager.wallet = original;
         });
 
@@ -1497,13 +1533,84 @@ describe('DMManager', () => {
             streamrController.getDMPublicKey.mockResolvedValue('0x02peerpubkey');
         });
 
+        afterEach(() => {
+            // isSealed is consulted twice per call, so mockReturnValueOnce is not
+            // enough — reset it here or later suites route down the sealed path.
+            dmCrypto.isSealed.mockReturnValue(false);
+            dmCrypto.isSealedBinary.mockReturnValue(false);
+            if (dmManager.openDMEnvelope.mockRestore) dmManager.openDMEnvelope.mockRestore();
+        });
+
+        it('should open a sealed binary piece and route it by the proved sender', async () => {
+            // Binary carries no JSON, so the proof rides inside the ciphertext.
+            // Opening yields the real sender; the publisherId is a throwaway.
+            const sealedPiece = new Uint8Array([0x02, ...new Array(200).fill(7)]);
+            dmCrypto.isSealedBinary.mockReturnValue(true);
+            dmCrypto.openBinary.mockResolvedValue({
+                sender: peerAddress,
+                bytes: new Uint8Array([10, 20, 30])
+            });
+
+            await dmManager.routeInboxMedia(sealedPiece, '0xthrowawaypublisher00000000000000000000');
+
+            expect(dmCrypto.decryptBinary).not.toHaveBeenCalled();
+            expect(mediaController.handleMediaMessage).toHaveBeenCalledWith(
+                peerInboxId, new Uint8Array([10, 20, 30]), peerAddress
+            );
+        });
+
+        it('should fall back to legacy when a binary only looks sealed', async () => {
+            // A v1 binary starts with a random IV byte, so 1 in 256 matches the
+            // version check. Failing to open must not drop the piece.
+            const legacyPiece = new Uint8Array([0x02, ...new Array(200).fill(3)]);
+            dmCrypto.isSealedBinary.mockReturnValue(true);
+            dmCrypto.openBinary.mockRejectedValue(new Error('bad auth tag'));
+            dmCrypto.decryptBinary.mockResolvedValue(new Uint8Array([1, 2, 3]));
+
+            await dmManager.routeInboxMedia(legacyPiece, peerAddress);
+
+            expect(dmCrypto.decryptBinary).toHaveBeenCalled();
+            expect(mediaController.handleMediaMessage).toHaveBeenCalledWith(
+                peerInboxId, new Uint8Array([1, 2, 3]), peerAddress
+            );
+        });
+
         it('should forward JSON signal to mediaController', async () => {
-            const data = { type: 'image_request', imageId: 'img-1', senderId: peerAddress };
+            const data = { type: 'image_request', imageId: 'img-1', account: peerAddress };
             await dmManager.routeInboxMedia(data);
 
             expect(mediaController.handleMediaMessage).toHaveBeenCalledWith(
-                peerInboxId, data, undefined
+                peerInboxId, data, peerAddress
             );
+        });
+
+        it('should open a sealed signal before resolving the conversation', async () => {
+            // The publisherId on a sealed signal is a throwaway key. Resolving
+            // the conversation from it finds nothing, so the signal must be
+            // opened first and routed by the sender proved inside.
+            const envelope = { v: 2, epk: '0x02epk', ct: 'sealed', iv: 'iv', e: 'aes-256-gcm' };
+            dmCrypto.isSealed.mockReturnValue(true);
+            vi.spyOn(dmManager, 'openDMEnvelope').mockResolvedValue({
+                type: 'source_announce', fileId: 'f1', account: peerAddress
+            });
+
+            await dmManager.routeInboxMedia(envelope, '0xthrowawaypublisher00000000000000000000');
+
+            expect(dmManager.openDMEnvelope).toHaveBeenCalledWith(envelope);
+            expect(mediaController.handleMediaMessage).toHaveBeenCalledWith(
+                peerInboxId,
+                expect.objectContaining({ type: 'source_announce', fileId: 'f1' }),
+                peerAddress
+            );
+        });
+
+        it('should drop a sealed signal it cannot open', async () => {
+            dmCrypto.isSealed.mockReturnValue(true);
+            vi.spyOn(dmManager, 'openDMEnvelope').mockResolvedValue(null);
+
+            await dmManager.routeInboxMedia({ v: 2, ct: 'nope' }, peerAddress);
+
+            expect(mediaController.handleMediaMessage).not.toHaveBeenCalled();
         });
 
         it('should forward binary data with ECDH decryption to mediaController', async () => {
@@ -1520,7 +1627,7 @@ describe('DMManager', () => {
         });
 
         it('should decrypt encrypted JSON signal with ECDH key', async () => {
-            const envelope = { ct: 'enc', iv: 'iv', e: 'aes-256-gcm', senderId: peerAddress };
+            const envelope = { ct: 'enc', iv: 'iv', e: 'aes-256-gcm', account: peerAddress };
             dmCrypto.isEncrypted.mockReturnValue(true);
             dmCrypto.decrypt.mockResolvedValue({ type: 'piece_request', fileId: 'f1' });
 
@@ -1530,7 +1637,7 @@ describe('DMManager', () => {
             expect(dmCrypto.decrypt).toHaveBeenCalledWith(envelope, 'mock-aes-key');
             const calledData = mediaController.handleMediaMessage.mock.calls[0][1];
             expect(calledData.type).toBe('piece_request');
-            expect(calledData.senderId).toBe(peerAddress);
+            expect(calledData.account).toBe(peerAddress);
         });
 
         it('should decrypt binary with ECDH decryptBinary', async () => {
@@ -1545,13 +1652,13 @@ describe('DMManager', () => {
         });
 
         it('should ignore messages from self', async () => {
-            const data = { type: 'image_request', senderId: '0xmyaddress1234567890abcdef12345678' };
+            const data = { type: 'image_request', account: '0xmyaddress1234567890abcdef12345678' };
             await dmManager.routeInboxMedia(data);
 
             expect(mediaController.handleMediaMessage).not.toHaveBeenCalled();
         });
 
-        it('should ignore messages without senderId', async () => {
+        it('should ignore messages without account', async () => {
             await dmManager.routeInboxMedia({});
 
             expect(mediaController.handleMediaMessage).not.toHaveBeenCalled();
@@ -1559,7 +1666,7 @@ describe('DMManager', () => {
 
         it('should ignore messages from blocked senders', async () => {
             secureStorage.isBlocked.mockReturnValue(true);
-            const data = { type: 'image_request', senderId: peerAddress };
+            const data = { type: 'image_request', account: peerAddress };
             await dmManager.routeInboxMedia(data);
 
             expect(mediaController.handleMediaMessage).not.toHaveBeenCalled();
@@ -1567,7 +1674,7 @@ describe('DMManager', () => {
         });
 
         it('should ignore messages from unknown senders', async () => {
-            const data = { type: 'image_request', senderId: '0xunknownpeer' };
+            const data = { type: 'image_request', account: '0xunknownpeer' };
             await dmManager.routeInboxMedia(data);
 
             expect(mediaController.handleMediaMessage).not.toHaveBeenCalled();
@@ -1576,7 +1683,7 @@ describe('DMManager', () => {
         it('should silently skip decryption when peer public key unavailable', async () => {
             dmCrypto.peerPublicKeys.clear();
             streamrController.getDMPublicKey.mockResolvedValue(null);
-            const data = { type: 'source_announce', senderId: peerAddress };
+            const data = { type: 'source_announce', account: peerAddress };
             await dmManager.routeInboxMedia(data);
 
             expect(dmCrypto.decrypt).not.toHaveBeenCalled();
@@ -1584,7 +1691,7 @@ describe('DMManager', () => {
         });
 
         it('should return early on decryption failure', async () => {
-            const envelope = { ct: 'bad', iv: 'iv', e: 'aes-256-gcm', senderId: peerAddress };
+            const envelope = { ct: 'bad', iv: 'iv', e: 'aes-256-gcm', account: peerAddress };
             dmCrypto.isEncrypted.mockReturnValue(true);
             dmCrypto.decrypt.mockRejectedValue(new Error('Auth tag mismatch'));
 
@@ -1661,7 +1768,7 @@ describe('DMManager', () => {
 
             // Invoke the captured callback to cover the inline arrow
             const cb = streamrController.subscribeToPartition.mock.calls[0][2];
-            await cb({ /* no senderId */ }); // returns early — covers route
+            await cb({ /* no account */ }); // returns early — covers route
         });
 
         it('should handle subscribeToPartition error gracefully', async () => {
@@ -1743,8 +1850,7 @@ describe('DMManager', () => {
             expect(secureStorage.updateSentMessage).toHaveBeenCalledWith(
                 streamId, 'm-1', expect.objectContaining({ text: 'edited', _edited: true })
             );
-            expect(streamrController.setDMPublishKey).toHaveBeenCalledWith(streamId);
-            expect(streamrController.publishMessage).toHaveBeenCalled();
+            expect(streamrController.publishAs).toHaveBeenCalled();
         });
 
         it('should throw when peer pub key is missing', async () => {
@@ -1755,7 +1861,7 @@ describe('DMManager', () => {
         });
 
         it('should not mutate local state when publish fails', async () => {
-            streamrController.publishMessage.mockRejectedValueOnce(new Error('network down'));
+            streamrController.publishAs.mockRejectedValueOnce(new Error('network down'));
 
             await expect(dmManager.sendEdit(streamId, 'm-1', 'new text'))
                 .rejects.toThrow('network down');
@@ -1809,7 +1915,7 @@ describe('DMManager', () => {
             const ch = channelManager.channels.get(streamId);
             expect(ch.messages).toHaveLength(0);
             expect(secureStorage.removeSentMessage).toHaveBeenCalledWith(streamId, 'm-1');
-            expect(streamrController.publishMessage).toHaveBeenCalled();
+            expect(streamrController.publishAs).toHaveBeenCalled();
         });
 
         it('should throw when peer pub key is missing', async () => {
@@ -1820,7 +1926,7 @@ describe('DMManager', () => {
         });
 
         it('should not remove the message locally when publish fails', async () => {
-            streamrController.publishMessage.mockRejectedValueOnce(new Error('network down'));
+            streamrController.publishAs.mockRejectedValueOnce(new Error('network down'));
 
             await expect(dmManager.sendDelete(streamId, 'm-1'))
                 .rejects.toThrow('network down');
@@ -1959,7 +2065,7 @@ describe('DMManager', () => {
             // Message stream callback (subscribeWithHistory call)
             const msgCb = streamrController.subscribeWithHistory.mock.calls[0][2];
             expect(typeof msgCb).toBe('function');
-            await msgCb({ /* no senderId */ }); // exits early but executes the arrow
+            await msgCb({ /* no account */ }); // exits early but executes the arrow
 
             // Notification stream callback (subscribeToPartition call)
             const notifCall = streamrController.subscribeToPartition.mock.calls.find(
@@ -1967,7 +2073,7 @@ describe('DMManager', () => {
             );
             expect(notifCall).toBeDefined();
             const notifCb = notifCall[2];
-            await notifCb({}); // no senderId — early return covers arrow
+            await notifCb({}); // no account — early return covers arrow
         });
     });
 
@@ -1991,7 +2097,7 @@ describe('DMManager', () => {
             expect(p1Call).toBeDefined();
             await p1Call[2]({});
 
-            // Media P2 callback (with senderId)
+            // Media P2 callback (with account)
             const p2Call = streamrController.subscribeToPartition.mock.calls.find(
                 c => c[0] === '0xmy/Pombo-DM-2' && c[1] === 2
             );

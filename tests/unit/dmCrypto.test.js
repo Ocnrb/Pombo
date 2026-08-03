@@ -236,7 +236,10 @@ describe('DMCrypto', () => {
             expect(crypto.subtle.decrypt).toHaveBeenCalledWith(
                 expect.objectContaining({ name: 'AES-GCM' }),
                 mockAesKey,
-                expect.any(ArrayBuffer)
+                // Uint8Array, not a bare ArrayBuffer: the latter fails
+                // SubtleCrypto's type check across a realm boundary. See
+                // base64ToBuf.
+                expect.any(Uint8Array)
             );
         });
 

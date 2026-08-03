@@ -11,6 +11,7 @@ vi.mock('../../src/js/streamr.js', () => ({
         publishMessage: vi.fn().mockResolvedValue(undefined),
         publishMediaSignal: vi.fn().mockResolvedValue(undefined),
         publishMediaData: vi.fn().mockResolvedValue(undefined),
+        publishMediaDataAs: vi.fn().mockResolvedValue(undefined),
         ensureMediaSubscription: vi.fn().mockResolvedValue(undefined)
     },
     deriveEphemeralId: vi.fn((id) => `ephemeral-${id}`),
@@ -71,9 +72,31 @@ vi.mock('../../src/js/secureStorage.js', () => ({
     }
 }));
 
+vi.mock('../../src/js/channelIdentity.js', () => ({
+    getChannelIdentity: vi.fn(() => ({
+        identity: { __channelIdentity: true },
+        publisherId: '0xephemeralpublisher',
+        proof: '0x' + '11'.repeat(65)
+    })),
+    dropChannelIdentity: vi.fn(),
+    clearChannelIdentities: vi.fn()
+}));
+
+vi.mock('../../src/js/publisherProof.js', () => ({
+    recoverPublisherAccount: vi.fn(() => null),
+    createPublisherProof: vi.fn(() => '0x' + '11'.repeat(65)),
+    clearPublisherProofCache: vi.fn()
+}));
+
 vi.mock('../../src/js/dm.js', () => ({
     dmManager: {
-        getPeerPublicKey: vi.fn().mockResolvedValue('peerPubKey123')
+        getPeerPublicKey: vi.fn().mockResolvedValue('peerPubKey123'),
+        sealAndPublish: vi.fn().mockResolvedValue(undefined),
+        sealFor: vi.fn().mockResolvedValue({
+            envelope: { v: 2, epk: '0x02epk', ct: 'sealed', iv: 'iv', e: 'aes-256-gcm' },
+            ephemeralPrivateKey: '0xephemeral'
+        }),
+        publishSealed: vi.fn().mockResolvedValue(undefined)
     }
 }));
 
@@ -86,6 +109,7 @@ vi.mock('../../src/js/dmCrypto.js', () => ({
 
 // Import after mocks
 import { mediaController, MEDIA_CONFIG, PieceRtoEstimator } from '../../src/js/media.js';
+import { cryptoManager } from '../../src/js/crypto.js';
 import { streamrController, deriveEphemeralId } from '../../src/js/streamr.js';
 import { authManager } from '../../src/js/auth.js';
 import { channelManager } from '../../src/js/channels.js';
@@ -513,7 +537,7 @@ describe('media.js core', () => {
             await mediaController.handleFilePiece('stream-1', {
                 fileId: 'file-1',
                 pieceIndex: 0,
-                senderId: '0xMyAddress',
+                account: '0xMyAddress',
                 data: 'base64data'
             });
 
@@ -527,7 +551,7 @@ describe('media.js core', () => {
                 mediaController.handleFilePiece('stream-1', {
                     fileId: 'no-such-file',
                     pieceIndex: 0,
-                    senderId: '0xother',
+                    account: '0xother',
                     data: 'data'
                 })
             ).resolves.not.toThrow();
@@ -542,7 +566,7 @@ describe('media.js core', () => {
             await mediaController.handleFilePiece('stream-1', {
                 fileId: 'file-1',
                 pieceIndex: 0,
-                senderId: '0xother',
+                account: '0xother',
                 data: 'data'
             });
 
@@ -558,7 +582,7 @@ describe('media.js core', () => {
             await mediaController.handleFilePiece('stream-1', {
                 fileId: 'file-1',
                 pieceIndex: 0,
-                senderId: '0xother',
+                account: '0xother',
                 data: 'data'
             });
 
@@ -577,7 +601,7 @@ describe('media.js core', () => {
             await mediaController.handleFilePiece('stream-1', {
                 fileId: 'file-1',
                 pieceIndex: 0,
-                senderId: '0xother',
+                account: '0xother',
                 data: 'baddata'
             });
 
@@ -598,7 +622,7 @@ describe('media.js core', () => {
             await mediaController.handleFilePiece('stream-1', {
                 fileId: 'file-1',
                 pieceIndex: 0,
-                senderId: '0xother',
+                account: '0xother',
                 data: 'encoded'
             });
 
@@ -623,7 +647,7 @@ describe('media.js core', () => {
             await mediaController.handleFilePiece('stream-1', {
                 fileId: 'file-1',
                 pieceIndex: 0,
-                senderId: '0xother',
+                account: '0xother',
                 data: 'encoded'
             });
 
@@ -651,7 +675,7 @@ describe('media.js core', () => {
             await mediaController.handleFilePiece('stream-1', {
                 fileId: 'file-1',
                 pieceIndex: 2,
-                senderId: '0xother',
+                account: '0xother',
                 data: 'data'
             });
 
@@ -677,7 +701,7 @@ describe('media.js core', () => {
             await mediaController.handleFilePiece('stream-1', {
                 fileId: 'file-1',
                 pieceIndex: 1,
-                senderId: '0xother',
+                account: '0xother',
                 data: 'data'
             });
 
@@ -702,7 +726,7 @@ describe('media.js core', () => {
             await mediaController.handleFilePiece('stream-1', {
                 fileId: 'file-1',
                 pieceIndex: 1,
-                senderId: '0xother',
+                account: '0xother',
                 data: 'data'
             });
 
@@ -726,7 +750,7 @@ describe('media.js core', () => {
             await mediaController.handleFilePiece('stream-1', {
                 fileId: 'file-1',
                 pieceIndex: 1,
-                senderId: '0xother',
+                account: '0xother',
                 data: 'data'
             });
 
@@ -945,11 +969,14 @@ describe('media.js core', () => {
 
             await mediaController.sendPiece('stream-1', 'file-1', 0);
 
-            expect(streamrController.publishMediaData).toHaveBeenCalledWith(
+            // Channel pieces publish under the channel's ephemeral identity,
+            // never the wallet, with the proof carried inline in the frame.
+            expect(streamrController.publishMediaDataAs).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
                 expect.any(Uint8Array),
-                null
+                { __channelIdentity: true }
             );
+            expect(streamrController.publishMediaData).not.toHaveBeenCalled();
         });
 
         it('_sendPieceImmediate skips if file not found', async () => {
@@ -964,13 +991,17 @@ describe('media.js core', () => {
                 metadata: { pieceCount: 1 }
             });
             channelManager.getChannel.mockReturnValue({ password: 'secret123' });
+            const encryptBinary = vi.spyOn(cryptoManager, 'encryptBinary');
 
             await mediaController._sendPieceImmediate('stream-1', 'file-1', 0);
 
-            expect(streamrController.publishMediaData).toHaveBeenCalledWith(
+            // The password still encrypts the frame; what changed is who signs it
+            expect(encryptBinary).toHaveBeenCalledWith(expect.any(Uint8Array), 'secret123');
+            encryptBinary.mockRestore();
+            expect(streamrController.publishMediaDataAs).toHaveBeenCalledWith(
                 'ephemeral-stream-1',
                 expect.any(Uint8Array),
-                'secret123'
+                { __channelIdentity: true }
             );
         });
     });
@@ -1661,7 +1692,7 @@ describe('media.js core', () => {
                 await mediaController.handleFilePiece('stream-1', {
                     fileId: 'file-1',
                     pieceIndex: 0,
-                    senderId: '0xother',
+                    account: '0xother',
                     data: 'data'
                 });
             }
@@ -1852,7 +1883,7 @@ describe('media.js core', () => {
             vi.spyOn(mediaController, 'manageDownload').mockImplementation(() => {});
 
             await mediaController.handleFilePiece('stream-1', {
-                fileId: 'f-attr', pieceIndex: 1, senderId: '0xOther', data: 'x'
+                fileId: 'f-attr', pieceIndex: 1, account: '0xOther', data: 'x'
             });
 
             expect(transfer.pieceExclusions.get(1).has('0xother')).toBe(true);
@@ -2263,7 +2294,7 @@ describe('media.js core', () => {
             expect(streamrController.publishMessage).toHaveBeenCalledWith('stream-1', expect.any(Object), 'pwd');
         });
 
-        it('sends DM image with E2E encryption', async () => {
+        it('seals the DM image announcement under a throwaway publisher', async () => {
             vi.spyOn(mediaController, 'resizeImage').mockResolvedValue('data:base64');
             channelManager.getChannel.mockReturnValue({
                 type: 'dm',
@@ -2274,9 +2305,17 @@ describe('media.js core', () => {
             const file = new File(['img'], 'photo.jpg', { type: 'image/jpeg' });
             await mediaController.sendImage('stream-1', file);
 
-            expect(dmManager.getPeerPublicKey).toHaveBeenCalledWith('0xpeer');
-            expect(dmCrypto.getSharedKey).toHaveBeenCalled();
-            expect(dmCrypto.encrypt).toHaveBeenCalled();
+            // Chunks and manifest are sealed for the peer, then published under
+            // the ephemeral key each seal generates — never under our account.
+            expect(dmManager.sealFor).toHaveBeenCalledWith('0xpeer', expect.any(Object));
+            expect(dmManager.publishSealed).toHaveBeenCalledWith(
+                'stream-1',
+                expect.objectContaining({
+                    envelope: expect.objectContaining({ v: 2 }),
+                    ephemeralPrivateKey: expect.any(String)
+                })
+            );
+            expect(streamrController.publishMessage).not.toHaveBeenCalled();
             expect(secureStorage.addSentMessage).toHaveBeenCalled();
         });
 
@@ -2294,9 +2333,14 @@ describe('media.js core', () => {
             expect(secureStorage.addSentMessage).toHaveBeenCalledWith('stream-1', expect.any(Object));
         });
 
-        it('throws when DM wallet private key missing', async () => {
+        it('propagates sealing failures instead of sending in the clear', async () => {
+            // sealFor raises when the wallet key or the peer public key is
+            // missing. sendImage must surface that, never fall back to an
+            // unsealed publish.
             vi.spyOn(mediaController, 'resizeImage').mockResolvedValue('data:base64');
-            authManager.wallet = null;
+            dmManager.sealFor.mockRejectedValueOnce(
+                new Error('Cannot send DM: peer public key not available')
+            );
             channelManager.getChannel.mockReturnValue({
                 type: 'dm',
                 peerAddress: '0xpeer',
@@ -2304,10 +2348,10 @@ describe('media.js core', () => {
             });
 
             const file = new File(['img'], 'photo.jpg', { type: 'image/jpeg' });
-            await expect(mediaController.sendImage('stream-1', file)).rejects.toThrow('wallet private key');
+            await expect(mediaController.sendImage('stream-1', file))
+                .rejects.toThrow('peer public key not available');
 
-            // Restore
-            authManager.wallet = { privateKey: '0xprivatekey' };
+            expect(streamrController.publishMessage).not.toHaveBeenCalled();
         });
     });
 

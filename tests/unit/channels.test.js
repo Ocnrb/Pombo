@@ -794,9 +794,9 @@ describe('ChannelManager', () => {
         });
 
         describe('handlePresenceMessage()', () => {
-            it('should add user to online users using senderId', () => {
+            it('should add user to online users using account', () => {
                 const presenceData = {
-                    senderId: 'user1',
+                    account: 'user1',
                     nickname: 'TestUser',
                     lastActive: Date.now()
                 };
@@ -808,9 +808,9 @@ describe('ChannelManager', () => {
                 expect(users.get('user1').address).toBe('user1');
             });
             
-            it('should prefer senderId over self-reported userId', () => {
+            it('should prefer account over self-reported userId', () => {
                 channelManager.handlePresenceMessage('stream1', {
-                    senderId: '0xreal',
+                    account: '0xreal',
                     userId: '0xspoofed',
                     nickname: 'Test',
                     lastActive: Date.now()
@@ -821,7 +821,7 @@ describe('ChannelManager', () => {
                 expect(users.has('0xspoofed')).toBe(false);
             });
 
-            it('should fall back to userId when senderId missing (legacy)', () => {
+            it('should fall back to userId when account missing (legacy)', () => {
                 channelManager.handlePresenceMessage('stream1', {
                     userId: 'user1',
                     nickname: 'Test',
@@ -832,7 +832,7 @@ describe('ChannelManager', () => {
                 expect(users.has('user1')).toBe(true);
             });
 
-            it('should ignore presence with no senderId or userId', () => {
+            it('should ignore presence with no account or userId', () => {
                 channelManager.handlePresenceMessage('stream1', {
                     nickname: 'Ghost',
                     lastActive: Date.now()
@@ -845,14 +845,14 @@ describe('ChannelManager', () => {
             it('should update existing user presence', () => {
                 // First presence
                 channelManager.handlePresenceMessage('stream1', {
-                    senderId: 'user1',
+                    account: 'user1',
                     nickname: 'OldName',
                     lastActive: 1000
                 });
                 
                 // Updated presence
                 channelManager.handlePresenceMessage('stream1', {
-                    senderId: 'user1',
+                    account: 'user1',
                     nickname: 'NewName',
                     lastActive: 2000
                 });
@@ -873,13 +873,13 @@ describe('ChannelManager', () => {
         });
 
         describe('handleControlMessage()', () => {
-            it('should use senderId for typing events', async () => {
+            it('should use account for typing events', async () => {
                 const handler = vi.fn();
                 channelManager.onMessage(handler);
 
                 await channelManager.handleControlMessage('stream1', {
                     type: 'typing',
-                    senderId: '0xreal_sender',
+                    account: '0xreal_sender',
                     user: '0xspoofed',
                     nickname: 'Alice'
                 });
@@ -891,7 +891,7 @@ describe('ChannelManager', () => {
                 });
             });
 
-            it('should fall back to data.user for typing when senderId missing', async () => {
+            it('should fall back to data.user for typing when account missing', async () => {
                 const handler = vi.fn();
                 channelManager.onMessage(handler);
 
@@ -907,7 +907,7 @@ describe('ChannelManager', () => {
                 });
             });
 
-            it('should use senderId for reaction events', async () => {
+            it('should use account for reaction events', async () => {
                 const channel = { reactions: {} };
                 channelManager.channels.set('stream1', channel);
                 const handler = vi.fn();
@@ -915,7 +915,7 @@ describe('ChannelManager', () => {
 
                 await channelManager.handleControlMessage('stream1', {
                     type: 'reaction',
-                    senderId: '0xreal_reactor',
+                    account: '0xreal_reactor',
                     user: '0xspoofed',
                     messageId: 'msg1',
                     emoji: '👍',
@@ -931,7 +931,7 @@ describe('ChannelManager', () => {
             it('should forward presence to handlePresenceMessage', async () => {
                 await channelManager.handleControlMessage('stream1', {
                     type: 'presence',
-                    senderId: '0xpresence_user',
+                    account: '0xpresence_user',
                     nickname: 'Alice',
                     lastActive: Date.now()
                 });
@@ -947,7 +947,7 @@ describe('ChannelManager', () => {
 
                 await channelManager.handleControlMessage('stream1', {
                     type: 'typing',
-                    senderId: '0xuser'
+                    account: '0xuser'
                 });
 
                 expect(handler).not.toHaveBeenCalled();
@@ -1518,7 +1518,7 @@ describe('ChannelManager', () => {
 
             streamrController.fetchOlderHistory.mockResolvedValue({
                 messages: [
-                    { type: 'reaction', action: 'add', messageId: 'msg-1', emoji: '👍', senderId: '0xabc', timestamp: 800 },
+                    { type: 'reaction', action: 'add', messageId: 'msg-1', emoji: '👍', account: '0xabc', timestamp: 800 },
                     { id: 'msg-2', timestamp: 600, text: 'real message', sender: '0x2' }
                 ],
                 hasMore: false
@@ -1541,7 +1541,7 @@ describe('ChannelManager', () => {
 
             streamrController.fetchOlderHistory.mockResolvedValue({
                 messages: [
-                    { type: 'reaction', action: 'add', messageId: 'msg-1', emoji: '🔥', senderId: '0xdef', timestamp: 200 }
+                    { type: 'reaction', action: 'add', messageId: 'msg-1', emoji: '🔥', account: '0xdef', timestamp: 200 }
                 ],
                 hasMore: true
             });
@@ -1559,8 +1559,8 @@ describe('ChannelManager', () => {
 
             streamrController.fetchOlderHistory.mockResolvedValue({
                 messages: [
-                    { type: 'reaction', action: 'add', messageId: 'msg-1', emoji: '👍', senderId: '0xabc', timestamp: 900 },
-                    { type: 'reaction', action: 'remove', messageId: 'msg-1', emoji: '👍', senderId: '0xabc', timestamp: 950 }
+                    { type: 'reaction', action: 'add', messageId: 'msg-1', emoji: '👍', account: '0xabc', timestamp: 900 },
+                    { type: 'reaction', action: 'remove', messageId: 'msg-1', emoji: '👍', account: '0xabc', timestamp: 950 }
                 ],
                 hasMore: true
             });
@@ -1818,7 +1818,7 @@ describe('ChannelManager', () => {
             const spy = vi.spyOn(channelManager, 'handleControlMessage');
 
             await channelManager.handleTextMessage(streamId, {
-                type: 'reaction', messageId: 'msg1', emoji: '👍', senderId: '0x1'
+                type: 'reaction', messageId: 'msg1', emoji: '👍', account: '0x1'
             });
 
             expect(spy).toHaveBeenCalled();

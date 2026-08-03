@@ -609,7 +609,7 @@ describe('media.js', () => {
             
             mediaController.handleSourceAnnounce({
                 fileId: 'file-1',
-                senderId: '0xABC123'
+                account: '0xABC123'
             });
             
             expect(seeders.has('0xabc123')).toBe(true); // lowercase
@@ -621,7 +621,7 @@ describe('media.js', () => {
             
             mediaController.handleSourceAnnounce({
                 fileId: 'file-1',
-                senderId: '0xABCDEF'
+                account: '0xABCDEF'
             });
             
             expect(seeders.has('0xabcdef')).toBe(true);
@@ -636,7 +636,7 @@ describe('media.js', () => {
             
             mediaController.handleSourceAnnounce({
                 fileId: 'file-1',
-                senderId: '0x123'
+                account: '0x123'
             });
             
             expect(handler).toHaveBeenCalledWith('file-1', 1);
@@ -647,18 +647,18 @@ describe('media.js', () => {
             expect(() => {
                 mediaController.handleSourceAnnounce({
                     fileId: 'unknown-file',
-                    senderId: '0x123'
+                    account: '0x123'
                 });
             }).not.toThrow();
         });
 
-        it('does nothing without senderId', () => {
+        it('does nothing without account', () => {
             const seeders = new Set();
             mediaController.fileSeeders.set('file-1', seeders);
             
             mediaController.handleSourceAnnounce({
                 fileId: 'file-1'
-                // no senderId
+                // no account
             });
             
             expect(seeders.size).toBe(0);

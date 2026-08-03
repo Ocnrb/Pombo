@@ -892,9 +892,9 @@ describe('SubscriptionManager', () => {
         it('should push the newest previewable message into channelLatestMessageManager', async () => {
             const now = Date.now();
             stubFetchHistoryAsync([
-                { id: 'm1', type: 'text', text: 'older', senderId: '0x1', senderName: 'Alice', timestamp: now - 500 },
-                { id: 'm2', type: 'reaction', emoji: '🔥', senderId: '0x2', timestamp: now - 300 },
-                { id: 'm3', type: 'text', text: 'newest', senderId: '0x3', senderName: 'Bob', timestamp: now - 100 }
+                { id: 'm1', type: 'text', text: 'older', account: '0x1', senderName: 'Alice', timestamp: now - 500 },
+                { id: 'm2', type: 'reaction', emoji: '🔥', account: '0x2', timestamp: now - 300 },
+                { id: 'm3', type: 'text', text: 'newest', account: '0x3', senderName: 'Bob', timestamp: now - 100 }
             ]);
             subscriptionManager.channelActivity.set('stream1', { lastMessageTime: now - 1000, unreadCount: 0, lastChecked: 0 });
 
@@ -912,7 +912,7 @@ describe('SubscriptionManager', () => {
         it('should not update the preview when only reactions are newer', async () => {
             const now = Date.now();
             stubFetchHistoryAsync([
-                { id: 'm1', type: 'reaction', emoji: '🔥', senderId: '0x1', timestamp: now - 100 }
+                { id: 'm1', type: 'reaction', emoji: '🔥', account: '0x1', timestamp: now - 100 }
             ]);
             subscriptionManager.channelActivity.set('stream1', { lastMessageTime: now - 1000, unreadCount: 0, lastChecked: 0 });
 

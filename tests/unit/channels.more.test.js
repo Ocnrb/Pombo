@@ -64,6 +64,7 @@ vi.mock('../../src/js/streamr.js', () => ({
         INITIAL_MESSAGES: 50,
         ADMIN_HISTORY_COUNT: 10,
         MESSAGE_STREAM: { MESSAGES: 0 },
+        EPHEMERAL_STREAM: { CONTROL: 0, MEDIA_SIGNALS: 1, MEDIA_DATA: 2 },
         ADMIN_STREAM: { MODERATION: 0 }
     },
     deriveEphemeralId: vi.fn((id) => `${id}-ephemeral`),
@@ -145,6 +146,7 @@ vi.mock('../../src/js/dm.js', () => ({
         unsubscribeDMEphemeral: vi.fn().mockResolvedValue(undefined),
         loadDMTimeline: vi.fn(),
         getPeerPublicKey: vi.fn().mockResolvedValue('peerPubKey123'),
+        sealAndPublish: vi.fn().mockResolvedValue({ messageId: { publisherId: '0xEphemeral' } }),
         isDMChannel: vi.fn().mockReturnValue(false),
         conversations: new Map()
     }
@@ -555,15 +557,13 @@ describe('ChannelManager - Additional Coverage', () => {
 
             await channelManager.sendReaction(streamId, messageId, '❤️');
 
-            expect(dmManager.getPeerPublicKey).toHaveBeenCalledWith('0xpeer');
-            expect(dmCrypto.getSharedKey).toHaveBeenCalled();
-            expect(dmCrypto.encrypt).toHaveBeenCalled();
-            expect(streamrController.setDMPublishKey).toHaveBeenCalledWith(streamId);
-            expect(streamrController.publishReaction).toHaveBeenCalledWith(
+            expect(dmManager.sealAndPublish).toHaveBeenCalledWith(
                 streamId,
-                expect.objectContaining({ ct: 'encrypted' }),
-                null
+                '0xpeer',
+                expect.objectContaining({ type: 'reaction' }),
+                expect.any(Number)
             );
+            expect(dmManager.getPeerPublicKey).not.toHaveBeenCalled();
         });
 
         it('persists DM reaction locally', async () => {
@@ -582,7 +582,10 @@ describe('ChannelManager - Additional Coverage', () => {
             );
         });
 
-        it('warns when DM peer public key not available', async () => {
+        it('still sends when the peer public key is unavailable', async () => {
+            // Used to bail out with a warning. Sealed sender needs only the
+            // recipient's key, which sealAndPublish resolves itself — a missing
+            // peer key no longer silences reactions, presence or typing.
             channelManager.channels.set(streamId, {
                 messageStreamId: streamId,
                 type: 'dm',
@@ -594,7 +597,7 @@ describe('ChannelManager - Additional Coverage', () => {
 
             await channelManager.sendReaction(streamId, messageId, '❤️');
 
-            expect(Logger.warn).toHaveBeenCalledWith(expect.stringContaining('peer public key not available'));
+            expect(dmManager.sealAndPublish).toHaveBeenCalled();
         });
 
         it('persists reaction locally for write-only channel', async () => {
@@ -678,15 +681,13 @@ describe('ChannelManager - Additional Coverage', () => {
 
             await channelManager.sendTypingIndicator(streamId);
 
-            expect(dmManager.getPeerPublicKey).toHaveBeenCalledWith('0xpeer');
-            expect(dmCrypto.getSharedKey).toHaveBeenCalled();
-            expect(dmCrypto.encrypt).toHaveBeenCalled();
-            expect(streamrController.setDMPublishKey).toHaveBeenCalledWith(`${streamId}-eph`);
-            expect(streamrController.publishControl).toHaveBeenCalledWith(
+            expect(dmManager.sealAndPublish).toHaveBeenCalledWith(
                 `${streamId}-eph`,
-                expect.objectContaining({ ct: 'encrypted' }),
-                null
+                '0xpeer',
+                expect.objectContaining({ type: 'typing' }),
+                expect.any(Number)
             );
+            expect(dmManager.getPeerPublicKey).not.toHaveBeenCalled();
         });
 
         it('skips DM typing when no private key', async () => {

@@ -26,7 +26,10 @@ vi.mock('../../src/js/streamr.js', () => ({
 }));
 
 vi.mock('../../src/js/dm.js', () => ({
-    dmManager: { hasInbox: vi.fn().mockResolvedValue(true) }
+    dmManager: {
+        hasInbox: vi.fn().mockResolvedValue(true),
+        sealAndPublish: vi.fn().mockResolvedValue({ messageId: { publisherId: '0xEphemeral' } })
+    }
 }));
 
 vi.mock('../../src/js/secureStorage.js', () => ({
@@ -69,7 +72,10 @@ vi.mock('../../src/js/dmCrypto.js', () => ({
         deriveSharedKey: vi.fn().mockResolvedValue({ type: 'secret' }),
         encrypt: vi.fn().mockResolvedValue({ ct: 'encrypted', iv: 'iv123', e: 'aes-256-gcm' }),
         decrypt: vi.fn().mockImplementation(async (env) => env._decrypted || { type: 'sync', v: 1, ts: Date.now(), data: {} }),
-        isEncrypted: vi.fn().mockReturnValue(true)
+        isEncrypted: vi.fn().mockReturnValue(true),
+        // Sealed sender (v2). Default off — see syncManager.blobSync.test.js
+        isSealed: vi.fn().mockReturnValue(false),
+        open: vi.fn().mockResolvedValue({ sender: '0xmyaddress', message: { type: 'sync', v: 1 } })
     }
 }));
 
@@ -393,7 +399,8 @@ describe('syncManager extended', () => {
         });
 
         it('should keep dirty when new changes are scheduled mid-push', async () => {
-            streamrController.publish.mockImplementation(async () => {
+            // The push now goes out via dmManager.sealAndPublish
+            dmManager.sealAndPublish.mockImplementation(async () => {
                 syncManager.scheduleAutoPush(60000);
             });
             await syncManager.pushSync();

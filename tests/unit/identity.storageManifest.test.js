@@ -112,17 +112,19 @@ describe('createStorageFileManifestHash', () => {
 });
 
 describe('createSignedStorageFileManifest', () => {
-    it('signs the manifest and returns the announce shape', async () => {
+    it('returns the announce shape, unsigned (D6)', async () => {
         const msg = await identityManager.createSignedStorageFileManifest({
             channelId: '0xchan/x-1', metadata: METADATA
         });
         expect(msg.type).toBe('storage_file_announce');
         expect(msg.v).toBe(1);
-        expect(msg.sender).toBe('0xTestUser');
+        expect(msg.sender).toBe('0xTestUser');   // local stamp, stripped at egress
         expect(msg.metadata).toEqual(METADATA);
-        expect(msg.signature).toBe('0xMockSignature');
         expect(msg.replyTo).toBeNull();
-        expect(authManager.signMessage).toHaveBeenCalledWith('0xMockHash');
+
+        expect(msg.signature).toBeUndefined();
+        expect(msg.channelId).toBeUndefined();
+        expect(authManager.signMessage).not.toHaveBeenCalled();
     });
 
     it('reuses a caller-provided id (optimistic bubble dedupe)', async () => {

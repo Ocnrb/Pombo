@@ -132,7 +132,29 @@ describe('RelayManager Extended', () => {
             const result = await relayManager.registerServiceWorker();
 
             expect(result).toBe(mockRegistration);
-            expect(global.navigator.serviceWorker.register).toHaveBeenCalledWith('/sw.js', { scope: '/' });
+            // Registration is document-relative so it also works when the app
+            // is served from a subfolder. At a root deploy (this test's jsdom
+            // URL) that must resolve to exactly the old behaviour: /sw.js at
+            // scope '/'. If this ever drifts, push notifications break.
+            const [scriptUrl, options] = global.navigator.serviceWorker.register.mock.calls[0];
+            expect(new URL(scriptUrl).pathname).toBe('/sw.js');
+            expect(options).toEqual({ scope: '/' });
+        });
+
+        it('should scope the SW to the subfolder when not served from root', async () => {
+            const mockRegistration = { pushManager: {} };
+            global.navigator.serviceWorker.register = vi.fn().mockResolvedValue(mockRegistration);
+            global.navigator.serviceWorker.ready = Promise.resolve(mockRegistration);
+            const baseURI = vi.spyOn(document, 'baseURI', 'get')
+                .mockReturnValue('http://localhost:3000/Pombo%20Web/index.html');
+
+            await relayManager.registerServiceWorker();
+
+            const [scriptUrl, options] = global.navigator.serviceWorker.register.mock.calls[0];
+            expect(new URL(scriptUrl).pathname).toBe('/Pombo%20Web/sw.js');
+            // A SW cannot claim a scope broader than its own path
+            expect(options).toEqual({ scope: '/Pombo%20Web/' });
+            baseURI.mockRestore();
         });
 
         it('should return null on registration error', async () => {

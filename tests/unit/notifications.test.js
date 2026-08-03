@@ -79,6 +79,13 @@ vi.mock('../../src/js/dmCrypto.js', () => ({
     }
 }));
 
+// Invites now go out sealed, via dmManager — same path as DM messages
+vi.mock('../../src/js/dm.js', () => ({
+    dmManager: {
+        sealAndPublish: vi.fn().mockResolvedValue({ messageId: { publisherId: '0xEphemeral' } })
+    }
+}));
+
 vi.mock('../../src/js/secureStorage.js', () => {
     let stored = [];
     return {
@@ -96,6 +103,7 @@ import { authManager } from '../../src/js/auth.js';
 import { channelManager } from '../../src/js/channels.js';
 import { uiController } from '../../src/js/ui.js';
 import { dmCrypto } from '../../src/js/dmCrypto.js';
+import { dmManager } from '../../src/js/dm.js';
 import { secureStorage } from '../../src/js/secureStorage.js';
 
 describe('NotificationManager', () => {
@@ -191,15 +199,16 @@ describe('NotificationManager', () => {
             ).rejects.toThrow('peer public key not available');
         });
 
-        it('should throw when wallet private key not available', async () => {
-            const origWallet = authManager.wallet;
-            authManager.wallet = null;
+        it('should propagate a missing private key from the seal path', async () => {
+            // The check moved into sealAndPublish, which needs the key to sign
+            // the identity proof. Kept as a test because losing the guard
+            // entirely would let invites go out unattributable.
+            dmManager.sealAndPublish.mockRejectedValueOnce(
+                new Error('Cannot send DM: no private key'));
 
             await expect(
                 notificationManager.sendChannelInvite('0xRecipient', { streamId: 's', name: 'n', type: 'public' })
-            ).rejects.toThrow('wallet private key not available');
-
-            authManager.wallet = origWallet;
+            ).rejects.toThrow('no private key');
         });
 
         it('should encrypt and publish invite to recipient DM inbox P3', async () => {
@@ -220,15 +229,12 @@ describe('NotificationManager', () => {
             // Should get peer public key
             expect(streamrController.getDMPublicKey).toHaveBeenCalledWith('0xRecipient');
 
-            // Should derive ECDH shared key
-            expect(dmCrypto.getSharedKey).toHaveBeenCalledWith(
-                '0xfakeprivatekey1234567890abcdef',
+            // Sealed and published under a throwaway identity, to inbox P3.
+            // An invite names a channel both parties are in, so the edge it
+            // exposes is if anything stronger than a plain message.
+            expect(dmManager.sealAndPublish).toHaveBeenCalledWith(
+                '0xrecipient/Pombo-DM-1',
                 '0xRecipient',
-                '0x02peerpubkey'
-            );
-
-            // Should encrypt the invite
-            expect(dmCrypto.encrypt).toHaveBeenCalledWith(
                 expect.objectContaining({
                     type: 'CHANNEL_INVITE',
                     from: '0xAbC1230000000000000000000000000000004567',
@@ -237,20 +243,12 @@ describe('NotificationManager', () => {
                         name: 'General'
                     })
                 }),
-                'mock-aes-key'
-            );
-
-            // Should set DM publish key and publish to P3
-            expect(streamrController.setDMPublishKey).toHaveBeenCalledWith('0xrecipient/Pombo-DM-1');
-            expect(streamrController.publishNotification).toHaveBeenCalledWith(
-                '0xrecipient/Pombo-DM-1',
-                expect.objectContaining({ ct: 'enc', iv: 'iv', e: 'aes-256-gcm' }),
-                null
+                3   // MESSAGE_STREAM.NOTIFICATIONS
             );
         });
 
         it('should throw on publish failure', async () => {
-            streamrController.publishNotification.mockRejectedValueOnce(new Error('Publish failed'));
+            dmManager.sealAndPublish.mockRejectedValueOnce(new Error('Publish failed'));
 
             await expect(
                 notificationManager.sendChannelInvite('0xRecipient', { streamId: 's', name: 'n', type: 'public' })

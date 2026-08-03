@@ -73,7 +73,7 @@ describe('PreviewModeUI', () => {
             }
             return {
                 messages: [
-                    { type: 'delete', targetId: 'msg-1', senderId: '0x1', timestamp: 950 }
+                    { type: 'delete', targetId: 'msg-1', account: '0x1', timestamp: 950 }
                 ],
                 hasMore: false
             };

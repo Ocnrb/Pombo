@@ -54,6 +54,7 @@ vi.mock('../../src/js/streamr.js', () => ({
         INITIAL_MESSAGES: 50,
         ADMIN_HISTORY_COUNT: 10,
         MESSAGE_STREAM: { MESSAGES: 0 },
+        EPHEMERAL_STREAM: { CONTROL: 0, MEDIA_SIGNALS: 1, MEDIA_DATA: 2 },
         ADMIN_STREAM: { MODERATION: 0 }
     },
     deriveEphemeralId: vi.fn((id) => `${id}-ephemeral`),
@@ -132,6 +133,7 @@ vi.mock('../../src/js/dm.js', () => ({
         unsubscribeDMEphemeral: vi.fn().mockResolvedValue(undefined),
         loadDMTimeline: vi.fn(),
         getPeerPublicKey: vi.fn().mockResolvedValue('peerPubKey123'),
+        sealAndPublish: vi.fn().mockResolvedValue({ messageId: { publisherId: '0xEphemeral' } }),
         isDMChannel: vi.fn().mockReturnValue(false),
         conversations: new Map()
     }
@@ -843,7 +845,7 @@ describe('ChannelManager Extended', () => {
             );
         });
 
-        it('handles DM presence with encryption', async () => {
+        it('seals DM presence instead of encrypting to the peer key', async () => {
             channelManager.channels.set('dm-stream', {
                 type: 'dm',
                 peerAddress: '0xpeer',
@@ -852,11 +854,16 @@ describe('ChannelManager Extended', () => {
 
             await channelManager.publishPresence('dm-stream');
 
-            expect(dmManager.getPeerPublicKey).toHaveBeenCalledWith('0xpeer');
-            expect(dmCrypto.getSharedKey).toHaveBeenCalled();
-            expect(dmCrypto.encrypt).toHaveBeenCalled();
-            expect(streamrController.setDMPublishKey).toHaveBeenCalledWith('dm-eph');
-            expect(streamrController.publishControl).toHaveBeenCalled();
+            expect(dmManager.sealAndPublish).toHaveBeenCalledWith(
+                'dm-eph',
+                '0xpeer',
+                expect.objectContaining({ type: 'presence' }),
+                expect.any(Number)
+            );
+            // The peer's public key is no longer needed. Depending on it meant
+            // presence silently vanished whenever the peer's inbox metadata
+            // lacked the key — which is exactly what happened in testing.
+            expect(dmManager.getPeerPublicKey).not.toHaveBeenCalled();
         });
 
         it('silently fails DM presence without error', async () => {
@@ -1185,7 +1192,7 @@ describe('ChannelManager Extended', () => {
     describe('handlePresenceMessage', () => {
         it('creates user tracking map if none exists', () => {
             channelManager.handlePresenceMessage('stream-1', {
-                senderId: '0xuser1',
+                account: '0xuser1',
                 nickname: 'User1',
                 lastActive: Date.now()
             });
@@ -1200,7 +1207,7 @@ describe('ChannelManager Extended', () => {
             const now = Date.now();
 
             channelManager.handlePresenceMessage('stream-1', {
-                senderId: '0xuser1',
+                account: '0xuser1',
                 nickname: 'NewNick',
                 lastActive: now
             });
@@ -1210,9 +1217,9 @@ describe('ChannelManager Extended', () => {
             expect(user.lastActive).toBe(now);
         });
 
-        it('prefers senderId over userId', () => {
+        it('prefers account over userId', () => {
             channelManager.handlePresenceMessage('stream-1', {
-                senderId: '0xsender',
+                account: '0xsender',
                 userId: '0xuser',
                 nickname: 'Nick'
             });
@@ -1234,7 +1241,7 @@ describe('ChannelManager Extended', () => {
             channelManager.onlineUsersHandlers.push(handler);
 
             channelManager.handlePresenceMessage('stream-1', {
-                senderId: '0xuser1',
+                account: '0xuser1',
                 nickname: 'User1'
             });
 

@@ -75,17 +75,32 @@ describe('IdentityManager Extended', () => {
 
     // ==================== createSignedMessage ====================
     describe('createSignedMessage()', () => {
-        it('should create a signed message with all fields', async () => {
+        it('should create a message with all fields', async () => {
             const msg = await identityManager.createSignedMessage('Hello', 'channel-1');
 
             expect(msg.type).toBe('text');
             expect(msg.text).toBe('Hello');
-            expect(msg.sender).toBe('0xTestUser');
-            expect(msg.channelId).toBe('channel-1');
-            expect(msg.signature).toBe('0xMockSignature');
             expect(msg.timestamp).toBeGreaterThan(0);
             expect(msg.id).toMatch(/^[0-9a-f]{32}$/);
             expect(msg.replyTo).toBeNull();
+        });
+
+        it('stamps the local identity so the message renders before it is sent', async () => {
+            const msg = await identityManager.createSignedMessage('Hello', 'channel-1');
+
+            // Set locally, stripped at egress, re-derived from the proof on
+            // arrival — the sender's own copy never goes through ingest.
+            expect(msg.account).toBe('0xTestUser');
+            expect(msg.sender).toBe('0xTestUser');
+        });
+
+        it('carries no app-layer signature or channelId (D6/D7)', async () => {
+            const msg = await identityManager.createSignedMessage('Hello', 'channel-1');
+
+            // Streamr signs the envelope and the proof authenticates the
+            // account; a third signature only re-exposed the address.
+            expect(msg.signature).toBeUndefined();
+            expect(msg.channelId).toBeUndefined();
         });
 
         it('should include senderName when username is set', async () => {
@@ -112,24 +127,20 @@ describe('IdentityManager Extended', () => {
             expect(msg.replyTo).toEqual(replyTo);
         });
 
-        it('should call createMessageHash with correct params', async () => {
+        it('should not hash the message', async () => {
             const hashSpy = vi.spyOn(identityManager, 'createMessageHash');
 
-            const msg = await identityManager.createSignedMessage('Test', 'ch-2');
+            await identityManager.createSignedMessage('Test', 'ch-2');
 
-            expect(hashSpy).toHaveBeenCalledWith(
-                msg.id,
-                'Test',
-                '0xTestUser',
-                msg.timestamp,
-                'ch-2'
-            );
+            // The hash existed only to be signed. createMessageHash survives
+            // for verifying pre-migration history, nothing else.
+            expect(hashSpy).not.toHaveBeenCalled();
         });
 
-        it('should sign the message hash', async () => {
+        it('should not sign', async () => {
             await identityManager.createSignedMessage('Sign me', 'ch-1');
 
-            expect(authManager.signMessage).toHaveBeenCalledWith('0xMockHash');
+            expect(authManager.signMessage).not.toHaveBeenCalled();
         });
 
         it('should generate unique IDs for each message', async () => {
@@ -151,12 +162,43 @@ describe('IdentityManager Extended', () => {
             signature: '0xSig'
         };
 
-        it('should return invalid when no signature', async () => {
-            const result = await identityManager.verifyMessage({ ...validMessage, signature: null });
+        it('accepts an unsigned message and takes identity from the account', async () => {
+            // The current format (D6). `account` was established by ecrecover
+            // over the proof at ingest, before this message reached anyone.
+            const result = await identityManager.verifyMessage({
+                ...validMessage,
+                signature: null,
+                account: '0xProvenAccount'
+            });
+
+            expect(result.valid).toBe(true);
+            expect(result.recoveredAddress).toBe('0xProvenAccount');
+        });
+
+        it('rejects an unsigned message with no account', async () => {
+            const result = await identityManager.verifyMessage({
+                ...validMessage,
+                signature: null,
+                account: null
+            });
 
             expect(result.valid).toBe(false);
-            expect(result.error).toBe('No signature');
+            expect(result.error).toBe('No account');
             expect(result.trustLevel).toBe(-1);
+        });
+
+        it('still rejects an unsigned message with an expired timestamp', async () => {
+            // The replay window must not widen just because the app-layer
+            // signature went away.
+            const result = await identityManager.verifyMessage({
+                ...validMessage,
+                signature: null,
+                account: '0xProvenAccount',
+                timestamp: Date.now() - 10 * 60000
+            });
+
+            expect(result.valid).toBe(false);
+            expect(result.isReplayAttempt).toBe(true);
         });
 
         it('should reject expired timestamp (replay attack)', async () => {

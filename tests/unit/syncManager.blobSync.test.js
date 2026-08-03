@@ -33,7 +33,10 @@ vi.mock('../../src/js/streamr.js', () => ({
 }));
 
 vi.mock('../../src/js/dm.js', () => ({
-    dmManager: { hasInbox: vi.fn().mockResolvedValue(true) }
+    dmManager: {
+        hasInbox: vi.fn().mockResolvedValue(true),
+        sealAndPublish: vi.fn().mockResolvedValue({ messageId: { publisherId: '0xEphemeral' } })
+    }
 }));
 
 vi.mock('../../src/js/secureStorage.js', () => ({
@@ -71,7 +74,11 @@ vi.mock('../../src/js/dmCrypto.js', () => ({
             if (env._decrypted) return env._decrypted;
             return { type: 'sync_blob', v: 2, ts: Date.now(), imageId: 'pulled-img', streamId: 'stream-1', data: 'pulled-data' };
         }),
-        isEncrypted: vi.fn().mockReturnValue(true)
+        isEncrypted: vi.fn().mockReturnValue(true),
+        // Sealed sender (v2). Default off so these keep exercising the legacy
+        // self-ECDH path, which still has to work for already-stored history.
+        isSealed: vi.fn().mockReturnValue(false),
+        open: vi.fn().mockResolvedValue({ sender: '0xmyaddress', message: { type: 'sync_blob', v: 2 } })
     }
 }));
 
@@ -161,11 +168,14 @@ describe('syncManager blob sync', () => {
                 records[0].encryptedData, records[0].iv
             );
 
-            // Should publish to partition 2
-            expect(streamrController.publish).toHaveBeenCalledWith(
+            // Sealed to ourselves and published to partition 2 under a
+            // throwaway identity, so sync traffic is indistinguishable from an
+            // incoming message on the inbox stream.
+            expect(dmManager.sealAndPublish).toHaveBeenCalledWith(
                 '0xabc/Pombo-DM-1',
-                STREAM_CONFIG.MESSAGE_STREAM.SYNC_BLOBS,
-                expect.any(Object)
+                '0xabc123',
+                expect.objectContaining({ type: expect.stringMatching(/^sync_blob/) }),
+                STREAM_CONFIG.MESSAGE_STREAM.SYNC_BLOBS
             );
 
             // Should mark as synced

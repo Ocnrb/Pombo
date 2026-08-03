@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<title>Pombo — teste de fumo: publishAs (R1/R2/R5)</title>
+<style>
+  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+         background: #14161a; color: #e6e6e6; margin: 0; padding: 24px; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  p.sub { color: #8b93a1; margin: 0 0 20px; }
+  fieldset { border: 1px solid #2b2f38; border-radius: 6px; margin: 0 0 16px; padding: 12px 14px; }
+  legend { color: #8b93a1; padding: 0 6px; }
+  label { display: block; margin: 8px 0 2px; color: #8b93a1; }
+  input { width: 100%; box-sizing: border-box; background: #0e1013; color: #e6e6e6;
+          border: 1px solid #2b2f38; border-radius: 4px; padding: 7px 9px; font: inherit; }
+  button { background: #F6851B; color: #14161a; border: 0; border-radius: 4px;
+           padding: 9px 18px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  #out { white-space: pre-wrap; margin-top: 18px; }
+  .pass { color: #4ade80; } .fail { color: #f87171; }
+  .warn { color: #fbbf24; } .dim { color: #8b93a1; }
+</style>
+</head>
+<body>
+
+<h1>Teste de fumo — <code>publishAs</code></h1>
+<p class="sub">Valida R1, R2 e R5 do <code>UNIFIED_IMPLEMENTATION_PLAN.md</code> contra a rede real.
+Nenhum destes está confirmado — foram deduzidos por leitura do código da SDK.</p>
+
+<fieldset>
+  <legend>Configuração</legend>
+
+  <label>Chave privada (uma conta descartável — <strong>não</strong> a principal)</label>
+  <input id="pk" placeholder="0x…" autocomplete="off" spellcheck="false">
+
+  <label>Canal público com storage — stream ID <span class="dim">(R1, R2)</span></label>
+  <input id="publicStream" placeholder="0x…/hash-1" spellcheck="false">
+
+  <label>Inbox de DM sem public subscribe — stream ID <span class="dim">(R5; deixa vazio para saltar)</span></label>
+  <input id="privateStream" placeholder="0x…/Pombo-DM-1" spellcheck="false">
+</fieldset>
+
+<button id="run">Correr</button>
+<div id="out"></div>
+
+<script src="../../js/vendor.bundle.js"></script>
+<script>
+const out = document.getElementById('out');
+const line = (msg, cls = '') => {
+    out.insertAdjacentHTML('beforeend', `<div class="${cls}">${msg}</div>`);
+};
+const pass = m => line('PASS  ' + m, 'pass');
+const fail = (m, e) => line('FAIL  ' + m + (e ? '\n      ' + (e.message || e) : ''), 'fail');
+const info = m => line('      ' + m, 'dim');
+
+// Mirrors streamrController.publishAs — kept standalone so the smoke test
+// exercises the SDK contract itself, not our wrapper's bookkeeping.
+async function publishAs(client, identity, streamId, partition, payload, log) {
+    const messageId = new MessageID(
+        streamId, partition, Date.now(), 0,
+        await identity.getUserId(),
+        Math.random().toString(16).slice(2)
+    );
+    const message = await new MessageSigner(identity).createSignedMessage({
+        messageId,
+        content: new TextEncoder().encode(JSON.stringify(payload)),
+        contentType: ContentType.JSON,
+        encryptionType: EncryptionType.NONE,
+        messageType: StreamMessageType.MESSAGE
+    }, identity.getSignatureType());
+
+    const node = client.getNode();
+    const streamPartId = messageId.getStreamPartID();
+
+    // join() only registers interest — it does not imply anyone is connected.
+    // The first run of this test published from a cold node and the message
+    // never reached a live subscriber (it did reach storage). Hence the
+    // neighbour requirement, mirroring streamrController.publishAs.
+    try {
+        await node.join(streamPartId, { minCount: 1, timeout: 5000 });
+    } catch (e) {
+        log?.('join: sem vizinhos em 5s (' + e.message + ') — publica na mesma');
+    }
+    try {
+        log?.('vizinhos em ' + streamPartId + ': ' + (await node.getNeighbors(streamPartId)).length);
+    } catch { /* diagnostic only */ }
+
+    await node.broadcast(message);
+    return message;
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+document.getElementById('run').onclick = async () => {
+    const btn = document.getElementById('run');
+    btn.disabled = true;
+    out.innerHTML = '';
+
+    const pk = document.getElementById('pk').value.trim();
+    const publicStream = document.getElementById('publicStream').value.trim();
+    const privateStream = document.getElementById('privateStream').value.trim();
+
+    if (!pk || !publicStream) { fail('Chave privada e canal público são obrigatórios.'); btn.disabled = false; return; }
+
+    let client;
+    try {
+        client = new StreamrClient({ auth: { privateKey: pk }, metrics: false });
+        const addr = await client.getAddress();
+        info('cliente ligado como ' + addr);
+
+        // A throwaway key, never funded, with no on-chain permission of its own.
+        // A public channel grants publish to everyone, so it should be accepted
+        // purely on the strength of its signature.
+        const ephemeral = EthereumKeyPairIdentity.generate();
+        const ephAddr = await ephemeral.getUserId();
+        info('identidade efémera ' + ephAddr);
+        info('');
+
+        // ── R2 — join + broadcast propagates to a live subscriber ──────────
+        const marker = 'smoke-' + Date.now();
+        let received = null;
+        const sub = await client.subscribe({ streamId: publicStream, partition: 0 }, (content) => {
+            if (content && content.marker === marker) received = content;
+        });
+        await sleep(2000);
+
+        let published;
+        try {
+            published = await publishAs(client, ephemeral, publicStream, 0, { marker, t: 'R2' }, info);
+            info('publicado, publisherId = ' + published.messageId.publisherId);
+        } catch (e) { fail('R2 — publishAs rebentou', e); }
+
+        if (published) {
+            for (let i = 0; i < 20 && !received; i++) await sleep(500);
+            if (received) pass('R2 — join + broadcast chegou a um subscritor ativo');
+            else fail('R2 — nada recebido em 10s. broadcast pode precisar de esperar por vizinhos.');
+
+            if (String(published.messageId.publisherId).toLowerCase() === String(ephAddr).toLowerCase()) {
+                pass('publisherId na wire é a chave efémera, não a wallet');
+            } else {
+                fail('publisherId não é a chave efémera — é ' + published.messageId.publisherId);
+            }
+        }
+        await sub.unsubscribe();
+        info('');
+
+        // ── R1 — the message is actually stored, not just propagated ───────
+        if (published) {
+            info('à espera do storage node (15s)…');
+            await sleep(15000);
+            try {
+                let found = false;
+                const resend = await client.resend(
+                    { streamId: publicStream, partition: 0 }, { last: 30 });
+                for await (const m of resend) {
+                    const c = m.content ?? m;
+                    if (c && c.marker === marker) { found = true; break; }
+                }
+                if (found) pass('R1 — mensagem via broadcast ficou ARMAZENADA (resend devolve-a)');
+                else fail('R1 — não está no storage. publishAs não serve para streams com storage.');
+            } catch (e) { fail('R1 — resend rebentou', e); }
+        }
+        info('');
+
+        // ── R5 — the one the whole DM design rests on ──────────────────────
+        if (!privateStream) {
+            line('SKIP  R5 — sem stream privado indicado', 'warn');
+            info('R5 é a base da D9. Sem ele confirmado, o desenho dos DMs fica por validar.');
+        } else {
+            const marker5 = 'smoke5-' + Date.now();
+            let got5 = null;
+            let sub5;
+            try {
+                sub5 = await client.subscribe({ streamId: privateStream, partition: 0 }, (content) => {
+                    if (content && content.marker === marker5) got5 = content;
+                });
+                await sleep(2000);
+                await publishAs(client, ephemeral, privateStream, 0, { marker: marker5, t: 'R5' }, info);
+                for (let i = 0; i < 20 && !got5; i++) await sleep(500);
+
+                if (got5) {
+                    pass('R5 — mensagem NONE num stream sem public subscribe foi ACEITE e entregue');
+                    info('D9 confirmada: os DMs podem largar a camada AES e a chave hardcoded.');
+                } else {
+                    fail('R5 — não entregue. D9 cai; reabrir §9 do plano unificado.');
+                }
+            } catch (e) {
+                fail('R5 — rebentou', e);
+                info('Se a queixa for de encriptação, a leitura da SDK estava errada e a D9 cai.');
+            } finally { try { await sub5?.unsubscribe(); } catch {} }
+        }
+
+    } catch (e) {
+        fail('erro fatal', e);
+    } finally {
+        try { await client?.destroy(); } catch {}
+        info('');
+        info('terminado.');
+        btn.disabled = false;
+    }
+};
+</script>
+</body>
+</html>

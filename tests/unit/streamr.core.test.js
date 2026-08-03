@@ -238,68 +238,82 @@ describe('StreamrController Core', () => {
     });
 
     // ==================== publishMessage() ====================
+    // Channel traffic no longer goes through client.publish(): it is published
+    // under the channel's ephemeral identity (D1 + D2), so these assert the
+    // single egress point rather than the SDK call underneath it.
     describe('publishMessage()', () => {
-        it('should strip verified, pending, _dmSent fields', async () => {
-            const message = {
-                id: '1', text: 'hello', sender: '0x1',
-                verified: true, pending: true, _dmSent: true
-            };
-            await streamrController.publishMessage('stream-1', message);
-            const publishedData = mockClient.publish.mock.calls[0][1];
-            expect(publishedData.id).toBe('1');
-            expect(publishedData.text).toBe('hello');
-            expect(publishedData).not.toHaveProperty('verified');
-            expect(publishedData).not.toHaveProperty('pending');
-            expect(publishedData).not.toHaveProperty('_dmSent');
+        let asChannel;
+
+        beforeEach(() => {
+            asChannel = vi.spyOn(streamrController, 'publishAsChannel')
+                .mockResolvedValue({ timestamp: 1 });
         });
 
-        it('should publish to MESSAGE_STREAM.MESSAGES partition', async () => {
+        afterEach(() => asChannel.mockRestore());
+
+        it('should route through the channel egress point, not client.publish', async () => {
+            // If this ever reverts to client.publish, that stream's publisherId
+            // silently becomes the user's wallet again.
             await streamrController.publishMessage('stream-1', { id: '1' });
-            expect(mockClient.publish).toHaveBeenCalledWith(
-                { streamId: 'stream-1', partition: STREAM_CONFIG.MESSAGE_STREAM.MESSAGES },
-                expect.any(Object)
+
+            expect(asChannel).toHaveBeenCalledWith(
+                'stream-1', STREAM_CONFIG.MESSAGE_STREAM.MESSAGES,
+                expect.any(Object), null
             );
+            expect(mockClient.publish).not.toHaveBeenCalled();
         });
 
-        it('should pass password to publish()', async () => {
+        it('should pass the password through', async () => {
             await streamrController.publishMessage('stream-1', { id: '1' }, 'pass');
-            expect(cryptoManager.encryptJSON).toHaveBeenCalled();
+            expect(asChannel).toHaveBeenCalledWith(
+                'stream-1', expect.any(Number), expect.any(Object), 'pass'
+            );
         });
     });
 
-    // ==================== publishControl() ====================
     describe('publishControl()', () => {
-        it('should publish to EPHEMERAL_STREAM.CONTROL partition', async () => {
+        it('should route control to EPHEMERAL_STREAM.CONTROL via the egress point', async () => {
+            const asChannel = vi.spyOn(streamrController, 'publishAsChannel')
+                .mockResolvedValue({});
             const control = { type: 'typing', userId: '0x1' };
+
             await streamrController.publishControl('stream-2', control);
-            expect(mockClient.publish).toHaveBeenCalledWith(
-                { streamId: 'stream-2', partition: STREAM_CONFIG.EPHEMERAL_STREAM.CONTROL },
-                control
+
+            expect(asChannel).toHaveBeenCalledWith(
+                'stream-2', STREAM_CONFIG.EPHEMERAL_STREAM.CONTROL, control, null
             );
+            asChannel.mockRestore();
         });
     });
 
-    // ==================== publishReaction() ====================
     describe('publishReaction()', () => {
-        it('should publish to MESSAGE_STREAM.MESSAGES partition', async () => {
+        it('should route reactions to MESSAGE_STREAM.MESSAGES via the egress point', async () => {
+            const asChannel = vi.spyOn(streamrController, 'publishAsChannel')
+                .mockResolvedValue({});
             const reaction = { type: 'reaction', messageId: 'm1', emoji: '👍' };
+
             await streamrController.publishReaction('stream-1', reaction);
-            expect(mockClient.publish).toHaveBeenCalledWith(
-                { streamId: 'stream-1', partition: STREAM_CONFIG.MESSAGE_STREAM.MESSAGES },
-                reaction
+
+            expect(asChannel).toHaveBeenCalledWith(
+                'stream-1', STREAM_CONFIG.MESSAGE_STREAM.MESSAGES, reaction, null
             );
+            asChannel.mockRestore();
         });
     });
 
     // ==================== publishMediaSignal() / publishMediaData() ====================
     describe('publishMediaSignal()', () => {
-        it('should publish to EPHEMERAL_STREAM.MEDIA_SIGNALS partition', async () => {
+        it('should route media signals to MEDIA_SIGNALS via the egress point', async () => {
+            const asChannel = vi.spyOn(streamrController, 'publishAsChannel')
+                .mockResolvedValue({});
             const signal = { type: 'image_request', imageId: 'img1' };
+
             await streamrController.publishMediaSignal('stream-2', signal);
-            expect(mockClient.publish).toHaveBeenCalledWith(
-                { streamId: 'stream-2', partition: STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_SIGNALS },
-                signal
+
+            expect(asChannel).toHaveBeenCalledWith(
+                'stream-2', STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_SIGNALS, signal, null
             );
+            asChannel.mockRestore();
         });
     });
 
@@ -434,7 +448,7 @@ describe('StreamrController Core', () => {
             expect(cryptoManager.decryptJSON).toHaveBeenCalledWith('encrypted-string', 'pass');
         });
 
-        it('should inject senderId from StreamMessage', async () => {
+        it('should inject account from StreamMessage', async () => {
             let capturedHandler;
             mockClient.subscribe.mockImplementation(async (opts, handler) => {
                 capturedHandler = handler;
@@ -446,7 +460,7 @@ describe('StreamrController Core', () => {
             
             const data = { text: 'hello' };
             await capturedHandler(data, { getPublisherId: () => '0xpublisher' });
-            expect(handler).toHaveBeenCalledWith(expect.objectContaining({ senderId: '0xpublisher' }));
+            expect(handler).toHaveBeenCalledWith(expect.objectContaining({ account: '0xpublisher' }));
         });
     });
 
@@ -1356,7 +1370,7 @@ describe('StreamrController Core', () => {
             expect(handler).toHaveBeenCalledTimes(1);
         });
 
-        it('should inject senderId from getPublisherId()', async () => {
+        it('should inject account from getPublisherId()', async () => {
             const handler = vi.fn();
             const msgs = [
                 createMockMessage({ id: '1', text: 'hi', sender: '0x1', timestamp: 100, type: 'text' }, '0xpub1')
@@ -1364,7 +1378,7 @@ describe('StreamrController Core', () => {
             mockClient.resend.mockResolvedValue(createMockAsyncIterator(msgs));
 
             await streamrController.fetchHistoryAsync('stream-1', 0, 10, handler);
-            expect(handler).toHaveBeenCalledWith(expect.objectContaining({ senderId: '0xpub1' }));
+            expect(handler).toHaveBeenCalledWith(expect.objectContaining({ account: '0xpub1' }));
         });
 
         it('should not throw on network error', async () => {
@@ -1698,116 +1712,4 @@ describe('StreamrController Core', () => {
         });
     });
 
-    // ==================== DM Encryption ====================
-    describe('DM Encryption', () => {
-        describe('_createPomboKey()', () => {
-            it('should return null if EncryptionKey not available', () => {
-                window.EncryptionKey = null;
-                expect(streamrController._createPomboKey()).toBeNull();
-            });
-
-            it('should create key when EncryptionKey available with Buffer', () => {
-                window.EncryptionKey = function(id, data) { this.id = id; this.data = data; };
-                const result = streamrController._createPomboKey();
-                expect(result).toBeDefined();
-                expect(result.id).toBeDefined();
-            });
-        });
-
-        describe('setDMPublishKey()', () => {
-            it('should do nothing if client is null', async () => {
-                streamrController.client = null;
-                await streamrController.setDMPublishKey('0x1/Pombo-DM-1');
-                // No error
-            });
-
-            it('should skip non-DM streams', async () => {
-                await streamrController.setDMPublishKey('owner/regular-channel-1');
-                expect(mockClient.updateEncryptionKey).not.toHaveBeenCalled();
-            });
-
-            it('should skip if already set for this stream', async () => {
-                streamrController._dmPublishKeySet.add('0x1/pombo-dm-1');
-                await streamrController.setDMPublishKey('0x1/pombo-dm-1');
-                expect(mockClient.updateEncryptionKey).not.toHaveBeenCalled();
-            });
-
-            it('should call updateEncryptionKey for DM streams', async () => {
-                window.EncryptionKey = function(id, data) { this.id = id; this.data = data; };
-                mockClient.updateEncryptionKey = vi.fn().mockResolvedValue(undefined);
-                await streamrController.setDMPublishKey('0x1/Pombo-DM-1');
-                expect(mockClient.updateEncryptionKey).toHaveBeenCalled();
-                expect(streamrController._dmPublishKeySet.has('0x1/Pombo-DM-1')).toBe(true);
-            });
-        });
-
-        describe('addDMDecryptKey()', () => {
-            it('should do nothing if client is null', async () => {
-                streamrController.client = null;
-                await streamrController.addDMDecryptKey('0xpeer');
-                // No error
-            });
-
-            it('should call addEncryptionKey with normalized address', async () => {
-                window.EncryptionKey = function(id, data) { this.id = id; this.data = data; };
-                mockClient.addEncryptionKey = vi.fn().mockResolvedValue(undefined);
-                await streamrController.addDMDecryptKey('0xABCDEF');
-                expect(mockClient.addEncryptionKey).toHaveBeenCalledWith(
-                    expect.any(Object),
-                    '0xabcdef'
-                );
-            });
-        });
-
-        describe('handleDMDecryptError()', () => {
-            it('should return false for non-DM streams', async () => {
-                const result = await streamrController.handleDMDecryptError(
-                    new Error('decrypt'), 'owner/channel-1', vi.fn()
-                );
-                expect(result).toBe(false);
-            });
-
-            it('should return false if no publisherId in error', async () => {
-                const result = await streamrController.handleDMDecryptError(
-                    { message: 'decrypt' }, '0x1/pombo-dm-1', vi.fn()
-                );
-                expect(result).toBe(false);
-            });
-
-            it('should return false if already tried for this publisher', async () => {
-                streamrController._dmKeyAddedForPublisher.add('0xpub');
-                const error = { messageId: { publisherId: '0xPUB', timestamp: 1000 }, message: 'decrypt' };
-                const result = await streamrController.handleDMDecryptError(
-                    error, '0x1/pombo-dm-1', vi.fn()
-                );
-                expect(result).toBe(false);
-            });
-
-            it('should add key and track publisher on first encounter', async () => {
-                window.EncryptionKey = function(id, data) { this.id = id; this.data = data; };
-                mockClient.addEncryptionKey = vi.fn().mockResolvedValue(undefined);
-                
-                const error = { messageId: { publisherId: '0xNewPub', timestamp: 1000 }, message: 'decrypt' };
-                const result = await streamrController.handleDMDecryptError(
-                    error, '0x1/pombo-dm-1', vi.fn()
-                );
-                expect(result).toBe(true);
-                expect(streamrController._dmKeyAddedForPublisher.has('0xnewpub')).toBe(true);
-            });
-
-            it('should parse JSON string messageId', async () => {
-                window.EncryptionKey = function(id, data) { this.id = id; this.data = data; };
-                mockClient.addEncryptionKey = vi.fn().mockResolvedValue(undefined);
-                
-                const error = { 
-                    messageId: JSON.stringify({ publisherId: '0xjson', timestamp: 1000 }), 
-                    message: 'decrypt' 
-                };
-                const result = await streamrController.handleDMDecryptError(
-                    error, '0x1/pombo-dm-1', vi.fn()
-                );
-                expect(result).toBe(true);
-            });
-        });
-    });
 });
