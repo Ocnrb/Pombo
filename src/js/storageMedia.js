@@ -45,6 +45,7 @@ import { secureStorage } from './secureStorage.js';
 import { streamrController } from './streamr.js';
 import { storageEndpoints } from './storageEndpoints.js';
 import { channelManager } from './channels.js';
+import { getChannelIdentity } from './channelIdentity.js';
 import { dmManager } from './dm.js';
 import { STORAGE_FILE, MESSAGE_STREAM, storageChunkPartition } from './streamConstants.js';
 
@@ -1127,14 +1128,17 @@ class StorageMediaController {
      * A 1-byte ping per chunk partition + a wait fixes that. Once per session
      * per stream (re-armed if the client reconnects: callers clear warmedUp).
      */
-    warmUpPartitions(sid, firstPartition, onStatus) {
+    warmUpPartitions(sid, firstPartition, onStatus, identity = null) {
         if (!sid || this.warmedUp.has(sid)) return Promise.resolve();
         if (this.warmUpPromises.has(sid)) return this.warmUpPromises.get(sid);
         const p = (async () => {
             if (onStatus) onStatus('Preparing network…');
             const ping = new Uint8Array([0]);
+            // Warm-up pings ride the SAME publisher as the chunks — otherwise
+            // the wallet would appear on the channel's -1 stream just from
+            // waking its partitions.
             await Promise.all(Array.from({ length: STORAGE_FILE.CHUNK_PARTITIONS }, (_, k) =>
-                streamrController.publishStorageChunk(sid, firstPartition + k, ping)
+                streamrController.publishStorageChunk(sid, firstPartition + k, ping, identity)
                     .catch(e => Logger.warn(`storage warm-up P${firstPartition + k} failed: ${e.message}`))
             ));
             await sleep(SM.warmUpWaitMs);
@@ -1457,13 +1461,23 @@ class StorageMediaController {
                 })();
             }
 
-            // DMs: one throwaway publishing identity for the whole transfer, so
-            // the chunks do not carry our address. Chunks are already sealed
-            // with the per-file key, so the Streamr layer adds nothing and is
-            // switched off (publishAs uses encryptionType NONE) — which also
-            // drops the old dependency on the well-known key for resends.
+            // Who publishes the chunks (and the warm-up pings). The announce
+            // already goes out under the channel's ephemeral identity, so the
+            // chunks must NOT fall back to the account — that would stamp the
+            // wallet onto the channel's -1 stream next to an ephemeral
+            // announce, linking wallet→channel. Three cases:
+            //   DM            → a throwaway identity for the whole transfer
+            //                   (sealed sender's per-message key would cost an
+            //                   ECDH per chunk and buy nothing);
+            //   public/pw     → the channel's own ephemeral identity, the SAME
+            //                   pseudonym as the announce (one per channel);
+            //   native/ro     → the account (D3) — chunkIdentity stays null,
+            //                   and verify falls back to our wallet address.
+            // chunkPublisher (whatever address the chunks carry) is what
+            // verify must match; a wrong value makes every chunk read back as
+            // foreign and repair concludes the upload is missing.
             let chunkIdentity = null;
-            let chunkPublisher = null;   // address the chunks are published under
+            let chunkPublisher = null;
             if (isDM) {
                 const EthereumKeyPairIdentity = window.EthereumKeyPairIdentity;
                 if (!EthereumKeyPairIdentity) {
@@ -1472,9 +1486,12 @@ class StorageMediaController {
                 chunkIdentity = EthereumKeyPairIdentity.fromPrivateKey(
                     dmCrypto.generateEphemeralPrivateKey());
                 chunkPublisher = await chunkIdentity.getUserId();
+            } else if (!channelManager.usesAccountPublish(messageStreamId)) {
+                chunkIdentity = getChannelIdentity(messageStreamId).identity;
+                chunkPublisher = await chunkIdentity.getUserId();
             }
 
-            await this.warmUpPartitions(messageStreamId, firstChunkPartition, () => emitPhase('Preparing network…', 'processing'));
+            await this.warmUpPartitions(messageStreamId, firstChunkPartition, () => emitPhase('Preparing network…', 'processing'), chunkIdentity);
 
             let failedChunks = [];
             const firstChunkTs = Date.now();

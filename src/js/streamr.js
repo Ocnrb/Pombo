@@ -153,8 +153,6 @@ class StreamrController {
         this.channels = new Map(); // streamId -> channel config
         this.address = null;
         this.mediaHandlers = new Map(); // ephemeralStreamId -> { handler, password }
-        
-        // DM decrypt key recovery tracking
     }
 
     async validateCustomStorageNodeAddress(nodeAddress) {
@@ -1890,6 +1888,22 @@ class StreamrController {
                 `publishAsChannel refuses the admin stream (${streamId}): ` +
                 'an ephemeral key holds no on-chain permission. See D3.');
         }
+
+        // Native and read-only channels keep the PRIMARY identity on the base
+        // path (D3): their publish grant is on-chain — per member address for
+        // native, owner-only for read-only — and a throwaway key holds none,
+        // so an ephemeral publish is rejected network-wide. `this.publish`
+        // uses the account and the SDK's own group-key encryption, which is
+        // the only encryption a native channel has. channelManager owns the
+        // registry; import it lazily (a static import would be circular —
+        // channels.js imports this module). Any failure falls through to the
+        // ephemeral path, which is correct for public/password.
+        try {
+            const { channelManager } = await import('./channels.js');
+            if (channelManager.usesAccountPublish?.(streamId)) {
+                return this.publish(streamId, partition, data, password);
+            }
+        } catch { /* registry unavailable → ephemeral (public/password) */ }
 
         const { identity, proof } = getChannelIdentity(streamId);
 

@@ -2446,7 +2446,13 @@ class ChannelManager {
             const overridePartition = channel?._controlPartitionSupported === false
                 ? STREAM_CONFIG.MESSAGE_STREAM.MESSAGES
                 : STREAM_CONFIG.MESSAGE_STREAM.CONTROL;
-            await streamrController.publish(
+            // publishAsChannel, not publish: edits/deletes must ride the SAME
+            // identity as the message they override — the channel's ephemeral
+            // key with the proof (public/password), or the account (native/
+            // read-only). Going through the raw account path put the wallet on
+            // the wire beside ephemeral messages and, on native channels,
+            // wrapped the override in SDK AES while messages were NONE.
+            await streamrController.publishAsChannel(
                 streamId,
                 overridePartition,
                 override,
@@ -2501,7 +2507,8 @@ class ChannelManager {
             const overridePartition = channel?._controlPartitionSupported === false
                 ? STREAM_CONFIG.MESSAGE_STREAM.MESSAGES
                 : STREAM_CONFIG.MESSAGE_STREAM.CONTROL;
-            await streamrController.publish(
+            // Same identity as the message it deletes — see sendEdit.
+            await streamrController.publishAsChannel(
                 streamId,
                 overridePartition,
                 override,
@@ -4314,6 +4321,22 @@ class ChannelManager {
      */
     getChannel(streamId) {
         return this.channels.get(streamId) || null;
+    }
+
+    /**
+     * Whether a stream's channel publishes under the ACCOUNT (native or
+     * read-only) rather than an ephemeral per-channel key. Native grants are
+     * on-chain per member; read-only channels are owner-publish — an ephemeral
+     * key holds neither, so those must use the primary identity (D3). Accepts
+     * any of a channel's three stream ids (-1/-2/-3). Injected into
+     * streamrController.channelUsesAccount so publishAsChannel can decide
+     * without importing channelManager (that would be circular).
+     */
+    usesAccountPublish(streamId) {
+        if (!streamId) return false;
+        const base = String(streamId).replace(/-[123]$/, '');
+        const ch = this.channels.get(base + '-1');
+        return !!ch && (ch.type === 'native' || ch.readOnly === true);
     }
 
     /**
