@@ -20,6 +20,9 @@ vi.mock('../../src/js/logger.js', () => ({
 
 vi.mock('../../src/js/streamr.js', () => ({
     streamrController: {
+        // Registration + wake signals now publish under a throwaway key via
+        // publishToPushStream (not client.publish under the account).
+        publishToPushStream: vi.fn().mockResolvedValue(undefined),
         client: {
             publish: vi.fn().mockResolvedValue(undefined)
         }
@@ -375,12 +378,12 @@ describe('RelayManager Extended', () => {
             expect(result).toBe(true);
             expect(calculateChannelTag).toHaveBeenCalledWith('owner/test-channel');
             expect(createRegistrationPayload).toHaveBeenCalled();
-            expect(streamrController.client.publish).toHaveBeenCalled();
+            expect(streamrController.publishToPushStream).toHaveBeenCalled();
             expect(relayManager.subscribedChannels.has('owner/test-channel')).toBe(true);
         });
 
         it('should return false on publish error', async () => {
-            streamrController.client.publish.mockRejectedValueOnce(new Error('publish fail'));
+            streamrController.publishToPushStream.mockRejectedValueOnce(new Error('publish fail'));
 
             const result = await relayManager.subscribeToChannel('owner/fail-channel');
 
@@ -411,12 +414,12 @@ describe('RelayManager Extended', () => {
             expect(result).toBe(true);
             expect(calculateNativeChannelTag).toHaveBeenCalledWith('owner/native-test');
             expect(createRegistrationPayload).toHaveBeenCalled();
-            expect(streamrController.client.publish).toHaveBeenCalled();
+            expect(streamrController.publishToPushStream).toHaveBeenCalled();
             expect(relayManager.subscribedNativeChannels.has('owner/native-test')).toBe(true);
         });
 
         it('should return false on publish error', async () => {
-            streamrController.client.publish.mockRejectedValueOnce(new Error('native publish fail'));
+            streamrController.publishToPushStream.mockRejectedValueOnce(new Error('native publish fail'));
 
             const result = await relayManager.subscribeToNativeChannel('owner/native-fail');
 
@@ -444,7 +447,7 @@ describe('RelayManager Extended', () => {
 
             expect(result).toBe(true);
             expect(createChannelNotificationPayload).toHaveBeenCalledWith('owner/wake-channel', expect.any(Number));
-            expect(streamrController.client.publish).toHaveBeenCalled();
+            expect(streamrController.publishToPushStream).toHaveBeenCalled();
         });
 
         it('should return false on payload creation error', async () => {
@@ -456,7 +459,7 @@ describe('RelayManager Extended', () => {
         });
 
         it('should return false on publish error', async () => {
-            streamrController.client.publish.mockRejectedValueOnce(new Error('publish fail'));
+            streamrController.publishToPushStream.mockRejectedValueOnce(new Error('publish fail'));
 
             const result = await relayManager.sendChannelWakeSignal('owner/pub-fail');
 
@@ -475,7 +478,7 @@ describe('RelayManager Extended', () => {
 
             expect(result).toBe(true);
             expect(createNativeChannelNotificationPayload).toHaveBeenCalledWith('owner/native-wake', expect.any(Number));
-            expect(streamrController.client.publish).toHaveBeenCalled();
+            expect(streamrController.publishToPushStream).toHaveBeenCalled();
         });
 
         it('should return false on error', async () => {
@@ -496,7 +499,7 @@ describe('RelayManager Extended', () => {
         it('should return early if no channels subscribed', async () => {
             await relayManager.refreshChannelSubscriptions();
 
-            expect(streamrController.client.publish).not.toHaveBeenCalled();
+            expect(streamrController.publishToPushStream).not.toHaveBeenCalled();
         });
 
         it('should refresh public channels', async () => {
@@ -506,7 +509,7 @@ describe('RelayManager Extended', () => {
             await relayManager.refreshChannelSubscriptions();
 
             expect(withCircuitBreaker).toHaveBeenCalledTimes(2);
-            expect(streamrController.client.publish).toHaveBeenCalledTimes(2);
+            expect(streamrController.publishToPushStream).toHaveBeenCalledTimes(2);
         });
 
         it('should refresh native channels', async () => {

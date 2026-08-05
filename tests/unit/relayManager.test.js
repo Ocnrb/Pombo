@@ -133,8 +133,7 @@ describe('RelayManager', () => {
                         tag: expect.any(String),
                         storageEndpoints: expect.any(Array)
                     })
-                ]),
-                dmPeers: expect.any(Array)
+                ])
             });
         });
 
@@ -334,7 +333,10 @@ describe('RelayManager', () => {
             expect(channelData.name).toBe('Direct Message');
         });
 
-        it('should include dmPeers array in sync message', () => {
+        it('should NOT ship a dmPeers map to the service worker', () => {
+            // Sealed sender makes the SW unable to identify a DM's sender, so a
+            // peer address→name map would be unused identity data in the SW's
+            // IndexedDB — it was removed. The SW must not receive it.
             const dmStreamId = '0xpeer/Pombo-DM-1';
             channelManager.channels.set(dmStreamId, {
                 type: 'dm',
@@ -346,63 +348,7 @@ describe('RelayManager', () => {
             relayManager.syncWithServiceWorker();
 
             const sentData = mockPostMessage.mock.calls[0][0];
-            expect(sentData.dmPeers).toBeDefined();
-            expect(sentData.dmPeers).toHaveLength(1);
-            expect(sentData.dmPeers[0]).toEqual({
-                address: '0xpeer',
-                name: 'Alice'
-            });
-        });
-
-        it('should include multiple DM peers from channelManager', () => {
-            // Set up DM conversations with two peers
-            channelManager.channels.set('0xalice/Pombo-DM-1', {
-                type: 'dm',
-                name: 'Alice Smith',
-                peerAddress: '0xAlice'
-            });
-            channelManager.channels.set('0xbob/Pombo-DM-1', {
-                type: 'dm',
-                name: 'Bob Jones',
-                peerAddress: '0xBob'
-            });
-
-            relayManager.syncWithServiceWorker();
-
-            const sentData = mockPostMessage.mock.calls[0][0];
-            expect(sentData.dmPeers).toHaveLength(2);
-            
-            const alice = sentData.dmPeers.find(p => p.address === '0xalice');
-            const bob = sentData.dmPeers.find(p => p.address === '0xbob');
-            
-            expect(alice.name).toBe('Alice Smith');
-            expect(bob.name).toBe('Bob Jones');
-        });
-
-        it('should lowercase peer addresses in dmPeers', () => {
-            channelManager.channels.set('0xPEER/Pombo-DM-1', {
-                type: 'dm',
-                name: 'Test',
-                peerAddress: '0xPEER'
-            });
-
-            relayManager.syncWithServiceWorker();
-
-            const sentData = mockPostMessage.mock.calls[0][0];
-            expect(sentData.dmPeers[0].address).toBe('0xpeer');
-        });
-
-        it('should not include DM peers without name', () => {
-            channelManager.channels.set('0xpeer/Pombo-DM-1', {
-                type: 'dm',
-                peerAddress: '0xpeer'
-                // No name
-            });
-
-            relayManager.syncWithServiceWorker();
-
-            const sentData = mockPostMessage.mock.calls[0][0];
-            expect(sentData.dmPeers).toHaveLength(0);
+            expect(sentData.dmPeers).toBeUndefined();
         });
     });
 

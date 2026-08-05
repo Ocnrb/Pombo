@@ -24,6 +24,8 @@ vi.mock('../../src/js/streamr.js', () => ({
         createStream: vi.fn(),
         subscribe: vi.fn(),
         publish: vi.fn(),
+        publishAsChannel: vi.fn().mockResolvedValue(undefined),
+        setChannelPolicyResolver: vi.fn(),
         publishMessage: vi.fn().mockResolvedValue(undefined),
         enableStorage: vi.fn().mockResolvedValue({ success: true, provider: 'streamr', storageDays: 180 }),
         getStoredMessages: vi.fn().mockResolvedValue([]),
@@ -2200,7 +2202,7 @@ describe('ChannelManager', () => {
 
         beforeEach(() => {
             streamId = 'stream-edit';
-            streamrController.publish.mockResolvedValue(undefined);
+            streamrController.publishAsChannel.mockClear().mockResolvedValue(undefined);
             channel = {
                 streamId,
                 name: 'Edit Channel',
@@ -2224,7 +2226,9 @@ describe('ChannelManager', () => {
         it('should publish edit override to network', async () => {
             await channelManager.sendEdit(streamId, 'msg-1', 'Edited text');
 
-            expect(streamrController.publish).toHaveBeenCalledWith(
+            // publishAsChannel: overrides ride the channel's ephemeral identity
+            // (or account for native/read-only), same as the message they edit.
+            expect(streamrController.publishAsChannel).toHaveBeenCalledWith(
                 streamId,
                 1,
                 expect.objectContaining({ type: 'edit', targetId: 'msg-1', text: 'Edited text' }),
@@ -2281,7 +2285,7 @@ describe('ChannelManager', () => {
 
             // Message should NOT be changed
             expect(channel.messages[0].text).toBe('Original text');
-            expect(streamrController.publish).not.toHaveBeenCalled();
+            expect(streamrController.publishAsChannel).not.toHaveBeenCalled();
         });
 
         it('should route DM channels through dmManager', async () => {
@@ -2292,7 +2296,7 @@ describe('ChannelManager', () => {
             await channelManager.sendEdit(streamId, 'msg-1', 'dm edit');
 
             expect(dmManager.sendEdit).toHaveBeenCalledWith(streamId, 'msg-1', 'dm edit');
-            expect(streamrController.publish).not.toHaveBeenCalled();
+            expect(streamrController.publishAsChannel).not.toHaveBeenCalled();
         });
     });
 
@@ -2302,7 +2306,7 @@ describe('ChannelManager', () => {
 
         beforeEach(() => {
             streamId = 'stream-del';
-            streamrController.publish.mockResolvedValue(undefined);
+            streamrController.publishAsChannel.mockClear().mockResolvedValue(undefined);
             channel = {
                 streamId,
                 name: 'Delete Channel',
@@ -2326,7 +2330,7 @@ describe('ChannelManager', () => {
         it('should publish delete override to network', async () => {
             await channelManager.sendDelete(streamId, 'msg-1');
 
-            expect(streamrController.publish).toHaveBeenCalledWith(
+            expect(streamrController.publishAsChannel).toHaveBeenCalledWith(
                 streamId,
                 1,
                 expect.objectContaining({ type: 'delete', targetId: 'msg-1' }),
@@ -2362,7 +2366,7 @@ describe('ChannelManager', () => {
 
             // Message should NOT be removed
             expect(channel.messages).toHaveLength(2);
-            expect(streamrController.publish).not.toHaveBeenCalled();
+            expect(streamrController.publishAsChannel).not.toHaveBeenCalled();
         });
 
         it('should route DM channels through dmManager', async () => {
@@ -2373,7 +2377,7 @@ describe('ChannelManager', () => {
             await channelManager.sendDelete(streamId, 'msg-1');
 
             expect(dmManager.sendDelete).toHaveBeenCalledWith(streamId, 'msg-1');
-            expect(streamrController.publish).not.toHaveBeenCalled();
+            expect(streamrController.publishAsChannel).not.toHaveBeenCalled();
         });
     });
 });
