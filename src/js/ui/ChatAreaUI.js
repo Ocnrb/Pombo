@@ -1321,7 +1321,13 @@ class ChatAreaUI {
         // Cache-first so the badge upgrades once ENS lands, instead of being
         // frozen at whatever the cache held when the message was verified.
         const ensName = identityManager.getCachedENS?.(msg.sender) || msg.verified?.ensName;
-        const hasENS = trustLevel === 1 || (trustLevel >= 1 && ensName);
+        // A known ENS name alone is enough (parity with Android's
+        // `trustLevel == 1 || ensName != null`). Gating on trustLevel >= 1
+        // meant a received message whose sender's ENS resolved only AFTER
+        // verification (the usual order) kept a plain ✓ forever, because
+        // trustLevel was snapshotted at 0 — the name showed but the badge
+        // never upgraded.
+        const hasENS = trustLevel === 1 || !!ensName;
 
         // ENS verified badge — green checkmark inside organic circle
         const ensBadgeSvg = `<svg class="inline-block" style="vertical-align: -1px" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="#4ade80" stroke-width="2" fill="none"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`;
@@ -1344,23 +1350,32 @@ class ChatAreaUI {
             };
         }
 
-        // No signature (system message or unsigned)
-        if (!msg.signature) {
-            return {
-                html: '',
-                textColor: 'text-white/30',
-                bgColor: 'bg-white/10',
-                border: ''
-            };
-        }
-
-        // Signature verification failed
-        if (msg.verified && !msg.verified.valid) {
+        // Signed but verification FAILED → red impersonation flag.
+        if (msg.signature && msg.verified && !msg.verified.valid) {
             return {
                 html: '<span class="text-red-500" title="⚠️ Invalid signature - may be impersonation!">❌</span>',
                 textColor: 'text-red-400',
                 bgColor: 'bg-red-900/20',
                 border: 'border border-red-500/50'
+            };
+        }
+
+        // Unsigned = the CURRENT format (D6). Identity is established by the
+        // proof at INGEST (attachAccount → msg.account), NOT by the async
+        // verifyMessage — so show the badge optimistically, exactly as a
+        // signed message showed ✓ before its async check returned. Waiting on
+        // `verified.valid` left every received (unsigned) message with NO
+        // badge until batch verification happened to re-render, which is why
+        // only own messages (rendered via the isOwn branch) ever showed one.
+        // The only unsigned case that gets no badge is an EXPLICIT failure
+        // (replay guard / no account) — and never a red ❌, matching the old
+        // "unsigned = no flag, not a failure" rule.
+        if (!msg.signature && msg.verified && msg.verified.valid === false) {
+            return {
+                html: '',
+                textColor: 'text-white/30',
+                bgColor: 'bg-white/10',
+                border: ''
             };
         }
 
