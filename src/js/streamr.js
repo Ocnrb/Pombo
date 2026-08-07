@@ -2460,17 +2460,21 @@ class StreamrController {
      * want to fail-closed on `!found` should pass retries > 0.
      *
      * Returns:
-     *   - { found: false, valid: false } when no challenge was ever published
-     *     (or storage never retained one, after retries exhausted).
-     *   - { found: true,  valid: true  } when password is correct.
-     *   - { found: true,  valid: false } when password is wrong.
+     *   - { found: false, valid: false, ts: 0 } when no challenge was ever
+     *     published (or storage never retained one, after retries exhausted).
+     *   - { found: true,  valid: true,  ts } when password is correct.
+     *   - { found: true,  valid: false, ts: 0 } when password is wrong.
+     *
+     * `ts` is the payload timestamp of the retained challenge (0 when absent
+     * or undecryptable) — the TTL-republish check on owner open compares it
+     * against the channel's retention (docs/TTL_REPUBLISH_PLAN.md).
      *
      * @param {string} adminStreamId - Admin stream ID (ends with -3)
      * @param {string} password - Candidate password
      * @param {Object} [options]
      * @param {number} [options.retries=0] Extra attempts after the first if `!found`
      * @param {number} [options.retryDelayMs=1500] Delay between attempts
-     * @returns {Promise<{found: boolean, valid: boolean}>}
+     * @returns {Promise<{found: boolean, valid: boolean, ts: number}>}
      */
     async verifyPasswordChallenge(adminStreamId, password, { retries = 0, retryDelayMs = 1500 } = {}) {
         if (!this.client) {
@@ -2480,7 +2484,7 @@ class StreamrController {
             Logger.warn('Invalid adminStreamId (should end with -3):', adminStreamId);
         }
         if (!password || typeof password !== 'string') {
-            return { found: false, valid: false };
+            return { found: false, valid: false, ts: 0 };
         }
 
         const partition = STREAM_CONFIG.ADMIN_STREAM.PASSWORD_CHALLENGE;
@@ -2526,7 +2530,7 @@ class StreamrController {
                     adminStreamId: String(adminStreamId).slice(-30),
                     attempts: maxAttempts
                 });
-                return { found: false, valid: false };
+                return { found: false, valid: false, ts: 0 };
             }
 
             // Challenge is always published encrypted, so resend returns a string.
@@ -2534,14 +2538,14 @@ class StreamrController {
             // malformed and reject (cannot prove password knowledge).
             if (typeof rawContent !== 'string') {
                 Logger.warn('verifyPasswordChallenge: challenge entry was not encrypted; treating as invalid');
-                return { found: true, valid: false };
+                return { found: true, valid: false, ts: 0 };
             }
 
             let decoded = null;
             try {
                 decoded = await cryptoManager.decryptJSON(rawContent, password);
             } catch (decryptError) {
-                return { found: true, valid: false };
+                return { found: true, valid: false, ts: 0 };
             }
 
             const ok = !!decoded
@@ -2549,10 +2553,14 @@ class StreamrController {
                 && decoded.type === 'PASSWORD_CHALLENGE'
                 && decoded.magic === PASSWORD_CHALLENGE_MAGIC;
 
-            return { found: true, valid: !!ok };
+            return {
+                found: true,
+                valid: !!ok,
+                ts: ok && typeof decoded.ts === 'number' ? decoded.ts : 0
+            };
         }
 
-        return { found: false, valid: false };
+        return { found: false, valid: false, ts: 0 };
     }
 
     /**

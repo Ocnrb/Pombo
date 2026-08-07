@@ -108,7 +108,12 @@ export const CONFIG = {
         // Default provider: 'streamr' or 'custom'
         defaultProvider: 'streamr',
         // Default retention days for Streamr storage
-        defaultRetentionDays: 180
+        defaultRetentionDays: 180,
+        // TTL-aware republish on owner open (see docs/TTL_REPUBLISH_PLAN.md):
+        // when a retained -3 artifact (ADMIN_STATE / CHANNEL_IMAGE /
+        // PASSWORD_CHALLENGE) is older than this fraction of the channel's
+        // storage TTL, the owner republishes it to reset the retention clock.
+        ttlRepublishAgeFraction: 0.8
     },
 
     // DM Configuration

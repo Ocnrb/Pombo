@@ -1892,9 +1892,15 @@ class ChannelSettingsUI {
         const status = document.getElementById('channel-image-status');
 
         const adminStreamId = channel.adminStreamId || deriveAdminId(channel.streamId);
-        const ownerAddress = (channel.createdBy || '').toLowerCase();
-        const myAddress = (this.deps.authManager?.getAddress() || '').toLowerCase();
-        const isOwner = !!myAddress && !!ownerAddress && myAddress === ownerAddress;
+        // Same authority source as the moderation menu (pin/hide/ban): the
+        // on-chain DELETE permission, RPC-verified and cached at channel
+        // open (getCachedDeletePermission). Fallback to isChannelOwner
+        // (createdBy OR stream-prefix) only while the cache hasn't been
+        // primed yet — the async check races a fast open of this panel.
+        const cachedPerm = this.deps?.channelManager?.getCachedDeletePermission?.(channel.streamId);
+        const isOwner = cachedPerm
+            ? !!cachedPerm.canDelete
+            : !!this.deps?.channelManager?.isChannelOwner(channel.streamId);
 
         // Render preview helper (uses cache; falls back to deterministic avatar)
         const renderPreview = (entry) => {
