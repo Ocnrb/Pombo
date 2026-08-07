@@ -1,0 +1,394 @@
+/**
+ * Tests for the TTL-aware republish of -3 artifacts on owner open
+ * (docs/TTL_REPUBLISH_PLAN.md):
+ *   - shouldRepublish() pure decision logic (ttlRepublish.js)
+ *   - channelManager._ttlRepublishOnOpen() wiring (channels.js)
+ *   - setChannelStorageDays keeping the local storageDays in sync
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Mock all dependencies before importing (same set as channels.test.js)
+vi.mock('../../src/js/logger.js', () => ({
+    Logger: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn()
+    }
+}));
+
+vi.mock('../../src/js/streamr.js', () => ({
+    streamrController: {
+        isInitialized: vi.fn().mockReturnValue(true),
+        getCurrentAddress: vi.fn().mockReturnValue('0xmyaddress'),
+        subscribe: vi.fn(),
+        publish: vi.fn(),
+        publishAsChannel: vi.fn().mockResolvedValue(undefined),
+        resend: vi.fn(),
+        resendAdminState: vi.fn().mockResolvedValue(null),
+        publishAdminState: vi.fn().mockResolvedValue(undefined),
+        publishPasswordChallenge: vi.fn().mockResolvedValue(undefined),
+        verifyPasswordChallenge: vi.fn().mockResolvedValue({ found: true, valid: true, ts: Date.now() }),
+        resendChannelImage: vi.fn().mockResolvedValue(null),
+        publishChannelImage: vi.fn().mockResolvedValue(undefined),
+        setStorageDays: vi.fn().mockResolvedValue(true),
+        checkPermissions: vi.fn().mockResolvedValue({ canSubscribe: true, canPublish: true, isOwner: false })
+    },
+    STREAM_CONFIG: {
+        partitions: 1,
+        LOAD_MORE_COUNT: 20,
+        ADMIN_HISTORY_COUNT: 10,
+        MESSAGE_STREAM: { MESSAGES: 0, CONTROL: 1 },
+        ADMIN_STREAM: { MODERATION: 0 }
+    },
+    deriveEphemeralId: vi.fn((id) => `${id}-ephemeral`),
+    deriveMessageId: vi.fn((id) => `${id}-message`),
+    deriveAdminId: vi.fn((id) => `${id}-admin`)
+}));
+
+vi.mock('../../src/js/auth.js', () => ({
+    authManager: {
+        getAddress: vi.fn().mockReturnValue('0xmyaddress'),
+        getCurrentAddress: vi.fn().mockReturnValue('0xmyaddress'),
+        isConnected: vi.fn().mockReturnValue(true)
+    }
+}));
+
+vi.mock('../../src/js/identity.js', () => ({
+    identityManager: {
+        getUserNickname: vi.fn().mockReturnValue('TestUser'),
+        getCurrentIdentity: vi.fn().mockReturnValue({ nickname: 'TestUser', address: '0xmyaddress' })
+    }
+}));
+
+vi.mock('../../src/js/secureStorage.js', () => ({
+    secureStorage: {
+        isStorageUnlocked: vi.fn().mockReturnValue(true),
+        getChannels: vi.fn().mockReturnValue([]),
+        saveChannels: vi.fn(),
+        setChannels: vi.fn(),
+        clearChannelLeftAt: vi.fn().mockResolvedValue(undefined)
+    }
+}));
+
+vi.mock('../../src/js/graph.js', () => ({
+    graphAPI: {
+        getPublicPomboChannels: vi.fn().mockResolvedValue([])
+    }
+}));
+
+vi.mock('../../src/js/relayManager.js', () => ({
+    relayManager: {
+        sendPushNotification: vi.fn(),
+        enabled: false
+    }
+}));
+
+vi.mock('../../src/js/dm.js', () => ({
+    dmManager: {
+        isDMChannel: vi.fn().mockReturnValue(false),
+        conversations: new Map()
+    }
+}));
+
+vi.mock('../../src/js/media.js', () => ({
+    mediaController: {
+        handleMediaMessage: vi.fn()
+    }
+}));
+
+vi.mock('../../src/js/channelImageManager.js', () => ({
+    channelImageManager: {
+        get: vi.fn().mockResolvedValue(null),
+        getCached: vi.fn().mockReturnValue(null),
+        setLocal: vi.fn().mockResolvedValue(undefined),
+        subscribe: vi.fn().mockReturnValue(() => {})
+    }
+}));
+
+import { shouldRepublish } from '../../src/js/ttlRepublish.js';
+import { channelManager } from '../../src/js/channels.js';
+import { streamrController } from '../../src/js/streamr.js';
+import { authManager } from '../../src/js/auth.js';
+import { channelImageManager } from '../../src/js/channelImageManager.js';
+import { CONFIG } from '../../src/js/config.js';
+
+const DAY = 86_400_000;
+
+describe('shouldRepublish()', () => {
+    const NOW = 1_800_000_000_000;
+
+    it('returns false for missing or invalid artifact ts', () => {
+        expect(shouldRepublish(0, 180, NOW)).toBe(false);
+        expect(shouldRepublish(null, 180, NOW)).toBe(false);
+        expect(shouldRepublish(undefined, 180, NOW)).toBe(false);
+        expect(shouldRepublish(-5, 180, NOW)).toBe(false);
+        expect(shouldRepublish('abc', 180, NOW)).toBe(false);
+    });
+
+    it('returns false for missing or invalid storageDays', () => {
+        expect(shouldRepublish(NOW - 100 * DAY, 0, NOW)).toBe(false);
+        expect(shouldRepublish(NOW - 100 * DAY, null, NOW)).toBe(false);
+        expect(shouldRepublish(NOW - 100 * DAY, undefined, NOW)).toBe(false);
+        expect(shouldRepublish(NOW - 100 * DAY, -1, NOW)).toBe(false);
+    });
+
+    it('returns false while younger than the age fraction of the TTL', () => {
+        // 180d TTL, 0.8 fraction -> threshold at 144 days
+        expect(shouldRepublish(NOW - 10 * DAY, 180, NOW)).toBe(false);
+        expect(shouldRepublish(NOW - 143 * DAY, 180, NOW)).toBe(false);
+    });
+
+    it('returns true once older than the age fraction of the TTL', () => {
+        expect(shouldRepublish(NOW - 145 * DAY, 180, NOW)).toBe(true);
+        expect(shouldRepublish(NOW - 179 * DAY, 180, NOW)).toBe(true);
+        // Even past the TTL (still retained until the purge runs)
+        expect(shouldRepublish(NOW - 500 * DAY, 180, NOW)).toBe(true);
+    });
+
+    it('is strict at the exact threshold', () => {
+        expect(shouldRepublish(NOW - 144 * DAY, 180, NOW)).toBe(false);
+    });
+
+    it('honours an explicit ageFraction override', () => {
+        expect(shouldRepublish(NOW - 10 * DAY, 180, NOW, 0.01)).toBe(true);
+        expect(shouldRepublish(NOW - 143 * DAY, 180, NOW, 0.99)).toBe(false);
+    });
+
+    it('scales with short TTLs', () => {
+        // 1d TTL -> threshold at 0.8 days
+        expect(shouldRepublish(NOW - 0.5 * DAY, 1, NOW)).toBe(false);
+        expect(shouldRepublish(NOW - 0.9 * DAY, 1, NOW)).toBe(true);
+    });
+});
+
+describe('channelManager._ttlRepublishOnOpen()', () => {
+    const STREAM_ID = 'owner/pombo/test-1';
+    const ADMIN_ID = 'owner/pombo/test-3';
+    const FRESH_TS = () => Date.now() - 1 * DAY;
+    const OLD_TS = () => Date.now() - 170 * DAY; // past 144d threshold for 180d TTL
+
+    function makeChannel(overrides = {}) {
+        return {
+            messageStreamId: STREAM_ID,
+            adminStreamId: ADMIN_ID,
+            name: 'Test',
+            type: 'public',
+            createdBy: '0xmyaddress',
+            storageEnabled: true,
+            storageDays: 180,
+            adminState: { bannedMembers: ['0xbad'], hiddenMessageIds: [], pins: [] },
+            adminRev: 3,
+            adminTs: FRESH_TS(),
+            adminLoaded: true,
+            ...overrides
+        };
+    }
+
+    let publishAdminStateSpy;
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        channelManager.channels.clear();
+        authManager.getAddress.mockReturnValue('0xmyaddress');
+        streamrController.resendChannelImage.mockResolvedValue(null);
+        streamrController.verifyPasswordChallenge.mockResolvedValue({ found: true, valid: true, ts: FRESH_TS() });
+        // The admin-state branch delegates to the real publishAdminState — spy
+        // it out so tests assert intent without exercising rev bookkeeping.
+        publishAdminStateSpy = vi.spyOn(channelManager, 'publishAdminState').mockResolvedValue({ rev: 4, state: {} });
+    });
+
+    afterEach(() => {
+        publishAdminStateSpy.mockRestore();
+    });
+
+    it('is a no-op for non-owners', async () => {
+        const channel = makeChannel({ createdBy: '0xsomeoneelse', adminTs: OLD_TS(), type: 'password' });
+        await channelManager._ttlRepublishOnOpen(channel, ADMIN_ID, 'pw');
+        expect(publishAdminStateSpy).not.toHaveBeenCalled();
+        expect(streamrController.verifyPasswordChallenge).not.toHaveBeenCalled();
+        expect(streamrController.resendChannelImage).not.toHaveBeenCalled();
+    });
+
+    it('derives ownership from the stream prefix when createdBy is missing', async () => {
+        // Locally-joined password channels may not carry createdBy — the
+        // stream path prefix (the creator's address) must still qualify.
+        const channel = makeChannel({
+            createdBy: undefined,
+            messageStreamId: '0xmyaddress/pombo/test-1',
+            adminTs: OLD_TS()
+        });
+        await channelManager._ttlRepublishOnOpen(channel, ADMIN_ID, null);
+        expect(publishAdminStateSpy).toHaveBeenCalled();
+    });
+
+    it('is a no-op for DMs', async () => {
+        await channelManager._ttlRepublishOnOpen(makeChannel({ type: 'dm', adminTs: OLD_TS() }), ADMIN_ID, null);
+        expect(publishAdminStateSpy).not.toHaveBeenCalled();
+        expect(streamrController.resendChannelImage).not.toHaveBeenCalled();
+    });
+
+    it('runs even when the local storageEnabled flag is stale/false', async () => {
+        // The stream can have storage on-chain while the local flag is false
+        // (joined channels, pre-flag records) — branches self-gate instead.
+        const channel = makeChannel({ storageEnabled: false, adminTs: OLD_TS() });
+        await channelManager._ttlRepublishOnOpen(channel, ADMIN_ID, null);
+        expect(publishAdminStateSpy).toHaveBeenCalled();
+    });
+
+    describe('ADMIN_STATE branch', () => {
+        it('republishes the current state when the snapshot is near TTL', async () => {
+            const channel = makeChannel({ adminTs: OLD_TS() });
+            await channelManager._ttlRepublishOnOpen(channel, ADMIN_ID, null);
+            expect(publishAdminStateSpy).toHaveBeenCalledWith(STREAM_ID, { state: channel.adminState });
+        });
+
+        it('does not republish a fresh snapshot', async () => {
+            await channelManager._ttlRepublishOnOpen(makeChannel({ adminTs: FRESH_TS() }), ADMIN_ID, null);
+            expect(publishAdminStateSpy).not.toHaveBeenCalled();
+        });
+
+        it('does not republish when no snapshot was ever published (rev 0)', async () => {
+            await channelManager._ttlRepublishOnOpen(
+                makeChannel({ adminRev: 0, adminTs: OLD_TS() }), ADMIN_ID, null);
+            expect(publishAdminStateSpy).not.toHaveBeenCalled();
+        });
+
+        it('does not republish before the bootstrap marked adminLoaded', async () => {
+            await channelManager._ttlRepublishOnOpen(
+                makeChannel({ adminLoaded: false, adminTs: OLD_TS() }), ADMIN_ID, null);
+            expect(publishAdminStateSpy).not.toHaveBeenCalled();
+        });
+
+        it('falls back to defaultRetentionDays when the channel has no storageDays', async () => {
+            const age = (CONFIG.storage.defaultRetentionDays - 10) * DAY; // past 0.8×default
+            const channel = makeChannel({ storageDays: null, adminTs: Date.now() - age });
+            await channelManager._ttlRepublishOnOpen(channel, ADMIN_ID, null);
+            expect(publishAdminStateSpy).toHaveBeenCalled();
+        });
+    });
+
+    describe('PASSWORD_CHALLENGE branch', () => {
+        it('skips non-password channels', async () => {
+            await channelManager._ttlRepublishOnOpen(makeChannel(), ADMIN_ID, null);
+            expect(streamrController.verifyPasswordChallenge).not.toHaveBeenCalled();
+        });
+
+        it('keeps the legacy redundancy semantics: republishes when not found', async () => {
+            streamrController.verifyPasswordChallenge.mockResolvedValue({ found: false, valid: false, ts: 0 });
+            await channelManager._ttlRepublishOnOpen(makeChannel({ type: 'password' }), ADMIN_ID, 'pw');
+            expect(streamrController.publishPasswordChallenge).toHaveBeenCalledWith(ADMIN_ID, 'pw');
+        });
+
+        it('republishes when the retained entry does not verify', async () => {
+            streamrController.verifyPasswordChallenge.mockResolvedValue({ found: true, valid: false, ts: 0 });
+            await channelManager._ttlRepublishOnOpen(makeChannel({ type: 'password' }), ADMIN_ID, 'pw');
+            expect(streamrController.publishPasswordChallenge).toHaveBeenCalledWith(ADMIN_ID, 'pw');
+        });
+
+        it('republishes a valid challenge nearing TTL', async () => {
+            streamrController.verifyPasswordChallenge.mockResolvedValue({ found: true, valid: true, ts: OLD_TS() });
+            await channelManager._ttlRepublishOnOpen(makeChannel({ type: 'password' }), ADMIN_ID, 'pw');
+            expect(streamrController.publishPasswordChallenge).toHaveBeenCalledWith(ADMIN_ID, 'pw');
+        });
+
+        it('leaves a fresh valid challenge alone', async () => {
+            streamrController.verifyPasswordChallenge.mockResolvedValue({ found: true, valid: true, ts: FRESH_TS() });
+            await channelManager._ttlRepublishOnOpen(makeChannel({ type: 'password' }), ADMIN_ID, 'pw');
+            expect(streamrController.publishPasswordChallenge).not.toHaveBeenCalled();
+        });
+
+        it('never republishes on a ts-less valid verdict (legacy safety)', async () => {
+            streamrController.verifyPasswordChallenge.mockResolvedValue({ found: true, valid: true, ts: 0 });
+            await channelManager._ttlRepublishOnOpen(makeChannel({ type: 'password' }), ADMIN_ID, 'pw');
+            expect(streamrController.publishPasswordChallenge).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('CHANNEL_IMAGE branch', () => {
+        const RETAINED = (ts, extra = {}) => ({
+            type: 'CHANNEL_IMAGE', v: 1, rev: 7, ts,
+            createdBy: '0xmyaddress', encrypted: false,
+            mime: 'image/jpeg', hash: 'abc123', data: 'data:image/jpeg;base64,xxx',
+            ...extra
+        });
+
+        it('republishes the retained payload with rev+1 and a fresh ts', async () => {
+            const old = OLD_TS();
+            streamrController.resendChannelImage.mockResolvedValue(RETAINED(old));
+            const channel = makeChannel();
+            const before = Date.now();
+            await channelManager._ttlRepublishOnOpen(channel, ADMIN_ID, null);
+
+            expect(streamrController.publishChannelImage).toHaveBeenCalledTimes(1);
+            const [adminId, payload, password] = streamrController.publishChannelImage.mock.calls[0];
+            expect(adminId).toBe(ADMIN_ID);
+            expect(payload.rev).toBe(8);
+            expect(payload.ts).toBeGreaterThanOrEqual(before);
+            expect(payload.hash).toBe('abc123');
+            expect(payload.data).toBe('data:image/jpeg;base64,xxx');
+            expect(password).toBeNull();
+            expect(channel.channelImageRev).toBe(8);
+            expect(channelImageManager.setLocal).toHaveBeenCalledWith(ADMIN_ID, expect.objectContaining({
+                hash: 'abc123', rev: 8
+            }));
+        });
+
+        it('does not republish a fresh image', async () => {
+            streamrController.resendChannelImage.mockResolvedValue(RETAINED(FRESH_TS()));
+            await channelManager._ttlRepublishOnOpen(makeChannel(), ADMIN_ID, null);
+            expect(streamrController.publishChannelImage).not.toHaveBeenCalled();
+        });
+
+        it('does not publish when nothing is retained (no cache resurrection)', async () => {
+            streamrController.resendChannelImage.mockResolvedValue(null);
+            await channelManager._ttlRepublishOnOpen(makeChannel(), ADMIN_ID, null);
+            expect(streamrController.publishChannelImage).not.toHaveBeenCalled();
+        });
+
+        it('re-encrypts with the channel password when the payload was encrypted', async () => {
+            streamrController.resendChannelImage.mockResolvedValue(RETAINED(OLD_TS(), { encrypted: true }));
+            await channelManager._ttlRepublishOnOpen(makeChannel({ type: 'password' }), ADMIN_ID, 'pw');
+            const [, , password] = streamrController.publishChannelImage.mock.calls[0];
+            expect(password).toBe('pw');
+        });
+
+        it('skips an encrypted payload when no password is available', async () => {
+            streamrController.resendChannelImage.mockResolvedValue(RETAINED(OLD_TS(), { encrypted: true }));
+            await channelManager._ttlRepublishOnOpen(makeChannel(), ADMIN_ID, null);
+            expect(streamrController.publishChannelImage).not.toHaveBeenCalled();
+        });
+    });
+});
+
+describe('setChannelStorageDays() local sync', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        channelManager.channels.clear();
+    });
+
+    it('updates channel.storageDays after a successful on-chain update', async () => {
+        const channel = {
+            messageStreamId: 's-1', adminStreamId: 's-3',
+            name: 'T', type: 'public', storageDays: 180
+        };
+        channelManager.channels.set('s-1', channel);
+        streamrController.setStorageDays.mockResolvedValue(true);
+
+        await channelManager.setChannelStorageDays('s-1', 30);
+        expect(channel.storageDays).toBe(30);
+    });
+
+    it('keeps the old value when the on-chain update fails', async () => {
+        const channel = {
+            messageStreamId: 's-1', adminStreamId: 's-3',
+            name: 'T', type: 'public', storageDays: 180
+        };
+        channelManager.channels.set('s-1', channel);
+        streamrController.setStorageDays.mockResolvedValue(false);
+
+        await channelManager.setChannelStorageDays('s-1', 30);
+        expect(channel.storageDays).toBe(180);
+    });
+});
