@@ -7,10 +7,11 @@
  * explicit and prevent accidental edits.
  *
  * ARCHITECTURE:
- *   Each regular channel uses up to 3 streams, derived from a base ID by appending:
+ *   Each regular channel uses up to 4 streams, derived from a base ID by appending:
  *     -1  → Message stream   (WITH storage) — content (text, reactions, media announces, edit/delete overrides)
  *     -2  → Ephemeral stream (NO storage)   — presence, typing, P2P media coordination
  *     -3  → Admin stream     (WITH storage) — admin-only writes (moderation state)
+ *     -4  → Keys stream      (WITH storage) — epoch-key distribution (gated channels only)
  *
  * MESSAGE STREAM (-1):
  *   Regular channels use 11 partitions:
@@ -34,12 +35,23 @@
  *     P2: PASSWORD_CHALLENGE                                               — RESERVED
  *   Permissions: only owner publishes; readers vary by channel type
  *   (public/password: public subscribe; native: members-only subscribe).
+ *
+ * KEYS STREAM (-4) — gated channels only:
+ *   Single partition carrying the epoch-key protocol (KEY_ANNOUNCE / KEY_REQUEST /
+ *   KEY_WRAP). Content on -1 is encrypted with a channel-wide epoch key versioned
+ *   by `kid`; this stream is how members obtain those keys.
+ *   Permissions: members publish AND subscribe (any member may answer a request
+ *   with a KEY_WRAP — k-of-n distribution). KEY_ANNOUNCE authority is app-layer:
+ *   accepted only from the admin set (v1: channel owner), never inferred from
+ *   stream permissions. This is why -4 cannot fold into -3, which must stay
+ *   owner-only publish.
  */
 
 export const STREAM_SUFFIX = Object.freeze({
     MESSAGE: '-1',
     EPHEMERAL: '-2',
-    ADMIN: '-3'
+    ADMIN: '-3',
+    KEYS: '-4'
 });
 
 export const MESSAGE_STREAM = Object.freeze({
@@ -101,6 +113,33 @@ export const ADMIN_STREAM = Object.freeze({
     PASSWORD_CHALLENGE: 2 // PASSWORD_CHALLENGE: encrypted magic-plaintext blob for password verification
 });
 
+export const KEYS_STREAM = Object.freeze({
+    SUFFIX: STREAM_SUFFIX.KEYS,
+    PARTITIONS: 1,
+
+    // Partition indexes
+    KEY_EXCHANGE: 0       // KEY_ANNOUNCE, KEY_REQUEST, KEY_WRAP
+});
+
+/**
+ * Message types on the keys stream (-4). Protocol constants — changing them
+ * orphans every already-published announce/wrap.
+ *
+ *   KEY_ANNOUNCE  admin only (app-layer check against the admin set):
+ *                 { epoch, keyId, keyHash, validFrom }
+ *   KEY_REQUEST   any member: { pubkey, fromEpoch, requestId } — `pubkey` is an
+ *                 ephemeral per-request key (D12); wraps are addressed to it
+ *   KEY_WRAP      any member holding the key:
+ *                 { keyId, epoch, tag, requestId, wrapped }
+ *                 tag = sha256(requestPubkey ‖ keyId); receivers verify
+ *                 sha256(unwrapped) === announced keyHash before adopting
+ */
+export const KEYS_MSG_TYPE = Object.freeze({
+    KEY_ANNOUNCE: 'key_announce',
+    KEY_REQUEST: 'key_request',
+    KEY_WRAP: 'key_wrap'
+});
+
 /**
  * Magic plaintext encrypted with the channel password and published to
  * ADMIN_STREAM partition 2 (PASSWORD_CHALLENGE). Successful decryption of the
@@ -147,11 +186,29 @@ export function deriveAdminId(messageStreamId) {
 }
 
 /**
+ * Derive keys stream ID from a message stream ID.
+ * @param {string} messageStreamId - Message stream ID (ends with -1)
+ * @returns {string|null} Keys stream ID (ends with -4) or null
+ */
+export function deriveKeysId(messageStreamId) {
+    if (!messageStreamId) return null;
+    return messageStreamId.replace(/-1$/, STREAM_SUFFIX.KEYS);
+}
+
+/**
  * @param {string} streamId
  * @returns {boolean} true if streamId ends with the message-stream suffix
  */
 export function isMessageStream(streamId) {
     return !!streamId && streamId.endsWith(STREAM_SUFFIX.MESSAGE);
+}
+
+/**
+ * @param {string} streamId
+ * @returns {boolean} true if streamId ends with the keys-stream suffix
+ */
+export function isKeysStream(streamId) {
+    return !!streamId && streamId.endsWith(STREAM_SUFFIX.KEYS);
 }
 
 /**

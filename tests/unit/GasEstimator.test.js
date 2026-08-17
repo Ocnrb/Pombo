@@ -181,9 +181,10 @@ describe('GasEstimator', () => {
         it('should calculate native channel cost', async () => {
             const costs = await GasEstimator.estimateCosts();
             
-            // Native = 3× createStream + 3× setPermissionsBatch
-            //        + 2× addStorageNode + 2× setStorageDayCount
-            const expectedGas = 3 * 420000 + 3 * 210000 + 2 * 165000 + 2 * 50000;
+            // Native adds the keys stream (-4, with storage):
+            // 4× createStream + 4× setPermissionsBatch
+            // + 3× addStorageNode + 3× setStorageDayCount
+            const expectedGas = 4 * 420000 + 4 * 210000 + 3 * 165000 + 3 * 50000;
             const expectedCost = 30 * 1e9 * expectedGas;
             
             expect(costs.native).toBe(expectedCost);

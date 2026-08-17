@@ -1576,6 +1576,14 @@ class ChannelSettingsUI {
             const now = Math.floor(Date.now() / 1000);
             
             const formatted = permissions
+                // The Graph keeps zeroed entries after a revoke (SDK has the
+                // same workaround) — an address with no effective permission
+                // is an ex-member, not a row.
+                .filter(perm => {
+                    const stillSubscribes = perm.subscribeExpiration === null || parseInt(perm.subscribeExpiration) > now;
+                    const stillPublishes = perm.publishExpiration === null || parseInt(perm.publishExpiration) > now;
+                    return stillSubscribes || stillPublishes || perm.canEdit || perm.canDelete || perm.canGrant;
+                })
                 .map(perm => {
                 let who;
                 let isOwner = false;

@@ -633,8 +633,10 @@ class ChannelModalsUI {
 
         try {
             // Total on-chain steps:
-            //   3× createStream + 3× setPermissions + 2× addToStorageNode + 2× setStorageDayCount = 10
-            const totalSteps = 10;
+            //   public/password: 3× createStream + 3× setPermissions + 2× addToStorageNode + 2× setStorageDayCount = 10
+            //   native adds the keys stream (-4): 4× create + 4× permissions + 3× addToStorageNode + 3× setStorageDayCount = 14
+            const streamCount = type === 'native' ? 4 : 3;
+            const totalSteps = type === 'native' ? 14 : 10;
             this.notificationUI?.showLoadingToast(
                 'Creating channel...',
                 'This may take a minute',
@@ -642,10 +644,10 @@ class ChannelModalsUI {
             );
 
             // Map step index -> phase label.
-            // [1; 3] Creating Channel · [4; 6] Setting Permissions · [7; total] Setting Storage
+            // [1; N] Creating Channel · [N+1; 2N] Setting Permissions · [2N+1; total] Setting Storage
             const labelForStep = (s) => {
-                if (s <= 3) return 'Creating Channel...';
-                if (s <= 6) return 'Setting Permissions...';
+                if (s <= streamCount) return 'Creating Channel...';
+                if (s <= streamCount * 2) return 'Setting Permissions...';
                 return 'Setting Storage...';
             };
 

@@ -568,6 +568,45 @@ class SecureStorage {
     }
 
     /**
+     * Get persisted epoch keys for a channel (keys stream protocol state).
+     * Epoch keys are CHANNEL keys, not ephemeral identities — persisting them
+     * is what avoids a KEY_REQUEST round-trip on every session (D14). They
+     * live inside the encrypted cache, out of the service worker's reach.
+     * @param {string} messageStreamId
+     * @returns {Object|null} { epochs: {keyId: {keyHex, keyHash, epoch}}, currentEpoch }
+     */
+    getEpochKeys(messageStreamId) {
+        if (!this.isUnlocked) return null;
+        return this.cache.epochKeys?.[messageStreamId] || null;
+    }
+
+    /**
+     * Persist epoch keys for a channel.
+     * @param {string} messageStreamId
+     * @param {Object} data - { epochs, currentEpoch }
+     */
+    async setEpochKeys(messageStreamId, data) {
+        if (!this.isUnlocked) return;
+        if (!this.cache.epochKeys) {
+            this.cache.epochKeys = {};
+        }
+        this.cache.epochKeys[messageStreamId] = data;
+        await this.saveToStorage();
+    }
+
+    /**
+     * Drop persisted epoch keys for a channel (on leave/delete).
+     * @param {string} messageStreamId
+     */
+    async clearEpochKeys(messageStreamId) {
+        if (!this.isUnlocked) return;
+        if (this.cache.epochKeys?.[messageStreamId]) {
+            delete this.cache.epochKeys[messageStreamId];
+            await this.saveToStorage();
+        }
+    }
+
+    /**
      * Get trusted contacts
      */
     getTrustedContacts() {

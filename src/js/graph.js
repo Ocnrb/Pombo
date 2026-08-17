@@ -255,17 +255,17 @@ class GraphAPI {
             Logger.debug('Permissions for members:', permissions);
             
             const now = Math.floor(Date.now() / 1000);
-            
+
             // Filter out public permissions and map to member format
             const members = permissions
                 .filter(p => p.userAddress && p.userAddress !== '0x0000000000000000000000000000000000000000')
                 .map(p => {
-                    // Check expiration times (null = unlimited)
-                    const canPublish = p.publishExpiration === null || 
+                    // Check expiration times (null/absent = unlimited)
+                    const canPublish = p.publishExpiration == null ||
                         parseInt(p.publishExpiration) > now;
-                    const canSubscribe = p.subscribeExpiration === null || 
+                    const canSubscribe = p.subscribeExpiration == null ||
                         parseInt(p.subscribeExpiration) > now;
-                    
+
                     return {
                         address: p.userAddress,
                         canPublish,
@@ -276,7 +276,11 @@ class GraphAPI {
                         // isOwner = has all admin permissions
                         isOwner: p.canGrant && p.canEdit && p.canDelete
                     };
-                });
+                })
+                // Revoking zeroes the on-chain entry but The Graph keeps it in
+                // the index (SDK has the same workaround with a cleanup TODO).
+                // An address with no effective permission is not a member.
+                .filter(m => m.canPublish || m.canSubscribe || m.canGrant || m.canEdit || m.canDelete);
             return Ok(members);
         } catch (error) {
             Logger.warn('Failed to get stream members:', error);

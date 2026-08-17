@@ -36,13 +36,16 @@ import {
     MESSAGE_STREAM as MESSAGE_STREAM_CONSTANTS,
     EPHEMERAL_STREAM as EPHEMERAL_STREAM_CONSTANTS,
     ADMIN_STREAM as ADMIN_STREAM_CONSTANTS,
+    KEYS_STREAM as KEYS_STREAM_CONSTANTS,
     PASSWORD_CHALLENGE_MAGIC,
     deriveEphemeralId as _deriveEphemeralId,
     deriveMessageId as _deriveMessageId,
     deriveAdminId as _deriveAdminId,
+    deriveKeysId as _deriveKeysId,
     isMessageStream as _isMessageStream,
     isEphemeralStream as _isEphemeralStream,
-    isAdminStream as _isAdminStream
+    isAdminStream as _isAdminStream,
+    isKeysStream as _isKeysStream
 } from './streamConstants.js';
 
 // === STREAM CONFIG (DUAL-STREAM ARCHITECTURE) ===
@@ -89,6 +92,8 @@ const STREAM_CONFIG = {
 
     ADMIN_STREAM: ADMIN_STREAM_CONSTANTS,
 
+    KEYS_STREAM: KEYS_STREAM_CONSTANTS,
+
     // History count to fetch when bootstrapping admin state on channel open.
     // Snapshot is `latest-wins`; a small window is sufficient.
     ADMIN_HISTORY_COUNT: 10,
@@ -107,9 +112,11 @@ const STREAM_CONFIG = {
 const deriveEphemeralId = _deriveEphemeralId;
 const deriveMessageId = _deriveMessageId;
 const deriveAdminId = _deriveAdminId;
+const deriveKeysId = _deriveKeysId;
 const isMessageStream = _isMessageStream;
 const isEphemeralStream = _isEphemeralStream;
 const isAdminStream = _isAdminStream;
+const isKeysStream = _isKeysStream;
 
 const isIpLiteralHost = (hostname) => {
     if (!hostname) {
@@ -233,6 +240,17 @@ class StreamrController {
             this.address = await this.client.getAddress();
             Logger.info('Streamr client initialized with address:', this.address);
 
+            // Account identity for publishAs-based ACCOUNT publishes (keys
+            // stream). The -4 stream must publish as the account — its grant is
+            // per member address — but with encryptionType NONE: client.publish
+            // would force the SDK's AES + group-key exchange on a members-only
+            // stream (§3.4), reintroducing for the key-distribution protocol the
+            // very publisher-online dependency it exists to remove. In-memory
+            // only, same exposure as the client's own auth config.
+            this._accountIdentity = window.EthereumKeyPairIdentity
+                ? window.EthereumKeyPairIdentity.fromPrivateKey(signer.privateKey)
+                : null;
+
             // Note: warmupNetwork() is called separately by app.js with the appropriate streamId
             // based on whether there's a deep link or not
 
@@ -329,10 +347,11 @@ class StreamrController {
         const randomHash = cryptoManager.generateRandomHex(8);
         const baseStreamPath = `${ownerAddress}/${randomHash}`;
         
-        // Triple-stream IDs
+        // Stream IDs (triple-stream; native channels add a 4th for epoch keys)
         const messageStreamId = `${baseStreamPath}-1`;
         const ephemeralStreamId = `${baseStreamPath}-2`;
         const adminStreamId = `${baseStreamPath}-3`;
+        const keysStreamId = `${baseStreamPath}-4`;
 
         // Build metadata for The Graph indexing (abbreviated keys per MIGRATION_PLAN)
         // Native channels are always hidden; others default to hidden unless specified
@@ -365,6 +384,13 @@ class StreamrController {
             v: '1',               // version
             ln: messageStreamId,  // linkedTo (parentStream)
             k: 'admin'            // kind
+        });
+
+        const keysMetadata = JSON.stringify({
+            a: 'pombo',           // app
+            v: '1',               // version
+            ln: messageStreamId,  // linkedTo (parentStream)
+            k: 'keys'             // kind
         });
 
         try {
@@ -403,7 +429,8 @@ class StreamrController {
             };
             
             // Optional progress callback — invoked once after each successful on-chain step
-            // (3 createStream + 3 setPermissions = 6 invocations from this method).
+            // (public/password: 3 createStream + 3 setPermissions = 6 invocations;
+            //  native adds the keys stream: 4 createStream + 4 setPermissions = 8).
             const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
 
             // Step 1: Create MESSAGE STREAM first (sequential to avoid nonce conflicts)
@@ -422,7 +449,17 @@ class StreamrController {
             Logger.info('Creating admin stream...');
             const adminStream = await createStreamWithRetry(adminStreamId, adminMetadata, 'admin', STREAM_CONFIG.ADMIN_STREAM.PARTITIONS);
             try { onProgress(); } catch (_) { /* see above */ }
-            
+
+            // Step 3b: Create KEYS STREAM (native channels only — epoch-key distribution).
+            // Lives outside -3 on purpose: any member must be able to publish
+            // KEY_REQUEST/KEY_WRAP here, while -3 stays owner-only publish.
+            let keysStream = null;
+            if (type === 'native') {
+                Logger.info('Creating keys stream...');
+                keysStream = await createStreamWithRetry(keysStreamId, keysMetadata, 'keys', STREAM_CONFIG.KEYS_STREAM.PARTITIONS);
+                try { onProgress(); } catch (_) { /* see above */ }
+            }
+
             const createTime = ((Date.now() - startTime) / 1000).toFixed(1);
             Logger.info(`✓ All streams created in ${createTime}s`);
 
@@ -509,7 +546,20 @@ class StreamrController {
                 } finally {
                     try { onProgress(); } catch (_) { /* ignore */ }
                 }
-                
+
+                // Keys stream: members publish AND subscribe — any member may
+                // answer a KEY_REQUEST with a KEY_WRAP (k-of-n distribution)
+                if (keysStream) {
+                    try {
+                        await this.setStreamPermissions(keysStream.id, { public: false, members });
+                        Logger.info('✓ Keys stream: permissions set');
+                    } catch (e) {
+                        Logger.error('✗ Keys stream permissions failed:', e.message);
+                    } finally {
+                        try { onProgress(); } catch (_) { /* ignore */ }
+                    }
+                }
+
                 const permTime = ((Date.now() - permStartTime) / 1000).toFixed(1);
                 Logger.info(`Permissions configured in ${permTime}s`);
             }
@@ -521,6 +571,7 @@ class StreamrController {
                 messageStreamId: messageStream.id,
                 ephemeralStreamId: ephemeralStream.id,
                 adminStreamId: adminStream.id,
+                keysStreamId: keysStream ? keysStream.id : null,
                 type: type,
                 name: channelName
             };
@@ -1892,18 +1943,37 @@ class StreamrController {
         // Native and read-only channels keep the PRIMARY identity on the base
         // path (D3): their publish grant is on-chain — per member address for
         // native, owner-only for read-only — and a throwaway key holds none,
-        // so an ephemeral publish is rejected network-wide. `this.publish`
-        // uses the account and the SDK's own group-key encryption, which is
-        // the only encryption a native channel has. channelManager owns the
-        // registry; import it lazily (a static import would be circular —
-        // channels.js imports this module). Any failure falls through to the
-        // ephemeral path, which is correct for public/password.
+        // so an ephemeral publish is rejected network-wide.
+        //
+        // NATIVE channels encrypt with the channel's EPOCH KEY (N-A) and go
+        // out via publishAs with encryptionType NONE — the SDK's group-key
+        // layer is exactly the per-publisher, publisher-must-be-online
+        // dependency the epoch protocol replaces. Fail-closed: no epoch key
+        // yet means NO publish, never a plaintext or SDK-keyed fallback.
+        //
+        // READ-ONLY channels stay on this.publish: their -1 is public
+        // subscribe, so the SDK sends NONE and content is meant to be public.
+        //
+        // channelManager owns the registry; import it lazily (a static import
+        // would be circular — channels.js imports this module). Any failure
+        // falls through to the ephemeral path, which is correct for
+        // public/password.
+        let channelManager = null;
         try {
-            const { channelManager } = await import('./channels.js');
-            if (channelManager.usesAccountPublish?.(streamId)) {
-                return this.publish(streamId, partition, data, password);
-            }
+            ({ channelManager } = await import('./channels.js'));
         } catch { /* registry unavailable → ephemeral (public/password) */ }
+
+        if (channelManager?.usesAccountPublish?.(streamId)) {
+            const base = String(streamId).replace(/-[1234]$/, '');
+            const channel = channelManager.channels?.get(base + '-1');
+            if (channel?.type === 'native') {
+                // Errors here MUST propagate: falling through to the ephemeral
+                // path would put an unencrypted payload under a key that holds
+                // no grant. Loud failure over silent leak.
+                return this.publishEpochEncrypted(channel, streamId, partition, data);
+            }
+            return this.publish(streamId, partition, data, password);
+        }
 
         const { identity, proof } = getChannelIdentity(streamId);
 
@@ -2020,6 +2090,224 @@ class StreamrController {
         // `undefined` and silently conclude nothing was stored.
         try { message.timestamp = messageId.timestamp; } catch { /* frozen: callers fall back */ }
         return message;
+    }
+
+    // ==================== KEYS STREAM (-4) ====================
+
+    /**
+     * Publish an epoch-key protocol message (KEY_ANNOUNCE / KEY_REQUEST /
+     * KEY_WRAP) on a channel's keys stream.
+     *
+     * Publishes AS THE ACCOUNT — the -4 grant is per member address, and a
+     * throwaway key holds none (D3). Refuses loudly rather than falling back:
+     * a silent identity substitution here would be rejected network-wide and
+     * the key exchange would just stall.
+     *
+     * @param {string} keysStreamId - Keys stream ID (ends with -4)
+     * @param {Object} data - Protocol message ({ t: KEYS_MSG_TYPE.*, ... })
+     * @returns {Promise<Object>} The published StreamMessage
+     */
+    async publishKeysMessage(keysStreamId, data) {
+        if (!isKeysStream(keysStreamId)) {
+            throw new Error(`publishKeysMessage expects a keys stream (-4), got: ${keysStreamId}`);
+        }
+        if (!this._accountIdentity) {
+            throw new Error('Account identity unavailable — EthereumKeyPairIdentity not exposed, check streamr-bundle.js');
+        }
+        return this.publishAs(
+            this._accountIdentity,
+            keysStreamId,
+            STREAM_CONFIG.KEYS_STREAM.KEY_EXCHANGE,
+            data
+        );
+    }
+
+    /**
+     * Publish a native-channel payload encrypted with the current epoch key.
+     *
+     * Wire envelope: { e: 'epoch-aes-gcm', k: <kid>, ct, iv } — `k` in the
+     * clear is what lets receivers pick the key (and history readers filter
+     * what they cannot open) without trial decryption.
+     *
+     * Fail-closed: without a current epoch key this THROWS. A native channel
+     * has no legitimate plaintext path and no SDK-keyed path anymore.
+     *
+     * @param {Object} channel - Channel object (native)
+     * @param {string} streamId - Target stream (-1 or -2 of this channel)
+     * @param {number} partition
+     * @param {Object} data - Plaintext payload
+     * @returns {Promise<Object>} The published StreamMessage
+     */
+    async publishEpochEncrypted(channel, streamId, partition, data) {
+        if (!this._accountIdentity) {
+            throw new Error('Account identity unavailable — check streamr-bundle.js');
+        }
+        const { epochKeyManager } = await import('./epochKeyManager.js');
+        const { epochKeyCrypto } = await import('./epochKeyCrypto.js');
+
+        let key = await epochKeyManager.getCurrentKey(channel.messageStreamId);
+        if (!key) {
+            // One recovery attempt: cold open may not have run the key
+            // bootstrap/request yet.
+            await epochKeyManager.ensureChannelKeys(channel);
+            key = await epochKeyManager.getCurrentKey(channel.messageStreamId);
+        }
+        if (!key) {
+            throw new Error(
+                `No epoch key for ${channel.messageStreamId} — cannot publish on a native channel without one (waiting for KEY_WRAP)`);
+        }
+
+        const payload = stripLocalFields(data);
+        const sealed = await epochKeyCrypto.encryptWithEpochKey(payload, key.cryptoKey);
+        const envelope = { e: 'epoch-aes-gcm', k: key.kid, ct: sealed.ct, iv: sealed.iv };
+
+        return this.publishAs(this._accountIdentity, streamId, partition, envelope);
+    }
+
+    /**
+     * @param {*} content - Parsed message content
+     * @returns {boolean} true if this is an epoch-encrypted envelope
+     */
+    isEpochEnvelope(content) {
+        return !!(content && content.e === 'epoch-aes-gcm'
+            && typeof content.k === 'string'
+            && typeof content.ct === 'string'
+            && typeof content.iv === 'string');
+    }
+
+    /**
+     * Open an epoch envelope from a channel's -1 or -2 stream.
+     *
+     * Returns the plaintext object, or NULL when we do not (yet) hold the
+     * key — an unknown `kid` is NOT an error (§7.9): the missing key is noted
+     * (which rate-limits a KEY_REQUEST) and the caller skips the message.
+     * Storage-backed messages are recovered by the refresh that runs when the
+     * key is adopted; ephemeral ones (presence) self-heal on the next beat.
+     *
+     * @param {string} streamId - Stream the message arrived on (-1 or -2)
+     * @param {Object} content - Envelope ({ e, k, ct, iv })
+     * @returns {Promise<Object|null>}
+     */
+    async openEpochEnvelope(streamId, content) {
+        const messageStreamId = String(streamId).replace(/-[24]$/, '-1');
+        const { epochKeyManager } = await import('./epochKeyManager.js');
+        const key = await epochKeyManager.getKeyForKid(messageStreamId, content.k);
+        if (!key) {
+            epochKeyManager.noteMissingKid(messageStreamId, content.k);
+            return null;
+        }
+        const { epochKeyCrypto } = await import('./epochKeyCrypto.js');
+        try {
+            return await epochKeyCrypto.decryptWithEpochKey({ ct: content.ct, iv: content.iv }, key);
+        } catch (e) {
+            Logger.warn(`Epoch envelope failed to open (kid ${content.k}):`, e.message);
+            return null;
+        }
+    }
+
+    /**
+     * One-shot resend of a channel's keys stream (-4).
+     *
+     * Returns raw protocol entries with their transport publisher and
+     * timestamp — the caller (epochKeyManager) validates KEY_ANNOUNCE
+     * authority against the admin set and applies the conflict rule (D13),
+     * so both must travel with the payload.
+     *
+     * @param {string} keysStreamId - Keys stream ID (ends with -4)
+     * @param {Object} [options]
+     * @param {number} [options.last=1000] - How many entries to fetch
+     * @returns {Promise<Array<{data: Object, publisherId: string, timestamp: number}>>}
+     */
+    async resendKeysMessages(keysStreamId, { last = 1000 } = {}) {
+        if (!this.client) {
+            throw new Error('Streamr client not initialized');
+        }
+        if (!isKeysStream(keysStreamId)) {
+            Logger.warn('Invalid keysStreamId (should end with -4):', keysStreamId);
+        }
+
+        const entries = [];
+        try {
+            const resend = await this.client.resend(
+                { streamId: keysStreamId, partition: STREAM_CONFIG.KEYS_STREAM.KEY_EXCHANGE },
+                { last }
+            );
+
+            for await (const message of resend) {
+                try {
+                    const content = message.content || message;
+                    if (!content || typeof content !== 'object' || typeof content.t !== 'string') continue;
+                    entries.push({
+                        data: content,
+                        publisherId: typeof message.getPublisherId === 'function'
+                            ? message.getPublisherId()
+                            : (message.publisherId ?? null),
+                        timestamp: typeof message.getTimestamp === 'function'
+                            ? message.getTimestamp()
+                            : (message.timestamp ?? 0)
+                    });
+                } catch (e) {
+                    Logger.debug('resendKeysMessages entry error:', e.message);
+                }
+            }
+        } catch (error) {
+            // No storage attached yet / empty stream — the caller treats an
+            // empty list as "no announces", which is the correct cold start
+            Logger.debug('resendKeysMessages error:', error.message);
+        }
+        return entries;
+    }
+
+    /**
+     * Live subscription to a channel's keys stream (-4).
+     *
+     * Raw handler on purpose: the epoch protocol validates KEY_ANNOUNCE
+     * authority by transport publisher and orders conflicts by transport
+     * timestamp (D13), so both must reach the handler unmangled — this does
+     * NOT go through attachAccount.
+     *
+     * @param {string} keysStreamId - Keys stream ID (ends with -4)
+     * @param {Function} handler - (data, publisherId, timestamp) => void
+     */
+    async subscribeToKeysStream(keysStreamId, handler) {
+        if (!this.client) {
+            throw new Error('Streamr client not initialized');
+        }
+        if (!isKeysStream(keysStreamId)) {
+            throw new Error(`subscribeToKeysStream expects a keys stream (-4), got: ${keysStreamId}`);
+        }
+
+        let partitionSubs = this.subscriptions.get(keysStreamId);
+        if (!partitionSubs) {
+            partitionSubs = {};
+            this.subscriptions.set(keysStreamId, partitionSubs);
+        }
+        const partition = STREAM_CONFIG.KEYS_STREAM.KEY_EXCHANGE;
+        if (partitionSubs[partition]) {
+            Logger.debug('Already subscribed to keys stream:', keysStreamId);
+            return partitionSubs[partition];
+        }
+
+        partitionSubs[partition] = await this.client.subscribe(
+            { streamId: keysStreamId, partition },
+            async (content, streamMessage) => {
+                try {
+                    if (!content || typeof content !== 'object') return;
+                    const publisherId = typeof streamMessage?.getPublisherId === 'function'
+                        ? streamMessage.getPublisherId()
+                        : streamMessage?.publisherId;
+                    const timestamp = typeof streamMessage?.getTimestamp === 'function'
+                        ? streamMessage.getTimestamp()
+                        : (streamMessage?.timestamp ?? Date.now());
+                    await handler(content, publisherId, timestamp);
+                } catch (error) {
+                    Logger.error('Failed to process keys stream message:', error);
+                }
+            }
+        );
+
+        Logger.debug('Subscribed to keys stream:', keysStreamId);
+        return partitionSubs[partition];
     }
 
     /**
@@ -2740,10 +3028,18 @@ class StreamrController {
                 if (password && typeof content === 'string') {
                     data = await cryptoManager.decryptJSON(content, password);
                 }
+                // Native channels: epoch-encrypted envelope (N-A). Unknown kid
+                // is NOT an error — skip; storage-backed messages come back via
+                // the refresh fired when the key is adopted.
+                if (this.isEpochEnvelope(data)) {
+                    const opened = await this.openEpochEnvelope(streamId, data);
+                    if (opened === null) return;
+                    data = opened;
+                }
                 // Add sender info from StreamMessage (v103+ uses getPublisherId())
                 if (streamMessage && typeof data === 'object') {
-                    const publisherId = typeof streamMessage.getPublisherId === 'function' 
-                        ? streamMessage.getPublisherId() 
+                    const publisherId = typeof streamMessage.getPublisherId === 'function'
+                        ? streamMessage.getPublisherId()
                         : streamMessage.publisherId;
                     if (publisherId) {
                         this.attachAccount(data, publisherId);
@@ -2921,8 +3217,11 @@ class StreamrController {
             throw new Error('Client not initialized');
         }
 
-        // Safety check: only enable storage for streams that should persist (-1 message, -3 admin)
-        if (!isMessageStream(messageStreamId) && !isAdminStream(messageStreamId)) {
+        // Safety check: only enable storage for streams that should persist
+        // (-1 message, -3 admin, -4 keys). The keys stream MUST persist — a
+        // joiner pulls KEY_ANNOUNCEs from storage, and requests/wraps survive
+        // there until the counterpart comes online. Only -2 stays unstored.
+        if (!isMessageStream(messageStreamId) && !isAdminStream(messageStreamId) && !isKeysStream(messageStreamId)) {
             Logger.warn('enableStorage called on non-persistent stream, ignoring:', messageStreamId);
             return { success: false, provider: null, storageDays: null };
         }
@@ -3371,7 +3670,8 @@ class StreamrController {
             const iterator = resend[Symbol.asyncIterator]();
             let iteratorDone = false;
             let decryptErrors = 0;
-            
+            let epochWaiting = 0;
+
             while (!iteratorDone) {
                 // Early exit if fetch was aborted (e.g. channel switch)
                 if (signal?.aborted) {
@@ -3396,7 +3696,7 @@ class StreamrController {
                 
                 try {
                     let content = message.content || message;
-                    
+
                     // Decrypt if password provided
                     if (password && typeof content === 'string') {
                         try {
@@ -3404,6 +3704,16 @@ class StreamrController {
                         } catch (decryptError) {
                             continue; // Skip messages we can't decrypt
                         }
+                    }
+
+                    // Epoch envelope (native): unknown kid → skip, not error (§7.9)
+                    if (this.isEpochEnvelope(content)) {
+                        const opened = await this.openEpochEnvelope(messageStreamId, content);
+                        if (opened === null) {
+                            epochWaiting++;
+                            continue;
+                        }
+                        content = opened;
                     }
 
                     // Inject account from StreamMessage metadata
@@ -3451,7 +3761,10 @@ class StreamrController {
             if (decryptErrors > 0) {
                 Logger.debug(`fetchOlderHistory: skipped ${decryptErrors} messages (decrypt error)`);
             }
-            
+            if (epochWaiting > 0) {
+                Logger.info(`fetchOlderHistory: ${epochWaiting} messages waiting for epoch key on ${messageStreamId.slice(-20)}`);
+            }
+
             return collected;
         };
 
@@ -3652,18 +3965,25 @@ class StreamrController {
                 if (password && typeof content === 'string') {
                     data = await cryptoManager.decryptJSON(content, password);
                 }
-                
+
+                // Epoch envelope (native): unknown kid → skip, not error (§7.9)
+                if (this.isEpochEnvelope(data)) {
+                    const opened = await this.openEpochEnvelope(streamId, data);
+                    if (opened === null) return;
+                    data = opened;
+                }
+
                 // Add sender info from StreamMessage (for media partition)
                 // StreamMessage has getPublisherId() method in Streamr SDK v103+
                 if (streamMessage && typeof data === 'object') {
-                    const publisherId = typeof streamMessage.getPublisherId === 'function' 
-                        ? streamMessage.getPublisherId() 
+                    const publisherId = typeof streamMessage.getPublisherId === 'function'
+                        ? streamMessage.getPublisherId()
                         : streamMessage.publisherId;
                     if (publisherId) {
                         this.attachAccount(data, publisherId);
                     }
                 }
-                
+
                 await handler(data);
             } catch (error) {
                 Logger.error('Failed to process message:', error);
@@ -3834,6 +4154,16 @@ class StreamrController {
                             skippedCount++;
                             continue;
                         }
+                    }
+
+                    // Epoch envelope (native): unknown kid → skip, not error (§7.9)
+                    if (this.isEpochEnvelope(content)) {
+                        const opened = await this.openEpochEnvelope(streamId, content);
+                        if (opened === null) {
+                            skippedCount++;
+                            continue;
+                        }
+                        content = opened;
                     }
 
                     // Inject account from StreamMessage (same as realtime handler)
@@ -4164,4 +4494,4 @@ class StreamrController {
 
 // Export singleton instance and config
 export const streamrController = new StreamrController();
-export { STREAM_CONFIG, deriveEphemeralId, deriveMessageId, deriveAdminId, isMessageStream, isEphemeralStream, isAdminStream };
+export { STREAM_CONFIG, deriveEphemeralId, deriveMessageId, deriveAdminId, deriveKeysId, isMessageStream, isEphemeralStream, isAdminStream, isKeysStream };

@@ -1,0 +1,555 @@
+/**
+ * Epoch Key Manager — protocol state machine for the keys stream (-4).
+ *
+ * Owns, per native channel: the adopted epoch keys (kid → key), the announces
+ * seen so far, and the in-flight KEY_REQUEST. The crypto lives in
+ * epochKeyCrypto; the transport (publish as account, resend) in streamr.js.
+ *
+ * Protocol (UNIFIED_IMPLEMENTATION_PLAN.md §5.4, §7.9, D12–D14):
+ *
+ *   KEY_ANNOUNCE  { t, epoch, keyId, keyHash, validFrom }
+ *     Only the admin set may announce. v1 admin set = the stream's namespace
+ *     address — the ONE address that could have created the stream, which is
+ *     the only admin claim that cannot be spoofed by an invite payload.
+ *     Conflict rule (D13): higher epoch wins; same epoch → older transport
+ *     timestamp wins; tie → lower publisher address.
+ *
+ *   KEY_REQUEST   { t, requestId, pubkey, fromEpoch }
+ *     `pubkey` is a fresh per-request keypair (D12) held in memory only —
+ *     never persisted, never reused. Answered only when seen LIVE: replaying
+ *     stored requests would make every channel-open re-answer months of
+ *     already-served requests.
+ *
+ *   KEY_WRAP      { t, requestId, keyId, epoch, tag, epk, iv, ct }
+ *     Any member holding the key may answer (k-of-n). Addressed by
+ *     tag = sha256(requestPubkey ‖ keyId) — O(1) match, no membership signal.
+ *     The unwrapped key is adopted ONLY if sha256(key) equals the keyHash of
+ *     the matching announce: a malicious wrapper can waste bandwidth, never
+ *     poison a key.
+ *
+ * Epoch keys are channel keys, not identities: they persist in secureStorage
+ * (encrypted at rest, out of the service worker's reach) so a session restart
+ * does not cost a request round-trip. History policy is D14: native channels
+ * hand out ALL retained epochs (holding access IS the condition).
+ */
+
+import { Logger } from './logger.js';
+import { secureStorage } from './secureStorage.js';
+import { epochKeyCrypto } from './epochKeyCrypto.js';
+import { streamrController } from './streamr.js';
+import { cryptoManager } from './crypto.js';
+import { authManager } from './auth.js';
+import { KEYS_MSG_TYPE } from './streamConstants.js';
+
+// Re-request backoff: a pending request younger than this is not superseded.
+const REQUEST_MIN_INTERVAL_MS = 60 * 1000;
+
+// How much -4 history to scan for announces on channel open. Rotations are
+// event-driven (ban/leave) in N-A, so even years of channel life fit here.
+const KEYS_HISTORY_COUNT = 1000;
+
+class EpochKeyManager {
+    constructor() {
+        // messageStreamId → channel key state
+        this.state = new Map();
+        // messageStreamId → Set<callback(kid)> fired when a key is adopted
+        this.listeners = new Map();
+    }
+
+    // ==================== STATE ====================
+
+    _getState(messageStreamId) {
+        let s = this.state.get(messageStreamId);
+        if (!s) {
+            s = {
+                // keyId → { keyHex, keyHash, epoch, cryptoKey: Promise<CryptoKey>|null }
+                epochs: new Map(),
+                // epoch → { keyId, keyHash, validFrom, publisher, timestamp }
+                announces: new Map(),
+                currentEpoch: 0,
+                // { requestId, privateKey, publicKey, fromEpoch, sentAt } — memory only (D12)
+                pendingRequest: null,
+                loaded: false
+            };
+            this.state.set(messageStreamId, s);
+        }
+        return s;
+    }
+
+    _loadPersisted(messageStreamId, s) {
+        const persisted = secureStorage.getEpochKeys(messageStreamId);
+        if (!persisted?.epochs) return;
+        for (const [keyId, entry] of Object.entries(persisted.epochs)) {
+            if (!s.epochs.has(keyId)) {
+                s.epochs.set(keyId, { ...entry, cryptoKey: null });
+            }
+        }
+        if (typeof persisted.currentEpoch === 'number' && persisted.currentEpoch > s.currentEpoch) {
+            s.currentEpoch = persisted.currentEpoch;
+        }
+    }
+
+    async _persist(messageStreamId, s) {
+        const epochs = {};
+        for (const [keyId, entry] of s.epochs) {
+            epochs[keyId] = { keyHex: entry.keyHex, keyHash: entry.keyHash, epoch: entry.epoch };
+        }
+        await secureStorage.setEpochKeys(messageStreamId, { epochs, currentEpoch: s.currentEpoch });
+    }
+
+    /**
+     * Register a callback fired whenever a key is adopted for a channel —
+     * the hook the receive path uses to retro-decrypt "waiting for key"
+     * messages (Passo 5).
+     */
+    onKeyAdopted(messageStreamId, callback) {
+        if (!this.listeners.has(messageStreamId)) {
+            this.listeners.set(messageStreamId, new Set());
+        }
+        this.listeners.get(messageStreamId).add(callback);
+    }
+
+    _notifyAdopted(messageStreamId, keyId) {
+        const subs = this.listeners.get(messageStreamId);
+        if (!subs) return;
+        for (const cb of subs) {
+            try { cb(keyId); } catch (e) { Logger.warn('epoch key listener error:', e.message); }
+        }
+    }
+
+    /**
+     * Drop a channel's runtime and persisted key state (on leave/delete).
+     */
+    async forgetChannel(messageStreamId) {
+        this.state.delete(messageStreamId);
+        this.listeners.delete(messageStreamId);
+        await secureStorage.clearEpochKeys(messageStreamId);
+    }
+
+    /** Clear runtime state (logout). Persisted keys stay encrypted at rest. */
+    clear() {
+        this.state.clear();
+        this.listeners.clear();
+    }
+
+    // ==================== ADMIN SET (D13) ====================
+
+    /**
+     * v1 admin set: the stream's namespace address, and nothing else.
+     * `createdBy` can be empty AND arrives via invite payloads, which an
+     * inviter controls — the namespace is the only claim bound on-chain
+     * (nobody else can create streams under that address).
+     * Multi-admin later = widening this set; the message format is untouched.
+     */
+    _adminSet(channel) {
+        const ns = (channel.messageStreamId?.split('/')[0] || '').toLowerCase();
+        return ns.length === 42 ? new Set([ns]) : new Set();
+    }
+
+    _isAdmin(channel, address) {
+        return !!address && this._adminSet(channel).has(address.toLowerCase());
+    }
+
+    /** Is the current account this channel's admin? */
+    isOwnAdmin(channel) {
+        return this._isAdmin(channel, authManager.getAddress());
+    }
+
+    // ==================== LIFECYCLE ====================
+
+    /**
+     * Bring a native channel's key state up to date. Called on channel
+     * open/subscribe. Pulls announces from -4 storage, bootstraps epoch 1 if
+     * we are the admin of a virgin channel, or requests missing keys.
+     * @param {Object} channel - Channel object (messageStreamId, keysStreamId, type)
+     */
+    async ensureChannelKeys(channel) {
+        if (channel?.type !== 'native' || !channel.keysStreamId) return;
+        const s = this._getState(channel.messageStreamId);
+
+        if (!s.loaded) {
+            this._loadPersisted(channel.messageStreamId, s);
+            s.loaded = true;
+        }
+
+        // Announces are rebuilt from -4 storage every session — they are not
+        // secrets and the storage node is their system of record.
+        const entries = await streamrController.resendKeysMessages(
+            channel.keysStreamId, { last: KEYS_HISTORY_COUNT });
+        for (const { data, publisherId, timestamp } of entries) {
+            if (data.t === KEYS_MSG_TYPE.KEY_ANNOUNCE) {
+                this._applyAnnounce(channel, s, data, publisherId, timestamp);
+            }
+            // KEY_REQUESTs are never answered from history; KEY_WRAPs from
+            // history are addressed to request keys that no longer exist.
+        }
+
+        if (s.announces.size === 0) {
+            if (this.isOwnAdmin(channel)) {
+                await this._bootstrapFirstEpoch(channel, s);
+            } else {
+                Logger.info('epochKeys: no announce yet on', channel.keysStreamId.slice(-30),
+                    '— waiting for the admin');
+            }
+            return;
+        }
+
+        if (this._missingEpochs(s).length > 0) {
+            await this._sendKeyRequest(channel, s);
+        }
+    }
+
+    /** Epoch numbers announced but not adopted. */
+    _missingEpochs(s) {
+        const adoptedEpochs = new Set([...s.epochs.values()].map(e => e.epoch));
+        return [...s.announces.keys()].filter(epoch => !adoptedEpochs.has(epoch));
+    }
+
+    /**
+     * Admin sees no announce in storage. Two cases:
+     *
+     *  - We hold persisted epoch keys → the announce was LOST (storage not yet
+     *    attached at create time, or aged past retention). RE-ANNOUNCE the
+     *    highest epoch we hold, same keyId/keyHash — idempotent self-heal, so
+     *    existing ciphertext stays readable by everyone.
+     *  - Virgin channel → create and announce epoch 1.
+     */
+    async _bootstrapFirstEpoch(channel, s) {
+        if (s.epochs.size > 0) {
+            let keyId = null, entry = null;
+            for (const [id, e] of s.epochs) {
+                if (!entry || e.epoch > entry.epoch) { keyId = id; entry = e; }
+            }
+            const announce = {
+                t: KEYS_MSG_TYPE.KEY_ANNOUNCE,
+                epoch: entry.epoch,
+                keyId,
+                keyHash: entry.keyHash,
+                validFrom: Date.now()
+            };
+            await streamrController.publishKeysMessage(channel.keysStreamId, announce);
+            this._applyAnnounce(channel, s, announce, authManager.getAddress(), announce.validFrom);
+            Logger.info(`epochKeys: re-announced epoch ${entry.epoch} (announce was missing from storage) on`,
+                channel.keysStreamId.slice(-30));
+            return;
+        }
+
+        const keyHex = epochKeyCrypto.generateEpochKey();
+        const keyHash = await epochKeyCrypto.computeKeyHash(keyHex);
+        const keyId = `1.${cryptoManager.generateRandomHex(6)}`;
+        const announce = {
+            t: KEYS_MSG_TYPE.KEY_ANNOUNCE,
+            epoch: 1,
+            keyId,
+            keyHash,
+            validFrom: Date.now()
+        };
+        await streamrController.publishKeysMessage(channel.keysStreamId, announce);
+        this._applyAnnounce(channel, s, announce, authManager.getAddress(), announce.validFrom);
+        await this._adopt(channel, s, { keyId, keyHex, keyHash, epoch: 1 });
+        Logger.info('epochKeys: bootstrapped epoch 1 on', channel.keysStreamId.slice(-30));
+    }
+
+    /**
+     * Admin action: rotate to a new epoch (e.g. after removing a member).
+     * The new key applies to writes from now on; old epochs stay readable
+     * for members (D14) and unreadable epochs stay ciphertext for ex-members.
+     */
+    async rotateEpoch(channel) {
+        if (channel?.type !== 'native' || !channel.keysStreamId) {
+            throw new Error('rotateEpoch: not a native channel');
+        }
+        if (!this.isOwnAdmin(channel)) {
+            throw new Error('rotateEpoch: only the channel admin can announce a new epoch');
+        }
+        const s = this._getState(channel.messageStreamId);
+        const epoch = Math.max(s.currentEpoch, ...[...s.announces.keys(), 0]) + 1;
+
+        const keyHex = epochKeyCrypto.generateEpochKey();
+        const keyHash = await epochKeyCrypto.computeKeyHash(keyHex);
+        const keyId = `${epoch}.${cryptoManager.generateRandomHex(6)}`;
+        const announce = {
+            t: KEYS_MSG_TYPE.KEY_ANNOUNCE,
+            epoch,
+            keyId,
+            keyHash,
+            validFrom: Date.now()
+        };
+        await streamrController.publishKeysMessage(channel.keysStreamId, announce);
+        this._applyAnnounce(channel, s, announce, authManager.getAddress(), announce.validFrom);
+        await this._adopt(channel, s, { keyId, keyHex, keyHash, epoch });
+        Logger.info(`epochKeys: rotated to epoch ${epoch} on`, channel.keysStreamId.slice(-30));
+        return epoch;
+    }
+
+    // ==================== PROTOCOL HANDLERS ====================
+
+    /**
+     * Ingest for -4 messages (live subscription).
+     * @param {Object} channel
+     * @param {Object} data - Parsed protocol message
+     * @param {string} publisherId - Transport publisher (the member's account — -4 publishes as account by design)
+     * @param {number} timestamp - Transport timestamp
+     */
+    async handleKeysMessage(channel, data, publisherId, timestamp) {
+        if (!data || typeof data.t !== 'string') return;
+        const s = this._getState(channel.messageStreamId);
+
+        switch (data.t) {
+            case KEYS_MSG_TYPE.KEY_ANNOUNCE:
+                await this._handleAnnounce(channel, s, data, publisherId, timestamp);
+                break;
+            case KEYS_MSG_TYPE.KEY_REQUEST:
+                await this._handleRequest(channel, s, data, publisherId);
+                break;
+            case KEYS_MSG_TYPE.KEY_WRAP:
+                await this._handleWrap(channel, s, data);
+                break;
+            default:
+                Logger.debug('epochKeys: unknown message type', data.t);
+        }
+    }
+
+    async _handleAnnounce(channel, s, data, publisherId, timestamp) {
+        const changed = this._applyAnnounce(channel, s, data, publisherId, timestamp);
+        if (!changed) return;
+        // Pull model: a live announce for an epoch we lack triggers a request
+        // (unless we just announced it ourselves and already hold the key).
+        if (this._missingEpochs(s).length > 0) {
+            await this._sendKeyRequest(channel, s);
+        }
+    }
+
+    /**
+     * Validate and apply an announce. Returns true if state changed.
+     * D13 conflict rule lives here.
+     */
+    _applyAnnounce(channel, s, data, publisherId, timestamp) {
+        if (!this._isAdmin(channel, publisherId)) {
+            Logger.warn('epochKeys: KEY_ANNOUNCE from non-admin REJECTED:',
+                publisherId, 'on', channel.messageStreamId.slice(-30));
+            return false;
+        }
+        const epoch = data.epoch;
+        if (!Number.isInteger(epoch) || epoch < 1) return false;
+        if (typeof data.keyId !== 'string' || typeof data.keyHash !== 'string') return false;
+
+        const incoming = {
+            keyId: data.keyId,
+            keyHash: data.keyHash.toLowerCase(),
+            validFrom: data.validFrom ?? timestamp,
+            publisher: (publisherId || '').toLowerCase(),
+            timestamp: timestamp ?? 0
+        };
+
+        const existing = s.announces.get(epoch);
+        if (existing) {
+            // Same epoch: older timestamp wins; tie → lower publisher address
+            const keep =
+                existing.timestamp < incoming.timestamp
+                || (existing.timestamp === incoming.timestamp
+                    && existing.publisher <= incoming.publisher);
+            if (keep) return false;
+        }
+        s.announces.set(epoch, incoming);
+        if (epoch > s.currentEpoch) {
+            s.currentEpoch = epoch;
+        }
+        return true;
+    }
+
+    /**
+     * Answer a live KEY_REQUEST with wraps for every epoch we hold that the
+     * requester asked for (D14 native policy: all retained epochs). Only the
+     * SDK-validated permission got this message to us — anyone we hear on -4
+     * passed the channel's access control.
+     */
+    async _handleRequest(channel, s, data, publisherId) {
+        const myAddress = (authManager.getAddress() || '').toLowerCase();
+        if ((publisherId || '').toLowerCase() === myAddress) return;      // our own request
+        if (typeof data.pubkey !== 'string' || typeof data.requestId !== 'string') return;
+        if (s.epochs.size === 0) return;                                  // nothing to offer
+
+        const fromEpoch = Number.isInteger(data.fromEpoch) ? data.fromEpoch : 1;
+
+        for (const [keyId, entry] of s.epochs) {
+            if (entry.epoch < fromEpoch) continue;
+            try {
+                const tag = await epochKeyCrypto.computeWrapTag(data.pubkey, keyId);
+                const wrapped = await epochKeyCrypto.wrapEpochKey(entry.keyHex, data.pubkey);
+                await streamrController.publishKeysMessage(channel.keysStreamId, {
+                    t: KEYS_MSG_TYPE.KEY_WRAP,
+                    requestId: data.requestId,
+                    keyId,
+                    epoch: entry.epoch,
+                    tag,
+                    ...wrapped
+                });
+            } catch (e) {
+                Logger.warn(`epochKeys: failed to wrap ${keyId} for request ${data.requestId}:`, e.message);
+            }
+        }
+        Logger.debug(`epochKeys: answered request ${data.requestId} with ${s.epochs.size} wrap(s)`);
+    }
+
+    /**
+     * A wrap addressed to our pending request: O(1) tag check, unwrap, verify
+     * against the announced keyHash, adopt. Verification failure is a warn and
+     * a drop — never adoption.
+     */
+    async _handleWrap(channel, s, data) {
+        const pending = s.pendingRequest;
+        if (!pending) return;
+        if (data.requestId !== pending.requestId) return;
+        if (typeof data.keyId !== 'string' || typeof data.tag !== 'string') return;
+        if (s.epochs.has(data.keyId)) return;                             // already adopted
+
+        const expectedTag = await epochKeyCrypto.computeWrapTag(pending.publicKey, data.keyId);
+        if (data.tag.toLowerCase() !== expectedTag.toLowerCase()) return; // not addressed to us
+
+        const announce = s.announces.get(data.epoch);
+        if (!announce || announce.keyId !== data.keyId) {
+            Logger.warn('epochKeys: wrap for unannounced key ignored:', data.keyId);
+            return;
+        }
+
+        let keyHex;
+        try {
+            keyHex = await epochKeyCrypto.unwrapEpochKey(
+                { epk: data.epk, iv: data.iv, ct: data.ct }, pending.privateKey);
+        } catch (e) {
+            Logger.warn('epochKeys: wrap failed to open:', e.message);
+            return;
+        }
+
+        const keyHash = await epochKeyCrypto.computeKeyHash(keyHex);
+        if (keyHash.toLowerCase() !== announce.keyHash) {
+            Logger.warn('epochKeys: wrap REJECTED — keyHash mismatch for', data.keyId,
+                '(malicious or corrupted wrap)');
+            return;
+        }
+
+        await this._adopt(channel, s, {
+            keyId: data.keyId, keyHex, keyHash: announce.keyHash, epoch: data.epoch
+        });
+        Logger.info(`epochKeys: adopted epoch ${data.epoch} (${data.keyId}) on`,
+            channel.messageStreamId.slice(-30));
+    }
+
+    /**
+     * Publish a KEY_REQUEST with a fresh request keypair (D12). The keypair
+     * lives on the pending request, in memory, until superseded.
+     */
+    async _sendKeyRequest(channel, s) {
+        if (s.pendingRequest && (Date.now() - s.pendingRequest.sentAt) < REQUEST_MIN_INTERVAL_MS) {
+            return;
+        }
+        const missing = this._missingEpochs(s);
+        if (missing.length === 0) return;
+
+        const { privateKey, publicKey } = epochKeyCrypto.generateRequestKeypair();
+        const requestId = cryptoManager.generateRandomHex(16);
+        const fromEpoch = Math.min(...missing);
+
+        s.pendingRequest = { requestId, privateKey, publicKey, fromEpoch, sentAt: Date.now() };
+
+        await streamrController.publishKeysMessage(channel.keysStreamId, {
+            t: KEYS_MSG_TYPE.KEY_REQUEST,
+            requestId,
+            pubkey: publicKey,
+            fromEpoch
+        });
+        Logger.info(`epochKeys: requested epochs ≥${fromEpoch} on`, channel.keysStreamId.slice(-30));
+    }
+
+    async _adopt(channel, s, { keyId, keyHex, keyHash, epoch }) {
+        s.epochs.set(keyId, { keyHex, keyHash, epoch, cryptoKey: null });
+        if (epoch > s.currentEpoch) {
+            s.currentEpoch = epoch;
+        }
+        s.missingKids?.delete(keyId);
+        await this._persist(channel.messageStreamId, s);
+        this._notifyAdopted(channel.messageStreamId, keyId);
+    }
+
+    /**
+     * Called by the ingest when a message carries a `kid` we do not hold.
+     * Not an error (§7.9) — record it for the UI and refresh key state at
+     * most once per interval (announce may not have been pulled yet, or the
+     * wrap is still on its way).
+     */
+    noteMissingKid(messageStreamId, kid) {
+        const s = this._getState(messageStreamId);
+        if (!s.missingKids) s.missingKids = new Set();
+        s.missingKids.add(kid);
+
+        const now = Date.now();
+        if (s.lastMissingRefresh && (now - s.lastMissingRefresh) < REQUEST_MIN_INTERVAL_MS) return;
+        s.lastMissingRefresh = now;
+
+        import('./channels.js').then(({ channelManager }) => {
+            const channel = channelManager.channels?.get(messageStreamId);
+            if (channel?.type === 'native') {
+                this.ensureChannelKeys(channel).catch(e =>
+                    Logger.warn('epochKeys: refresh after missing kid failed:', e.message));
+            }
+        }).catch(() => { /* channels module unavailable (early boot) */ });
+    }
+
+    /**
+     * UI state: is this channel waiting for keys, and how many kids are open?
+     * @returns {{waiting: boolean, missingKids: number, hasCurrentKey: boolean}}
+     */
+    getWaitingInfo(messageStreamId) {
+        const s = this.state.get(messageStreamId);
+        if (!s) return { waiting: false, missingKids: 0, hasCurrentKey: false };
+        const announce = s.announces.get(s.currentEpoch);
+        const hasCurrentKey = !!(announce && s.epochs.has(announce.keyId));
+        const missingKids = s.missingKids?.size || 0;
+        return {
+            waiting: (!hasCurrentKey && s.announces.size > 0) || missingKids > 0,
+            missingKids,
+            hasCurrentKey
+        };
+    }
+
+    // ==================== KEY ACCESS (Passo 5) ====================
+
+    /**
+     * Key to encrypt with right now: the current epoch's.
+     * @returns {Promise<{kid: string, cryptoKey: CryptoKey}|null>} null while waiting for a key
+     */
+    async getCurrentKey(messageStreamId) {
+        const s = this.state.get(messageStreamId);
+        if (!s || s.currentEpoch === 0) return null;
+        const announce = s.announces.get(s.currentEpoch);
+        if (!announce) return null;
+        const entry = s.epochs.get(announce.keyId);
+        if (!entry) return null;
+        return { kid: announce.keyId, cryptoKey: await this._cryptoKey(entry) };
+    }
+
+    /**
+     * Key for a received `kid`, or null if not (yet) held — the caller parks
+     * the message as "waiting for key" and retries via onKeyAdopted.
+     */
+    async getKeyForKid(messageStreamId, kid) {
+        const s = this.state.get(messageStreamId);
+        const entry = s?.epochs.get(kid);
+        if (!entry) return null;
+        return this._cryptoKey(entry);
+    }
+
+    hasKey(messageStreamId, kid) {
+        return !!this.state.get(messageStreamId)?.epochs.has(kid);
+    }
+
+    _cryptoKey(entry) {
+        if (!entry.cryptoKey) {
+            entry.cryptoKey = epochKeyCrypto.importEpochKey(entry.keyHex);
+        }
+        return entry.cryptoKey;
+    }
+}
+
+export const epochKeyManager = new EpochKeyManager();

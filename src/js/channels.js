@@ -9,7 +9,7 @@
  */
 
 import { Logger } from './logger.js';
-import { streamrController, STREAM_CONFIG, deriveEphemeralId, deriveMessageId, deriveAdminId } from './streamr.js';
+import { streamrController, STREAM_CONFIG, deriveEphemeralId, deriveMessageId, deriveAdminId, deriveKeysId } from './streamr.js';
 import { authManager } from './auth.js';
 import { identityManager } from './identity.js';
 import { secureStorage } from './secureStorage.js';
@@ -25,6 +25,7 @@ import { adminStatePoller } from './adminStatePoller.js';
 import { channelImageManager } from './channelImageManager.js';
 import { channelLatestMessageManager } from './channelLatestMessageManager.js';
 import { shouldRepublish } from './ttlRepublish.js';
+import { epochKeyManager } from './epochKeyManager.js';
 
 class ChannelManager {
     constructor() {
@@ -142,6 +143,9 @@ class ChannelManager {
         target.streamId = target.messageStreamId;
         if (!target.adminStreamId) {
             target.adminStreamId = deriveAdminId(target.messageStreamId);
+        }
+        if (!target.keysStreamId && target.type === 'native') {
+            target.keysStreamId = deriveKeysId(target.messageStreamId);
         }
         target.adminState = preserved.adminState;
         target.adminRev = preserved.adminRev;
@@ -434,6 +438,23 @@ class ChannelManager {
                 }
             }
 
+            // Keys stream (-4, native only): storage is what makes the epoch-key
+            // protocol asynchronous — KEY_REQUESTs and KEY_WRAPs must survive
+            // until the counterpart comes online
+            if (streamInfo.keysStreamId) {
+                try {
+                    const keysStorageResult = await streamrController.enableStorage(streamInfo.keysStreamId, {
+                        storageProvider: options.storageProvider,
+                        customStorageAddress: options.customStorageAddress,
+                        storageDays: options.storageDays,
+                        onProgress
+                    });
+                    Logger.debug('Keys storage result:', keysStorageResult);
+                } catch (storageError) {
+                    Logger.warn('Failed to enable storage on keys stream (key exchange limited to live members):', storageError.message);
+                }
+            }
+
             // Seed PASSWORD_CHALLENGE on -3/P2 immediately, then kick off a
             // background loop that keeps republishing until the storage node
             // has actually retained it (resend last:1 returns the entry).
@@ -471,6 +492,9 @@ class ChannelManager {
                 messageStreamId: streamInfo.messageStreamId,
                 ephemeralStreamId: streamInfo.ephemeralStreamId,
                 adminStreamId: streamInfo.adminStreamId || deriveAdminId(streamInfo.messageStreamId),
+                keysStreamId: type === 'native'
+                    ? (streamInfo.keysStreamId || deriveKeysId(streamInfo.messageStreamId))
+                    : null,
                 streamId: streamInfo.messageStreamId,  // Alias for convenience
                 name: name,
                 type: type,
@@ -1002,13 +1026,15 @@ class ChannelManager {
             throw new Error('Address is already a member');
         }
 
-        // Get ephemeral and admin stream IDs
+        // Get ephemeral, admin and keys stream IDs
         const ephemeralStreamId = channel.ephemeralStreamId || deriveEphemeralId(messageStreamId);
         const adminStreamId = channel.adminStreamId || deriveAdminId(messageStreamId);
+        const keysStreamId = channel.keysStreamId || deriveKeysId(messageStreamId);
 
         try {
-            // Grant permissions on all 3 streams (sequential to avoid nonce conflicts).
+            // Grant permissions on all 4 streams (sequential to avoid nonce conflicts).
             // Admin stream: subscribe-only (members read admin state, owner publishes).
+            // Keys stream: full — any member answers KEY_REQUESTs with KEY_WRAPs.
             await streamrController.grantPermissionsToAddresses(messageStreamId, [address]);
             await streamrController.grantPermissionsToAddresses(ephemeralStreamId, [address]);
             if (adminStreamId) {
@@ -1017,6 +1043,9 @@ class ChannelManager {
                     members: [address],
                     memberPermissions: ['subscribe']
                 });
+            }
+            if (keysStreamId) {
+                await streamrController.grantPermissionsToAddresses(keysStreamId, [address]);
             }
             
             // Clear Graph cache to refresh member list
@@ -1065,25 +1094,39 @@ class ChannelManager {
             throw new Error('Cannot remove the channel creator');
         }
 
-        // Get ephemeral and admin stream IDs
+        // Get ephemeral, admin and keys stream IDs
         const ephemeralStreamId = channel.ephemeralStreamId || deriveEphemeralId(messageStreamId);
         const adminStreamId = channel.adminStreamId || deriveAdminId(messageStreamId);
+        const keysStreamId = channel.keysStreamId || deriveKeysId(messageStreamId);
 
         try {
-            // Revoke permissions on all 3 streams (sequential to avoid nonce conflicts).
+            // Revoke permissions on all 4 streams (sequential to avoid nonce conflicts).
             await streamrController.revokePermissionsFromAddresses(messageStreamId, [address]);
             await streamrController.revokePermissionsFromAddresses(ephemeralStreamId, [address]);
             if (adminStreamId) {
                 await streamrController.revokePermissionsFromAddresses(adminStreamId, [address]);
             }
+            if (keysStreamId) {
+                await streamrController.revokePermissionsFromAddresses(keysStreamId, [address]);
+            }
             
             // Clear Graph cache to refresh member list
             graphAPI.clearCache();
-            
+
             // Update local channel
             channel.members.splice(memberIndex, 1);
             await this.saveChannels();
-            
+
+            // Rotate the epoch so the removed member cannot read anything
+            // published from here on. They keep what they already read — the
+            // rotation protects the future, not the past (§7.14 honesty rule).
+            // Failure is surfaced but does not undo the removal.
+            try {
+                await epochKeyManager.rotateEpoch(channel);
+            } catch (rotateError) {
+                Logger.warn('Epoch rotation after member removal FAILED — removed member can still read new messages until the next rotation:', rotateError.message);
+            }
+
             Logger.info('Member removed from triple-stream channel:', address);
             return true;
         } catch (error) {
@@ -2261,6 +2304,18 @@ class ChannelManager {
             }
         }
 
+        // Epoch keys (native, N-A): subscribe -4 and bring key state up to date
+        // BEFORE the -1 history pull below, so envelopes can already be opened.
+        // Failure is non-fatal — messages park as "waiting for key" and the
+        // refresh fired on key adoption recovers them.
+        if (channel?.type === 'native') {
+            try {
+                await this._setupEpochKeys(channel);
+            } catch (e) {
+                Logger.warn('Epoch key setup failed (messages will wait for key):', e.message);
+            }
+        }
+
         // Fire-and-forget: pull latest-message preview (-1/P0). Sidebar
         // and Explore consume the cache via channelLatestMessageManager.
         // Skipped for DMs (E2EE — handled exclusively from the local path).
@@ -2392,6 +2447,97 @@ class ChannelManager {
             Promise.resolve(mediaController.reannounceForChannel(messageStreamId, pwd))
                 .catch(err => Logger.debug('reannounceForChannel failed (non-critical):', err?.message));
         }
+    }
+
+    /**
+     * Wire a native channel into the epoch-key protocol: live -4
+     * subscription, refresh-on-adopt listener, and initial key state
+     * (bootstrap as admin, or request as member). Idempotent per channel.
+     */
+    async _setupEpochKeys(channel) {
+        const keysStreamId = channel.keysStreamId || deriveKeysId(channel.messageStreamId);
+        channel.keysStreamId = keysStreamId;
+
+        if (!channel._epochAdoptListener) {
+            channel._epochAdoptListener = true;
+            epochKeyManager.onKeyAdopted(channel.messageStreamId, () =>
+                this._refreshAfterEpochKey(channel.messageStreamId));
+        }
+
+        await streamrController.subscribeToKeysStream(keysStreamId, (data, publisherId, timestamp) =>
+            epochKeyManager.handleKeysMessage(channel, data, publisherId, timestamp));
+
+        await epochKeyManager.ensureChannelKeys(channel);
+    }
+
+    /**
+     * A key was adopted: messages skipped as "waiting for key" are sitting in
+     * storage — re-pull the recent window through the normal handlers (which
+     * dedupe by id) so they surface without a manual reload. Debounced:
+     * adopting N epochs in a burst (join) fires one refresh.
+     */
+    _refreshAfterEpochKey(messageStreamId) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel || channel.type !== 'native') return;
+        clearTimeout(channel._epochRefreshTimer);
+        channel._epochRefreshTimer = setTimeout(() => {
+            this._runEpochRefresh(messageStreamId).catch(e =>
+                Logger.warn('Epoch refresh failed:', e.message));
+        }, 1500);
+    }
+
+    async _runEpochRefresh(messageStreamId) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) return;
+
+        // Never overlap the initial load or another refresh: concurrent P0/P1
+        // fetches let an override land before its target and park forever in
+        // _pendingOverrides. Reschedule through the debounce instead.
+        if (channel.initialLoadInProgress || channel._epochRefreshRunning) {
+            this._refreshAfterEpochKey(messageStreamId);
+            return;
+        }
+        channel._epochRefreshRunning = true;
+        Logger.info('epochKeys: refreshing history after key adoption:', messageStreamId.slice(-20));
+
+        // Same discipline as the initial-load pipeline: gate per-message
+        // renders (no flash of pre-override originals), P0 before P1, then
+        // flush verifications, apply pending overrides (which also prunes
+        // deleted messages), and render ONCE.
+        channel.initialLoadInProgress = true;
+        try {
+            await streamrController.fetchHistoryAsync(
+                messageStreamId,
+                STREAM_CONFIG.MESSAGE_STREAM.MESSAGES,
+                STREAM_CONFIG.INITIAL_MESSAGES,
+                (data) => this.handleTextMessage(messageStreamId, data),
+                channel.password || null,
+                null,
+                false,
+                { quiet: true }
+            );
+            if (channel._controlPartitionSupported !== false) {
+                await streamrController.fetchHistoryAsync(
+                    messageStreamId,
+                    STREAM_CONFIG.MESSAGE_STREAM.CONTROL,
+                    STREAM_CONFIG.INITIAL_MESSAGES,
+                    (data) => this.handleOverrideMessage(messageStreamId, data, true),
+                    channel.password || null,
+                    null,
+                    false,
+                    { quiet: true }
+                );
+            }
+
+            await this.flushBatchVerification(messageStreamId);
+            await this.awaitAllFlushes(messageStreamId);
+            this.applyPendingOverrides(channel);
+            this.sortMessagesByTimestamp(channel);
+        } finally {
+            channel.initialLoadInProgress = false;
+            channel._epochRefreshRunning = false;
+        }
+        this.notifyHandlers('initial_history_complete', { streamId: messageStreamId });
     }
 
     /**
@@ -2780,7 +2926,14 @@ class ChannelManager {
             // Publish to ephemeral stream (partition 0 = control)
             await streamrController.publishControl(ephemeralStreamId, presenceData, channel.password);
         } catch (e) {
-            Logger.warn('Failed to publish presence:', e.message);
+            // Waiting for the epoch key is an expected state for a member who
+            // just joined a native channel (fail-closed publish, §7.9) — the
+            // heartbeat retries every beat anyway, so keep that case quiet.
+            if (e.message?.includes('No epoch key')) {
+                Logger.debug('Presence skipped (waiting for epoch key):', channel.messageStreamId?.slice(-20));
+            } else {
+                Logger.warn('Failed to publish presence:', e.message);
+            }
         }
     }
 
@@ -4129,7 +4282,11 @@ class ChannelManager {
                 channel.password
             );
         } catch (error) {
-            Logger.error('Failed to send typing indicator:', error);
+            if (error.message?.includes('No epoch key')) {
+                Logger.debug('Typing indicator skipped (waiting for epoch key)');
+            } else {
+                Logger.error('Failed to send typing indicator:', error);
+            }
         }
     }
 
@@ -4282,6 +4439,13 @@ class ChannelManager {
             // subscription to drop — the resend-based admin model holds no
             // live websocket on -3 (see adminStatePoller).
             await streamrController.unsubscribeFromDualStream(messageStreamId, ephemeralStreamId);
+
+            // Native: drop the -4 subscription and the channel's epoch keys
+            if (channel?.type === 'native') {
+                const keysStreamId = channel.keysStreamId || deriveKeysId(messageStreamId);
+                try { await streamrController.unsubscribe(keysStreamId); } catch { /* not subscribed */ }
+                await epochKeyManager.forgetChannel(messageStreamId);
+            }
             
             // Cancel any pending batch verifications for this channel
             this.cancelPendingVerifications(messageStreamId);
@@ -4372,6 +4536,7 @@ class ChannelManager {
             
             // Remove from local storage
             this.channels.delete(streamId);
+            await epochKeyManager.forgetChannel(streamId);
             // Tombstone so sync doesn't resurrect the deleted channel
             await secureStorage.setChannelLeftAt(streamId, Date.now());
             await this.saveChannels();

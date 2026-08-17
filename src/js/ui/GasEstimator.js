@@ -117,12 +117,13 @@ export const GasEstimator = {
             + 2 * this.GAS_UNITS.addStorageNode
             + 2 * this.GAS_UNITS.setStorageDayCount
         );
-        // Native: 3× createStream + 3× setPermissionsBatch + 2× addStorageNode + 2× setStorageDayCount
+        // Native adds the keys stream (-4, with storage):
+        // 4× createStream + 4× setPermissionsBatch + 3× addStorageNode + 3× setStorageDayCount
         const nativeCost = gasPrice * (
-            3 * this.GAS_UNITS.createStream
-            + 3 * this.GAS_UNITS.setPermissionsBatch
-            + 2 * this.GAS_UNITS.addStorageNode
-            + 2 * this.GAS_UNITS.setStorageDayCount
+            4 * this.GAS_UNITS.createStream
+            + 4 * this.GAS_UNITS.setPermissionsBatch
+            + 3 * this.GAS_UNITS.addStorageNode
+            + 3 * this.GAS_UNITS.setStorageDayCount
         );
         // DM Inbox: 2 streams (-1 + -2) + 2 public permissions + 1 addStorageNode + 1 setStorageDayCount
         const dmInboxCost = gasPrice * (
