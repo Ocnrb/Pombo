@@ -16,12 +16,16 @@
  *
  *   KEY_REQUEST   { t, requestId, pubkey, fromEpoch }
  *     `pubkey` is a fresh per-request keypair (D12) held in memory only —
- *     never persisted, never reused. Answered only when seen LIVE: replaying
- *     stored requests would make every channel-open re-answer months of
- *     already-served requests.
+ *     never persisted, never reused. Answered live AND from storage (N-B):
+ *     a member coming online later scans recent stored requests that no wrap
+ *     covers yet and answers them — the requester holds the pair while
+ *     waiting, so timing no longer has to coincide.
  *
  *   KEY_WRAP      { t, requestId, keyId, epoch, tag, epk, iv, ct }
- *     Any member holding the key may answer (k-of-n). Addressed by
+ *     Any member holding the key may answer (k-of-n), but politely (N-B
+ *     anti-stampede, §7.10): rank = hash(identity ‖ requestId) mod N orders
+ *     the members without coordination; each waits rank × 2s and stays
+ *     silent for epochs some observed wrap already covers. Addressed by
  *     tag = sha256(requestPubkey ‖ keyId) — O(1) match, no membership signal.
  *     The unwrapped key is adopted ONLY if sha256(key) equals the keyHash of
  *     the matching announce: a malicious wrapper can waste bandwidth, never
@@ -56,6 +60,22 @@ const REQUEST_FAST_ATTEMPTS = 4;
 // event-driven (ban/leave) in N-A, so even years of channel life fit here.
 const KEYS_HISTORY_COUNT = 1000;
 
+// N-B anti-stampede (§7.10): rank × this = how long an answerer waits before
+// checking whether someone with a lower rank already covered the request.
+const RANK_STEP_MS = 2000;
+// Rank domain cap: with member counts beyond this the tail ranks add latency
+// without adding meaningful redundancy.
+const RANK_MAX = 8;
+
+// N-B stored-request answering: only requests this recent are answered from
+// storage — the requester holds the ephemeral pair in memory, so a wrap for a
+// long-gone request is dead bytes. Generous enough to cover "opened the
+// channel, waited, admin arrived minutes later".
+const REQUEST_ANSWER_WINDOW_MS = 10 * 60 * 1000;
+
+// Observed-wrap suppression memory (requestId → Set(keyId)), bounded.
+const SEEN_WRAPS_MAX = 100;
+
 class EpochKeyManager {
     constructor() {
         // messageStreamId → channel key state
@@ -84,6 +104,9 @@ class EpochKeyManager {
                 pendingRequest: null,
                 // Consecutive unanswered requests — drives the retry backoff
                 requestAttempts: 0,
+                // requestId → Set(keyId) of wraps OBSERVED (live or history) —
+                // the N-B suppression signal: stay silent for covered epochs
+                seenWraps: new Map(),
                 loaded: false
             };
             this.state.set(messageStreamId, s);
@@ -230,14 +253,39 @@ class EpochKeyManager {
         const entries = await streamrController.resendKeysMessages(
             channel.keysStreamId, { last: KEYS_HISTORY_COUNT });
         let changed = false;
+        const storedRequests = [];
         for (const { data, publisherId, timestamp } of entries) {
             if (data.t === KEYS_MSG_TYPE.KEY_ANNOUNCE) {
                 if (this._applyAnnounce(channel, s, data, publisherId, timestamp)) changed = true;
+            } else if (data.t === KEYS_MSG_TYPE.KEY_WRAP) {
+                // Coverage bookkeeping: a stored wrap means someone already
+                // answered — its epochs need no re-answering from us
+                if (typeof data.requestId === 'string' && typeof data.keyId === 'string') {
+                    this._recordSeenWrap(s, data.requestId, data.keyId);
+                }
+            } else if (data.t === KEYS_MSG_TYPE.KEY_REQUEST) {
+                storedRequests.push({ data, publisherId, timestamp });
             }
-            // KEY_REQUESTs are never answered from history; KEY_WRAPs from
-            // history are addressed to request keys that no longer exist.
         }
         if (changed) await this._persist(channel.messageStreamId, s);
+
+        // N-B: answer RECENT stored requests that no wrap covers yet — a
+        // member arriving later serves whoever is still waiting, so requester
+        // and key-holder no longer have to coincide in time. Older requests
+        // are dead: the requester's ephemeral pair lives in memory only.
+        if (s.epochs.size > 0) {
+            const me = (authManager.getAddress() || '').toLowerCase();
+            const now = Date.now();
+            for (const { data, publisherId, timestamp } of storedRequests) {
+                if ((publisherId || '').toLowerCase() === me) continue;
+                if (now - (timestamp || 0) > REQUEST_ANSWER_WINDOW_MS) continue;
+                if (typeof data.pubkey !== 'string' || typeof data.requestId !== 'string') continue;
+                const rank = await this._rankFor(data.requestId, (channel.members || []).length);
+                this._scheduleAnswer(channel, {
+                    requestId: data.requestId, pubkey: data.pubkey, fromEpoch: data.fromEpoch
+                }, rank * RANK_STEP_MS);
+            }
+        }
 
         if (s.announces.size === 0) {
             if (this.isOwnAdmin(channel)) {
@@ -474,10 +522,9 @@ class EpochKeyManager {
     }
 
     /**
-     * Answer a live KEY_REQUEST with wraps for every epoch we hold that the
-     * requester asked for (D14 native policy: all retained epochs). Only the
-     * SDK-validated permission got this message to us — anyone we hear on -4
-     * passed the channel's access control.
+     * A live KEY_REQUEST: schedule an answer behind the anti-stampede rank
+     * (§7.10). Only the SDK-validated permission got this message to us —
+     * anyone we hear on -4 passed the channel's access control.
      */
     async _handleRequest(channel, s, data, publisherId) {
         const myAddress = (authManager.getAddress() || '').toLowerCase();
@@ -485,26 +532,84 @@ class EpochKeyManager {
         if (typeof data.pubkey !== 'string' || typeof data.requestId !== 'string') return;
         if (s.epochs.size === 0) return;                                  // nothing to offer
 
-        const fromEpoch = Number.isInteger(data.fromEpoch) ? data.fromEpoch : 1;
+        const rank = await this._rankFor(data.requestId, (channel.members || []).length);
+        this._scheduleAnswer(channel, {
+            requestId: data.requestId, pubkey: data.pubkey, fromEpoch: data.fromEpoch
+        }, rank * RANK_STEP_MS);
+    }
 
+    /**
+     * Anti-stampede rank (§7.10): hash(identity ‖ requestId) mod N orders the
+     * members deterministically WITHOUT coordination — everyone computes their
+     * own place in the queue from public data. Rank 0 answers immediately;
+     * each higher rank waits one step and stays silent for covered epochs.
+     */
+    async _rankFor(requestId, memberCount) {
+        const n = Math.max(1, Math.min(RANK_MAX, memberCount || 4));
+        const me = (authManager.getAddress() || '').toLowerCase();
+        const digest = new Uint8Array(await crypto.subtle.digest(
+            'SHA-256', new TextEncoder().encode(`${me}|${requestId}`)));
+        return digest[0] % n;
+    }
+
+    /** Fire-and-forget: NEVER delay inline — the -4 subscription callback must
+     *  keep flowing, or the wraps whose arrival should silence us would queue
+     *  up BEHIND our own wait. */
+    _scheduleAnswer(channel, request, delayMs) {
+        setTimeout(() => {
+            this._answerRequest(channel, request).catch(e =>
+                Logger.warn('epochKeys: scheduled answer failed:', e.message));
+        }, delayMs);
+    }
+
+    /**
+     * Answer with wraps for every epoch we hold that the requester asked for
+     * (D14 native policy: all retained epochs) MINUS the epochs an observed
+     * wrap already covers — the N-B suppression that turns thirty identical
+     * envelopes into one.
+     */
+    async _answerRequest(channel, request) {
+        const s = this.state.get(channel.messageStreamId);
+        if (!s || s.epochs.size === 0) return;
+        const covered = s.seenWraps.get(request.requestId) || new Set();
+        const fromEpoch = Number.isInteger(request.fromEpoch) ? request.fromEpoch : 1;
+
+        let sent = 0;
         for (const [keyId, entry] of s.epochs) {
-            if (entry.epoch < fromEpoch) continue;
+            if (entry.epoch < fromEpoch || covered.has(keyId)) continue;
             try {
-                const tag = await epochKeyCrypto.computeWrapTag(data.pubkey, keyId);
-                const wrapped = await epochKeyCrypto.wrapEpochKey(entry.keyHex, data.pubkey);
+                const tag = await epochKeyCrypto.computeWrapTag(request.pubkey, keyId);
+                const wrapped = await epochKeyCrypto.wrapEpochKey(entry.keyHex, request.pubkey);
                 await streamrController.publishKeysMessage(channel.keysStreamId, {
                     t: KEYS_MSG_TYPE.KEY_WRAP,
-                    requestId: data.requestId,
+                    requestId: request.requestId,
                     keyId,
                     epoch: entry.epoch,
                     tag,
                     ...wrapped
                 });
+                this._recordSeenWrap(s, request.requestId, keyId);
+                sent += 1;
             } catch (e) {
-                Logger.warn(`epochKeys: failed to wrap ${keyId} for request ${data.requestId}:`, e.message);
+                Logger.warn(`epochKeys: failed to wrap ${keyId} for request ${request.requestId}:`, e.message);
             }
         }
-        Logger.debug(`epochKeys: answered request ${data.requestId} with ${s.epochs.size} wrap(s)`);
+        if (sent > 0) {
+            Logger.debug(`epochKeys: answered request ${request.requestId} with ${sent} wrap(s)`);
+        }
+    }
+
+    _recordSeenWrap(s, requestId, keyId) {
+        let set = s.seenWraps.get(requestId);
+        if (!set) {
+            if (s.seenWraps.size >= SEEN_WRAPS_MAX) {
+                const oldest = s.seenWraps.keys().next().value;
+                s.seenWraps.delete(oldest);
+            }
+            set = new Set();
+            s.seenWraps.set(requestId, set);
+        }
+        set.add(keyId);
     }
 
     /**
@@ -513,6 +618,11 @@ class EpochKeyManager {
      * a drop — never adoption.
      */
     async _handleWrap(channel, s, data) {
+        // Suppression bookkeeping FIRST, for every well-formed wrap — this is
+        // what lets higher-rank answerers stay silent (N-B)
+        if (typeof data.requestId === 'string' && typeof data.keyId === 'string') {
+            this._recordSeenWrap(s, data.requestId, data.keyId);
+        }
         const pending = s.pendingRequest;
         if (!pending) return;
         if (data.requestId !== pending.requestId) return;
