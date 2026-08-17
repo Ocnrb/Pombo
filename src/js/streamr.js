@@ -32,6 +32,7 @@ import {
 import {
     getChannelIdentity, dropChannelIdentity, clearChannelIdentities
 } from './channelIdentity.js';
+import { recoverEnvelopeSigner } from './envelopeSigner.js';
 import {
     MESSAGE_STREAM as MESSAGE_STREAM_CONSTANTS,
     EPHEMERAL_STREAM as EPHEMERAL_STREAM_CONSTANTS,
@@ -369,15 +370,23 @@ class StreamrController {
             a: 'pombo',           // app
             v: '1',               // version
             n: exposure === 'hidden' ? null : channelName,  // name
-            t: type,              // type: public|private|native
+            t: type,              // type: public|password|native|gated
             e: exposure,          // exposure: visible|hidden
             r: readOnly,          // readOnly
+            // Gated channels (N-C): the PomboGate clone address. Joiners and
+            // The Graph read the gate from here; everything else about the
+            // gate (mode, token, price) is read from the chain.
+            g: type === 'gated' ? options.gateAddress : undefined,
             // Only include metadata if visible
             d: exposure === 'visible' ? (options.description || '') : undefined,  // description
             l: exposure === 'visible' ? (options.language || 'en') : undefined,   // language
             c: exposure === 'visible' ? (options.category || 'general') : undefined,  // category
             ts: Date.now()        // createdAt
         });
+
+        if (type === 'gated' && !options.gateAddress) {
+            throw new Error('createStream: gated channel requires options.gateAddress');
+        }
 
         const ephemeralMetadata = JSON.stringify({
             a: 'pombo',           // app
@@ -460,7 +469,7 @@ class StreamrController {
             // Lives outside -3 on purpose: any member must be able to publish
             // KEY_REQUEST/KEY_WRAP here, while -3 stays owner-only publish.
             let keysStream = null;
-            if (type === 'native') {
+            if (type === 'native' || type === 'gated') {
                 Logger.info('Creating keys stream...');
                 keysStream = await createStreamWithRetry(keysStreamId, keysMetadata, 'keys', STREAM_CONFIG.KEYS_STREAM.PARTITIONS);
                 try { onProgress(); } catch (_) { /* see above */ }
@@ -568,8 +577,37 @@ class StreamrController {
 
                 const permTime = ((Date.now() - permStartTime) / 1000).toFixed(1);
                 Logger.info(`Permissions configured in ${permTime}s`);
+            } else if (type === 'gated') {
+                // ONE grantee for every stream: the gate clone (N-C, Q7). No
+                // per-member grants ever — members prove access through the
+                // contract (publish/subscribe with erc1271Contract), so
+                // membership changes are gate transactions, not stream txs.
+                //
+                // -3 note: the clone necessarily holds publish there too, so
+                // the transport no longer enforces owner-only writes — that
+                // moved to ingest (resolveAuthor drops non-admin signers).
+                const gateMembers = [options.gateAddress];
+                for (const [stream, label] of [
+                    [messageStream, 'Message'],
+                    [ephemeralStream, 'Ephemeral'],
+                    [adminStream, 'Admin'],
+                    [keysStream, 'Keys']
+                ]) {
+                    if (!stream) continue;
+                    try {
+                        await this.setStreamPermissions(stream.id, { public: false, members: gateMembers });
+                        Logger.info(`✓ ${label} stream: gate clone permissions set`);
+                    } catch (e) {
+                        Logger.error(`✗ ${label} stream permissions failed:`, e.message);
+                    } finally {
+                        try { onProgress(); } catch (_) { /* ignore */ }
+                    }
+                }
+
+                const permTime = ((Date.now() - permStartTime) / 1000).toFixed(1);
+                Logger.info(`Permissions configured in ${permTime}s`);
             }
-            
+
             const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
             Logger.info(`✓ Channel creation complete in ${totalTime}s total`);
 
@@ -1596,6 +1634,20 @@ class StreamrController {
             return createPermissionResult(false, false);
         }
 
+        // Gated (N-C): the stream grant belongs to the gate clone; a member's
+        // write ability is the CURRENT gate. One cached eth_call.
+        const gatedChannel = await this._gatedChannelFor(streamId);
+        if (gatedChannel) {
+            try {
+                const { gateManager } = await import('./gate.js');
+                const ok = await gateManager.checkAccess(
+                    gatedChannel.gate.address, authManager.getAddress());
+                return createPermissionResult(ok, false);
+            } catch (error) {
+                return createPermissionResult(null, true, error.message);
+            }
+        }
+
         try {
             const stream = await this.client.getStream(streamId);
             const StreamPermission = window.StreamPermission;
@@ -1639,6 +1691,18 @@ class StreamrController {
     async hasSubscribePermission(streamId, allowPublic = true) {
         if (!this.client) {
             return false;
+        }
+
+        // Gated (N-C): read ability is the current gate, same as publish
+        const gatedChannel = await this._gatedChannelFor(streamId);
+        if (gatedChannel) {
+            try {
+                const { gateManager } = await import('./gate.js');
+                return await gateManager.checkAccess(
+                    gatedChannel.gate.address, authManager.getAddress());
+            } catch {
+                return false;
+            }
         }
 
         try {
@@ -1728,8 +1792,8 @@ class StreamrController {
             throw new Error('Streamr client not initialized');
         }
 
-        // Derive all stream IDs (message + ephemeral + admin)
-        let messageStreamId, ephemeralStreamId, adminStreamId;
+        // Derive all stream IDs (message + ephemeral + admin + keys)
+        let messageStreamId, ephemeralStreamId, adminStreamId, keysStreamId;
 
         if (isMessageStream(streamId)) {
             messageStreamId = streamId;
@@ -1741,6 +1805,7 @@ class StreamrController {
 
         ephemeralStreamId = deriveEphemeralId(messageStreamId);
         adminStreamId = deriveAdminId(messageStreamId);
+        keysStreamId = deriveKeysId(messageStreamId);
 
         // Helper: detect "stream does not exist" — idempotent success case.
         // The stream may have been deleted in a previous attempt or never existed
@@ -1789,9 +1854,15 @@ class StreamrController {
                     Logger.warn('Admin unsubscribe warning:', e.message)
                 );
             }
+            // And the keys stream (-4), when the channel has one
+            if (keysStreamId) {
+                await this.unsubscribe(keysStreamId).catch(e =>
+                    Logger.warn('Keys unsubscribe warning:', e.message)
+                );
+            }
 
             // Delete sequentially (preserves wallet nonce ordering):
-            // message (primary) → ephemeral → admin.
+            // message (primary) → ephemeral → admin → keys.
             const msgResult = await deleteWithRetry(messageStreamId, 'message stream');
 
             if (ephemeralStreamId) {
@@ -1802,6 +1873,12 @@ class StreamrController {
                 // Admin stream may not exist on legacy channels created before
                 // the -3 feature; failures here are non-critical (logged, not thrown).
                 await deleteWithRetry(adminStreamId, 'admin stream');
+            }
+
+            if (keysStreamId) {
+                // Keys stream exists only on native/gated channels; the
+                // idempotent "already gone" path absorbs every other type.
+                await deleteWithRetry(keysStreamId, 'keys stream');
             }
 
             // Throw if message stream failed (primary stream)
@@ -1917,6 +1994,72 @@ class StreamrController {
     }
 
     /**
+     * The gated channel a stream belongs to, or null.
+     *
+     * Lazy channelManager import (static would be circular). Any failure means
+     * "not gated", which is correct: a channel we do not know cannot have a
+     * gate we should trust.
+     *
+     * @param {string} streamId - Any of the channel's streams (-1..-4)
+     * @returns {Promise<Object|null>} The channel object when it has a gate
+     */
+    async _gatedChannelFor(streamId) {
+        try {
+            const { channelManager } = await import('./channels.js');
+            const base = String(streamId).replace(/-[1234]$/, '');
+            const channel = channelManager?.channels?.get(base + '-1');
+            return channel?.gate?.address ? channel : null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Resolve the AUTHENTICATED author of a received message.
+     *
+     * Ungated streams: the transport publisherId (attachAccount then applies
+     * the proof rule on top). Gated streams: the on-wire publisher is the gate
+     * clone for every member, so authorship comes from the ecrecover of the
+     * envelope signature — the very signature the SDK already validated
+     * against the gate's isValidSignature (N-C; D10c applies).
+     *
+     * Returns null when the author cannot be established — the caller MUST
+     * drop the message. That covers: a gated message whose envelope does not
+     * recover, and a message on a gated ADMIN stream (-3) whose signer is not
+     * the channel admin (with the clone holding the publish grant, the
+     * transport no longer enforces owner-only writes — this check replaces it).
+     *
+     * @param {string} streamId
+     * @param {Object} streamMessage - Raw SDK StreamMessage
+     * @param {string} publisherId - Transport publisher already read off it
+     * @returns {Promise<string|null>} Author address, or null to drop
+     */
+    async resolveAuthor(streamId, streamMessage, publisherId) {
+        const channel = await this._gatedChannelFor(streamId);
+        if (!channel) return publisherId ?? null;
+
+        const gateAddress = channel.gate.address.toLowerCase();
+        if ((publisherId || '').toLowerCase() !== gateAddress) {
+            // Not published through the clone — a foreign publisher on a gated
+            // stream has no business here (permissions are clone-only).
+            return null;
+        }
+        const signer = recoverEnvelopeSigner(streamMessage);
+        if (!signer) {
+            Logger.warn(`resolveAuthor: unrecoverable envelope on gated ${streamId} — dropping`);
+            return null;
+        }
+        if (isAdminStream(streamId)) {
+            const admin = (channel.messageStreamId?.split('/')[0] || '').toLowerCase();
+            if (signer !== admin) {
+                Logger.warn(`resolveAuthor: non-admin ${signer} on gated admin stream — dropping`);
+                return null;
+            }
+        }
+        return signer;
+    }
+
+    /**
      * Publish channel traffic under the channel's ephemeral publisher (D1 + D2).
      *
      * THE single place where "who we appear to be" is decided, mirroring
@@ -1972,10 +2115,14 @@ class StreamrController {
         if (channelManager?.usesAccountPublish?.(streamId)) {
             const base = String(streamId).replace(/-[1234]$/, '');
             const channel = channelManager.channels?.get(base + '-1');
-            if (channel?.type === 'native') {
+            if (channel?.type === 'native' || channel?.type === 'gated' || channel?.gate?.address) {
                 // Errors here MUST propagate: falling through to the ephemeral
                 // path would put an unencrypted payload under a key that holds
                 // no grant. Loud failure over silent leak.
+                //
+                // Gated channels take this same path: epoch encryption plus,
+                // inside publishEpochEncrypted, the ERC-1271 transport (the
+                // account signs, the gate clone is the on-wire publisher).
                 return this.publishEpochEncrypted(channel, streamId, partition, data);
             }
             return this.publish(streamId, partition, data, password);
@@ -2120,11 +2267,18 @@ class StreamrController {
         if (!this._accountIdentity) {
             throw new Error('Account identity unavailable — EthereumKeyPairIdentity not exposed, check streamr-bundle.js');
         }
+        // Gated channels: the -4 grant is on the clone, not per member — the
+        // account signs and the clone is the on-wire publisher, exactly like
+        // -1/-2. epochKeyManager receives the recovered signer as the
+        // publisher (resolveAuthor in the -4 ingest), so its identity checks
+        // keep working unchanged.
+        const channel = await this._gatedChannelFor(keysStreamId);
         return this.publishAs(
             this._accountIdentity,
             keysStreamId,
             STREAM_CONFIG.KEYS_STREAM.KEY_EXCHANGE,
-            data
+            data,
+            this._gateTransportOptions(channel)
         );
     }
 
@@ -2167,7 +2321,38 @@ class StreamrController {
         const sealed = await epochKeyCrypto.encryptWithEpochKey(payload, key.cryptoKey);
         const envelope = { e: 'epoch-aes-gcm', k: key.kid, ct: sealed.ct, iv: sealed.iv };
 
-        return this.publishAs(this._accountIdentity, streamId, partition, envelope);
+        return this.publishAs(
+            this._accountIdentity, streamId, partition, envelope,
+            this._gateTransportOptions(channel)
+        );
+    }
+
+    /**
+     * publishAs options for a channel's transport identity.
+     *
+     * Gated channels publish as the GATE CLONE with an ERC-1271 signature —
+     * the account key signs the envelope, the clone is the on-wire publisher,
+     * and receivers recover authorship from that signature (resolveAuthor).
+     * Native channels return {} and keep the account as publisher (D3).
+     */
+    _gateTransportOptions(channel) {
+        if (!channel?.gate?.address) {
+            // A gated channel without its gate address (repair pending) must
+            // fail LOUDLY: publishing as the account or an ephemeral key would
+            // just be rejected by the network (only the clone holds a grant).
+            if (channel?.type === 'gated') {
+                throw new Error('Gate address unknown for this channel (repair pending) — cannot publish');
+            }
+            return {};
+        }
+        const { SignatureType } = window;
+        if (SignatureType?.ERC_1271 === undefined) {
+            throw new Error('SignatureType not exposed — check streamr-bundle.js');
+        }
+        return {
+            publisherId: channel.gate.address.toLowerCase(),
+            signatureType: SignatureType.ERC_1271
+        };
     }
 
     /**
@@ -2192,12 +2377,21 @@ class StreamrController {
      *
      * @param {string} streamId - Stream the message arrived on (-1 or -2)
      * @param {Object} content - Envelope ({ e, k, ct, iv })
+     * @param {Object} [context] - Kid freshness inputs (gated channels)
+     * @param {number} [context.timestamp] - The message's transport timestamp
+     * @param {boolean} [context.live] - true on live subscriptions
      * @returns {Promise<Object|null>}
      */
-    async openEpochEnvelope(streamId, content) {
+    async openEpochEnvelope(streamId, content, context = {}) {
         const messageStreamId = String(streamId).replace(/-[234]$/, '-1');
         const { epochKeyManager } = await import('./epochKeyManager.js');
-        const key = await epochKeyManager.getKeyForKid(messageStreamId, content.k);
+        const key = await epochKeyManager.getKeyForKid(messageStreamId, content.k, context);
+        if (key === false) {
+            // Kid freshness violation (gated): a readable key used outside its
+            // epoch's validity — stale-key spam, not a missing key. Drop
+            // silently, and do NOT request anything.
+            return null;
+        }
         if (!key) {
             epochKeyManager.noteMissingKid(messageStreamId, content.k);
             return null;
@@ -2243,11 +2437,16 @@ class StreamrController {
                 try {
                     const content = message.content || message;
                     if (!content || typeof content !== 'object' || typeof content.t !== 'string') continue;
+                    const transportPublisher = typeof message.getPublisherId === 'function'
+                        ? message.getPublisherId()
+                        : (message.publisherId ?? null);
+                    // Gated: authorship = envelope signer (see subscribeToKeysStream)
+                    const publisherId = await this.resolveAuthor(
+                        keysStreamId, message, transportPublisher);
+                    if (!publisherId) continue;
                     entries.push({
                         data: content,
-                        publisherId: typeof message.getPublisherId === 'function'
-                            ? message.getPublisherId()
-                            : (message.publisherId ?? null),
+                        publisherId,
                         timestamp: typeof message.getTimestamp === 'function'
                             ? message.getTimestamp()
                             : (message.timestamp ?? 0)
@@ -2294,14 +2493,26 @@ class StreamrController {
             return partitionSubs[partition];
         }
 
+        const gatedChannel = await this._gatedChannelFor(keysStreamId);
         partitionSubs[partition] = await this.client.subscribe(
-            { streamId: keysStreamId, partition },
+            {
+                streamId: keysStreamId, partition,
+                // Gated: prove access via the gate (our wallet signs, the
+                // contract's isValidSignature vouches) — no per-member grant.
+                ...(gatedChannel ? { erc1271Contract: gatedChannel.gate.address } : {})
+            },
             async (content, streamMessage) => {
                 try {
                     if (!content || typeof content !== 'object') return;
-                    const publisherId = typeof streamMessage?.getPublisherId === 'function'
+                    const transportPublisher = typeof streamMessage?.getPublisherId === 'function'
                         ? streamMessage.getPublisherId()
                         : streamMessage?.publisherId;
+                    // Gated: the clone publishes for everyone — the epoch
+                    // protocol's identity checks (admin set, own-request skip,
+                    // checkAccess) need the AUTHOR, i.e. the envelope signer.
+                    const publisherId = await this.resolveAuthor(
+                        keysStreamId, streamMessage, transportPublisher);
+                    if (!publisherId) return;
                     const timestamp = typeof streamMessage?.getTimestamp === 'function'
                         ? streamMessage.getTimestamp()
                         : (streamMessage?.timestamp ?? Date.now());
@@ -2505,7 +2716,10 @@ class StreamrController {
             const { channelManager } = await import('./channels.js');
             const base = String(adminStreamId).replace(/-[1234]$/, '');
             const channel = channelManager.channels?.get(base + '-1');
-            if (channel?.type === 'native') {
+            if (channel?.type === 'native' || channel?.type === 'gated' || channel?.gate?.address) {
+                // Gated: publishEpochEncrypted adds the ERC-1271 transport;
+                // owner-only authority on -3 is enforced at ingest by
+                // resolveAuthor (envelope signer must be the namespace admin).
                 return await this.publishEpochEncrypted(
                     channel, adminStreamId, STREAM_CONFIG.ADMIN_STREAM.MODERATION, state);
             }
@@ -2588,12 +2802,16 @@ class StreamrController {
                     if (!content || typeof content !== 'object') continue;
                     if (content.type && content.type !== 'ADMIN_STATE') continue;
 
-                    // Inject publisher info so caller can validate sender == createdBy
-                    if (typeof message.getPublisherId === 'function') {
-                        const publisherId = message.getPublisherId();
-                        if (publisherId && !content.createdBy) {
-                            content.createdBy = publisherId;
-                        }
+                    // Inject publisher info so caller can validate sender == createdBy.
+                    // Gated: the clone publishes for everyone — resolveAuthor swaps in
+                    // the envelope signer and DROPS non-admin writes on -3 (D10c).
+                    {
+                        const transportPublisher = typeof message.getPublisherId === 'function'
+                            ? message.getPublisherId() : message.publisherId;
+                        const publisherId = await this.resolveAuthor(
+                            adminStreamId, message, transportPublisher);
+                        if (!publisherId) continue;
+                        if (!content.createdBy) content.createdBy = publisherId;
                     }
 
                     const incomingRev = typeof content.rev === 'number' ? content.rev : 0;
@@ -2646,7 +2864,7 @@ class StreamrController {
             const { channelManager } = await import('./channels.js');
             const base = String(adminStreamId).replace(/-[1234]$/, '');
             const channel = channelManager.channels?.get(base + '-1');
-            if (channel?.type === 'native') {
+            if (channel?.type === 'native' || channel?.type === 'gated' || channel?.gate?.address) {
                 return await this.publishEpochEncrypted(
                     channel, adminStreamId, STREAM_CONFIG.ADMIN_STREAM.CHANNEL_IMAGE, payload);
             }
@@ -2722,11 +2940,15 @@ class StreamrController {
                     if (!content || typeof content !== 'object') continue;
                     if (content.type && content.type !== 'CHANNEL_IMAGE') continue;
 
-                    if (typeof message.getPublisherId === 'function') {
-                        const publisherId = message.getPublisherId();
-                        if (publisherId && !content.createdBy) {
-                            content.createdBy = publisherId;
-                        }
+                    // Gated: resolveAuthor swaps in the envelope signer and
+                    // drops non-admin writes on -3 (D10c)
+                    {
+                        const transportPublisher = typeof message.getPublisherId === 'function'
+                            ? message.getPublisherId() : message.publisherId;
+                        const publisherId = await this.resolveAuthor(
+                            adminStreamId, message, transportPublisher);
+                        if (!publisherId) continue;
+                        if (!content.createdBy) content.createdBy = publisherId;
                     }
 
                     latest = content;
@@ -3063,19 +3285,21 @@ class StreamrController {
         const messageHandler = async (content, streamMessage) => {
             try {
                 let data = content;
-                
+
                 // Handle binary content (Uint8Array from MEDIA_DATA partition)
                 if (content instanceof Uint8Array) {
                     if (password) {
                         data = await cryptoManager.decryptBinary(content, password);
                     }
-                    const publisherId = streamMessage && (typeof streamMessage.getPublisherId === 'function' 
-                        ? streamMessage.getPublisherId() 
+                    const transportPublisher = streamMessage && (typeof streamMessage.getPublisherId === 'function'
+                        ? streamMessage.getPublisherId()
                         : streamMessage.publisherId);
+                    const publisherId = await this.resolveAuthor(streamId, streamMessage, transportPublisher);
+                    if (!publisherId) return;
                     await handler(data, publisherId);
                     return;
                 }
-                
+
                 if (password && typeof content === 'string') {
                     data = await cryptoManager.decryptJSON(content, password);
                 }
@@ -3083,18 +3307,23 @@ class StreamrController {
                 // is NOT an error — skip; storage-backed messages come back via
                 // the refresh fired when the key is adopted.
                 if (this.isEpochEnvelope(data)) {
-                    const opened = await this.openEpochEnvelope(streamId, data);
+                    const opened = await this.openEpochEnvelope(streamId, data, {
+                        live: true,
+                        timestamp: typeof streamMessage?.getTimestamp === 'function'
+                            ? streamMessage.getTimestamp() : streamMessage?.timestamp
+                    });
                     if (opened === null) return;
                     data = opened;
                 }
-                // Add sender info from StreamMessage (v103+ uses getPublisherId())
+                // Authorship: envelope signer on gated streams, transport
+                // publisher otherwise (resolveAuthor; D10c)
                 if (streamMessage && typeof data === 'object') {
-                    const publisherId = typeof streamMessage.getPublisherId === 'function'
+                    const transportPublisher = typeof streamMessage.getPublisherId === 'function'
                         ? streamMessage.getPublisherId()
                         : streamMessage.publisherId;
-                    if (publisherId) {
-                        this.attachAccount(data, publisherId);
-                    }
+                    const publisherId = await this.resolveAuthor(streamId, streamMessage, transportPublisher);
+                    if (!publisherId) return;
+                    this.attachAccount(data, publisherId);
                 }
                 await handler(data);
             } catch (error) {
@@ -3102,9 +3331,12 @@ class StreamrController {
             }
         };
 
+        const gatedChannel = await this._gatedChannelFor(streamId);
         partitionSubs[partition] = await this.client.subscribe({
             streamId: streamId,
-            partition: partition
+            partition: partition,
+            // Gated: prove access via the gate contract (no per-member grant)
+            ...(gatedChannel ? { erc1271Contract: gatedChannel.gate.address } : {})
         }, messageHandler);
 
         Logger.debug(`Subscribed to ${streamId} partition ${partition}`);
@@ -3757,9 +3989,14 @@ class StreamrController {
                         }
                     }
 
+                    const historyTimestamp = typeof message.getTimestamp === 'function'
+                        ? message.getTimestamp()
+                        : message.timestamp;
+
                     // Epoch envelope (native): unknown kid → skip, not error (§7.9)
                     if (this.isEpochEnvelope(content)) {
-                        const opened = await this.openEpochEnvelope(messageStreamId, content);
+                        const opened = await this.openEpochEnvelope(messageStreamId, content,
+                            { live: false, timestamp: historyTimestamp });
                         if (opened === null) {
                             epochWaiting++;
                             continue;
@@ -3767,14 +4004,16 @@ class StreamrController {
                         content = opened;
                     }
 
-                    // Inject account from StreamMessage metadata
+                    // Inject account from StreamMessage metadata (gated: the
+                    // envelope signer, via resolveAuthor — D10c)
                     if (typeof content === 'object') {
-                        const publisherId = typeof message.getPublisherId === 'function'
+                        const transportPublisher = typeof message.getPublisherId === 'function'
                             ? message.getPublisherId()
                             : message.publisherId;
-                        const messageTimestamp = typeof message.getTimestamp === 'function'
-                            ? message.getTimestamp()
-                            : message.timestamp;
+                        const publisherId = await this.resolveAuthor(
+                            messageStreamId, message, transportPublisher);
+                        if (!publisherId) continue;
+                        const messageTimestamp = historyTimestamp;
                         if (publisherId) {
                             this.attachAccount(content, publisherId);
                             if (!content.sender) content.sender = publisherId;
@@ -3998,20 +4237,22 @@ class StreamrController {
         const messageHandler = async (content, streamMessage) => {
             try {
                 let data = content;
-                
+
                 // Handle binary content (Uint8Array from MEDIA_DATA partition)
                 if (content instanceof Uint8Array) {
                     if (password) {
                         data = await cryptoManager.decryptBinary(content, password);
                     }
                     // Extract account and wrap binary with metadata
-                    const publisherId = streamMessage && (typeof streamMessage.getPublisherId === 'function' 
-                        ? streamMessage.getPublisherId() 
+                    const transportPublisher = streamMessage && (typeof streamMessage.getPublisherId === 'function'
+                        ? streamMessage.getPublisherId()
                         : streamMessage.publisherId);
+                    const publisherId = await this.resolveAuthor(streamId, streamMessage, transportPublisher);
+                    if (!publisherId) return;
                     await handler(data, publisherId);
                     return;
                 }
-                
+
                 // Decrypt if password provided
                 if (password && typeof content === 'string') {
                     data = await cryptoManager.decryptJSON(content, password);
@@ -4019,20 +4260,24 @@ class StreamrController {
 
                 // Epoch envelope (native): unknown kid → skip, not error (§7.9)
                 if (this.isEpochEnvelope(data)) {
-                    const opened = await this.openEpochEnvelope(streamId, data);
+                    const opened = await this.openEpochEnvelope(streamId, data, {
+                        live: true,
+                        timestamp: typeof streamMessage?.getTimestamp === 'function'
+                            ? streamMessage.getTimestamp() : streamMessage?.timestamp
+                    });
                     if (opened === null) return;
                     data = opened;
                 }
 
-                // Add sender info from StreamMessage (for media partition)
-                // StreamMessage has getPublisherId() method in Streamr SDK v103+
+                // Authorship: envelope signer on gated streams, transport
+                // publisher otherwise (resolveAuthor; D10c)
                 if (streamMessage && typeof data === 'object') {
-                    const publisherId = typeof streamMessage.getPublisherId === 'function'
+                    const transportPublisher = typeof streamMessage.getPublisherId === 'function'
                         ? streamMessage.getPublisherId()
                         : streamMessage.publisherId;
-                    if (publisherId) {
-                        this.attachAccount(data, publisherId);
-                    }
+                    const publisherId = await this.resolveAuthor(streamId, streamMessage, transportPublisher);
+                    if (!publisherId) return;
+                    this.attachAccount(data, publisherId);
                 }
 
                 await handler(data);
@@ -4055,10 +4300,13 @@ class StreamrController {
         };
 
         // First, subscribe for real-time messages (this always works)
+        const gatedChannel = await this._gatedChannelFor(streamId);
         const subscription = await this.client.subscribe(
             {
                 streamId: streamId,
-                partition: partition
+                partition: partition,
+                // Gated: prove access via the gate contract (no per-member grant)
+                ...(gatedChannel ? { erc1271Contract: gatedChannel.gate.address } : {})
             },
             messageHandler,
             errorHandler
@@ -4207,9 +4455,14 @@ class StreamrController {
                         }
                     }
 
+                    const historyTimestamp = typeof message.getTimestamp === 'function'
+                        ? message.getTimestamp()
+                        : message.timestamp;
+
                     // Epoch envelope (native): unknown kid → skip, not error (§7.9)
                     if (this.isEpochEnvelope(content)) {
-                        const opened = await this.openEpochEnvelope(streamId, content);
+                        const opened = await this.openEpochEnvelope(streamId, content,
+                            { live: false, timestamp: historyTimestamp });
                         if (opened === null) {
                             skippedCount++;
                             continue;
@@ -4217,16 +4470,21 @@ class StreamrController {
                         content = opened;
                     }
 
-                    // Inject account from StreamMessage (same as realtime handler)
+                    // Inject account from StreamMessage (same as realtime handler;
+                    // gated: the envelope signer, via resolveAuthor — D10c).
                     // Also surface broker timestamps (same as fetchOlderHistory) so
                     // consumers can rely on `timestamp`/`_timestamp` fallbacks.
                     if (typeof content === 'object') {
-                        const publisherId = typeof message.getPublisherId === 'function'
+                        const transportPublisher = typeof message.getPublisherId === 'function'
                             ? message.getPublisherId()
                             : message.publisherId;
-                        const messageTimestamp = typeof message.getTimestamp === 'function'
-                            ? message.getTimestamp()
-                            : message.timestamp;
+                        const publisherId = await this.resolveAuthor(
+                            streamId, message, transportPublisher);
+                        if (!publisherId) {
+                            skippedCount++;
+                            continue;
+                        }
+                        const messageTimestamp = historyTimestamp;
                         if (publisherId) {
                             this.attachAccount(content, publisherId);
                         }

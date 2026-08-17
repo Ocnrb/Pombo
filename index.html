@@ -704,6 +704,14 @@
 
                         <!-- Native fields (shown only for Closed tab) -->
                         <div id="native-fields-section" class="hidden space-y-5">
+                            <!-- N-C: on-chain gate (PomboGate clone) instead of per-member stream grants -->
+                            <label class="flex items-start gap-3 p-4 bg-white/5 rounded-xl border border-white/5 cursor-pointer">
+                                <input type="checkbox" id="gated-channel-toggle" class="mt-0.5 accent-white/80">
+                                <span class="block">
+                                    <span class="block text-sm text-white/80 mb-1">On-chain gate <span class="text-[10px] bg-white/10 text-white/60 px-1.5 py-0.5 rounded uppercase tracking-wider ml-1">Beta</span></span>
+                                    <span class="block text-xs text-white/40 leading-relaxed">Membership lives in a per-channel smart contract: adding or removing a member is one transaction instead of four, and your message history never disappears when you leave.</span>
+                                </span>
+                            </label>
                             <div>
                                 <label class="block text-xs font-medium text-white/80 uppercase tracking-wider mb-2">Member Addresses</label>
                                 <textarea

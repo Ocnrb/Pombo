@@ -251,7 +251,7 @@ describe('ChannelManager Extended', () => {
 
         it('throws if channel not native type', async () => {
             channelManager.channels.set('public-ch', { type: 'public', members: [] });
-            await expect(channelManager.addMember('public-ch', '0x1')).rejects.toThrow('native encrypted');
+            await expect(channelManager.addMember('public-ch', '0x1')).rejects.toThrow('native or gated');
         });
 
         it('throws if already a member', async () => {
@@ -326,7 +326,7 @@ describe('ChannelManager Extended', () => {
 
         it('throws if not native type', async () => {
             channelManager.channels.set('public-ch', { type: 'public', members: ['0x1'] });
-            await expect(channelManager.removeMember('public-ch', '0x1')).rejects.toThrow('native encrypted');
+            await expect(channelManager.removeMember('public-ch', '0x1')).rejects.toThrow('native or gated');
         });
 
         it('throws if address is not a member', async () => {

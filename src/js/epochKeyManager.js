@@ -45,6 +45,16 @@ import { cryptoManager } from './crypto.js';
 import { authManager } from './auth.js';
 import { CONFIG } from './config.js';
 import { KEYS_MSG_TYPE } from './streamConstants.js';
+import { gateManager } from './gate.js';
+
+/**
+ * Channels running the epoch-key protocol: native (N-A) and gated (N-C).
+ * Gated channels differ only in transport (the gate clone publishes for
+ * everyone, ERC-1271) and in the KEY_REQUEST gate check — the state machine
+ * is identical.
+ */
+const usesEpochKeys = (channel) =>
+    (channel?.type === 'native' || !!channel?.gate?.address) && !!channel?.keysStreamId;
 
 // Re-request backoff: a pending request younger than this is not superseded.
 const REQUEST_MIN_INTERVAL_MS = 60 * 1000;
@@ -240,8 +250,9 @@ class EpochKeyManager {
      * @param {Object} channel - Channel object (messageStreamId, keysStreamId, type)
      */
     async ensureChannelKeys(channel) {
-        if (channel?.type !== 'native' || !channel.keysStreamId) return;
+        if (!usesEpochKeys(channel)) return;
         const s = this._getState(channel.messageStreamId);
+        s.gated = !!channel.gate?.address;   // arms the kid-freshness rule
 
         if (!s.loaded) {
             this._loadPersisted(channel.messageStreamId, s);
@@ -282,7 +293,8 @@ class EpochKeyManager {
                 if (typeof data.pubkey !== 'string' || typeof data.requestId !== 'string') continue;
                 const rank = await this._rankFor(data.requestId, (channel.members || []).length);
                 this._scheduleAnswer(channel, {
-                    requestId: data.requestId, pubkey: data.pubkey, fromEpoch: data.fromEpoch
+                    requestId: data.requestId, pubkey: data.pubkey, fromEpoch: data.fromEpoch,
+                    requester: publisherId
                 }, rank * RANK_STEP_MS);
             }
         }
@@ -445,12 +457,16 @@ class EpochKeyManager {
      * Ingest for -4 messages (live subscription).
      * @param {Object} channel
      * @param {Object} data - Parsed protocol message
-     * @param {string} publisherId - Transport publisher (the member's account — -4 publishes as account by design)
+     * @param {string} publisherId - Authenticated author: the transport
+     *   publisher on native (-4 publishes as account by design), the recovered
+     *   envelope signer on gated (the clone publishes for everyone; streamr.js
+     *   resolveAuthor swaps it in before this handler runs)
      * @param {number} timestamp - Transport timestamp
      */
     async handleKeysMessage(channel, data, publisherId, timestamp) {
         if (!data || typeof data.t !== 'string') return;
         const s = this._getState(channel.messageStreamId);
+        s.gated = !!channel.gate?.address;   // arms the kid-freshness rule
 
         switch (data.t) {
             case KEYS_MSG_TYPE.KEY_ANNOUNCE:
@@ -523,8 +539,10 @@ class EpochKeyManager {
 
     /**
      * A live KEY_REQUEST: schedule an answer behind the anti-stampede rank
-     * (§7.10). Only the SDK-validated permission got this message to us —
-     * anyone we hear on -4 passed the channel's access control.
+     * (§7.10). Native: only the SDK-validated permission got this message to
+     * us — anyone we hear on -4 passed the channel's access control. Gated:
+     * the clone's permission is everyone's, so the CURRENT gate is checked
+     * against the requester (envelope signer) just before wrapping.
      */
     async _handleRequest(channel, s, data, publisherId) {
         const myAddress = (authManager.getAddress() || '').toLowerCase();
@@ -534,7 +552,8 @@ class EpochKeyManager {
 
         const rank = await this._rankFor(data.requestId, (channel.members || []).length);
         this._scheduleAnswer(channel, {
-            requestId: data.requestId, pubkey: data.pubkey, fromEpoch: data.fromEpoch
+            requestId: data.requestId, pubkey: data.pubkey, fromEpoch: data.fromEpoch,
+            requester: publisherId
         }, rank * RANK_STEP_MS);
     }
 
@@ -571,6 +590,22 @@ class EpochKeyManager {
     async _answerRequest(channel, request) {
         const s = this.state.get(channel.messageStreamId);
         if (!s || s.epochs.size === 0) return;
+
+        // Gated (N-C): the write-cut for ex-members lives HERE. The requester
+        // authenticated as an author (sticky isValidSignature), but the epoch
+        // key only goes to whoever passes the CURRENT gate — one cached
+        // eth_call. Fail-closed inside checkAccess: RPC trouble means no wrap
+        // from us; the requester's retry finds a healthier responder.
+        if (channel.gate?.address) {
+            if (!request.requester) return;
+            const ok = await gateManager.checkAccess(channel.gate.address, request.requester);
+            if (!ok) {
+                Logger.info('epochKeys: KEY_REQUEST from', request.requester,
+                    'refused by gate', channel.gate.address.slice(0, 10));
+                return;
+            }
+        }
+
         const covered = s.seenWraps.get(request.requestId) || new Set();
         const fromEpoch = Number.isInteger(request.fromEpoch) ? request.fromEpoch : 1;
 
@@ -773,12 +808,63 @@ class EpochKeyManager {
     /**
      * Key for a received `kid`, or null if not (yet) held — the caller parks
      * the message as "waiting for key" and retries via onKeyAdopted.
+     *
+     * Returns FALSE (distinct from null) on a kid-freshness violation: the
+     * key is held and would open the message, but its use is out of policy —
+     * the caller drops the message without requesting anything.
+     *
+     * Kid freshness (N-C, gated channels only): sticky signatures mean an
+     * ex-member still authors valid envelopes; what stops readable spam is
+     * that old epoch keys stop being acceptable. Live traffic must use the
+     * CURRENT epoch (previous epoch tolerated briefly around a rotation);
+     * history must use the epoch that was in force at the message timestamp
+     * (the announces' validFrom map). Native channels are exempt: removal
+     * revokes the on-chain publish grant, which cuts harder than any kid rule.
+     *
+     * @param {string} messageStreamId
+     * @param {string} kid
+     * @param {Object} [context]
+     * @param {boolean} [context.live] - true when the message arrived on a live subscription
+     * @param {number} [context.timestamp] - transport timestamp of the message
+     * @param {boolean} [context.gated] - set by the state (see ensureChannelKeys)
      */
-    async getKeyForKid(messageStreamId, kid) {
+    async getKeyForKid(messageStreamId, kid, context = {}) {
         const s = this.state.get(messageStreamId);
         const entry = s?.epochs.get(kid);
         if (!entry) return null;
+        if (s.gated && !this._kidIsFresh(s, kid, entry, context)) return false;
         return this._cryptoKey(entry);
+    }
+
+    /** The kid-freshness rule. True = acceptable use of this key. */
+    _kidIsFresh(s, kid, entry, { live, timestamp } = {}) {
+        const currentAnnounce = s.announces.get(s.currentEpoch);
+        if (!currentAnnounce) return true;               // no anchor yet — cannot judge
+        if (kid === currentAnnounce.keyId) return true;  // current epoch always fine
+
+        if (live) {
+            // Previous epoch tolerated briefly after a rotation (messages in
+            // flight, slow adopters). Anything older is stale-key spam.
+            const tolerance = CONFIG.gate.kidFreshnessToleranceMs;
+            const rotatedAt = currentAnnounce.validFrom ?? currentAnnounce.timestamp ?? 0;
+            return entry.epoch === s.currentEpoch - 1
+                && Date.now() - rotatedAt < tolerance;
+        }
+
+        // History: the kid must be the one in force at the message timestamp —
+        // the announce with the highest validFrom that is <= ts. Without a
+        // timestamp there is nothing to judge against; reject the odd kid.
+        if (!Number.isFinite(timestamp)) return false;
+        let epochInForce = 0;
+        let bestValidFrom = -Infinity;
+        for (const [epoch, announce] of s.announces) {
+            const validFrom = announce.validFrom ?? announce.timestamp ?? 0;
+            if (validFrom <= timestamp && validFrom > bestValidFrom) {
+                bestValidFrom = validFrom;
+                epochInForce = epoch;
+            }
+        }
+        return entry.epoch === epochInForce;
     }
 
     hasKey(messageStreamId, kid) {

@@ -309,7 +309,9 @@ const clipboardMock = {
     read: vi.fn().mockResolvedValue([]),
 };
 
-if (!navigator.clipboard) {
+// Guarded: files with `@vitest-environment node` (SDK parity suites need
+// same-realm Uint8Array) have no navigator to patch.
+if (typeof navigator !== 'undefined' && !navigator.clipboard) {
     Object.defineProperty(navigator, 'clipboard', { value: clipboardMock, writable: true });
 }
 
@@ -362,8 +364,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-    // Clean up DOM
-    document.body.innerHTML = '';
+    // Clean up DOM (absent under @vitest-environment node)
+    if (typeof document !== 'undefined') {
+        document.body.innerHTML = '';
+    }
 });
 
 // ============================================

@@ -517,18 +517,25 @@ class ChannelModalsUI {
     async handleCreate() {
         const name = this.elements.channelNameInput?.value.trim();
         const activeTab = document.querySelector('.channel-tab-content:not(.hidden)');
-        const type = activeTab?.querySelector('.channel-type-input')?.value || 'public';
+        let type = activeTab?.querySelector('.channel-type-input')?.value || 'public';
         const password = this.elements.channelPasswordInput?.value;
         const membersText = this.elements.channelMembersInput?.value;
-        
+
+        // Closed + "on-chain gate" toggle → gated channel (N-C): one PomboGate
+        // clone instead of per-member stream grants. Same form otherwise.
+        if (type === 'native' && document.getElementById('gated-channel-toggle')?.checked) {
+            type = 'gated';
+        }
+        const isClosed = type === 'native' || type === 'gated';
+
         // Exposure and metadata (for visible channels)
-        const exposure = type === 'native' ? 'hidden' : (this.currentExposure || 'hidden');
+        const exposure = isClosed ? 'hidden' : (this.currentExposure || 'hidden');
         const description = exposure === 'visible' ? (this.elements.channelDescriptionInput?.value?.trim() || '') : '';
         const language = exposure === 'visible' ? (this.elements.channelLanguageInput?.value || 'en') : '';
         const category = exposure === 'visible' ? (this.elements.channelCategoryInput?.value || 'general') : '';
-        
+
         // Classification for Closed channels (stored locally only)
-        const classification = type === 'native' ? (this.currentClassification || 'personal') : null;
+        const classification = isClosed ? (this.currentClassification || 'personal') : null;
 
         // Storage provider selection
         const storageProvider = this.currentStorageProvider || 'streamr';
@@ -563,7 +570,7 @@ class ChannelModalsUI {
             return;
         }
 
-        const members = type === 'native'
+        const members = isClosed
             ? (membersText || '').split('\n').map(m => m.trim()).filter(m => m)
             : [];
         

@@ -7,8 +7,9 @@ as a PWA), live at [app.pombo.cc](https://app.pombo.cc). It is the reference
 implementation of the Pombo wire protocol; the native Android client mirrors
 it byte-for-byte so both talk on the same channels and DMs.
 
-Docs: [docs.pombo.cc](https://docs.pombo.cc) · Landing:
-[pombo.cc](https://pombo.cc)
+· Website:[pombo.cc](https://pombo.cc)
+· Docs: [docs.pombo.cc](https://docs.pombo.cc) 
+
 
 ## Features
 

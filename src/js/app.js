@@ -822,6 +822,20 @@ class App {
     }
 }
 
+// Streamr's validation pipeline rejects unauthorized messages (e.g. traffic
+// from a publisher without a grant) in a promise nothing awaits — correct
+// outcome, uncaught noise. Known live case: a broken build published to a
+// gated channel with an ephemeral key; the storage node retained the message
+// and every history replay re-rejects it for the full retention window.
+// Downgrade exactly that error to a debug line; everything else stays loud.
+window.addEventListener('unhandledrejection', (event) => {
+    if (event.reason?.code === 'MISSING_PERMISSION') {
+        event.preventDefault();
+        Logger.debug('Network rejected unauthorized message (expected):',
+            event.reason.message?.slice(0, 140));
+    }
+});
+
 // Initialize app when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
     const app = new App();

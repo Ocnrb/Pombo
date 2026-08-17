@@ -90,8 +90,10 @@ class ChannelSettingsUI {
         }
         this._editingDescription = false;
 
-        // Determine channel type
-        const isNative = currentChannel.type === 'native';
+        // Determine channel type. Gated channels (N-C) share the whole
+        // Closed surface — member list, add/remove, notifications — the
+        // difference is only where membership lives (gate contract vs grants).
+        const isNative = currentChannel.type === 'native' || !!currentChannel.gate?.address;
         
         // In preview mode: no admin permissions
         let canDelete = false;
@@ -662,7 +664,7 @@ class ChannelSettingsUI {
 
         const { channelManager } = this.deps;
         const channel = channelManager.channels.get(streamId);
-        const isNative = channel?.type === 'native';
+        const isNative = channel?.type === 'native' || !!channel?.gate?.address;
         const pushEnabled = relayManager.enabled;
 
         const isSubscribed = isNative
@@ -826,13 +828,13 @@ class ChannelSettingsUI {
         // Get channel type
         const { channelManager } = this.deps;
         const channel = channelManager.channels.get(streamId);
-        const isNative = channel?.type === 'native';
-        
+        const isNative = channel?.type === 'native' || !!channel?.gate?.address;
+
         // Check if push notifications are enabled globally
         const pushEnabled = relayManager.enabled;
-        
+
         // Check if this channel has notifications enabled (use appropriate method based on type)
-        const isSubscribed = isNative 
+        const isSubscribed = isNative
             ? relayManager.isNativeChannelSubscribed(streamId)
             : relayManager.isChannelSubscribed(streamId);
         
@@ -913,8 +915,8 @@ class ChannelSettingsUI {
         
         // Get channel type
         const channel = channelManager.channels.get(streamId);
-        const isNative = channel?.type === 'native';
-        
+        const isNative = channel?.type === 'native' || !!channel?.gate?.address;
+
         if (enable) {
             try {
                 // Use appropriate method based on channel type
@@ -1124,7 +1126,7 @@ class ChannelSettingsUI {
      */
     async loadMembers() {
         const currentChannel = this.deps.channelManager.getCurrentChannel();
-        if (!currentChannel || currentChannel.type !== 'native') {
+        if (!currentChannel || (currentChannel.type !== 'native' && !currentChannel.gate?.address)) {
             return;
         }
 
@@ -1513,12 +1515,47 @@ class ChannelSettingsUI {
         const { channelManager } = this.deps;
         
         const currentChannel = channelManager.getCurrentChannel();
-        if (!currentChannel || currentChannel.type !== 'native') {
+        if (!currentChannel || (currentChannel.type !== 'native' && !currentChannel.gate?.address)) {
             return;
         }
 
         if (!this.elements.permissionsList) return;
-        
+
+        // Gated (N-C): the permissions ARE the gate contract's state — list
+        // every address the clone has seen with its current flags, in the
+        // same visual shape as the stream-grant list.
+        if (currentChannel.gate?.address) {
+            this.elements.permissionsList.innerHTML = '<div class="text-white/30">Loading...</div>';
+            try {
+                const { gateManager } = await import('../gate.js');
+                const gateMembers = await gateManager.getGateMembers(
+                    currentChannel.gate.address, currentChannel.members || []);
+                let html = '';
+                for (const m of gateMembers) {
+                    const short = `${m.address.slice(0, 8)}...${m.address.slice(-4)}`;
+                    let tag;
+                    if (m.isOwner) tag = '<span class="text-xs text-yellow-400/80">Owner</span>';
+                    else if (m.erased) tag = '<span class="text-xs text-red-400/80">Erased</span>';
+                    else if (m.banned) tag = '<span class="text-xs text-red-400/60">Banned</span>';
+                    else if (m.moderator) tag = '<span class="text-xs text-sky-400/80">Mod</span>';
+                    else if (m.allowed) tag = '<span class="text-xs text-white/40">Member</span>';
+                    else if (m.everMember) tag = '<span class="text-xs text-white/25">Ex-member</span>';
+                    else tag = '<span class="text-xs text-white/25">—</span>';
+                    html += `<div class="flex justify-between items-center py-1.5 px-2.5 bg-white/5 rounded-lg">
+                        <span class="font-mono text-white/60">${escapeHtml(short)}</span>
+                        ${tag}
+                    </div>`;
+                }
+                this.elements.permissionsList.innerHTML = html
+                    || '<div class="text-white/30">Owner only (private)</div>';
+            } catch (e) {
+                Logger.warn('Failed to load gate members:', e.message);
+                this.elements.permissionsList.innerHTML =
+                    '<div class="text-white/30">Could not load gate state — try again</div>';
+            }
+            return;
+        }
+
         this.elements.permissionsList.innerHTML = '<div class="text-white/30">Loading...</div>';
 
         try {

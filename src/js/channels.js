@@ -144,7 +144,7 @@ class ChannelManager {
         if (!target.adminStreamId) {
             target.adminStreamId = deriveAdminId(target.messageStreamId);
         }
-        if (!target.keysStreamId && target.type === 'native') {
+        if (!target.keysStreamId && (target.type === 'native' || target.type === 'gated')) {
             target.keysStreamId = deriveKeysId(target.messageStreamId);
         }
         target.adminState = preserved.adminState;
@@ -153,6 +153,16 @@ class ChannelManager {
         target.adminTs = preserved.adminTs;
         target.initialLoadInProgress = preserved.initialLoadInProgress;
         target._publishPermCache = preserved._publishPermCache;
+
+        // Gated channel without its gate address — persisted by an old build
+        // or restored from a sync snapshot that lost it. Repair from the
+        // stream's on-chain metadata, HERE in the hydrator so every restore
+        // path (initial load, sync reload) heals; publishes stay loud-failing
+        // until it lands.
+        if (target.type === 'gated' && !target.gate?.address) {
+            this._repairGateAddress(target).catch(e =>
+                Logger.warn('Gate repair failed for', target.messageStreamId?.slice(-20), '—', e.message));
+        }
 
         return target;
     }
@@ -182,6 +192,50 @@ class ChannelManager {
             Logger.debug('Channels in map:', Array.from(this.channels.keys()));
         } else {
             Logger.debug('No saved channels found');
+        }
+    }
+
+    /**
+     * Recover a gated channel's gate address from the -1 stream's on-chain
+     * metadata (the `g` field written at creation). The chain is the system
+     * of record — local persistence is only a warm-start cache of it.
+     * @private
+     */
+    async _repairGateAddress(channel) {
+        // One in-flight repair per channel — the hydrator fires on every
+        // load/sync pass and repairs must not stack.
+        this._gateRepairsPending ??= new Set();
+        if (this._gateRepairsPending.has(channel.messageStreamId)) return;
+        this._gateRepairsPending.add(channel.messageStreamId);
+        try {
+            await this._doRepairGateAddress(channel);
+        } finally {
+            this._gateRepairsPending.delete(channel.messageStreamId);
+        }
+    }
+
+    async _doRepairGateAddress(channel) {
+        const gateAddress = await this.readGateFromMetadata(channel.messageStreamId);
+        if (!gateAddress) throw new Error('no gate address in stream metadata');
+        channel.gate = { address: gateAddress };
+        await this.saveChannels();
+        Logger.info('Gate address repaired from metadata:', channel.messageStreamId?.slice(-20), '→', gateAddress);
+    }
+
+    /**
+     * The gate clone address from a stream's on-chain metadata (`g`, written
+     * at creation), or null when the stream is not a gated channel.
+     */
+    async readGateFromMetadata(messageStreamId) {
+        const stream = await graphAPI.getStream(messageStreamId);
+        if (!stream?.metadata) return null;
+        try {
+            const outer = JSON.parse(stream.metadata || '{}');
+            const pombo = JSON.parse(outer.description || '{}');
+            const gateAddress = typeof pombo.g === 'string' ? pombo.g.toLowerCase() : null;
+            return /^0x[0-9a-f]{40}$/.test(gateAddress || '') ? gateAddress : null;
+        } catch {
+            return null;
         }
     }
 
@@ -254,6 +308,10 @@ class ChannelManager {
                 adminStreamId: ch.adminStreamId,
                 name: ch.name,
                 type: ch.type,
+                // Gated (N-C): without the gate address every gated code path
+                // silently degrades after a reload — the publish falls back to
+                // an ephemeral key the network rejects (MISSING_PERMISSION).
+                gate: ch.gate || null,
                 createdAt: ch.createdAt,
                 createdBy: ch.createdBy,
                 // Local membership timestamp — drives per-channel latest-wins
@@ -394,14 +452,33 @@ class ChannelManager {
 
             const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
 
+            // Gated channels (N-C): the gate clone comes FIRST — its address
+            // goes into the stream metadata and receives every permission
+            // grant. One factory tx; the creator becomes the gate owner and
+            // is everMember from block one.
+            let gateAddress = null;
+            if (type === 'gated') {
+                const { gateManager, GATE_MODE } = await import('./gate.js');
+                const gateMode = options.gateMode ?? GATE_MODE.NONE;
+                gateAddress = await gateManager.createGate({
+                    mode: gateMode,
+                    token: options.gateToken,
+                    minBalance: options.gateMinBalance,
+                    price: options.gatePrice,
+                    duration: options.gateDuration
+                });
+                Logger.info('Gate clone created:', gateAddress);
+                try { onProgress?.(); } catch (_) { /* ignore */ }
+            }
+
             // Create dual-stream channel - streamrController handles on-chain operations
             // Returns: { messageStreamId, ephemeralStreamId, type, name }
             const streamInfo = await streamrController.createStream(
-                name, 
-                realAddress, 
-                type, 
+                name,
+                realAddress,
+                type,
                 type === 'native' ? members : [],
-                { ...options, onProgress }
+                { ...options, onProgress, gateAddress }
             );
             Logger.debug('Triple-stream created:', { 
                 messageStreamId: streamInfo.messageStreamId, 
@@ -475,9 +552,24 @@ class ChannelManager {
                 this._ensurePasswordChallengeRetained(streamInfo.adminStreamId, password).catch(() => {});
             }
 
+            // Gated: initial members are ONE gate transaction (allowBatch on a
+            // Closed gate), never stream grants. Failure is non-fatal — the
+            // owner can re-add from the members UI.
+            if (type === 'gated' && members.length > 0) {
+                try {
+                    const { gateManager } = await import('./gate.js');
+                    await gateManager.allowBatch(gateAddress, members);
+                    Logger.info(`Gate: ${members.length} member(s) allowed in one tx`);
+                } catch (allowError) {
+                    Logger.warn('Gate allowBatch failed (re-add members later):', allowError.message);
+                }
+                try { onProgress?.(); } catch (_) { /* ignore */ }
+            }
+
             // Create channel object with dual-stream IDs
-            // Include owner in members array for native channels
-            const channelMembers = type === 'native' 
+            // Include owner in members array for native/gated channels (local
+            // UI list — for gated the chain is the authority, this is a cache)
+            const channelMembers = (type === 'native' || type === 'gated')
                 ? [realAddress, ...members.filter(m => m.toLowerCase() !== realAddress.toLowerCase())]
                 : [];
             
@@ -492,12 +584,16 @@ class ChannelManager {
                 messageStreamId: streamInfo.messageStreamId,
                 ephemeralStreamId: streamInfo.ephemeralStreamId,
                 adminStreamId: streamInfo.adminStreamId || deriveAdminId(streamInfo.messageStreamId),
-                keysStreamId: type === 'native'
+                keysStreamId: (type === 'native' || type === 'gated')
                     ? (streamInfo.keysStreamId || deriveKeysId(streamInfo.messageStreamId))
                     : null,
                 streamId: streamInfo.messageStreamId,  // Alias for convenience
                 name: name,
                 type: type,
+                // Gated (N-C): the PomboGate clone. Presence of `gate.address`
+                // is what flips every gated code path (transport, epoch keys,
+                // authorship) — keep it null elsewhere.
+                gate: type === 'gated' ? { address: gateAddress } : null,
                 createdAt: Date.now(),
                 joinedAt: Date.now(),
                 createdBy: realAddress,
@@ -551,7 +647,7 @@ class ChannelManager {
             // Auto-enable notifications for this channel if global notifications are enabled
             if (relayManager.enabled) {
                 try {
-                    if (type === 'native') {
+                    if (type === 'native' || type === 'gated') {
                         await relayManager.subscribeToNativeChannel(channel.messageStreamId);
                     } else {
                         await relayManager.subscribeToChannel(channel.messageStreamId);
@@ -623,9 +719,42 @@ class ChannelManager {
             
             Logger.debug('Permissions result:', permissions);
 
-            // User needs at least one permission (publish OR subscribe) to join
-            // Many-to-one streams may grant only publish (public) without subscribe
-            if (!permissions.canSubscribe && !permissions.canPublish) {
+            // Direct join / Hub join of a gated channel: no invite `k` field.
+            // A member holds NO stream permission (grants belong to the
+            // clone), so before rejecting, check whether the stream's
+            // on-chain metadata names a gate — one extra graph read, and only
+            // on the would-have-been-rejected path.
+            if (!options.gateAddress && !permissions.canSubscribe && !permissions.canPublish) {
+                try {
+                    const discovered = await this.readGateFromMetadata(messageStreamId);
+                    if (discovered) {
+                        Logger.info('Gate discovered from stream metadata:', discovered);
+                        options.gateAddress = discovered;
+                    }
+                } catch (e) {
+                    Logger.debug('Gate discovery failed (treating as ungated):', e.message);
+                }
+            }
+
+            // Gated (N-C): stream permissions belong to the gate clone, never
+            // to members — the join gate is the CONTRACT. One cached eth_call.
+            if (options.gateAddress) {
+                channelType = 'gated';
+                const { gateManager } = await import('./gate.js');
+                const me = authManager.getAddress();
+                const hasAccess = me && await gateManager.checkAccess(options.gateAddress, me);
+                if (!hasAccess) {
+                    throw new Error('You do not have access to this gated channel. Ask the owner to add you.');
+                }
+                // The stream check above naturally reported no permissions
+                // (grants belong to the clone) — the gate says otherwise, and
+                // everything downstream (subscription, composer cache) reads
+                // from this object.
+                permissions.canPublish = true;
+                permissions.canSubscribe = true;
+            } else if (!permissions.canSubscribe && !permissions.canPublish) {
+                // User needs at least one permission (publish OR subscribe) to join
+                // Many-to-one streams may grant only publish (public) without subscribe
                 throw new Error('You do not have permission to access this channel. This is a private channel and you are not a member.');
             }
             
@@ -715,9 +844,16 @@ class ChannelManager {
                 messageStreamId: messageStreamId,
                 ephemeralStreamId: ephemeralStreamId,
                 adminStreamId: adminStreamId,
+                keysStreamId: (channelType === 'native' || channelType === 'gated')
+                    ? deriveKeysId(messageStreamId)
+                    : null,
                 streamId: messageStreamId,  // Alias for convenience
                 name: channelName,
                 type: channelType,
+                // Gated (N-C): presence of gate.address flips the gated paths
+                gate: channelType === 'gated' && options.gateAddress
+                    ? { address: options.gateAddress.toLowerCase() }
+                    : null,
                 createdAt: Date.now(),
                 joinedAt: Date.now(),
                 createdBy: createdBy,
@@ -794,7 +930,7 @@ class ChannelManager {
             // Auto-enable notifications for this channel if global notifications are enabled
             if (relayManager.enabled) {
                 try {
-                    if (channelType === 'native') {
+                    if (channelType === 'native' || channelType === 'gated') {
                         await relayManager.subscribeToNativeChannel(messageStreamId);
                     } else {
                         await relayManager.subscribeToChannel(messageStreamId);
@@ -924,7 +1060,7 @@ class ChannelManager {
             // Auto-enable notifications for this channel if global notifications are enabled
             if (relayManager.enabled) {
                 try {
-                    if (channelType === 'native') {
+                    if (channelType === 'native' || channelType === 'gated') {
                         await relayManager.subscribeToNativeChannel(messageStreamId);
                     } else {
                         await relayManager.subscribeToChannel(messageStreamId);
@@ -1014,16 +1150,34 @@ class ChannelManager {
             throw new Error('Channel not found');
         }
 
-        if (channel.type !== 'native') {
-            throw new Error('Can only add members to native encrypted channels');
+        if (channel.type !== 'native' && !channel.gate?.address) {
+            throw new Error('Can only add members to native or gated channels');
         }
 
         // Normalize address
         const normalizedAddress = address.toLowerCase();
-        
+
         // Check if already a member
         if (channel.members.map(m => m.toLowerCase()).includes(normalizedAddress)) {
             throw new Error('Address is already a member');
+        }
+
+        // Gated (N-C): membership is ONE gate transaction — allow() on the
+        // Closed gate marks the address allowlisted + everMember. No stream
+        // grants: access is proven per-message via ERC-1271.
+        if (channel.gate?.address) {
+            try {
+                const { gateManager } = await import('./gate.js');
+                await gateManager.allow(channel.gate.address, address);
+                channel.members.push(address);
+                await this.saveChannels();
+                Logger.info('Member allowed on gate:', address);
+                return true;
+            } catch (error) {
+                Logger.error('Failed to allow member on gate:', error);
+                const chainError = parseChainError(error);
+                throw new Error(chainError.message);
+            }
         }
 
         // Get ephemeral, admin and keys stream IDs
@@ -1076,8 +1230,8 @@ class ChannelManager {
             throw new Error('Channel not found');
         }
 
-        if (channel.type !== 'native') {
-            throw new Error('Can only remove members from native encrypted channels');
+        if (channel.type !== 'native' && !channel.gate?.address) {
+            throw new Error('Can only remove members from native or gated channels');
         }
 
         // Normalize address
@@ -1092,6 +1246,31 @@ class ChannelManager {
         // Cannot remove the channel creator
         if (channel.createdBy && channel.createdBy.toLowerCase() === normalizedAddress) {
             throw new Error('Cannot remove the channel creator');
+        }
+
+        // Gated (N-C): removing IS the ban — one gate transaction cuts
+        // checkAccess (no new epoch keys for them), the epoch rotation cuts
+        // reads from here on, and the sticky isValidSignature keeps their
+        // history readable for everyone else (Q10). `erased` is NOT set here:
+        // that is a separate, explicit owner choice in the moderation UI.
+        if (channel.gate?.address) {
+            try {
+                const { gateManager } = await import('./gate.js');
+                await gateManager.ban(channel.gate.address, address, false);
+                channel.members.splice(memberIndex, 1);
+                await this.saveChannels();
+                try {
+                    await epochKeyManager.rotateEpoch(channel);
+                } catch (rotateError) {
+                    Logger.warn('Epoch rotation after gate ban FAILED — banned member can still read new messages until the next rotation:', rotateError.message);
+                }
+                Logger.info('Member banned on gate:', address);
+                return true;
+            } catch (error) {
+                Logger.error('Failed to ban member on gate:', error);
+                const chainError = parseChainError(error);
+                throw new Error(chainError.message);
+            }
         }
 
         // Get ephemeral, admin and keys stream IDs
@@ -1932,8 +2111,8 @@ class ChannelManager {
             throw new Error('Channel not found');
         }
 
-        if (channel.type !== 'native') {
-            return []; // Non-native channels don't have member list
+        if (channel.type !== 'native' && !channel.gate?.address) {
+            return []; // Public/password channels don't have a member list
         }
 
         const ownerAddress = channel.createdBy?.toLowerCase();
@@ -1947,6 +2126,46 @@ class ChannelManager {
                 canEdit: true,
                 canDelete: true,
                 isOwner: true
+            });
+        }
+
+        // Gated (N-C): membership lives on the GATE, not on stream grants —
+        // the only stream grantee is the clone itself, so the Graph's list is
+        // owner + clone and nothing else. The local cache (kept in lockstep
+        // with allow/ban transactions) names the candidates; their CURRENT
+        // state — including the moderator flag, which maps onto `canGrant` so
+        // the whole members UI works unchanged — is read from the contract.
+        if (channel.gate?.address) {
+            const gateAddr = channel.gate.address.toLowerCase();
+            try {
+                const { gateManager } = await import('./gate.js');
+                const gateMembers = await gateManager.getGateMembers(
+                    channel.gate.address, channel.members || []);
+                for (const m of gateMembers) {
+                    if (!m.isOwner && !m.moderator && !m.allowed) continue; // banned/ex-members
+                    membersMap.set(m.address, {
+                        address: m.address,
+                        canGrant: m.isOwner || m.moderator,
+                        canEdit: m.isOwner,
+                        canDelete: m.isOwner,
+                        isOwner: m.isOwner
+                    });
+                }
+            } catch (error) {
+                // Chain unreachable → local cache, no flags
+                Logger.warn('Gate member read failed, using local cache:', error.message);
+                for (const addr of channel.members || []) {
+                    const normalizedAddr = addr.toLowerCase();
+                    if (normalizedAddr === gateAddr || membersMap.has(normalizedAddr)) continue;
+                    membersMap.set(normalizedAddr, {
+                        address: normalizedAddr,
+                        canGrant: false, canEdit: false, canDelete: false, isOwner: false
+                    });
+                }
+            }
+            return Array.from(membersMap.values()).map(m => {
+                try { return { ...m, address: ethers.getAddress(m.address) }; }
+                catch { return m; }
             });
         }
 
@@ -2041,8 +2260,23 @@ class ChannelManager {
             throw new Error('Channel not found');
         }
 
-        if (channel.type !== 'native') {
-            throw new Error('Can only update permissions on native channels');
+        if (channel.type !== 'native' && !channel.gate?.address) {
+            throw new Error('Can only update permissions on native or gated channels');
+        }
+
+        // Gated (N-C): "can add members" is the gate's moderator flag — one
+        // owner transaction (setModerator), the contract enforces the rest.
+        if (channel.gate?.address) {
+            try {
+                const { gateManager } = await import('./gate.js');
+                await gateManager.setModerator(channel.gate.address, address, !!permissions.canGrant);
+                Logger.info('Gate moderator updated:', address, !!permissions.canGrant);
+                return true;
+            } catch (error) {
+                Logger.error('Failed to update gate moderator:', error);
+                const chainError = parseChainError(error);
+                throw new Error(chainError.message);
+            }
         }
 
         try {
@@ -2099,6 +2333,19 @@ class ChannelManager {
         // Owner can always add members
         if (this.isChannelOwner(streamId)) {
             return true;
+        }
+
+        // Gated (N-C): moderators appointed on the gate manage membership —
+        // the on-chain mirror of the native GRANT permission
+        const channel = this.channels.get(streamId);
+        if (channel?.gate?.address) {
+            try {
+                const { gateManager } = await import('./gate.js');
+                return await gateManager.canModerate(channel.gate.address, authManager.getAddress());
+            } catch (error) {
+                Logger.warn('Failed to check gate moderator status:', error.message);
+                return false;
+            }
         }
 
         // Check if user has GRANT permission
@@ -2308,7 +2555,7 @@ class ChannelManager {
         // BEFORE the -1 history pull below, so envelopes can already be opened.
         // Failure is non-fatal — messages park as "waiting for key" and the
         // refresh fired on key adoption recovers them.
-        if (channel?.type === 'native') {
+        if (channel?.type === 'native' || channel?.gate?.address) {
             try {
                 await this._setupEpochKeys(channel);
             } catch (e) {
@@ -2504,7 +2751,7 @@ class ChannelManager {
      */
     _refreshAfterEpochKey(messageStreamId) {
         const channel = this.channels.get(messageStreamId);
-        if (!channel || channel.type !== 'native') return;
+        if (!channel || (channel.type !== 'native' && !channel.gate?.address)) return;
         clearTimeout(channel._epochRefreshTimer);
         channel._epochRefreshTimer = setTimeout(() => {
             this._runEpochRefresh(messageStreamId).catch(e =>
@@ -4340,8 +4587,8 @@ class ChannelManager {
                 await relayManager.sendChannelWakeSignal(messageStreamId);
                 Logger.debug('DM wake signal sent');
                 
-            // Native channels: Send to channel tag (per-channel notifications)
-            } else if (channelType === 'native') {
+            // Native/gated channels: Send to channel tag (per-channel notifications)
+            } else if (channelType === 'native' || channelType === 'gated') {
                 Logger.debug('Sending native channel wake signal for:', messageStreamId.slice(0, 20) + '...');
                 await relayManager.sendNativeChannelWakeSignal(messageStreamId);
                 Logger.debug('Native channel wake signal sent');
@@ -4467,7 +4714,7 @@ class ChannelManager {
             await streamrController.unsubscribeFromDualStream(messageStreamId, ephemeralStreamId);
 
             // Native: drop the -4 subscription and the channel's epoch keys
-            if (channel?.type === 'native') {
+            if (channel?.type === 'native' || channel?.gate?.address) {
                 const keysStreamId = channel.keysStreamId || deriveKeysId(messageStreamId);
                 try { await streamrController.unsubscribe(keysStreamId); } catch { /* not subscribed */ }
                 await epochKeyManager.forgetChannel(messageStreamId);
@@ -4673,7 +4920,13 @@ class ChannelManager {
         if (!streamId) return false;
         const base = String(streamId).replace(/-[123]$/, '');
         const ch = this.channels.get(base + '-1');
-        return !!ch && (ch.type === 'native' || ch.readOnly === true);
+        // Gated included: the ACCOUNT signs the envelope (that signature is
+        // the authorship) even though the on-wire publisher is the gate clone.
+        // By TYPE, not by gate.address — a gated channel whose gate is still
+        // being repaired must fail loudly in the gated path, never fall
+        // through to an ephemeral publish the network rejects.
+        return !!ch && (ch.type === 'native' || ch.type === 'gated'
+            || ch.readOnly === true || !!ch.gate?.address);
     }
 
     /**
@@ -4837,6 +5090,13 @@ class ChannelManager {
             inviteData.p = channel.password;  // password
         }
 
+        // Gated (N-C, §7.14): the gate clone address. Everything else about
+        // the gate (mode, token, price, duration) is read from the chain by
+        // the joiner — one address is the whole invite surface.
+        if (channel.gate?.address) {
+            inviteData.k = channel.gate.address;
+        }
+
         const keyBytes = crypto.getRandomValues(new Uint8Array(32));
         const iv = crypto.getRandomValues(new Uint8Array(12));
         const key = await crypto.subtle.importKey(
@@ -4900,12 +5160,14 @@ class ChannelManager {
             const decoded = new TextDecoder().decode(decrypted);
             const data = JSON.parse(decoded);
             
-            // Compact format: s=streamId, n=name, t=type, p=password
+            // Compact format: s=streamId, n=name, t=type, p=password,
+            // k=gate clone address (gated channels)
             return {
                 streamId: data.s,
                 name: data.n,
                 type: data.t,
-                password: data.p
+                password: data.p,
+                gateAddress: data.k
             };
         } catch (error) {
             Logger.error('Failed to parse invite link:', error);

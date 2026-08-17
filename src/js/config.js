@@ -116,6 +116,23 @@ export const CONFIG = {
         ttlRepublishAgeFraction: 0.8
     },
 
+    // On-chain channel gates (PomboGate, N-C). One EIP-1167 clone per gated
+    // channel; the clone address is the channel's publisher id and its
+    // isValidSignature/checkAccess drive envelope validation and epoch-key
+    // distribution. See docs/UNIFIED_IMPLEMENTATION_PLAN.md §7.11.
+    gate: {
+        // PomboGateFactory v2 on Polygon PoS (pre-audit deploy, 2026-08-17).
+        // v2 adds owner-appointed moderators (setModerator). Gates minted by
+        // the v1 factory (0xaCd7…E548) keep working — they just have no
+        // moderator surface.
+        factoryAddress: '0x14595B5F192fA56714D1F8821BD1651dC5bFd1aB',
+        // checkAccess eth_call cache — mirrors the SDK's own ERC-1271 TTL
+        checkAccessCacheMs: 10 * 60 * 1000,
+        // Live messages may use the previous epoch's kid for this long after
+        // a rotation (the "short tolerance" of the kid freshness rule)
+        kidFreshnessToleranceMs: 10 * 60 * 1000
+    },
+
     // DM Configuration
     dm: {
         // Deterministic stream path prefix

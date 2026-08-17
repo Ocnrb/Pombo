@@ -2572,6 +2572,10 @@ video {
   color: rgb(248 113 113 / 0.5);
 }
 
+.text-red-400\/60 {
+  color: rgb(248 113 113 / 0.6);
+}
+
 .text-red-400\/80 {
   color: rgb(248 113 113 / 0.8);
 }
@@ -2584,6 +2588,10 @@ video {
 .text-sky-400 {
   --tw-text-opacity: 1;
   color: rgb(56 189 248 / var(--tw-text-opacity, 1));
+}
+
+.text-sky-400\/80 {
+  color: rgb(56 189 248 / 0.8);
 }
 
 .text-white {
@@ -2691,6 +2699,10 @@ video {
 
 .accent-white {
   accent-color: #fff;
+}
+
+.accent-white\/80 {
+  accent-color: rgb(255 255 255 / 0.8);
 }
 
 .opacity-0 {
@@ -2817,6 +2829,30 @@ video {
 
 .ease-out {
   transition-timing-function: cubic-bezier(0, 0, 0.2, 1);
+}
+
+.\[ct\:\.\.\.\] {
+  ct: ...;
+}
+
+.\[epk\:33\] {
+  epk: 33;
+}
+
+.\[iv\:12\] {
+  iv: 12;
+}
+
+.\[payload\:\.\.\.\] {
+  payload: ...;
+}
+
+.\[proof\:65\] {
+  proof: 65;
+}
+
+.\[v\:1\] {
+  v: 1;
 }
 
 /* Note: Component styles are in components.css (loaded separately in HTML) */

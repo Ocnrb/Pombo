@@ -87,7 +87,8 @@ class InviteHandler {
         const labels = {
             'public': 'Public Channel',
             'password': 'Password Protected',
-            'native': 'Native Encryption'
+            'native': 'Native Encryption',
+            'gated': 'Gated Channel (on-chain)'
         };
         // Security: escape unknown types to prevent XSS
         return labels[type] || escapeHtml(String(type || 'Unknown'));
@@ -102,7 +103,8 @@ class InviteHandler {
             uiController.showLoading('Joining channel...');
             await channelManager.joinChannel(inviteData.streamId, inviteData.password, {
                 name: inviteData.name,
-                type: inviteData.type
+                type: inviteData.type,
+                gateAddress: inviteData.gateAddress
             });
 
             uiController.renderChannelList();
