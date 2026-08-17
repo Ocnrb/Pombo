@@ -216,6 +216,12 @@ class StreamrController {
                 // alone is enough for anyone to build a presence timeline of every Pombo user,
                 // and it would defeat every other privacy measure in this file.
                 metrics: false,
+                // Pombo publishes NOTHING under the SDK's group-key AES any
+                // more (DMs/channels/admin all seal at the app layer, NONE on
+                // the wire). Only legacy rows and foreign streams remain
+                // SDK-encrypted, and each used to cost the default 30s
+                // key-request timeout inside a resend. Fail those fast.
+                encryption: { keyRequestTimeout: 3000 },
                 // Network layer tuning for media transfer
                 network: {
                     controlLayer: {
@@ -2189,7 +2195,7 @@ class StreamrController {
      * @returns {Promise<Object|null>}
      */
     async openEpochEnvelope(streamId, content) {
-        const messageStreamId = String(streamId).replace(/-[24]$/, '-1');
+        const messageStreamId = String(streamId).replace(/-[234]$/, '-1');
         const { epochKeyManager } = await import('./epochKeyManager.js');
         const key = await epochKeyManager.getKeyForKid(messageStreamId, content.k);
         if (!key) {
@@ -2489,6 +2495,24 @@ class StreamrController {
      */
     async publishAdminState(adminStreamId, state, password = null) {
         Logger.debug('publishAdminState called - sending to adminStream partition 0:', { adminStreamId, rev: state?.rev });
+        // NATIVE channels: epoch envelope + account + NONE. The SDK's group-key
+        // layer on -3 was the LAST publisher-online dependency native channels
+        // had — measured on Android as 20s+ key-exchange timeouts per row and
+        // moderation that never landed. Members hold the epoch key; the -3
+        // owner-only publish permission is still enforced on-chain (the
+        // account signs).
+        try {
+            const { channelManager } = await import('./channels.js');
+            const base = String(adminStreamId).replace(/-[1234]$/, '');
+            const channel = channelManager.channels?.get(base + '-1');
+            if (channel?.type === 'native') {
+                return await this.publishEpochEncrypted(
+                    channel, adminStreamId, STREAM_CONFIG.ADMIN_STREAM.MODERATION, state);
+            }
+        } catch (e) {
+            if (String(e?.message || '').includes('No epoch key')) throw e;
+            /* registry unavailable → legacy path */
+        }
         return await this.publish(adminStreamId, STREAM_CONFIG.ADMIN_STREAM.MODERATION, state, password);
     }
 
@@ -2555,6 +2579,12 @@ class StreamrController {
                             continue;
                         }
                     }
+                    // Native: ADMIN_STATE arrives as an epoch envelope (N-A)
+                    if (this.isEpochEnvelope(content)) {
+                        const opened = await this.openEpochEnvelope(adminStreamId, content);
+                        if (opened === null) continue;
+                        content = opened;
+                    }
                     if (!content || typeof content !== 'object') continue;
                     if (content.type && content.type !== 'ADMIN_STATE') continue;
 
@@ -2609,6 +2639,21 @@ class StreamrController {
             rev: payload?.rev,
             encrypted: !!password
         });
+        // Native: epoch envelope, same reason as publishAdminState — without
+        // it the SDK forces AES on the members-only -3 and the image never
+        // opens for anyone who cannot reach the owner's group key.
+        try {
+            const { channelManager } = await import('./channels.js');
+            const base = String(adminStreamId).replace(/-[1234]$/, '');
+            const channel = channelManager.channels?.get(base + '-1');
+            if (channel?.type === 'native') {
+                return await this.publishEpochEncrypted(
+                    channel, adminStreamId, STREAM_CONFIG.ADMIN_STREAM.CHANNEL_IMAGE, payload);
+            }
+        } catch (e) {
+            if (String(e?.message || '').includes('No epoch key')) throw e;
+            /* registry unavailable → legacy path */
+        }
         return await this.publish(adminStreamId, STREAM_CONFIG.ADMIN_STREAM.CHANNEL_IMAGE, payload, password);
     }
 
@@ -2667,6 +2712,12 @@ class StreamrController {
                         } catch (decryptError) {
                             continue;
                         }
+                    }
+                    // Native: CHANNEL_IMAGE arrives as an epoch envelope (N-A)
+                    if (this.isEpochEnvelope(content)) {
+                        const opened = await this.openEpochEnvelope(adminStreamId, content);
+                        if (opened === null) continue;
+                        content = opened;
                     }
                     if (!content || typeof content !== 'object') continue;
                     if (content.type && content.type !== 'CHANNEL_IMAGE') continue;
