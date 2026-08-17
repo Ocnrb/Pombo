@@ -39,10 +39,18 @@ import { epochKeyCrypto } from './epochKeyCrypto.js';
 import { streamrController } from './streamr.js';
 import { cryptoManager } from './crypto.js';
 import { authManager } from './auth.js';
+import { CONFIG } from './config.js';
 import { KEYS_MSG_TYPE } from './streamConstants.js';
 
 // Re-request backoff: a pending request younger than this is not superseded.
 const REQUEST_MIN_INTERVAL_MS = 60 * 1000;
+
+// A KEY_REQUEST from a cold node can miss every live subscriber (§7.2 R2:
+// join registers interest, broadcast can still shout into an empty room).
+// Waiting the full minute to retry turns that loss into a 60s blank channel
+// — measured on Android. Retry fast while the topology warms, then back off.
+const REQUEST_RETRY_FAST_MS = 10 * 1000;
+const REQUEST_FAST_ATTEMPTS = 4;
 
 // How much -4 history to scan for announces on channel open. Rotations are
 // event-driven (ban/leave) in N-A, so even years of channel life fit here.
@@ -66,9 +74,16 @@ class EpochKeyManager {
                 epochs: new Map(),
                 // epoch → { keyId, keyHash, validFrom, publisher, timestamp }
                 announces: new Map(),
+                // epoch → NEWEST valid announce timestamp seen. The conflict
+                // rule (D13) deliberately keeps the OLDEST announce, so the
+                // TTL re-announce check cannot read s.announces — it would
+                // republish on every open. This map tracks freshness instead.
+                announceFreshness: new Map(),
                 currentEpoch: 0,
                 // { requestId, privateKey, publicKey, fromEpoch, sentAt } — memory only (D12)
                 pendingRequest: null,
+                // Consecutive unanswered requests — drives the retry backoff
+                requestAttempts: 0,
                 loaded: false
             };
             this.state.set(messageStreamId, s);
@@ -78,15 +93,26 @@ class EpochKeyManager {
 
     _loadPersisted(messageStreamId, s) {
         const persisted = secureStorage.getEpochKeys(messageStreamId);
-        if (!persisted?.epochs) return;
-        for (const [keyId, entry] of Object.entries(persisted.epochs)) {
+        if (!persisted) return;
+        for (const [keyId, entry] of Object.entries(persisted.epochs || {})) {
             if (!s.epochs.has(keyId)) {
                 s.epochs.set(keyId, { ...entry, cryptoKey: null });
+            }
+        }
+        // Announces persist too (public data): with them AND the keys a
+        // restarted session encrypts/decrypts IMMEDIATELY — the -4 resend
+        // becomes a background reconcile instead of the open's critical path.
+        for (const [epochStr, ann] of Object.entries(persisted.announces || {})) {
+            const epoch = parseInt(epochStr, 10);
+            if (Number.isInteger(epoch) && !s.announces.has(epoch)) {
+                s.announces.set(epoch, ann);
             }
         }
         if (typeof persisted.currentEpoch === 'number' && persisted.currentEpoch > s.currentEpoch) {
             s.currentEpoch = persisted.currentEpoch;
         }
+        const maxAnnounced = Math.max(0, ...s.announces.keys());
+        if (maxAnnounced > s.currentEpoch) s.currentEpoch = maxAnnounced;
     }
 
     async _persist(messageStreamId, s) {
@@ -94,7 +120,34 @@ class EpochKeyManager {
         for (const [keyId, entry] of s.epochs) {
             epochs[keyId] = { keyHex: entry.keyHex, keyHash: entry.keyHash, epoch: entry.epoch };
         }
-        await secureStorage.setEpochKeys(messageStreamId, { epochs, currentEpoch: s.currentEpoch });
+        const announces = {};
+        for (const [epoch, ann] of s.announces) {
+            announces[epoch] = {
+                keyId: ann.keyId, keyHash: ann.keyHash,
+                publisher: ann.publisher, timestamp: ann.timestamp, validFrom: ann.validFrom
+            };
+        }
+        await secureStorage.setEpochKeys(messageStreamId, { epochs, announces, currentEpoch: s.currentEpoch });
+    }
+
+    /**
+     * Load persisted state without any network work — the fast path a channel
+     * open uses to decide whether the blocking ensure is needed at all.
+     */
+    loadPersistedState(messageStreamId) {
+        const s = this._getState(messageStreamId);
+        if (!s.loaded) {
+            this._loadPersisted(messageStreamId, s);
+            s.loaded = true;
+        }
+    }
+
+    /** Does the channel hold a usable current key right now? */
+    hasCurrentKey(messageStreamId) {
+        const s = this.state.get(messageStreamId);
+        if (!s || s.currentEpoch === 0) return false;
+        const announce = s.announces.get(s.currentEpoch);
+        return !!(announce && s.epochs.has(announce.keyId));
     }
 
     /**
@@ -172,17 +225,19 @@ class EpochKeyManager {
             s.loaded = true;
         }
 
-        // Announces are rebuilt from -4 storage every session — they are not
-        // secrets and the storage node is their system of record.
+        // Reconcile with -4 storage (announces are public; the storage node is
+        // their system of record — persisted copies are a warm-start cache).
         const entries = await streamrController.resendKeysMessages(
             channel.keysStreamId, { last: KEYS_HISTORY_COUNT });
+        let changed = false;
         for (const { data, publisherId, timestamp } of entries) {
             if (data.t === KEYS_MSG_TYPE.KEY_ANNOUNCE) {
-                this._applyAnnounce(channel, s, data, publisherId, timestamp);
+                if (this._applyAnnounce(channel, s, data, publisherId, timestamp)) changed = true;
             }
             // KEY_REQUESTs are never answered from history; KEY_WRAPs from
             // history are addressed to request keys that no longer exist.
         }
+        if (changed) await this._persist(channel.messageStreamId, s);
 
         if (s.announces.size === 0) {
             if (this.isOwnAdmin(channel)) {
@@ -194,9 +249,47 @@ class EpochKeyManager {
             return;
         }
 
+        if (this.isOwnAdmin(channel)) {
+            await this._maybeReannounceAging(channel, s);
+        }
+
         if (this._missingEpochs(s).length > 0) {
             await this._sendKeyRequest(channel, s);
         }
+    }
+
+    /**
+     * TTL-aware re-announce (same pattern as the -3 artifacts' ttlRepublish):
+     * the CURRENT epoch's announce ages out of storage retention if no
+     * rotation happens for that long, and a joiner then has no keyHash anchor
+     * even with every member online. Republish the SAME keyId/keyHash when
+     * the freshest retained copy nears the TTL — idempotent by construction.
+     */
+    async _maybeReannounceAging(channel, s) {
+        const announce = s.announces.get(s.currentEpoch);
+        if (!announce) return;
+        const entry = s.epochs.get(announce.keyId);
+        if (!entry) return;                                  // no key held — nothing to anchor
+        // freshest == 0: the announce exists only in OUR persisted state — the
+        // storage lost it (or the resend failed; republishing then is a
+        // harmless duplicate). Otherwise republish when nearing the TTL.
+        const freshest = s.announceFreshness.get(s.currentEpoch) || 0;
+        const retentionMs = (channel.storageDays || CONFIG.storage.defaultRetentionDays) * 86_400_000;
+        if (freshest && Date.now() - freshest < retentionMs * CONFIG.storage.ttlRepublishAgeFraction) return;
+
+        // CONSISTENT BY CONSTRUCTION across the admin's devices: this only
+        // ever republishes the PERSISTED keyId/keyHash — two devices doing it
+        // concurrently emit identical content. Minting happens nowhere here.
+        await streamrController.publishKeysMessage(channel.keysStreamId, {
+            t: KEYS_MSG_TYPE.KEY_ANNOUNCE,
+            epoch: s.currentEpoch,
+            keyId: announce.keyId,
+            keyHash: entry.keyHash,
+            validFrom: Date.now()
+        });
+        s.announceFreshness.set(s.currentEpoch, Date.now());
+        Logger.info(`epochKeys: re-announced epoch ${s.currentEpoch} (announce ${freshest ? 'nearing storage TTL' : 'missing from storage'}) on`,
+            channel.keysStreamId.slice(-30));
     }
 
     /** Epoch numbers announced but not adopted. */
@@ -231,6 +324,22 @@ class EpochKeyManager {
             this._applyAnnounce(channel, s, announce, authManager.getAddress(), announce.validFrom);
             Logger.info(`epochKeys: re-announced epoch ${entry.epoch} (announce was missing from storage) on`,
                 channel.keysStreamId.slice(-30));
+            return;
+        }
+
+        // MINT GUARD (admin on two devices): a fresh admin device — no
+        // persisted keys — on an ESTABLISHED channel must never mint a new
+        // epoch 1: it would fork the channel. And it cannot recover from
+        // member wraps either — without an announce there is no keyHash to
+        // verify them against, and an admin re-announcing an unverified key
+        // would launder it into the trust anchor. Virginity signal is
+        // CREATION RECENCY: createdAt travels with the channel via sync, so
+        // a second device inherits the original (old) date and refuses.
+        const ageMs = Date.now() - (channel.createdAt || 0);
+        if (!channel.createdAt || ageMs > 3_600_000) {
+            Logger.warn('epochKeys: admin device holds NO epoch keys on an established channel',
+                channel.messageStreamId.slice(-30),
+                '— NOT minting (would fork the channel). Recover the keys on the original device.');
             return;
         }
 
@@ -333,6 +442,12 @@ class EpochKeyManager {
         const epoch = data.epoch;
         if (!Number.isInteger(epoch) || epoch < 1) return false;
         if (typeof data.keyId !== 'string' || typeof data.keyHash !== 'string') return false;
+
+        // Freshness bookkeeping for the TTL re-announce — tracks the NEWEST
+        // valid copy even when the conflict rule below keeps an older one
+        if ((timestamp || 0) > (s.announceFreshness.get(epoch) || 0)) {
+            s.announceFreshness.set(epoch, timestamp || 0);
+        }
 
         const incoming = {
             keyId: data.keyId,
@@ -441,7 +556,9 @@ class EpochKeyManager {
      * lives on the pending request, in memory, until superseded.
      */
     async _sendKeyRequest(channel, s) {
-        if (s.pendingRequest && (Date.now() - s.pendingRequest.sentAt) < REQUEST_MIN_INTERVAL_MS) {
+        const interval = s.requestAttempts < REQUEST_FAST_ATTEMPTS
+            ? REQUEST_RETRY_FAST_MS : REQUEST_MIN_INTERVAL_MS;
+        if (s.pendingRequest && (Date.now() - s.pendingRequest.sentAt) < interval) {
             return;
         }
         const missing = this._missingEpochs(s);
@@ -451,6 +568,7 @@ class EpochKeyManager {
         const requestId = cryptoManager.generateRandomHex(16);
         const fromEpoch = Math.min(...missing);
 
+        s.requestAttempts += 1;
         s.pendingRequest = { requestId, privateKey, publicKey, fromEpoch, sentAt: Date.now() };
 
         await streamrController.publishKeysMessage(channel.keysStreamId, {
@@ -468,8 +586,21 @@ class EpochKeyManager {
             s.currentEpoch = epoch;
         }
         s.missingKids?.delete(keyId);
+        s.requestAttempts = 0;   // future rotations start on the fast retry again
         await this._persist(channel.messageStreamId, s);
         this._notifyAdopted(channel.messageStreamId, keyId);
+    }
+
+    /**
+     * Requester-side retry while early requests may have been lost to a cold
+     * topology (§7.2 R2): re-send, respecting the fast backoff, until the keys
+     * land. Returns true while the channel is still waiting.
+     */
+    async retryRequestIfWaiting(channel) {
+        const s = this.state.get(channel.messageStreamId);
+        if (!s || this._missingEpochs(s).length === 0) return false;
+        await this._sendKeyRequest(channel, s);
+        return true;
     }
 
     /**

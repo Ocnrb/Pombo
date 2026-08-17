@@ -2467,7 +2467,33 @@ class ChannelManager {
         await streamrController.subscribeToKeysStream(keysStreamId, (data, publisherId, timestamp) =>
             epochKeyManager.handleKeysMessage(channel, data, publisherId, timestamp));
 
+        // FAST PATH: with persisted keys+announces the channel decrypts
+        // immediately — the -4 resend becomes a background reconcile (which
+        // also runs the admin's TTL re-announce) instead of blocking history.
+        epochKeyManager.loadPersistedState(channel.messageStreamId);
+        if (epochKeyManager.hasCurrentKey(channel.messageStreamId)) {
+            setTimeout(() => {
+                epochKeyManager.ensureChannelKeys(channel).catch(e =>
+                    Logger.debug('Background epoch reconcile failed:', e.message));
+            }, 8_000);
+            return;
+        }
+
         await epochKeyManager.ensureChannelKeys(channel);
+
+        // A first KEY_REQUEST from a cold node can miss every live subscriber
+        // (§7.2 R2) — retry fast while the topology warms; stop as soon as
+        // the keys land or the channel is switched away.
+        if (!epochKeyManager.hasCurrentKey(channel.messageStreamId)) {
+            let laps = 0;
+            const timer = setInterval(async () => {
+                laps += 1;
+                const still = this.currentChannel === channel.messageStreamId
+                    && !epochKeyManager.hasCurrentKey(channel.messageStreamId);
+                if (!still || laps > 6) { clearInterval(timer); return; }
+                try { await epochKeyManager.retryRequestIfWaiting(channel); } catch { /* next lap */ }
+            }, 10_000);
+        }
     }
 
     /**
