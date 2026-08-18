@@ -6,6 +6,10 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { ethers } from 'ethers';
+
+// streamr.js reads the bundle-global `ethers` at runtime
+globalThis.ethers = ethers;
 
 // Mock auth before importing streamrController
 vi.mock('../../src/js/auth.js', () => ({
@@ -316,14 +320,40 @@ describe('StreamrController', () => {
     });
 
     describe('getDMPublicKey()', () => {
-        it('should return public key from stream description', async () => {
+        // The key must BE the address: the metadata read travels through
+        // user-chosen RPCs with automatic public failover, so a forged `pk`
+        // would be a full DM MITM — getDMPublicKey verifies before returning.
+        const owner = new ethers.Wallet('0x' + '11'.repeat(32));
+        const ownerPk = owner.signingKey.compressedPublicKey;
+
+        it('should return the public key when it matches the inbox owner', async () => {
+            const mockStream = {
+                getDescription: vi.fn().mockResolvedValue(JSON.stringify({ pk: ownerPk }))
+            };
+            mockClient.getStream.mockResolvedValue(mockStream);
+
+            const pk = await streamrController.getDMPublicKey(owner.address);
+            expect(pk).toBe(ownerPk);
+        });
+
+        it('rejects a public key that does not match the inbox owner (RPC spoof)', async () => {
+            const mockStream = {
+                getDescription: vi.fn().mockResolvedValue(JSON.stringify({ pk: ownerPk }))
+            };
+            mockClient.getStream.mockResolvedValue(mockStream);
+
+            const pk = await streamrController.getDMPublicKey('0x' + 'ab'.repeat(20));
+            expect(pk).toBeNull();
+        });
+
+        it('rejects a malformed public key', async () => {
             const mockStream = {
                 getDescription: vi.fn().mockResolvedValue(JSON.stringify({ pk: '0xpubkey123' }))
             };
             mockClient.getStream.mockResolvedValue(mockStream);
 
-            const pk = await streamrController.getDMPublicKey('0xAddress');
-            expect(pk).toBe('0xpubkey123');
+            const pk = await streamrController.getDMPublicKey(owner.address);
+            expect(pk).toBeNull();
         });
 
         it('should return null when stream not found', async () => {

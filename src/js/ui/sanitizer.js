@@ -21,7 +21,9 @@ const MESSAGE_CONFIG = {
         'data-emoji', 'data-emoji-only', 'title',
         'src', 'frameborder', 'allow', 'allowfullscreen', 'loading'
     ],
-    ALLOW_DATA_ATTR: true,
+    // Only the data-* attributes listed above survive — a blanket allow
+    // plus attribute-driven event delegation is a combination to avoid.
+    ALLOW_DATA_ATTR: false,
     // Force all links to open in new tab with security attrs
     ADD_ATTR: ['target', 'rel'],
     // Forbid dangerous protocols

@@ -888,7 +888,22 @@ class StreamrController {
             const desc = await stream.getDescription();
             if (!desc) return null;
             const meta = JSON.parse(desc);
-            return meta.pk || null;
+            const pk = meta.pk || null;
+            if (!pk) return null;
+            // The stream namespace proves ownership on-chain, but this READ
+            // travels through a user-chosen RPC with automatic failover to
+            // public endpoints — a hostile RPC forging `pk` here would be a
+            // full DM MITM. The key must BE the address.
+            try {
+                if (ethers.computeAddress(pk).toLowerCase() !== String(address).toLowerCase()) {
+                    Logger.warn('DM: inbox metadata public key does not match its owner — rejecting', address);
+                    return null;
+                }
+            } catch {
+                Logger.warn('DM: malformed public key in inbox metadata — rejecting', address);
+                return null;
+            }
+            return pk;
         } catch (e) {
             Logger.warn('DM: Could not fetch public key for', address, ':', e.message);
             return null;
