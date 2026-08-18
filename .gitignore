@@ -6,3 +6,6 @@ coverage/
 # Generated bundles - Vercel builds them (vercel.json buildCommand)
 /js/
 /css/
+# Hand-written sources living in js/ (referenced by index.html, not built)
+!/js/install-pre.js
+!/js/install-modal.js
