@@ -2,3 +2,7 @@ node_modules/
 coverage/
 .DS_Store
 *.log
+
+# Generated bundles - Vercel builds them (vercel.json buildCommand)
+/js/
+/css/
