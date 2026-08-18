@@ -2057,7 +2057,6 @@ body {
     #settings-modal > div,
     #channel-settings-modal > div,
     #contacts-modal > div,
-    #channel-types-modal > div,
     #storage-info-modal > div {
         background-color: #000000 !important;
     }

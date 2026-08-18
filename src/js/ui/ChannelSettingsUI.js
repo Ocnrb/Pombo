@@ -178,6 +178,18 @@ class ChannelSettingsUI {
 
         // Show/hide members-related elements based on permission to add members
         this.elements.addMemberForm?.classList.toggle('hidden', !canAddMembers);
+        // TOKEN/NFT/PAID gates have no owner-minted members — allow() is
+        // NONE-only on-chain, so manual add is a guaranteed revert there.
+        if (currentChannel.gate?.address && this.elements.addMemberForm && canAddMembers) {
+            import('../gate.js').then(async ({ gateManager, GATE_MODE }) => {
+                try {
+                    const info = await gateManager.getGateInfo(currentChannel.gate.address);
+                    if (info.mode !== GATE_MODE.NONE) {
+                        this.elements.addMemberForm.classList.add('hidden');
+                    }
+                } catch { /* unreadable gate — leave visible, the tx error is decoded anyway */ }
+            }).catch(() => {});
+        }
         this.elements.permissionsSection?.classList.toggle('hidden', !canDelete || !isNative);
 
         // Clear members list for non-native channels (prevents stale data)
@@ -1715,6 +1727,15 @@ class ChannelSettingsUI {
     }
 
     /**
+     * Whether this channel's name/description live in PUBLIC on-chain
+     * metadata. True for visible channels; a joiner's object may lack the
+     * exposure flag, so an on-chain name (channelInfo) also qualifies.
+     */
+    _hasPublicMetadata(channel) {
+        return channel?.exposure === 'visible' || !!channel?.channelInfo?.name;
+    }
+
+    /**
      * Start editing the channel name (and description, when the channel has one).
      * Single global edit mode: unlocks both fields so name + description are
      * saved together in one on-chain transaction.
@@ -1733,14 +1754,16 @@ class ChannelSettingsUI {
             this.elements.editChannelNameBtn.classList.add('hidden');
         }
 
-        // Description editing: open/password channels only. Native channels
-        // intentionally have no description; DMs neither. If the channel has
-        // no description yet, the field still appears so the admin can add one.
+        // Name and description live in PUBLIC on-chain metadata, so editing
+        // them there is only meaningful where that metadata is public: any
+        // visible channel (public, password, gated/paid alike). Hidden
+        // channels — Closed included — keep name off-chain and have no
+        // description; their rename is local, like a DM's.
         const { channelManager } = this.deps;
         const currentChannel = this.deps.getActiveChannel?.() || channelManager.getCurrentChannel();
         const isDM = currentChannel?.type === 'dm';
-        const isNative = currentChannel?.type === 'native';
-        this._editingDescription = !isDM && !isNative;
+        const onChainMeta = !isDM && this._hasPublicMetadata(currentChannel);
+        this._editingDescription = onChainMeta;
 
         if (this._editingDescription && this.elements.channelSettingsDescriptionInput) {
             const currentDescription = this.elements.channelDescriptionDisplay?.textContent || '';
@@ -1756,8 +1779,8 @@ class ChannelSettingsUI {
             this.elements.channelEditActions.classList.remove('hidden');
         }
 
-        // Gas warning: only for non-DM channels (rename/description = on-chain tx)
-        document.getElementById('channel-edit-gas-warning')?.classList.toggle('hidden', isDM);
+        // Gas warning: only when saving means an on-chain metadata tx
+        document.getElementById('channel-edit-gas-warning')?.classList.toggle('hidden', !onChainMeta);
         
         // Set current name in input and focus
         if (this.elements.channelSettingsNameInput) {
@@ -1803,8 +1826,9 @@ class ChannelSettingsUI {
 
     /**
      * Save the edited channel name (and description, if unlocked)
-     * - DM channels: local rename, propagated to other devices via sync (saveChannels → auto-push)
-     * - Non-DM channels: admin-only, updates the stream's on-chain metadata
+     * - DM and hidden channels: local rename, propagated to other devices via
+     *   sync (saveChannels → auto-push) — hidden names never touch the chain
+     * - Visible channels: admin-only, updates the stream's on-chain metadata
      *   (name + description written in a SINGLE transaction)
      */
     async saveChannelName() {
@@ -1821,7 +1845,11 @@ class ChannelSettingsUI {
         }
 
         const isDM = currentChannel.type === 'dm';
-        const editingDescription = !isDM && this._editingDescription;
+        // On-chain write only where the metadata is public (visible channels);
+        // a hidden channel's rename staying local is what keeps its name off
+        // the public stream registry.
+        const onChainRename = !isDM && this._hasPublicMetadata(currentChannel);
+        const editingDescription = onChainRename && this._editingDescription;
         const newDescription = editingDescription
             ? (this.elements.channelSettingsDescriptionInput?.value?.trim() || '')
             : null;
@@ -1841,8 +1869,8 @@ class ChannelSettingsUI {
         const cancelBtn = this.elements.cancelChannelNameBtn;
 
         try {
-            if (!isDM) {
-                // Non-DM: admin-only on-chain metadata update (single tx for name + description)
+            if (onChainRename) {
+                // Visible channel: admin-only on-chain metadata update (single tx for name + description)
                 if (saveBtn) saveBtn.disabled = true;
                 if (cancelBtn) cancelBtn.disabled = true;
                 showNotification('Updating channel info on-chain...', 'info');

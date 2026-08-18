@@ -744,7 +744,12 @@ class ChannelManager {
                 const me = authManager.getAddress();
                 const hasAccess = me && await gateManager.checkAccess(options.gateAddress, me);
                 if (!hasAccess) {
-                    throw new Error('You do not have access to this gated channel. Ask the owner to add you.');
+                    // Typed for the UI: the gate entry screen (N-D) reads the
+                    // mode on-chain and offers pay()/join() instead of a toast.
+                    const err = new Error('You do not have access to this gated channel.');
+                    err.code = 'GATE_ACCESS_DENIED';
+                    err.gateAddress = options.gateAddress.toLowerCase();
+                    throw err;
                 }
                 // The stream check above naturally reported no permissions
                 // (grants belong to the clone) — the gate says otherwise, and
@@ -2131,18 +2136,26 @@ class ChannelManager {
 
         // Gated (N-C): membership lives on the GATE, not on stream grants —
         // the only stream grantee is the clone itself, so the Graph's list is
-        // owner + clone and nothing else. The local cache (kept in lockstep
-        // with allow/ban transactions) names the candidates; their CURRENT
-        // state — including the moderator flag, which maps onto `canGrant` so
-        // the whole members UI works unchanged — is read from the contract.
+        // owner + clone and nothing else. Candidates: the local cache (kept in
+        // lockstep with allow/ban transactions) plus the KEY_REQUEST authors
+        // seen on -4 (N-D — join()/pay() members never pass through the
+        // owner, but every reader must request keys). Their CURRENT state —
+        // including the moderator flag, which maps onto `canGrant` so the
+        // whole members UI works unchanged — is read from the contract;
+        // `access` is the mode-aware membership signal (allowlist only means
+        // Closed).
         if (channel.gate?.address) {
             const gateAddr = channel.gate.address.toLowerCase();
             try {
                 const { gateManager } = await import('./gate.js');
+                const candidates = [
+                    ...(channel.members || []),
+                    ...epochKeyManager.getSeenRequesters(channel.messageStreamId)
+                ];
                 const gateMembers = await gateManager.getGateMembers(
-                    channel.gate.address, channel.members || []);
+                    channel.gate.address, candidates);
                 for (const m of gateMembers) {
-                    if (!m.isOwner && !m.moderator && !m.allowed) continue; // banned/ex-members
+                    if (!m.isOwner && !m.moderator && !m.access) continue; // banned/ex-members
                     membersMap.set(m.address, {
                         address: m.address,
                         canGrant: m.isOwner || m.moderator,

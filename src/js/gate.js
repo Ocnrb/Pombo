@@ -44,6 +44,7 @@ const GATE_ABI = [
     'function revokeAllow(address user)',
     'function join()',
     'function pay()',
+    'function payWithPermit(uint256 permitValue, uint256 deadline, uint8 v, bytes32 r, bytes32 s)',
     'function ban(address user, bool eraseHistory)',
     'function unban(address user)',
     'function unerase(address user)',
@@ -65,6 +66,21 @@ const FACTORY_ABI = [
     'event GateCreated(address indexed gate, address indexed owner, uint8 mode)'
 ];
 
+// Canonical wrapped-native on Polygon (WPOL, WETH9 code). pay() auto-wraps
+// native POL into it when the standing WPOL balance is short — deposit() is
+// only assumed safe for THIS address, never for arbitrary payment tokens.
+const WRAPPED_NATIVE = '0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270';
+const WRAPPED_NATIVE_ABI = ['function deposit() payable'];
+
+// balanceOf covers ERC-721 too (same selector); decimals/allowance are ERC-20 only.
+const TOKEN_ABI = [
+    'function balanceOf(address) view returns (uint256)',
+    'function allowance(address owner, address spender) view returns (uint256)',
+    'function approve(address spender, uint256 value) returns (bool)',
+    'function decimals() view returns (uint8)',
+    'function symbol() view returns (string)'
+];
+
 /** Mirrors PomboGate.Mode on-chain — order is part of the ABI, never reorder. */
 export const GATE_MODE = Object.freeze({
     NONE: 0,            // Closed: owner-managed allowlist
@@ -83,6 +99,8 @@ class GateManager {
         this._accessCache = new Map();
         // gate → immutable params ({ owner, mode, token, minBalance, price, duration })
         this._infoCache = new Map();
+        // token → { symbol, decimals } — immutable, fetched once
+        this._tokenMetaCache = new Map();
     }
 
     // ------------------------------------------------------------- provider
@@ -131,6 +149,10 @@ class GateManager {
 
     _readContract(gateAddress) {
         return new ethers.Contract(gateAddress, GATE_ABI, this._getProvider());
+    }
+
+    _readToken(tokenAddress) {
+        return new ethers.Contract(tokenAddress, TOKEN_ABI, this._getProvider());
     }
 
     /** The local account wallet, connected for transactions. */
@@ -205,19 +227,54 @@ class GateManager {
             this._readContract(gateAddress).accessUntil(userAddress));
     }
 
+    /** @returns {Promise<bigint>} Unix seconds the subscription runs to; 0 = never paid */
+    paidUntil(gateAddress, userAddress) {
+        return this._withProvider(() =>
+            this._readContract(gateAddress).paidUntil(userAddress));
+    }
+
+    /**
+     * Display metadata for a gate's token. `decimals` is null for ERC-721
+     * collections (the getter does not exist there) — render whole units.
+     * @returns {Promise<{symbol: string, decimals: number|null}>}
+     */
+    async getTokenMeta(tokenAddress) {
+        const key = tokenAddress.toLowerCase();
+        if (this._tokenMetaCache.has(key)) return this._tokenMetaCache.get(key);
+        const meta = await this._withProvider(async () => {
+            const token = this._readToken(tokenAddress);
+            const [symbol, decimals] = await Promise.all([
+                token.symbol().catch(() => `${tokenAddress.slice(0, 6)}…${tokenAddress.slice(-4)}`),
+                token.decimals().then(Number).catch(() => null)
+            ]);
+            return { symbol, decimals };
+        });
+        this._tokenMetaCache.set(key, meta);
+        return meta;
+    }
+
+    /** ERC-20 balance, or owned-token count for an ERC-721 collection. */
+    getTokenBalance(tokenAddress, userAddress) {
+        return this._withProvider(() =>
+            this._readToken(tokenAddress).balanceOf(userAddress));
+    }
+
     /**
      * The CURRENT on-chain state of a set of candidate addresses, plus the
      * owner — what the permissions panel renders.
      *
      * The candidate set (not the flags) comes from the caller: on a Closed
-     * (NONE) gate only the owner mints members, so the locally-synced member
-     * cache already names everyone. Free-tier RPCs cap eth_getLogs at 10k
-     * blocks, which rules out an event scan from genesis; enumerating
-     * join()/pay() members for TOKEN/PAID gates will need an indexer (N-D).
+     * (NONE) gate the locally-synced member cache names everyone the owner
+     * minted; on TOKEN/NFT/PAID gates the KEY_REQUEST authors seen on -4
+     * are the candidates (N-D — free-tier RPCs cap eth_getLogs at 10k
+     * blocks, so there is no event scan and no indexer in v0).
+     *
+     * `access` is the mode-aware CURRENT gate (checkAccess) — the membership
+     * signal that works for every mode, where `allowed` only means NONE.
      *
      * @param {string} gateAddress
      * @param {string[]} [candidates] - Addresses to check (owner is implicit)
-     * @returns {Promise<Array<{address: string, isOwner: boolean,
+     * @returns {Promise<Array<{address: string, isOwner: boolean, access: boolean,
      *   allowed: boolean, banned: boolean, everMember: boolean, erased: boolean}>>}
      */
     async getGateMembers(gateAddress, candidates = []) {
@@ -233,18 +290,22 @@ class GateManager {
             }
 
             const members = await Promise.all(Array.from(addresses).map(async (address) => {
-                const [allowed, banned, everMember, erased, moderator] = await Promise.all([
+                const [allowed, banned, everMember, erased, moderator, access] = await Promise.all([
                     gate.allowlist(address), gate.banned(address),
                     gate.everMember(address), gate.erased(address),
                     // v1 gates predate the moderators getter — read as false
-                    gate.moderators(address).catch(() => false)
+                    gate.moderators(address).catch(() => false),
+                    gate.checkAccess(address).catch(() => false)
                 ]);
-                return { address, allowed, banned, everMember, erased, moderator, isOwner: address === owner };
+                return {
+                    address, allowed, banned, everMember, erased, moderator, access,
+                    isOwner: address === owner
+                };
             }));
             // Owner first, then moderators, then current members, then the rest
             return members.sort((a, b) =>
                 (b.isOwner - a.isOwner) || (b.moderator - a.moderator)
-                || (b.allowed - a.allowed) || a.address.localeCompare(b.address));
+                || (b.access - a.access) || a.address.localeCompare(b.address));
         });
     }
 
@@ -325,6 +386,76 @@ class GateManager {
      */
     setModerator(gateAddress, userAddress, enabled) {
         return this._ownerCall(gateAddress, 'setModerator', [userAddress, enabled], userAddress);
+    }
+
+    // ----------------------------------------------------------- member txs
+
+    async _memberCall(gateAddress, method, args = []) {
+        const signer = await this._txSigner();
+        const gate = new ethers.Contract(gateAddress, GATE_ABI, signer);
+        const tx = await gate[method](...args);
+        Logger.info(`gate: ${method} tx`, tx.hash);
+        await tx.wait();
+        this.invalidateAccess(gateAddress, signer.address);
+        return signer.address.toLowerCase();
+    }
+
+    /**
+     * TOKEN/NFT gates: opt in to sticky membership (everMember). Optional by
+     * design — without it, selling the asset before ever joining forfeits the
+     * published history (§7.11).
+     * @returns {Promise<string>} The joining address (lowercase)
+     */
+    join(gateAddress) {
+        return this._memberCall(gateAddress, 'join');
+    }
+
+    /**
+     * PAID gates: pay for one subscription period (renewing early extends
+     * from the current end). WPOL-priced gates wrap native POL to cover any
+     * shortfall first; then the gate is approved for exactly `price` when the
+     * standing allowance is short — three transactions worst case, one when
+     * allowance and balance already cover it.
+     *
+     * @param {string} gateAddress
+     * @param {function(string): void} [onStep] - 'wrap' | 'approve' | 'pay' progress
+     * @returns {Promise<string>} The paying address (lowercase)
+     */
+    async pay(gateAddress, onStep = null) {
+        const info = await this.getGateInfo(gateAddress);
+        const signer = await this._txSigner();
+        const token = new ethers.Contract(info.token, TOKEN_ABI, signer);
+
+        if (info.token === WRAPPED_NATIVE) {
+            const balance = await token.balanceOf(signer.address);
+            if (balance < info.price) {
+                const shortfall = info.price - balance;
+                const native = await signer.provider.getBalance(signer.address);
+                if (native <= shortfall) {
+                    throw new Error('Not enough POL to cover the subscription price');
+                }
+                onStep?.('wrap');
+                const wrapper = new ethers.Contract(info.token, WRAPPED_NATIVE_ABI, signer);
+                const wrapTx = await wrapper.deposit({ value: shortfall });
+                Logger.info('gate: wrap POL tx', wrapTx.hash);
+                await wrapTx.wait();
+            }
+        }
+
+        const allowance = await token.allowance(signer.address, gateAddress);
+        if (allowance < info.price) {
+            onStep?.('approve');
+            // USDT-style tokens revert on non-zero → non-zero approve
+            if (allowance > 0n) {
+                const resetTx = await token.approve(gateAddress, 0n);
+                await resetTx.wait();
+            }
+            const approveTx = await token.approve(gateAddress, info.price);
+            Logger.info('gate: approve tx', approveTx.hash);
+            await approveTx.wait();
+        }
+        onStep?.('pay');
+        return this._memberCall(gateAddress, 'pay');
     }
 
     /** Whether an address moderates this gate (v1 gates lack the getter → false). */

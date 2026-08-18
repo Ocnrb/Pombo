@@ -272,9 +272,14 @@ class ExploreUI {
         
         let filtered = this.cachedPublicChannels;
         
-        // Apply type filter
-        if (this.browseTypeFilter) {
-            filtered = filtered.filter(ch => ch.type === this.browseTypeFilter);
+        // Apply type filter. Two buckets only: password channels live behind
+        // the Private chip (their access is a secret shared out-of-band);
+        // everything else — public AND gate-backed (gated/paid) — is a
+        // storefront and lists in the main view.
+        if (this.browseTypeFilter === 'password') {
+            filtered = filtered.filter(ch => ch.type === 'password');
+        } else {
+            filtered = filtered.filter(ch => ch.type !== 'password');
         }
         
         // Apply category filter
@@ -348,6 +353,9 @@ class ExploreUI {
             const categoryBadge = ch.category && ch.category !== 'general'
                 ? `<span class="px-1.5 py-1 bg-white/5 text-white/50 text-[11px] font-medium rounded">${escapeHtml(categoryNames[ch.category] || ch.category)}</span>`
                 : '';
+            const gatedBadge = ch.type === 'gated'
+                ? '<span class="px-1.5 py-1 bg-white/5 text-white/50 text-[11px] font-medium rounded">Gated</span>'
+                : '';
             const languageBadge = ch.language
                 ? `<span class="px-1.5 py-1 bg-white/5 text-white/50 text-[11px] font-medium rounded">${escapeHtml(languageNames[ch.language] || ch.language.toUpperCase())}</span>`
                 : '';
@@ -410,6 +418,7 @@ class ExploreUI {
                     </svg>
                 </div>
                 <div class="flex items-center gap-1.5 mt-2.5">
+                    ${gatedBadge}
                     ${categoryBadge}
                     ${languageBadge}
                 </div>

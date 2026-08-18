@@ -708,6 +708,25 @@ class UIController {
             });
         });
 
+        // Gate asset tabs (for Gated channels) - switch between token/nft
+        document.querySelectorAll('.gate-asset-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                channelModalsUI.switchGateAssetTab(tab.dataset.gateAsset);
+            });
+        });
+
+        // Quick-pick token presets (Gated/Paid tabs)
+        document.querySelectorAll('.gate-token-preset-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                channelModalsUI.switchTokenPresetTab('gate', tab.dataset.tokenPreset);
+            });
+        });
+        document.querySelectorAll('.paid-token-preset-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                channelModalsUI.switchTokenPresetTab('paid', tab.dataset.tokenPreset);
+            });
+        });
+
         // Join classification tabs (in join-closed-channel modal)
         document.querySelectorAll('.join-classification-tab').forEach(tab => {
             tab.addEventListener('click', () => {
@@ -777,19 +796,6 @@ class UIController {
         // Footer cancel button (new design)
         document.getElementById('cancel-channel-btn-footer')?.addEventListener('click', () => {
             channelModalsUI.hide();
-        });
-
-        // Channel types info modal
-        document.querySelectorAll('.channel-info-help-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                modalManager.show('channel-types-modal');
-            });
-        });
-        document.getElementById('close-channel-types-btn')?.addEventListener('click', () => {
-            modalManager.hide('channel-types-modal');
-        });
-        document.getElementById('close-channel-types-btn-footer')?.addEventListener('click', () => {
-            modalManager.hide('channel-types-modal');
         });
 
         // Storage info modal

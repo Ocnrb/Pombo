@@ -6,6 +6,7 @@
 import { GasEstimator } from './GasEstimator.js';
 import { authManager } from '../auth.js';
 import { streamrController } from '../streamr.js';
+import { CONFIG } from '../config.js';
 
 class ChannelModalsUI {
     constructor() {
@@ -13,6 +14,9 @@ class ChannelModalsUI {
         this.elements = {};
         this.currentExposure = 'hidden';
         this.currentClassification = 'personal';
+        this.currentGateAsset = 'token';
+        this.gateTokenPreset = 'pol';
+        this.paidTokenPreset = 'usdc';
         this.joinClassification = 'personal';
         this.currentReadOnly = false;
         this.currentStorageProvider = 'streamr';
@@ -76,6 +80,17 @@ class ChannelModalsUI {
         this.setVisibility(false);
         // Reset classification to personal (for Closed channels)
         this.switchClassificationTab('personal');
+        // Reset gate fields (Gated/Paid tabs)
+        for (const id of ['gate-token-input', 'gate-min-balance-input', 'paid-token-input', 'paid-price-input']) {
+            const input = document.getElementById(id);
+            if (input) input.value = '';
+        }
+        const paidDuration = document.getElementById('paid-duration-input');
+        if (paidDuration) paidDuration.value = '30';
+        this.gateTokenPreset = 'pol';
+        this.paidTokenPreset = 'usdc';
+        this.switchGateAssetTab('token');   // reapplies the gate token preset
+        this.switchTokenPresetTab('paid', 'usdc');
         // Reset read-only toggle
         this.setReadOnly(false);
         // Reset storage provider to Streamr (default)
@@ -110,12 +125,15 @@ class ChannelModalsUI {
     async updateGasEstimates() {
         const costPublic = document.getElementById('cost-public');
         const costPassword = document.getElementById('cost-password');
-        const costNative = document.getElementById('cost-native');
-        
+        // Every gate-backed tab (Closed/Gated/Paid) deploys the same clone
+        // and stream set — they share the 'native' cost bucket.
+        const costGated = ['cost-native', 'cost-gated', 'cost-paid']
+            .map((id) => document.getElementById(id)).filter(Boolean);
+
         try {
             const estimates = await GasEstimator.estimateCosts();
             const tooltipText = `Gas: ${estimates.formatted.gasPrice}`;
-            
+
             if (costPublic) {
                 costPublic.textContent = estimates.formatted.public;
                 costPublic.dataset.tooltip = tooltipText;
@@ -124,9 +142,9 @@ class ChannelModalsUI {
                 costPassword.textContent = estimates.formatted.password;
                 costPassword.dataset.tooltip = tooltipText;
             }
-            if (costNative) {
-                costNative.textContent = estimates.formatted.native;
-                costNative.dataset.tooltip = tooltipText;
+            for (const el of costGated) {
+                el.textContent = estimates.formatted.native;
+                el.dataset.tooltip = tooltipText;
             }
         } catch (error) {
             this.Logger?.warn('Failed to estimate gas costs:', error);
@@ -139,9 +157,9 @@ class ChannelModalsUI {
                 costPassword.textContent = '~0.23 POL';
                 costPassword.dataset.tooltip = fallbackTooltip;
             }
-            if (costNative) {
-                costNative.textContent = '~0.28 POL';
-                costNative.dataset.tooltip = fallbackTooltip;
+            for (const el of costGated) {
+                el.textContent = '~0.28 POL';
+                el.dataset.tooltip = fallbackTooltip;
             }
         }
     }
@@ -166,21 +184,29 @@ class ChannelModalsUI {
         // Show/hide type-specific fields
         const passwordSection = document.getElementById('password-field-section');
         const nativeSection = document.getElementById('native-fields-section');
-        
+        const gatedSection = document.getElementById('gated-fields-section');
+        const paidSection = document.getElementById('paid-fields-section');
+
         if (passwordSection) {
             passwordSection.classList.toggle('hidden', tabType !== 'password');
         }
         if (nativeSection) {
             nativeSection.classList.toggle('hidden', tabType !== 'native');
         }
-        
+        if (gatedSection) {
+            gatedSection.classList.toggle('hidden', tabType !== 'gated');
+        }
+        if (paidSection) {
+            paidSection.classList.toggle('hidden', tabType !== 'paid');
+        }
+
         // Update cost display in footer
         document.querySelectorAll('.channel-cost-display').forEach(cost => {
             cost.classList.add('hidden');
         });
         const activeCost = document.getElementById(`cost-${tabType}`);
         if (activeCost) activeCost.classList.remove('hidden');
-        
+
         // Native (Closed) channels: hide exposure section entirely
         if (tabType === 'native') {
             this.setVisibility(false);
@@ -188,6 +214,85 @@ class ChannelModalsUI {
         } else {
             this.elements.exposureSection?.classList.remove('hidden');
         }
+    }
+
+    /**
+     * Switch asset type (token/nft) in the Gated tab
+     */
+    switchGateAssetTab(asset) {
+        document.querySelectorAll('.gate-asset-tab').forEach(tab => {
+            const isActive = tab.dataset.gateAsset === asset;
+            tab.classList.toggle('bg-white/10', isActive);
+            tab.classList.toggle('text-white', isActive);
+            tab.classList.toggle('border-white/10', isActive);
+            tab.classList.toggle('bg-white/5', !isActive);
+            tab.classList.toggle('text-white/50', !isActive);
+            tab.classList.toggle('border-white/5', !isActive);
+            tab.classList.toggle('hover:bg-white/10', !isActive);
+            tab.classList.toggle('hover:text-white/70', !isActive);
+        });
+        // NFT gates require holding at least one — no balance threshold on-chain
+        document.getElementById('gate-min-balance-field')?.classList.toggle('hidden', asset === 'nft');
+        this.currentGateAsset = asset;
+
+        // Quick-pick tokens are ERC-20 only — an NFT gate is always a custom
+        // collection address
+        const presetsRow = document.getElementById('gate-token-presets');
+        if (asset === 'nft') {
+            presetsRow?.classList.add('hidden');
+            const input = document.getElementById('gate-token-input');
+            if (input) {
+                input.classList.remove('hidden');
+                input.value = '';
+            }
+            const hint = document.getElementById('gate-token-hint');
+            if (hint) hint.textContent = 'ERC-721 collection on Polygon — holding any token grants access.';
+        } else {
+            presetsRow?.classList.remove('hidden');
+            this.switchTokenPresetTab('gate', this.gateTokenPreset);
+        }
+    }
+
+    /**
+     * Switch the quick-pick token (pol/usdc/data/custom) in the Gated or Paid
+     * tab. A preset fills the (hidden) token input; Custom reveals it empty.
+     * POL differs by context — see CONFIG.gate.tokenPresets.
+     */
+    switchTokenPresetTab(context, key) {
+        const isGate = context === 'gate';
+        const preset = CONFIG.gate.tokenPresets[isGate ? 'gate' : 'pay'][key] || null;
+        document.querySelectorAll(isGate ? '.gate-token-preset-tab' : '.paid-token-preset-tab').forEach(tab => {
+            const isActive = tab.dataset.tokenPreset === key;
+            tab.classList.toggle('bg-white/10', isActive);
+            tab.classList.toggle('text-white', isActive);
+            tab.classList.toggle('border-white/10', isActive);
+            tab.classList.toggle('bg-white/5', !isActive);
+            tab.classList.toggle('text-white/50', !isActive);
+            tab.classList.toggle('border-white/5', !isActive);
+            tab.classList.toggle('hover:bg-white/10', !isActive);
+            tab.classList.toggle('hover:text-white/70', !isActive);
+        });
+        const input = document.getElementById(isGate ? 'gate-token-input' : 'paid-token-input');
+        if (input) {
+            input.classList.toggle('hidden', !!preset);
+            input.value = preset ? preset.address : '';
+        }
+        const hint = document.getElementById(isGate ? 'gate-token-hint' : 'paid-token-hint');
+        if (hint) hint.textContent = this._tokenPresetHint(context, key, preset);
+        if (isGate) this.gateTokenPreset = key;
+        else this.paidTokenPreset = key;
+    }
+
+    _tokenPresetHint(context, key, preset) {
+        const short = (addr) => `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+        if (context === 'gate') {
+            if (key === 'pol') return "Gates on the member's native POL balance.";
+            if (!preset) return 'ERC-20 contract on Polygon.';
+            return `${preset.label} on Polygon · ${short(preset.address)}`;
+        }
+        if (key === 'pol') return 'Priced in Wrapped POL (WPOL) — subscribers paying with plain POL have it wrapped automatically.';
+        if (!preset) return 'ERC-20 token subscribers pay with, on Polygon.';
+        return `Subscribers pay in ${preset.label} · ${short(preset.address)}`;
     }
 
     /**
@@ -488,26 +593,213 @@ class ChannelModalsUI {
         // Clear pending state
         this._pendingJoinChannelInfo = null;
         
+        // Use actual channel type from Graph, or 'gated' if unknown
+        const channelType = channelInfo?.type || 'gated';
+
+        const attempt = async () => {
+            try {
+                this.notificationUI?.showLoadingToast('Joining channel...', 'This may take a moment');
+                await this.channelManager.joinChannel(streamId, null, {
+                    name: localName,
+                    type: channelType,
+                    classification: classification,  // Always save classification for local organization
+                    readOnly: channelInfo?.readOnly || false,
+                    createdBy: channelInfo?.createdBy
+                });
+                this.deps.renderChannelList?.();
+                this.showNotification('Joined channel successfully!', 'success');
+            } finally {
+                this.notificationUI?.hideLoadingToast();
+            }
+        };
+
         try {
-            this.notificationUI?.showLoadingToast('Joining channel...', 'This may take a moment');
-            
-            // Use actual channel type from Graph, or 'native' if unknown
-            const channelType = channelInfo?.type || 'gated';
-            
-            await this.channelManager.joinChannel(streamId, null, {
-                name: localName,
-                type: channelType,
-                classification: classification,  // Always save classification for local organization
-                readOnly: channelInfo?.readOnly || false,
-                createdBy: channelInfo?.createdBy
-            });
-            
-            this.deps.renderChannelList?.();
-            this.showNotification('Joined channel successfully!', 'success');
+            await attempt();
         } catch (error) {
-            this.showNotification('Failed to join: ' + error.message, 'error');
-        } finally {
-            this.notificationUI?.hideLoadingToast();
+            if (error.code === 'GATE_ACCESS_DENIED') {
+                this.showGateEntryModal({
+                    streamId,
+                    gateAddress: error.gateAddress,
+                    name: localName,
+                    retry: attempt
+                });
+            } else {
+                this.showNotification('Failed to join: ' + error.message, 'error');
+            }
+        }
+    }
+
+    /**
+     * Entry screen for a gated channel the user cannot enter yet (N-D, §7.14):
+     * reads the gate mode on-chain and shows the requirement, the user's
+     * standing, and the pay()/join() actions. `retry` re-runs the join that
+     * was denied with GATE_ACCESS_DENIED.
+     */
+    async showGateEntryModal({ streamId, gateAddress, name = null, retry = null }) {
+        this._gateEntry = { streamId, gateAddress, name, retry };
+        this.deps.modalManager?.show('gate-entry-modal');
+
+        const titleEl = document.getElementById('gate-entry-title');
+        const subtitleEl = document.getElementById('gate-entry-subtitle');
+        if (titleEl) titleEl.textContent = name ? `Join ${name}` : 'Join Gated Channel';
+        if (subtitleEl) subtitleEl.textContent = streamId;
+
+        const cancelBtn = document.getElementById('gate-entry-cancel-btn');
+        if (cancelBtn) cancelBtn.onclick = () => this.hideGateEntryModal();
+
+        await this._renderGateEntry();
+    }
+
+    hideGateEntryModal() {
+        this._gateEntry = null;
+        this.deps.modalManager?.hide('gate-entry-modal');
+    }
+
+    async _renderGateEntry() {
+        const entry = this._gateEntry;
+        if (!entry) return;
+        const conditionEl = document.getElementById('gate-entry-condition');
+        const statusBox = document.getElementById('gate-entry-status-box');
+        const statusEl = document.getElementById('gate-entry-status');
+        const noteEl = document.getElementById('gate-entry-note');
+        const actionBtn = document.getElementById('gate-entry-action-btn');
+        const recheckBtn = document.getElementById('gate-entry-recheck-btn');
+        const joinBtn = document.getElementById('gate-entry-join-btn');
+
+        if (conditionEl) conditionEl.textContent = 'Loading…';
+        statusBox?.classList.add('hidden');
+        noteEl?.classList.add('hidden');
+        actionBtn?.classList.add('hidden');
+        recheckBtn?.classList.add('hidden');
+        joinBtn?.classList.add('hidden');
+
+        const fmt = (value, decimals) => {
+            const s = ethers.formatUnits(value, decimals ?? 0);
+            return s.endsWith('.0') ? s.slice(0, -2) : s;
+        };
+        const finishJoin = async (gateManager) => {
+            // The denial that opened this modal is still cached fail-closed
+            gateManager.invalidateAccess(entry.gateAddress, authManager.getAddress());
+            this.hideGateEntryModal();
+            try {
+                await entry.retry?.();
+            } catch (error) {
+                this.showNotification('Failed to join: ' + error.message, 'error');
+            }
+        };
+
+        try {
+            const { gateManager, GATE_MODE } = await import('../gate.js');
+            const me = authManager.getAddress();
+            const info = await gateManager.getGateInfo(entry.gateAddress);
+
+            if (recheckBtn) {
+                recheckBtn.classList.remove('hidden');
+                recheckBtn.onclick = () => {
+                    gateManager.invalidateAccess(entry.gateAddress, me);
+                    this._renderGateEntry();
+                };
+            }
+
+            if (info.mode === GATE_MODE.NONE) {
+                if (conditionEl) conditionEl.textContent =
+                    'This is a closed channel — members are added by the owner. Ask the owner to add your address, then check again.';
+                return;
+            }
+
+            const meta = await gateManager.getTokenMeta(info.token);
+
+            if (info.mode === GATE_MODE.PAID) {
+                const days = Number(info.duration) / 86400;
+                const daysLabel = Number.isInteger(days) ? days : days.toFixed(1);
+                if (conditionEl) conditionEl.textContent =
+                    `${fmt(info.price, meta.decimals)} ${meta.symbol} for ${daysLabel} days. Renewing extends from the current end.`;
+                const until = me ? await gateManager.paidUntil(entry.gateAddress, me) : 0n;
+                const active = until * 1000n > BigInt(Date.now());
+                statusBox?.classList.remove('hidden');
+                if (statusEl) {
+                    statusEl.textContent = active
+                        ? `Subscribed until ${new Date(Number(until) * 1000).toLocaleString()}`
+                        : 'No active subscription';
+                }
+                if (!active && meta.symbol === 'WPOL' && noteEl) {
+                    noteEl.classList.remove('hidden');
+                    noteEl.textContent = 'Plain POL works — it is wrapped automatically when you pay.';
+                }
+                if (actionBtn) {
+                    actionBtn.classList.remove('hidden');
+                    if (active) {
+                        actionBtn.textContent = 'Enter Channel';
+                        actionBtn.onclick = () => finishJoin(gateManager);
+                    } else {
+                        actionBtn.textContent = `Pay ${fmt(info.price, meta.decimals)} ${meta.symbol}`;
+                        actionBtn.onclick = async () => {
+                            actionBtn.disabled = true;
+                            try {
+                                this.notificationUI?.showLoadingToast('Paying subscription...', 'Confirm may take a moment');
+                                await gateManager.pay(entry.gateAddress, (step) => {
+                                    this.notificationUI?.showLoadingToast(
+                                        step === 'wrap' ? 'Wrapping POL...'
+                                            : step === 'approve' ? 'Approving token...'
+                                                : 'Paying subscription...',
+                                        'Waiting for the transaction'
+                                    );
+                                });
+                                this.notificationUI?.hideLoadingToast();
+                                await finishJoin(gateManager);
+                            } catch (error) {
+                                this.notificationUI?.hideLoadingToast();
+                                this.showNotification('Payment failed: ' + error.message, 'error');
+                                actionBtn.disabled = false;
+                            }
+                        };
+                    }
+                }
+                return;
+            }
+
+            // TOKEN_BALANCE / NFT_OWNERSHIP
+            const isNft = info.mode === GATE_MODE.NFT_OWNERSHIP;
+            if (conditionEl) {
+                conditionEl.textContent = isNft
+                    ? `Hold a ${meta.symbol} NFT.`
+                    : `Hold at least ${fmt(info.minBalance, meta.decimals)} ${meta.symbol}.`;
+            }
+            const balance = me ? await gateManager.getTokenBalance(info.token, me) : 0n;
+            const holds = isNft ? balance > 0n : balance >= info.minBalance;
+            statusBox?.classList.remove('hidden');
+            if (statusEl) {
+                statusEl.textContent = isNft
+                    ? (holds ? `You hold ${balance} — access granted` : 'You hold none — acquire one to enter')
+                    : `Your balance: ${fmt(balance, meta.decimals)} ${meta.symbol}${holds ? ' — access granted' : ''}`;
+            }
+            if (holds && actionBtn) {
+                actionBtn.classList.remove('hidden');
+                actionBtn.textContent = 'Enter Channel';
+                actionBtn.onclick = () => finishJoin(gateManager);
+            }
+            if (holds && joinBtn && noteEl) {
+                noteEl.classList.remove('hidden');
+                noteEl.textContent =
+                    'Optional: registering membership keeps your messages valid even after you sell the asset.';
+                joinBtn.classList.remove('hidden');
+                joinBtn.onclick = async () => {
+                    joinBtn.disabled = true;
+                    try {
+                        this.notificationUI?.showLoadingToast('Registering membership...', 'Waiting for the transaction');
+                        await gateManager.join(entry.gateAddress);
+                        this.notificationUI?.hideLoadingToast();
+                        this.showNotification('Membership registered on-chain', 'success');
+                        joinBtn.classList.add('hidden');
+                    } catch (error) {
+                        this.notificationUI?.hideLoadingToast();
+                        this.showNotification('Registration failed: ' + error.message, 'error');
+                        joinBtn.disabled = false;
+                    }
+                };
+            }
+        } catch (error) {
+            if (conditionEl) conditionEl.textContent = 'Could not read the gate contract: ' + error.message;
         }
     }
 
@@ -521,13 +813,25 @@ class ChannelModalsUI {
         const password = this.elements.channelPasswordInput?.value;
         const membersText = this.elements.channelMembersInput?.value;
 
-        // Closed channels are gate-backed (N-C, Q7): membership lives in a
-        // per-channel PomboGate clone (mode NONE). Legacy 'native' channels
-        // keep working but can no longer be created.
+        // Every non-public tab is gate-backed (N-C, Q7): membership lives in a
+        // per-channel PomboGate clone and the tab only picks the mode — Closed
+        // is NONE (owner allowlist), Gated is TOKEN/NFT holding, Paid is a
+        // subscription (N-D). Legacy 'native' channels keep working but can no
+        // longer be created.
+        const { gateManager, GATE_MODE } = await import('../gate.js');
+        let gateMode = null;
         if (type === 'native') {
             type = 'gated';
+            gateMode = GATE_MODE.NONE;
+        } else if (type === 'gated') {
+            gateMode = this.currentGateAsset === 'nft'
+                ? GATE_MODE.NFT_OWNERSHIP : GATE_MODE.TOKEN_BALANCE;
+        } else if (type === 'paid') {
+            type = 'gated';
+            gateMode = GATE_MODE.PAID;
         }
-        const isClosed = type === 'gated';
+        const isGated = gateMode !== null;
+        const isClosed = gateMode === GATE_MODE.NONE;
 
         // Exposure and metadata (for visible channels)
         const exposure = isClosed ? 'hidden' : (this.currentExposure || 'hidden');
@@ -571,6 +875,67 @@ class ChannelModalsUI {
             return;
         }
 
+        // Gate parameters — validated up front against PomboGate.initialize's
+        // per-mode rules: a bad combination would only revert (InvalidParams)
+        // after the wallet already paid for the gate deploy attempt.
+        const gateOptions = isGated ? { gateMode } : {};
+        if (isGated && !isClosed) {
+            const tokenInputId = gateMode === GATE_MODE.PAID ? 'paid-token-input' : 'gate-token-input';
+            const token = (document.getElementById(tokenInputId)?.value || '').trim();
+            if (!/^0x[a-fA-F0-9]{40}$/.test(token)) {
+                this.showNotification('Enter a valid token contract address (0x…)', 'warning');
+                return;
+            }
+            let meta;
+            try {
+                [meta] = await Promise.all([
+                    gateManager.getTokenMeta(token),
+                    // An address without a working balanceOf would create a
+                    // gate that fails checkAccess for everyone, forever.
+                    gateManager.getTokenBalance(token, authManager.getAddress())
+                ]);
+            } catch (error) {
+                this.showNotification('That address does not look like a token contract on Polygon', 'warning');
+                this.Logger?.warn('Gate token validation failed:', error);
+                return;
+            }
+            gateOptions.gateToken = token;
+
+            if (gateMode === GATE_MODE.TOKEN_BALANCE) {
+                const raw = (document.getElementById('gate-min-balance-input')?.value || '').trim();
+                let minBalance = 0n;
+                try {
+                    minBalance = ethers.parseUnits(raw, meta.decimals ?? 0);
+                } catch { /* leave 0n — rejected below */ }
+                if (minBalance <= 0n) {
+                    this.showNotification('Enter a minimum balance greater than zero', 'warning');
+                    return;
+                }
+                gateOptions.gateMinBalance = minBalance;
+            } else if (gateMode === GATE_MODE.PAID) {
+                if (meta.decimals === null) {
+                    this.showNotification('The payment token must be an ERC-20 contract', 'warning');
+                    return;
+                }
+                const rawPrice = (document.getElementById('paid-price-input')?.value || '').trim();
+                let price = 0n;
+                try {
+                    price = ethers.parseUnits(rawPrice, meta.decimals);
+                } catch { /* leave 0n — rejected below */ }
+                if (price <= 0n) {
+                    this.showNotification('Enter a price greater than zero', 'warning');
+                    return;
+                }
+                const days = parseInt(document.getElementById('paid-duration-input')?.value || '0', 10);
+                if (!Number.isFinite(days) || days < 1) {
+                    this.showNotification('Enter a subscription period of at least 1 day', 'warning');
+                    return;
+                }
+                gateOptions.gatePrice = price;
+                gateOptions.gateDuration = BigInt(days) * 86400n;
+            }
+        }
+
         const members = isClosed
             ? (membersText || '').split('\n').map(m => m.trim()).filter(m => m)
             : [];
@@ -584,7 +949,8 @@ class ChannelModalsUI {
             readOnly: this.currentReadOnly || false,
             storageProvider,
             customStorageAddress,
-            storageDays
+            storageDays,
+            ...gateOptions
         };
 
         this.Logger?.debug('Creating channel:', { name, type, password: password ? '***' : null, members, options });
@@ -601,8 +967,8 @@ class ChannelModalsUI {
                     GasEstimator.getBalance(address),
                     GasEstimator.estimateCosts()
                 ]);
-                const estimateWei = type === 'native' ? estimates.native : estimates.public;
-                const formattedEstimate = type === 'native' ? estimates.formatted.native : estimates.formatted.public;
+                const estimateWei = isGated ? estimates.native : estimates.public;
+                const formattedEstimate = isGated ? estimates.formatted.native : estimates.formatted.public;
                 const formattedBalance = GasEstimator.formatBalancePOL(balanceWei);
 
                 if (balanceWei === null) {
@@ -645,8 +1011,8 @@ class ChannelModalsUI {
             //   native adds the keys stream (-4): 4× create + 4× permissions + 3× addToStorageNode + 3× setStorageDayCount = 14
             // gated: gate deploy + 4× createStream + 4× setPermissions
             //        + 3× addToStorageNode + 3× setStorageDayCount = 15
-            const streamCount = isClosed ? 4 : 3;
-            const totalSteps = isClosed ? 15 : 10;
+            const streamCount = isGated ? 4 : 3;
+            const totalSteps = isGated ? 15 : 10;
             this.notificationUI?.showLoadingToast(
                 'Creating channel...',
                 'This may take a minute',

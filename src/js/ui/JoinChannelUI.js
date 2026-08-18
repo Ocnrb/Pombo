@@ -98,8 +98,10 @@ class JoinChannelUI {
             return;
         }
         
-        // For native/Closed channels, show the special modal to get name + classification
-        if (channelInfo?.type === 'native' || channelInfo?.type === 'gated') {
+        // Closed-style channels without an on-chain name need a local name +
+        // classification. A gated channel WITH an on-chain name (visible
+        // token/paid) joins like a public channel — the owner named it.
+        if ((channelInfo?.type === 'native' || channelInfo?.type === 'gated') && !channelInfo?.name) {
             channelModalsUI.showJoinClosedModal(streamId, channelInfo);
             return;
         }
@@ -126,11 +128,20 @@ class JoinChannelUI {
                 readOnly: channelInfo.readOnly || false,
                 createdBy: channelInfo.createdBy
             });
-            
+
             renderChannelList();
             showNotification('Joined channel successfully!', 'success');
         } catch (error) {
-            showNotification('Failed to join: ' + error.message, 'error');
+            if (error.code === 'GATE_ACCESS_DENIED') {
+                channelModalsUI.showGateEntryModal({
+                    streamId,
+                    gateAddress: error.gateAddress,
+                    name: channelInfo.name,
+                    retry: () => this.handleQuickJoin(showNotification, renderChannelList, streamId)
+                });
+            } else {
+                showNotification('Failed to join: ' + error.message, 'error');
+            }
         } finally {
             notificationUI.hideLoadingToast();
         }
@@ -157,7 +168,25 @@ class JoinChannelUI {
             renderChannelList();
             showNotification('Joined channel successfully!', 'success');
         } catch (error) {
-            showNotification('Failed to join: ' + error.message, 'error');
+            if (error.code === 'GATE_ACCESS_DENIED') {
+                this.hideJoinChannelModal();
+                channelModalsUI.showGateEntryModal({
+                    streamId,
+                    gateAddress: error.gateAddress,
+                    retry: async () => {
+                        try {
+                            notificationUI.showLoadingToast('Joining channel...', 'This may take a moment');
+                            await channelManager.joinChannel(streamId, password);
+                            renderChannelList();
+                            showNotification('Joined channel successfully!', 'success');
+                        } finally {
+                            notificationUI.hideLoadingToast();
+                        }
+                    }
+                });
+            } else {
+                showNotification('Failed to join: ' + error.message, 'error');
+            }
         } finally {
             notificationUI.hideLoadingToast();
         }
@@ -173,8 +202,10 @@ class JoinChannelUI {
      */
     async joinPublicChannel(streamId, channelInfo, showNotification, renderChannelList, selectChannel) {
         try {
-            // For native/Closed channels, show the special modal to get name + classification
-            if (channelInfo?.type === 'native' || channelInfo?.type === 'gated') {
+            // Closed-style channels without an on-chain name need a local name +
+            // classification. A gated channel WITH an on-chain name (visible
+            // token/paid) joins like a public channel — the owner named it.
+            if ((channelInfo?.type === 'native' || channelInfo?.type === 'gated') && !channelInfo?.name) {
                 channelModalsUI.showJoinClosedModal(streamId, channelInfo);
                 return;
             }
@@ -213,13 +244,22 @@ class JoinChannelUI {
             }
             
             renderChannelList();
-            
+
             // Automatically enter the channel after joining
             await selectChannel(streamId);
-            
+
             showNotification('Joined channel successfully!', 'success');
         } catch (error) {
-            showNotification('Failed to join: ' + error.message, 'error');
+            if (error.code === 'GATE_ACCESS_DENIED') {
+                channelModalsUI.showGateEntryModal({
+                    streamId,
+                    gateAddress: error.gateAddress,
+                    name: channelInfo?.name,
+                    retry: () => this.joinPublicChannel(streamId, channelInfo, showNotification, renderChannelList, selectChannel)
+                });
+            } else {
+                showNotification('Failed to join: ' + error.message, 'error');
+            }
         } finally {
             notificationUI.hideLoadingToast();
         }

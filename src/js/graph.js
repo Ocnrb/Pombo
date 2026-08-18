@@ -412,8 +412,8 @@ class GraphAPI {
     }
 
     /**
-     * Get public Pombo channels from The Graph
-     * Queries streams with Pombo metadata and public permissions
+     * Get discoverable (exposure: visible) Pombo channels from The Graph,
+     * whatever their access control — public, password or gated.
      * @param {Object} options - Query options
      * @param {number} options.first - Number of results (default: 50)
      * @param {number} options.skip - Offset for pagination (default: 0)
@@ -424,20 +424,25 @@ class GraphAPI {
         const cacheKey = `pombo_public:${first}:${skip}`;
 
         return this.getCached(cacheKey, async () => {
-            // Query streams that have public permissions AND contain "pombo" in metadata
-            // metadata_contains filters at the subgraph level, avoiding client-side loss
-            // when non-Pombo public streams outnumber Pombo ones in the first N results
+            // Filter by metadata, NOT by public permissions: gated channels
+            // grant every permission to their clone and none to the zero
+            // address, so a permission filter can never list them. The exact
+            // marker (`\"e\":\"visible\"`) cannot be expressed — graph-node
+            // feeds _contains to a LIKE where backslash escapes — so the
+            // subgraph narrows with two backslash-free substrings and the
+            // loop below applies the exact a/e checks. Hidden channels never
+            // carry "visible" anywhere (n/d/l/c are omitted when hidden).
             const query = `
                 query GetPublicPomboChannels {
                     streams(
-                        first: ${first}, 
-                        skip: ${skip}, 
-                        orderBy: updatedAt, 
+                        first: ${first},
+                        skip: ${skip},
+                        orderBy: updatedAt,
                         orderDirection: desc,
-                        where: { 
-                            permissions_: { userAddress: "0x0000000000000000000000000000000000000000" },
-                            metadata_contains: "pombo"
-                        },
+                        where: { and: [
+                            { metadata_contains: "pombo" },
+                            { metadata_contains: "visible" }
+                        ] },
                         subgraphError: allow
                     ) {
                         id

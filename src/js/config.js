@@ -130,7 +130,25 @@ export const CONFIG = {
         checkAccessCacheMs: 10 * 60 * 1000,
         // Live messages may use the previous epoch's kid for this long after
         // a rotation (the "short tolerance" of the kid freshness rule)
-        kidFreshnessToleranceMs: 10 * 60 * 1000
+        kidFreshnessToleranceMs: 10 * 60 * 1000,
+        // Quick-pick tokens for the create modal (N-D), Polygon PoS mainnet.
+        // POL diverges by context: 0x…1010 is Polygon's system contract for
+        // the NATIVE coin — its balanceOf mirrors the native balance, so
+        // balance gates work, but it has no usable transferFrom, so pay()
+        // would always revert — hence WPOL on the paid side. Payers holding
+        // only plain POL are covered: pay() auto-wraps the shortfall.
+        tokenPresets: {
+            gate: {
+                pol: { label: 'POL', address: '0x0000000000000000000000000000000000001010' },
+                usdc: { label: 'USDC', address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359' },
+                data: { label: 'DATA', address: '0x3a9A81d576d83FF21f26f325066054540720fC34' }
+            },
+            pay: {
+                pol: { label: 'POL (wrapped)', address: '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270' },
+                usdc: { label: 'USDC', address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359' },
+                data: { label: 'DATA', address: '0x3a9A81d576d83FF21f26f325066054540720fC34' }
+            }
+        }
     },
 
     // DM Configuration

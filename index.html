@@ -610,19 +610,13 @@
                             <svg class="w-4 h-4" viewBox="0 0 320 512" fill="currentColor"><path d="M311.9 260.8L160 353.6 8 260.8 160 0l151.9 260.8zM160 383.4L8 290.6 160 512l152-221.4-152 92.8z"/></svg>
                             <span>Closed</span>
                         </button>
-                        <button type="button" disabled class="w-full flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-lg text-sm text-left text-white/25 cursor-not-allowed">
-                            <span class="flex items-center gap-2.5">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z"/></svg>
-                                <span>Gated</span>
-                            </span>
-                            <span class="text-[9px] bg-white/10 text-white/40 px-1.5 py-0.5 rounded uppercase tracking-wider">Soon</span>
+                        <button type="button" data-tab="gated" class="channel-tab w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm text-left transition-all text-white/60 hover:text-white/90 hover:bg-white/5">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z"/></svg>
+                            <span>Gated</span>
                         </button>
-                        <button type="button" disabled class="w-full flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-lg text-sm text-left text-white/25 cursor-not-allowed">
-                            <span class="flex items-center gap-2.5">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                <span>Paid</span>
-                            </span>
-                            <span class="text-[9px] bg-white/10 text-white/40 px-1.5 py-0.5 rounded uppercase tracking-wider">Soon</span>
+                        <button type="button" data-tab="paid" class="channel-tab w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm text-left transition-all text-white/60 hover:text-white/90 hover:bg-white/5">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            <span>Paid</span>
                         </button>
                     </nav>
 
@@ -631,16 +625,16 @@
                 <!-- Content Panel -->
                 <div class="flex-1 p-5 overflow-y-auto">
                     <div class="space-y-5">
+                        <!-- One wrapper for every tab content: the panel's
+                             space-y margins land on later siblings even when
+                             hidden, pushing every tab but the first down -->
+                        <div>
                         <!-- Tab Content: Public -->
                         <div id="tab-public" class="channel-tab-content space-y-4">
                             <div class="p-4 bg-white/5 rounded-xl border border-white/5">
-                                <p class="text-sm text-white/50 leading-relaxed mb-2">
+                                <p class="text-sm text-white/50 leading-relaxed">
                                     Open channel that anyone can discover and join. Messages are visible to all participants.
                                 </p>
-                                <button type="button" class="channel-info-help-btn inline-flex items-center gap-1 text-xs text-white/40 hover:text-white/60 transition">
-                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z"/></svg>
-                                    <span>Learn more</span>
-                                </button>
                             </div>
                             <input type="hidden" name="channel-type" value="public" class="channel-type-input">
                         </div>
@@ -648,13 +642,9 @@
                         <!-- Tab Content: Password (description only) -->
                         <div id="tab-password" class="channel-tab-content hidden space-y-4">
                             <div class="p-4 bg-white/5 rounded-xl border border-white/5">
-                                <p class="text-sm text-white/50 leading-relaxed mb-2">
+                                <p class="text-sm text-white/50 leading-relaxed">
                                     Password protected channel. Only users with the correct password can join and read messages.
                                 </p>
-                                <button type="button" class="channel-info-help-btn inline-flex items-center gap-1 text-xs text-white/40 hover:text-white/60 transition">
-                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z"/></svg>
-                                    <span>Learn more</span>
-                                </button>
                             </div>
                             <input type="hidden" name="channel-type" value="password" class="channel-type-input">
                         </div>
@@ -662,18 +652,32 @@
                         <!-- Tab Content: Native (Closed) (description only) -->
                         <div id="tab-native" class="channel-tab-content hidden space-y-4">
                             <div class="p-4 bg-white/5 rounded-xl border border-white/5">
-                                <div class="flex items-center gap-2 mb-2">
-                                    <span class="text-[10px] bg-white/10 text-white/60 px-1.5 py-0.5 rounded uppercase tracking-wider">Most Secure</span>
-                                </div>
-                                <p class="text-sm text-white/50 leading-relaxed mb-2">
+                                <p class="text-sm text-white/50 leading-relaxed">
                                     Private channel with on-chain verified membership. Each member is authorized by account address.
                                 </p>
-                                <button type="button" class="channel-info-help-btn inline-flex items-center gap-1 text-xs text-white/40 hover:text-white/60 transition">
-                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z"/></svg>
-                                    <span>Learn more</span>
-                                </button>
                             </div>
                             <input type="hidden" name="channel-type" value="native" class="channel-type-input">
+                        </div>
+
+                        <!-- Tab Content: Gated (token/NFT holding) -->
+                        <div id="tab-gated" class="channel-tab-content hidden space-y-4">
+                            <div class="p-4 bg-white/5 rounded-xl border border-white/5">
+                                <p class="text-sm text-white/50 leading-relaxed">
+                                    Access follows an on-chain asset: anyone holding the token or NFT can join, read and write. Selling the asset cuts new access; messages already published stay.
+                                </p>
+                            </div>
+                            <input type="hidden" name="channel-type" value="gated" class="channel-type-input">
+                        </div>
+
+                        <!-- Tab Content: Paid (subscription) -->
+                        <div id="tab-paid" class="channel-tab-content hidden space-y-4">
+                            <div class="p-4 bg-white/5 rounded-xl border border-white/5">
+                                <p class="text-sm text-white/50 leading-relaxed">
+                                    Subscription channel: members pay a fixed price in an ERC-20 token for a period of access. Payments go directly to your wallet; renewing extends from the current end.
+                                </p>
+                            </div>
+                            <input type="hidden" name="channel-type" value="paid" class="channel-type-input">
+                        </div>
                         </div>
 
                         <!-- Channel Name (common for all tabs) -->
@@ -739,6 +743,108 @@
                                     </button>
                                 </div>
                                 <p class="text-xs text-white/30 mt-2">For organizing your channels locally.</p>
+                            </div>
+                        </div>
+
+                        <!-- Gated fields (shown only for Gated tab) -->
+                        <div id="gated-fields-section" class="hidden space-y-5">
+                            <div>
+                                <label class="block text-xs font-medium text-white/80 uppercase tracking-wider mb-2">Asset Type</label>
+                                <div class="flex gap-2">
+                                    <button type="button" data-gate-asset="token" class="gate-asset-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/10 text-white border border-white/10">
+                                        Token
+                                    </button>
+                                    <button type="button" data-gate-asset="nft" class="gate-asset-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 hover:bg-white/10 hover:text-white/70">
+                                        NFT
+                                    </button>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-white/80 uppercase tracking-wider mb-2">Token</label>
+                                <div id="gate-token-presets" class="flex gap-2">
+                                    <button type="button" data-token-preset="pol" class="gate-token-preset-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/10 text-white border border-white/10">
+                                        POL
+                                    </button>
+                                    <button type="button" data-token-preset="usdc" class="gate-token-preset-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 hover:bg-white/10 hover:text-white/70">
+                                        USDC
+                                    </button>
+                                    <button type="button" data-token-preset="data" class="gate-token-preset-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 hover:bg-white/10 hover:text-white/70">
+                                        DATA
+                                    </button>
+                                    <button type="button" data-token-preset="custom" class="gate-token-preset-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 hover:bg-white/10 hover:text-white/70">
+                                        Custom
+                                    </button>
+                                </div>
+                                <input
+                                    type="text"
+                                    id="gate-token-input"
+                                    placeholder="0x…"
+                                    spellcheck="false"
+                                    class="hidden w-full mt-2 bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition font-mono placeholder:text-white/20"
+                                />
+                                <p class="text-xs text-white/30 mt-2" id="gate-token-hint">Gates on the member's native POL balance.</p>
+                            </div>
+                            <div id="gate-min-balance-field">
+                                <label class="block text-xs font-medium text-white/80 uppercase tracking-wider mb-2">Minimum Balance</label>
+                                <input
+                                    type="text"
+                                    id="gate-min-balance-input"
+                                    placeholder="e.g. 100"
+                                    inputmode="decimal"
+                                    class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20"
+                                />
+                                <p class="text-xs text-white/30 mt-2">Balance a member must hold to read and write.</p>
+                            </div>
+                        </div>
+
+                        <!-- Paid fields (shown only for Paid tab) -->
+                        <div id="paid-fields-section" class="hidden space-y-5">
+                            <div>
+                                <label class="block text-xs font-medium text-white/80 uppercase tracking-wider mb-2">Payment Token</label>
+                                <div id="paid-token-presets" class="flex gap-2">
+                                    <button type="button" data-token-preset="pol" class="paid-token-preset-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 hover:bg-white/10 hover:text-white/70">
+                                        POL
+                                    </button>
+                                    <button type="button" data-token-preset="usdc" class="paid-token-preset-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/10 text-white border border-white/10">
+                                        USDC
+                                    </button>
+                                    <button type="button" data-token-preset="data" class="paid-token-preset-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 hover:bg-white/10 hover:text-white/70">
+                                        DATA
+                                    </button>
+                                    <button type="button" data-token-preset="custom" class="paid-token-preset-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 hover:bg-white/10 hover:text-white/70">
+                                        Custom
+                                    </button>
+                                </div>
+                                <input
+                                    type="text"
+                                    id="paid-token-input"
+                                    placeholder="0x… (e.g. USDC)"
+                                    spellcheck="false"
+                                    class="hidden w-full mt-2 bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition font-mono placeholder:text-white/20"
+                                />
+                                <p class="text-xs text-white/30 mt-2" id="paid-token-hint">Subscribers pay in USDC.</p>
+                            </div>
+                            <div class="flex gap-3">
+                                <div class="flex-1">
+                                    <label class="block text-xs font-medium text-white/80 uppercase tracking-wider mb-2">Price</label>
+                                    <input
+                                        type="text"
+                                        id="paid-price-input"
+                                        placeholder="e.g. 5"
+                                        inputmode="decimal"
+                                        class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20"
+                                    />
+                                </div>
+                                <div class="flex-1">
+                                    <label class="block text-xs font-medium text-white/80 uppercase tracking-wider mb-2">Period (days)</label>
+                                    <input
+                                        type="number"
+                                        id="paid-duration-input"
+                                        value="30"
+                                        min="1"
+                                        class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20"
+                                    />
+                                </div>
                             </div>
                         </div>
 
@@ -888,6 +994,8 @@
                     <span id="cost-public" class="text-white/80 font-medium channel-cost-display tooltip" data-tooltip="Gas: loading...">calculating...</span>
                     <span id="cost-password" class="text-white/80 font-medium channel-cost-display tooltip hidden" data-tooltip="Gas: loading...">calculating...</span>
                     <span id="cost-native" class="text-white/80 font-medium channel-cost-display tooltip hidden" data-tooltip="Gas: loading...">calculating...</span>
+                    <span id="cost-gated" class="text-white/80 font-medium channel-cost-display tooltip hidden" data-tooltip="Gas: loading...">calculating...</span>
+                    <span id="cost-paid" class="text-white/80 font-medium channel-cost-display tooltip hidden" data-tooltip="Gas: loading...">calculating...</span>
                 </div>
                 <div class="flex gap-3">
                     <button id="cancel-channel-btn-footer" class="hidden md:block px-5 py-2.5 rounded-xl text-sm font-medium text-white/60 hover:text-white/90 hover:bg-white/5 transition">
@@ -902,90 +1010,6 @@
     </div>
 
     <!-- Modal: Channel Types Info -->
-    <div id="channel-types-modal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-end md:items-center justify-center z-[60] md:p-4">
-        <div class="bg-[#111113] w-full h-full md:h-auto md:max-h-[70vh] md:w-[520px] md:max-w-[95vw] md:rounded-2xl shadow-2xl border-t md:border border-white/[0.06] overflow-hidden flex flex-col">
-            <!-- Header -->
-            <div class="flex items-center justify-between px-5 md:px-6 py-4 border-b border-white/5 flex-shrink-0">
-                <h3 class="text-base md:text-lg font-medium text-white/90">Channel Types</h3>
-                <button id="close-channel-types-btn" class="text-white/40 hover:text-white/80 transition p-1">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                    </svg>
-                </button>
-            </div>
-            
-            <!-- Content -->
-            <div class="p-5 md:p-6 space-y-4 md:space-y-5 overflow-y-auto flex-1 min-h-0">
-                <!-- Intro -->
-                <p class="text-sm text-white/50 leading-relaxed">
-                    Pombo offers three channel types, each with different privacy and access control mechanisms. All channels use verified ID and decentralized infrastructure.
-                </p>
-
-                <!-- Public -->
-                <div class="p-4 bg-white/5 rounded-xl border border-white/5">
-                    <div class="flex items-center gap-3 mb-3">
-                        <div class="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
-                            <svg class="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"/></svg>
-                        </div>
-                        <h4 class="text-sm font-medium text-white">Public</h4>
-                    </div>
-                    <p class="text-sm text-white/40 leading-relaxed">
-                        Open channels that anyone can discover and join. Perfect for communities, announcements, and public discussions. Everything is visible to all participants.
-                    </p>
-                    <div class="flex flex-wrap gap-2 md:gap-4 mt-3 pt-3 border-t border-white/5 text-xs text-white/30">
-                        <span>Open access</span>
-                        <span>Discoverable</span>
-                        <span>Community-friendly</span>
-                    </div>
-                </div>
-
-                <!-- Password -->
-                <div class="p-4 bg-white/5 rounded-xl border border-white/5">
-                    <div class="flex items-center gap-3 mb-3">
-                        <div class="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
-                            <svg class="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>
-                        </div>
-                        <h4 class="text-sm font-medium text-white">Password</h4>
-                    </div>
-                    <p class="text-sm text-white/40 leading-relaxed">
-                        Protected channels where messages are encrypted with a shared password. Only users who know the password can decrypt and read messages. Easy to share access with friends or team members.
-                    </p>
-                    <div class="flex flex-wrap gap-2 md:gap-4 mt-3 pt-3 border-t border-white/5 text-xs text-white/30">
-                        <span>Password-encrypted</span>
-                        <span>Easy sharing</span>
-                        <span>Private groups</span>
-                    </div>
-                </div>
-
-                <!-- Verified -->
-                <div class="p-4 bg-white/5 rounded-xl border border-white/5">
-                    <div class="flex items-center gap-3 mb-3">
-                        <div class="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
-                            <svg class="w-4 h-4 text-white/60" viewBox="0 0 320 512" fill="currentColor"><path d="M311.9 260.8L160 353.6 8 260.8 160 0l151.9 260.8zM160 383.4L8 290.6 160 512l152-221.4-152 92.8z"/></svg>
-                        </div>
-                        <h4 class="text-sm font-medium text-white">Verified</h4>
-                        <span class="text-[10px] bg-white/10 text-white/50 px-1.5 py-0.5 rounded uppercase tracking-wider">Most Secure</span>
-                    </div>
-                    <p class="text-sm text-white/40 leading-relaxed">
-                        Blockchain-verified membership using smart contracts. Access is controlled on-chain, and each member must be explicitly authorized by their wallet address. Ideal for high-security channels requiring cryptographic proof of membership.
-                    </p>
-                    <div class="flex flex-wrap gap-2 md:gap-4 mt-3 pt-3 border-t border-white/5 text-xs text-white/30">
-                        <span>On-chain access</span>
-                        <span>Wallet-verified</span>
-                        <span>Maximum security</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Footer -->
-            <div class="px-5 md:px-6 py-4 pb-safe border-t border-white/5 bg-[#0a0a0a] flex-shrink-0">
-                <button id="close-channel-types-btn-footer" class="w-full px-5 py-2.5 rounded-xl text-sm font-medium bg-white/10 text-white hover:bg-white/15 transition">
-                    Got it
-                </button>
-            </div>
-        </div>
-    </div>
-
     <!-- Modal: Storage Info -->
     <div id="storage-info-modal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-end md:items-center justify-center z-[60] md:p-4">
         <div class="bg-[#111113] w-full h-full md:h-auto md:w-[520px] md:max-w-[95vw] md:rounded-2xl shadow-2xl border-t md:border border-white/[0.06] overflow-hidden flex flex-col">
@@ -1387,6 +1411,41 @@
                 </button>
                 <button id="join-closed-btn" class="flex-1 bg-white hover:bg-[#f0f0f0] text-black text-sm font-medium px-3 py-2.5 rounded-xl transition">
                     Join
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Gate Entry (Gated/Paid channels — requirement, standing, pay/join) -->
+    <div id="gate-entry-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+        <div class="bg-[#111113] rounded-2xl p-5 w-[380px] max-w-full mx-4 border border-white/[0.06]">
+            <h3 id="gate-entry-title" class="text-base font-medium mb-1 text-white">Join Gated Channel</h3>
+            <p id="gate-entry-subtitle" class="text-xs text-white/40 mb-4 break-all"></p>
+
+            <div class="space-y-3">
+                <div class="bg-white/[0.05] rounded-xl p-3 border border-white/[0.08]">
+                    <p class="text-xs text-white/30 uppercase tracking-wide mb-1">Requirement</p>
+                    <p id="gate-entry-condition" class="text-sm text-white/80 leading-relaxed">Loading…</p>
+                </div>
+                <div id="gate-entry-status-box" class="bg-white/[0.05] rounded-xl p-3 border border-white/[0.08] hidden">
+                    <p class="text-xs text-white/30 uppercase tracking-wide mb-1">Your Status</p>
+                    <p id="gate-entry-status" class="text-sm text-white/80 leading-relaxed"></p>
+                </div>
+                <p id="gate-entry-note" class="text-xs text-white/30 hidden"></p>
+                <button id="gate-entry-join-btn" class="text-xs text-white/40 hover:text-white/70 underline hidden">
+                    Register membership on-chain (1 tx)
+                </button>
+            </div>
+
+            <div class="flex gap-2 mt-5">
+                <button id="gate-entry-cancel-btn" class="flex-1 bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] text-white/50 text-sm font-medium px-3 py-2.5 rounded-xl transition">
+                    Cancel
+                </button>
+                <button id="gate-entry-recheck-btn" class="flex-1 bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] text-white/70 text-sm font-medium px-3 py-2.5 rounded-xl transition hidden">
+                    Check Again
+                </button>
+                <button id="gate-entry-action-btn" class="flex-1 bg-white hover:bg-[#f0f0f0] text-black text-sm font-medium px-3 py-2.5 rounded-xl transition hidden">
+                    Enter
                 </button>
             </div>
         </div>

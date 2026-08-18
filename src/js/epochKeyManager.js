@@ -33,8 +33,10 @@
  *
  * Epoch keys are channel keys, not identities: they persist in secureStorage
  * (encrypted at rest, out of the service worker's reach) so a session restart
- * does not cost a request round-trip. History policy is D14: native channels
- * hand out ALL retained epochs (holding access IS the condition).
+ * does not cost a request round-trip. History policy is D14: all retained
+ * epochs are handed out (holding access IS the condition) — except PAID
+ * gates, which hand out only the current epoch: a subscription buys the
+ * future, never the channel's past.
  */
 
 import { Logger } from './logger.js';
@@ -45,7 +47,7 @@ import { cryptoManager } from './crypto.js';
 import { authManager } from './auth.js';
 import { CONFIG } from './config.js';
 import { KEYS_MSG_TYPE } from './streamConstants.js';
-import { gateManager } from './gate.js';
+import { gateManager, GATE_MODE } from './gate.js';
 
 /**
  * Channels running the epoch-key protocol: native (N-A) and gated (N-C).
@@ -66,8 +68,10 @@ const REQUEST_MIN_INTERVAL_MS = 60 * 1000;
 const REQUEST_RETRY_FAST_MS = 10 * 1000;
 const REQUEST_FAST_ATTEMPTS = 4;
 
-// How much -4 history to scan for announces on channel open. Rotations are
-// event-driven (ban/leave) in N-A, so even years of channel life fit here.
+// How much -4 history to scan for announces on channel open. Native rotations
+// are event-driven (ban/leave); gated channels add the weekly cadence (N-D) —
+// ~52 announces/year plus wraps, still inside this window for the storage
+// retention that actually bounds what a resend returns.
 const KEYS_HISTORY_COUNT = 1000;
 
 // N-B anti-stampede (§7.10): rank × this = how long an answerer waits before
@@ -85,6 +89,14 @@ const REQUEST_ANSWER_WINDOW_MS = 10 * 60 * 1000;
 
 // Observed-wrap suppression memory (requestId → Set(keyId)), bounded.
 const SEEN_WRAPS_MAX = 100;
+
+// N-D (§7.12): gated channels rotate on a cadence — selling the asset or a
+// lapsed subscription only cuts reads at the NEXT rotation, so without a
+// schedule the cut never lands. Weekly for every gate mode; native channels
+// stay event-driven only.
+const ROTATION_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+// Failed or not-yet-due scheduled rotations re-check on this fallback.
+const ROTATION_RETRY_MS = 60 * 60 * 1000;
 
 class EpochKeyManager {
     constructor() {
@@ -117,6 +129,11 @@ class EpochKeyManager {
                 // requestId → Set(keyId) of wraps OBSERVED (live or history) —
                 // the N-B suppression signal: stay silent for covered epochs
                 seenWraps: new Map(),
+                // Addresses seen authoring a KEY_REQUEST (live or -4 history).
+                // Every reader of a gated channel must request keys, so this
+                // enumerates members for TOKEN/NFT/PAID gates where join()/
+                // pay() bypasses the owner — the N-D no-indexer decision.
+                seenRequesters: new Set(),
                 loaded: false
             };
             this.state.set(messageStreamId, s);
@@ -207,6 +224,8 @@ class EpochKeyManager {
      * Drop a channel's runtime and persisted key state (on leave/delete).
      */
     async forgetChannel(messageStreamId) {
+        const s = this.state.get(messageStreamId);
+        if (s?.rotationTimer) clearTimeout(s.rotationTimer);
         this.state.delete(messageStreamId);
         this.listeners.delete(messageStreamId);
         await secureStorage.clearEpochKeys(messageStreamId);
@@ -214,6 +233,9 @@ class EpochKeyManager {
 
     /** Clear runtime state (logout). Persisted keys stay encrypted at rest. */
     clear() {
+        for (const s of this.state.values()) {
+            if (s.rotationTimer) clearTimeout(s.rotationTimer);
+        }
         this.state.clear();
         this.listeners.clear();
     }
@@ -276,6 +298,7 @@ class EpochKeyManager {
                 }
             } else if (data.t === KEYS_MSG_TYPE.KEY_REQUEST) {
                 storedRequests.push({ data, publisherId, timestamp });
+                this._recordRequester(s, publisherId);
             }
         }
         if (changed) await this._persist(channel.messageStreamId, s);
@@ -302,6 +325,7 @@ class EpochKeyManager {
         if (s.announces.size === 0) {
             if (this.isOwnAdmin(channel)) {
                 await this._bootstrapFirstEpoch(channel, s);
+                this._armScheduledRotation(channel, s);
             } else {
                 Logger.info('epochKeys: no announce yet on', channel.keysStreamId.slice(-30),
                     '— waiting for the admin');
@@ -311,6 +335,7 @@ class EpochKeyManager {
 
         if (this.isOwnAdmin(channel)) {
             await this._maybeReannounceAging(channel, s);
+            this._armScheduledRotation(channel, s);
         }
 
         if (this._missingEpochs(s).length > 0) {
@@ -350,6 +375,39 @@ class EpochKeyManager {
         s.announceFreshness.set(s.currentEpoch, Date.now());
         Logger.info(`epochKeys: re-announced epoch ${s.currentEpoch} (announce ${freshest ? 'nearing storage TTL' : 'missing from storage'}) on`,
             channel.keysStreamId.slice(-30));
+    }
+
+    /**
+     * Arm the weekly rotation timer (N-D, gated channels, admin-side). The
+     * timer checks the CURRENT epoch's age on fire — a manual rotation (ban)
+     * in between simply makes the check a no-op and the timer re-arm. If the
+     * admin is offline past the due time, the epoch lives longer and the next
+     * channel open rotates.
+     */
+    _armScheduledRotation(channel, s) {
+        if (!channel.gate?.address || s.rotationTimer) return;
+        const announce = s.announces.get(s.currentEpoch);
+        if (!announce?.validFrom) return;
+        const dueIn = Math.max(announce.validFrom + ROTATION_INTERVAL_MS - Date.now(), 0) + 1000;
+        s.rotationTimer = setTimeout(async () => {
+            s.rotationTimer = null;
+            if (!this.state.has(channel.messageStreamId)) return;    // left/deleted
+            try {
+                const current = s.announces.get(s.currentEpoch);
+                if (current?.validFrom
+                        && Date.now() - current.validFrom >= ROTATION_INTERVAL_MS
+                        && this.isOwnAdmin(channel)) {
+                    await this.rotateEpoch(channel);
+                }
+                this._armScheduledRotation(channel, s);
+            } catch (e) {
+                Logger.warn('epochKeys: scheduled rotation failed (retrying later):', e.message);
+                s.rotationTimer = setTimeout(() => {
+                    s.rotationTimer = null;
+                    this._armScheduledRotation(channel, s);
+                }, ROTATION_RETRY_MS);
+            }
+        }, Math.min(dueIn, ROTATION_INTERVAL_MS));
     }
 
     /** Epoch numbers announced but not adopted. */
@@ -425,8 +483,8 @@ class EpochKeyManager {
      * for members (D14) and unreadable epochs stay ciphertext for ex-members.
      */
     async rotateEpoch(channel) {
-        if (channel?.type !== 'native' || !channel.keysStreamId) {
-            throw new Error('rotateEpoch: not a native channel');
+        if (!usesEpochKeys(channel)) {
+            throw new Error('rotateEpoch: channel has no epoch-key protocol');
         }
         if (!this.isOwnAdmin(channel)) {
             throw new Error('rotateEpoch: only the channel admin can announce a new epoch');
@@ -545,6 +603,7 @@ class EpochKeyManager {
      * against the requester (envelope signer) just before wrapping.
      */
     async _handleRequest(channel, s, data, publisherId) {
+        this._recordRequester(s, publisherId);
         const myAddress = (authManager.getAddress() || '').toLowerCase();
         if ((publisherId || '').toLowerCase() === myAddress) return;      // our own request
         if (typeof data.pubkey !== 'string' || typeof data.requestId !== 'string') return;
@@ -583,9 +642,9 @@ class EpochKeyManager {
 
     /**
      * Answer with wraps for every epoch we hold that the requester asked for
-     * (D14 native policy: all retained epochs) MINUS the epochs an observed
-     * wrap already covers — the N-B suppression that turns thirty identical
-     * envelopes into one.
+     * (D14: all retained epochs; PAID gates only the current one) MINUS the
+     * epochs an observed wrap already covers — the N-B suppression that turns
+     * thirty identical envelopes into one.
      */
     async _answerRequest(channel, request) {
         const s = this.state.get(channel.messageStreamId);
@@ -606,12 +665,28 @@ class EpochKeyManager {
             }
         }
 
+        // D14: a PAID gate hands out ONLY the current epoch — the history
+        // scope of a subscription is the future. Fail-closed on an unreadable
+        // gate config: missing old epochs get re-requested and answered once
+        // the RPC heals, leaked ones cannot be taken back.
+        let currentEpochOnly = false;
+        if (channel.gate?.address) {
+            try {
+                const info = await gateManager.getGateInfo(channel.gate.address);
+                currentEpochOnly = info.mode === GATE_MODE.PAID;
+            } catch (e) {
+                Logger.warn('epochKeys: gate mode unreadable, answering current epoch only:', e.message);
+                currentEpochOnly = true;
+            }
+        }
+
         const covered = s.seenWraps.get(request.requestId) || new Set();
         const fromEpoch = Number.isInteger(request.fromEpoch) ? request.fromEpoch : 1;
 
         let sent = 0;
         for (const [keyId, entry] of s.epochs) {
             if (entry.epoch < fromEpoch || covered.has(keyId)) continue;
+            if (currentEpochOnly && entry.epoch !== s.currentEpoch) continue;
             try {
                 const tag = await epochKeyCrypto.computeWrapTag(request.pubkey, keyId);
                 const wrapped = await epochKeyCrypto.wrapEpochKey(entry.keyHex, request.pubkey);
@@ -632,6 +707,23 @@ class EpochKeyManager {
         if (sent > 0) {
             Logger.debug(`epochKeys: answered request ${request.requestId} with ${sent} wrap(s)`);
         }
+    }
+
+    _recordRequester(s, publisherId) {
+        const addr = (publisherId || '').toLowerCase();
+        if (!/^0x[0-9a-f]{40}$/.test(addr)) return;
+        if (s.seenRequesters.size >= 500 && !s.seenRequesters.has(addr)) return;
+        s.seenRequesters.add(addr);
+    }
+
+    /**
+     * Member candidates observed on -4 (KEY_REQUEST authors) — the candidate
+     * source for enumerating TOKEN/NFT/PAID gate members without an indexer.
+     * Misses whoever paid/joined but never opened the channel.
+     */
+    getSeenRequesters(messageStreamId) {
+        const s = this.state.get(messageStreamId);
+        return s ? Array.from(s.seenRequesters) : [];
     }
 
     _recordSeenWrap(s, requestId, keyId) {
@@ -765,7 +857,7 @@ class EpochKeyManager {
 
         import('./channels.js').then(({ channelManager }) => {
             const channel = channelManager.channels?.get(messageStreamId);
-            if (channel?.type === 'native') {
+            if (usesEpochKeys(channel)) {
                 this.ensureChannelKeys(channel).catch(e =>
                     Logger.warn('epochKeys: refresh after missing kid failed:', e.message));
             }

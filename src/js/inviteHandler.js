@@ -110,7 +110,17 @@ class InviteHandler {
             uiController.renderChannelList();
             uiController.showNotification('Joined channel successfully!', 'success');
         } catch (error) {
-            uiController.showNotification('Failed to join channel: ' + error.message, 'error');
+            if (error.code === 'GATE_ACCESS_DENIED') {
+                const { channelModalsUI } = await import('./ui/ChannelModalsUI.js');
+                channelModalsUI.showGateEntryModal({
+                    streamId: inviteData.streamId,
+                    gateAddress: error.gateAddress,
+                    name: inviteData.name,
+                    retry: () => this.joinChannelFromInvite(inviteData)
+                });
+            } else {
+                uiController.showNotification('Failed to join channel: ' + error.message, 'error');
+            }
         } finally {
             uiController.hideLoading();
         }
