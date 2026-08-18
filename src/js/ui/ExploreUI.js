@@ -15,10 +15,29 @@ import { getAvatarHtml } from './AvatarGenerator.js';
 import { formatPreviewLine } from './channelPreviewFormatter.js';
 import { identityManager } from '../identity.js';
 
-// Explore card access-info styling: right side of the card on desktop,
-// centered under the content on mobile (Tailwind scans these literals).
-const EXPLORE_ACCESS_D_CLS = 'explore-gate-access-d hidden md:inline-flex items-center self-center ml-2 px-2 py-1 rounded-md bg-white/5 text-white/60 text-[11px] font-medium whitespace-nowrap';
-const EXPLORE_ACCESS_M_CLS = 'explore-gate-access-m md:hidden mt-2.5 text-center text-[11px] font-medium text-white/60';
+// Explore card access-info styling: the 3-line pricing stack absolutely
+// centered in the card's right half on desktop (anchored to the CARD, not
+// the top row, so the vertical centering is true; a hairline divider gives
+// it price-column structure; pointer-events pass through to the card tap),
+// centered under the content on mobile. Tailwind scans these literals.
+const EXPLORE_ACCESS_D_CLS = 'explore-gate-access-d hidden md:flex absolute inset-y-3 left-1/2 right-10 items-center justify-center border-l border-white/[0.06] pointer-events-none';
+const EXPLORE_ACCESS_M_CLS = 'explore-gate-access-m md:hidden mt-2 flex justify-center';
+
+/**
+ * The 3-line access stack: VERB / VALUE / QUALIFIER. The verb carries the
+ * semantic split — Subscribe (recurring, accent-tinted) vs Hold (mere
+ * possession, neutral) — and 'in your wallet' says "you pay nothing".
+ */
+function gateAccessHtml(info) {
+    if (!info?.verb) return '';
+    const verbColor = info.mode === GATE_MODE.PAID ? 'text-[#F6851B]/70' : 'text-white/40';
+    return `
+        <div class="flex flex-col items-center leading-tight text-center">
+            <span class="text-[10px] uppercase tracking-[0.08em] font-medium ${verbColor}">${escapeHtml(info.verb)}</span>
+            <span class="text-[15px] font-semibold text-white/90 mt-0.5">${escapeHtml(info.value)}</span>
+            <span class="text-[11px] text-white/40 mt-0.5">${escapeHtml(info.qualifier)}</span>
+        </div>`;
+}
 
 class ExploreUI {
     constructor() {
@@ -26,8 +45,9 @@ class ExploreUI {
         this.browseTypeFilter = 'public';
         this.browseCategoryFilter = '';
         this.browseLanguageFilterValue = '';
-        // Access-type marker (N-D): '' = all, 'open' | 'gated' | 'paid'
-        this.browseAccessFilter = '';
+        // Access-type marker (N-D): 'open' | 'gated' | 'paid' ('' = all).
+        // Explore OPENS on Open — gate-backed storefronts are a tap away.
+        this.browseAccessFilter = 'open';
         // gate → { mode, label } | 'pending' — Explore card access info,
         // resolved once per gate (both reads cache in gateManager)
         this._gateCardInfo = new Map();
@@ -128,7 +148,7 @@ class ExploreUI {
                     <!-- Access-type markers (N-D): Open / Gated / Paid.
                          Toggles — none active shows every type. Gated vs
                          Paid is the on-chain gate MODE, resolved per card. -->
-                    <div class="flex items-center gap-1 text-sm" id="explore-access-markers">
+                    <div class="flex items-center justify-center gap-1 text-sm" id="explore-access-markers">
                         ${['open', 'gated', 'paid'].map((t, i) => `
                             ${i > 0 ? '<span class="text-white/15 px-1">|</span>' : ''}
                             <button type="button" data-access="${t}" class="explore-access-marker px-2 py-1 rounded-md transition text-white/50 hover:text-white/80">
@@ -209,6 +229,7 @@ class ExploreUI {
                 this.filterChannels(searchInput?.value || '');
             });
         });
+        this.updateAccessMarkers();   // paint the pre-selected Open
         
         // Category chips
         document.querySelectorAll('.explore-category-chip').forEach(chip => {
@@ -246,7 +267,7 @@ class ExploreUI {
         this.browseTypeFilter = 'public';
         this.browseCategoryFilter = '';
         this.browseLanguageFilterValue = '';
-        this.browseAccessFilter = '';
+        this.browseAccessFilter = 'open';
         this.updateAccessMarkers();
         
         // Sync language dropdown
@@ -291,6 +312,11 @@ class ExploreUI {
                 loadCurationManifest(),
             ]);
             this.cachedPublicChannels = applyCuration(channels, manifest);
+            // Resolve gate modes for the WHOLE list up front, not just the
+            // rendered subset — Explore opens on Open, so gated cards are
+            // filtered out before rendering and the per-render resolution
+            // never fires; tapping Paid then filtered against nothing.
+            this._resolveGateAccess(this.cachedPublicChannels);
             this.filterChannels('');
         } catch (error) {
             console.error('Failed to load explore channels:', error);
@@ -409,26 +435,31 @@ class ExploreUI {
             const categoryBadge = ch.category && ch.category !== 'general'
                 ? `<span class="px-1.5 py-1 bg-white/5 text-white/50 text-[11px] font-medium rounded">${escapeHtml(categoryNames[ch.category] || ch.category)}</span>`
                 : '';
-            // Access info (N-D): the gate condition on the card — right side
-            // on desktop, centered under the content on mobile. Rendered
-            // inline when the mode is cached, patched async otherwise.
+            // Access info (N-D): the 3-line stack — right half on desktop,
+            // centered under the content on mobile. Rendered inline when the
+            // mode is cached, patched async otherwise.
             const gateCached = ch.type === 'gated' && ch.gateAddress
                 ? this._gateCardInfo.get(ch.gateAddress) : null;
-            const accessLabel = (gateCached && gateCached !== 'pending' && gateCached.label) || '';
+            const accessHtml = gateCached && gateCached !== 'pending'
+                ? gateAccessHtml(gateCached) : '';
             const accessAttr = ch.type === 'gated' && ch.gateAddress
                 ? `data-gate-access="${escapeAttr(ch.gateAddress)}"` : '';
             const accessDesktop = accessAttr
-                ? `<span ${accessAttr} class="${accessLabel ? EXPLORE_ACCESS_D_CLS : 'explore-gate-access-d hidden'}">${escapeHtml(accessLabel)}</span>`
+                ? `<div ${accessAttr} class="${accessHtml ? EXPLORE_ACCESS_D_CLS : 'explore-gate-access-d hidden'}">${accessHtml}</div>`
                 : '';
             const accessMobile = accessAttr
-                ? `<div ${accessAttr} class="${accessLabel ? EXPLORE_ACCESS_M_CLS : 'explore-gate-access-m hidden'}">${escapeHtml(accessLabel)}</div>`
+                ? `<div ${accessAttr} class="${accessHtml ? EXPLORE_ACCESS_M_CLS : 'explore-gate-access-m hidden'}">${accessHtml}</div>`
                 : '';
             const languageBadge = ch.language
                 ? `<span class="px-1.5 py-1 bg-white/5 text-white/50 text-[11px] font-medium rounded">${escapeHtml(languageNames[ch.language] || ch.language.toUpperCase())}</span>`
                 : '';
+            // Every card caps description/preview at 55% on desktop (two
+            // lines max) — uniform layout, and gated cards never run under
+            // the absolutely-centered access text
+            const halfCap = ' md:max-w-[55%]';
             // Defense-in-depth: sanitize user-provided content before escaping
-            const description = ch.description 
-                ? `<p class="text-base text-white/40 mt-1 line-clamp-2">${escapeHtml(sanitizeText(ch.description))}</p>` 
+            const description = ch.description
+                ? `<p class="text-base text-white/40 mt-1 line-clamp-2${halfCap}">${escapeHtml(sanitizeText(ch.description))}</p>`
                 : '';
 
             // Latest message preview (sidebar/Explore share the same source).
@@ -440,14 +471,19 @@ class ExploreUI {
             // 3 lines mobile). Drop the explicit `truncate` class — the
             // CSS rule handles overflow with multi-line clamping.
             let previewLine;
-            if (previewEntry) {
-                previewLine = `<p class="channel-preview-line explore-preview-line mt-3 ml-3" data-channel-preview="${escapeAttr(ch.streamId)}">${formatPreviewLine(previewEntry)}</p>`;
+            if (ch.type === 'gated') {
+                // Gated: no card previews — members-only content, and the
+                // browser-wide preview cache would leak entries a member
+                // account decrypted to every other account on this device
+                previewLine = '';
+            } else if (previewEntry) {
+                previewLine = `<p class="channel-preview-line explore-preview-line mt-3 ml-3${halfCap}" data-channel-preview="${escapeAttr(ch.streamId)}">${formatPreviewLine(previewEntry)}</p>`;
             } else if (!this._explorePreviewResolved.has(ch.streamId)) {
-                previewLine = `<p class="channel-preview-line explore-preview-line mt-3 ml-3" data-channel-preview="${escapeAttr(ch.streamId)}"><span class="thumb-spinner inline-block align-middle" style="width:10px;height:10px"></span></p>`;
+                previewLine = `<p class="channel-preview-line explore-preview-line mt-3 ml-3${halfCap}" data-channel-preview="${escapeAttr(ch.streamId)}"><span class="thumb-spinner inline-block align-middle" style="width:10px;height:10px"></span></p>`;
             } else {
                 // Resolved without a usable entry → leave the slot empty
                 // (avoids a permanent dead spinner on dormant channels).
-                previewLine = `<p class="channel-preview-line explore-preview-line mt-3 ml-4" data-channel-preview="${escapeAttr(ch.streamId)}"></p>`;
+                previewLine = `<p class="channel-preview-line explore-preview-line mt-3 ml-4${halfCap}" data-channel-preview="${escapeAttr(ch.streamId)}"></p>`;
             }
 
             // Channel thumbnail: cached if available, else spinner placeholder
@@ -459,15 +495,15 @@ class ExploreUI {
             if (!this._exploreResolvedImages) this._exploreResolvedImages = new Set();
             let thumb;
             if (cachedImage?.dataUrl) {
-                thumb = `<img class="rounded-full object-cover flex-shrink-0" alt="" src="${escapeAttr(cachedImage.dataUrl)}" data-channel-thumb="${escapeAttr(adminStreamId)}" style="width:52px;height:52px" />`;
+                thumb = `<img class="rounded-full object-cover flex-shrink-0" alt="" src="${escapeAttr(cachedImage.dataUrl)}" data-channel-thumb="${escapeAttr(adminStreamId)}" style="width:56px;height:56px" />`;
             } else if (adminStreamId && !this._exploreResolvedImages.has(adminStreamId)) {
-                thumb = `<div class="rounded-full flex items-center justify-center flex-shrink-0 bg-white/[0.04]" data-channel-thumb="${escapeAttr(adminStreamId)}" style="width:52px;height:52px"><div class="thumb-spinner" style="width:20px;height:20px"></div></div>`;
+                thumb = `<div class="rounded-full flex items-center justify-center flex-shrink-0 bg-white/[0.04]" data-channel-thumb="${escapeAttr(adminStreamId)}" style="width:56px;height:56px"><div class="thumb-spinner" style="width:20px;height:20px"></div></div>`;
             } else {
-                thumb = `<div class="rounded-full overflow-hidden flex-shrink-0" data-channel-thumb="${escapeAttr(adminStreamId || '')}" style="width:52px;height:52px">${getAvatarHtml(ch.streamId, 52, 0.5, null)}</div>`;
+                thumb = `<div class="rounded-full overflow-hidden flex-shrink-0" data-channel-thumb="${escapeAttr(adminStreamId || '')}" style="width:56px;height:56px">${getAvatarHtml(ch.streamId, 56, 0.5, null)}</div>`;
             }
 
             return `
-            <div class="p-3.5 bg-white/[0.03] border border-white/[0.05] rounded-2xl hover:bg-white/[0.06] hover:border-white/[0.1] transition-all duration-200 cursor-pointer explore-channel-item group" data-stream-id="${escapeAttr(ch.streamId)}" data-type="${escapeAttr(ch.type || 'public')}">
+            <div class="relative p-3.5 md:w-[70%] md:mx-auto bg-white/[0.03] border border-white/[0.05] rounded-2xl hover:bg-white/[0.06] hover:border-white/[0.1] transition-all duration-200 cursor-pointer explore-channel-item group" data-stream-id="${escapeAttr(ch.streamId)}" data-type="${escapeAttr(ch.type || 'public')}">
                 <div class="flex items-start justify-between gap-3">
                     <div class="flex items-start gap-3 flex-1 min-w-0">
                         ${thumb}
@@ -485,11 +521,13 @@ class ExploreUI {
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
                     </svg>
                 </div>
-                <div class="flex items-center gap-1.5 mt-2.5">
-                    ${categoryBadge}
-                    ${languageBadge}
+                <div class="relative">
+                    ${accessMobile}
+                    <div class="flex items-center justify-end gap-1.5 mt-2.5${accessAttr ? ' absolute bottom-0 right-0 md:static' : ''}">
+                        ${categoryBadge}
+                        ${languageBadge}
+                    </div>
                 </div>
-                ${accessMobile}
             </div>
             `;
         }).join('');
@@ -510,7 +548,7 @@ class ExploreUI {
                     if (!entry?.dataUrl) return;
                     const slot = listEl.querySelector(`[data-channel-thumb="${CSS.escape(adminStreamId)}"]`);
                     if (slot && !(slot.tagName === 'IMG')) {
-                        slot.outerHTML = `<img class="rounded-full object-cover flex-shrink-0" alt="" src="${escapeAttr(entry.dataUrl)}" data-channel-thumb="${escapeAttr(adminStreamId)}" style="width:52px;height:52px" />`;
+                        slot.outerHTML = `<img class="rounded-full object-cover flex-shrink-0" alt="" src="${escapeAttr(entry.dataUrl)}" data-channel-thumb="${escapeAttr(adminStreamId)}" style="width:56px;height:56px" />`;
                     } else if (slot && slot.tagName === 'IMG') {
                         slot.src = entry.dataUrl;
                     }
@@ -522,7 +560,7 @@ class ExploreUI {
                     // swap to deterministic fallback avatar.
                     const slot = listEl.querySelector(`[data-channel-thumb="${CSS.escape(adminStreamId)}"]`);
                     if (slot && slot.tagName !== 'IMG' && !channelImageManager.getCached(adminStreamId)?.dataUrl) {
-                        slot.outerHTML = `<div class="rounded-full overflow-hidden flex-shrink-0" data-channel-thumb="${escapeAttr(adminStreamId)}" style="width:52px;height:52px">${getAvatarHtml(ch.streamId, 52, 0.5, null)}</div>`;
+                        slot.outerHTML = `<div class="rounded-full overflow-hidden flex-shrink-0" data-channel-thumb="${escapeAttr(adminStreamId)}" style="width:56px;height:56px">${getAvatarHtml(ch.streamId, 56, 0.5, null)}</div>`;
                     }
                 });
         }
@@ -541,6 +579,11 @@ class ExploreUI {
         if (!this._explorePreviewRefreshStarted) this._explorePreviewRefreshStarted = new Set();
         for (const ch of channels) {
             if (!ch.streamId) continue;
+            // Gated: no card previews (Android parity). The content is for
+            // members; and the preview cache is browser-wide, so an entry
+            // decrypted by a member ACCOUNT would leak to the other accounts
+            // on the same device.
+            if (ch.type === 'gated') continue;
             if (!this._explorePreviewSubs.has(ch.streamId)) {
                 const unsub = channelLatestMessageManager.subscribe(ch.streamId, (entry) => {
                     const slot = listEl.querySelector(`[data-channel-preview="${CSS.escape(ch.streamId)}"]`);
@@ -673,14 +716,15 @@ class ExploreUI {
     }
 
     _patchGateAccess(gateAddress, info) {
-        if (!info?.label) return;
+        const html = gateAccessHtml(info);
+        if (!html) return;
         const selector = `[data-gate-access="${CSS.escape(gateAddress)}"]`;
         document.querySelectorAll(`.explore-gate-access-d${selector}`).forEach(el => {
-            el.textContent = info.label;
+            el.innerHTML = html;
             el.className = EXPLORE_ACCESS_D_CLS;
         });
         document.querySelectorAll(`.explore-gate-access-m${selector}`).forEach(el => {
-            el.textContent = info.label;
+            el.innerHTML = html;
             el.className = EXPLORE_ACCESS_M_CLS;
         });
     }

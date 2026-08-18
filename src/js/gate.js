@@ -459,32 +459,46 @@ class GateManager {
     }
 
     /**
-     * Explore card access info (N-D): the gate mode plus the short human
-     * condition — TOKEN 'Hold N SYM' · NFT 'Hold SYM NFT' · PAID
-     * 'N SYM for D days' (POL for WPOL-priced gates). NONE never lists,
-     * so its label is null. Both reads cache.
-     * @returns {Promise<{mode: number, label: string|null}>}
+     * Explore card access info (N-D), as the 3-line pricing anatomy the
+     * cards render: VERB (Subscribe = recurring payment, Hold = mere
+     * possession — the semantic split users must get) / VALUE / QUALIFIER
+     * ('in your wallet' says "you pay nothing" without a help sentence).
+     * POL for WPOL-priced gates; NONE never lists (null parts). Both
+     * reads cache.
+     * @returns {Promise<{mode: number, verb: string|null, value: string|null, qualifier: string|null}>}
      */
     async gateCardInfo(gateAddress) {
         const info = await this.getGateInfo(gateAddress);
-        if (info.mode === GATE_MODE.NONE) return { mode: info.mode, label: null };
+        if (info.mode === GATE_MODE.NONE) {
+            return { mode: info.mode, verb: null, value: null, qualifier: null };
+        }
         const meta = await this.getTokenMeta(info.token);
         const fmt = (value) => {
             const s = ethers.formatUnits(value, meta.decimals ?? 0);
             return s.endsWith('.0') ? s.slice(0, -2) : s;
         };
         if (info.mode === GATE_MODE.TOKEN_BALANCE) {
-            return { mode: info.mode, label: `Hold ${fmt(info.minBalance)} ${meta.symbol}` };
+            return {
+                mode: info.mode, verb: 'Hold',
+                value: `${fmt(info.minBalance)} ${meta.symbol}`,
+                qualifier: 'in your wallet'
+            };
         }
         if (info.mode === GATE_MODE.NFT_OWNERSHIP) {
-            return { mode: info.mode, label: `Hold ${meta.symbol} NFT` };
+            return {
+                mode: info.mode, verb: 'Hold',
+                value: `${meta.symbol} NFT`,
+                qualifier: 'in your wallet'
+            };
         }
         const days = Number(info.duration) / 86400;
         const daysLabel = Number.isInteger(days) ? String(days) : days.toFixed(1);
         const paySymbol = info.token === WRAPPED_NATIVE ? 'POL' : meta.symbol;
         return {
-            mode: info.mode,
-            label: `${fmt(info.price)} ${paySymbol} for ${daysLabel} ${daysLabel === '1' ? 'day' : 'days'}`
+            mode: info.mode, verb: 'Subscribe',
+            value: `${fmt(info.price)} ${paySymbol}`,
+            // "per" spells out the recurrence under SUBSCRIBE
+            qualifier: daysLabel === '1' ? 'per day' : `per ${daysLabel} days`
         };
     }
 
