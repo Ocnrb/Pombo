@@ -459,6 +459,36 @@ class GateManager {
     }
 
     /**
+     * Explore card access info (N-D): the gate mode plus the short human
+     * condition — TOKEN 'Hold N SYM' · NFT 'Hold SYM NFT' · PAID
+     * 'N SYM for D days' (POL for WPOL-priced gates). NONE never lists,
+     * so its label is null. Both reads cache.
+     * @returns {Promise<{mode: number, label: string|null}>}
+     */
+    async gateCardInfo(gateAddress) {
+        const info = await this.getGateInfo(gateAddress);
+        if (info.mode === GATE_MODE.NONE) return { mode: info.mode, label: null };
+        const meta = await this.getTokenMeta(info.token);
+        const fmt = (value) => {
+            const s = ethers.formatUnits(value, meta.decimals ?? 0);
+            return s.endsWith('.0') ? s.slice(0, -2) : s;
+        };
+        if (info.mode === GATE_MODE.TOKEN_BALANCE) {
+            return { mode: info.mode, label: `Hold ${fmt(info.minBalance)} ${meta.symbol}` };
+        }
+        if (info.mode === GATE_MODE.NFT_OWNERSHIP) {
+            return { mode: info.mode, label: `Hold ${meta.symbol} NFT` };
+        }
+        const days = Number(info.duration) / 86400;
+        const daysLabel = Number.isInteger(days) ? String(days) : days.toFixed(1);
+        const paySymbol = info.token === WRAPPED_NATIVE ? 'POL' : meta.symbol;
+        return {
+            mode: info.mode,
+            label: `${fmt(info.price)} ${paySymbol} for ${daysLabel} ${daysLabel === '1' ? 'day' : 'days'}`
+        };
+    }
+
+    /**
      * Channel Details access line, by gate MODE (N-D): only Closed (NONE)
      * reads 'Verified Membership' — token/NFT show the condition, paid the
      * price/period, mirroring the Create modal's lineup. Both reads cache.

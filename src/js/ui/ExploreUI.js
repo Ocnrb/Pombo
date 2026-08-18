@@ -4,6 +4,7 @@
  */
 
 import { Logger } from '../logger.js';
+import { GATE_MODE } from '../gate.js';
 import { escapeHtml, escapeAttr } from './utils.js';
 import { sanitizeText } from './sanitizer.js';
 import { loadCurationManifest, applyCuration } from '../exploreCuration.js';
@@ -14,12 +15,22 @@ import { getAvatarHtml } from './AvatarGenerator.js';
 import { formatPreviewLine } from './channelPreviewFormatter.js';
 import { identityManager } from '../identity.js';
 
+// Explore card access-info styling: right side of the card on desktop,
+// centered under the content on mobile (Tailwind scans these literals).
+const EXPLORE_ACCESS_D_CLS = 'explore-gate-access-d hidden md:inline-flex items-center self-center ml-2 px-2 py-1 rounded-md bg-white/5 text-white/60 text-[11px] font-medium whitespace-nowrap';
+const EXPLORE_ACCESS_M_CLS = 'explore-gate-access-m md:hidden mt-2.5 text-center text-[11px] font-medium text-white/60';
+
 class ExploreUI {
     constructor() {
         // Filter state
         this.browseTypeFilter = 'public';
         this.browseCategoryFilter = '';
         this.browseLanguageFilterValue = '';
+        // Access-type marker (N-D): '' = all, 'open' | 'gated' | 'paid'
+        this.browseAccessFilter = '';
+        // gate → { mode, label } | 'pending' — Explore card access info,
+        // resolved once per gate (both reads cache in gateManager)
+        this._gateCardInfo = new Map();
         
         // Cached channels
         this.cachedPublicChannels = null;
@@ -114,6 +125,17 @@ class ExploreUI {
                         </select>
                     </div>
 
+                    <!-- Access-type markers (N-D): Open / Gated / Paid.
+                         Toggles — none active shows every type. Gated vs
+                         Paid is the on-chain gate MODE, resolved per card. -->
+                    <div class="flex items-center gap-1 text-sm" id="explore-access-markers">
+                        ${['open', 'gated', 'paid'].map((t, i) => `
+                            ${i > 0 ? '<span class="text-white/15 px-1">|</span>' : ''}
+                            <button type="button" data-access="${t}" class="explore-access-marker px-2 py-1 rounded-md transition text-white/50 hover:text-white/80">
+                                ${t[0].toUpperCase() + t.slice(1)}
+                            </button>`).join('')}
+                    </div>
+
                     <!-- Category Chips (collapsible) -->
                     <div class="explore-category-controls">
                         <div class="explore-category-rail" data-overflow="false" data-scroll-start="true" data-scroll-end="true">
@@ -165,9 +187,27 @@ class ExploreUI {
             if (!isActive) {
                 this.browseCategoryFilter = '';
                 this.updateCategoryChips();
+                // Password view and the access markers are disjoint universes
+                this.browseAccessFilter = '';
+                this.updateAccessMarkers();
             }
             this.updatePrivateChip();
             this.filterChannels(searchInput?.value || '');
+        });
+
+        // Access-type markers (Open / Gated / Paid) — exclusive toggles;
+        // tapping the active one clears it (every type shown again)
+        document.querySelectorAll('.explore-access-marker').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const next = this.browseAccessFilter === btn.dataset.access ? '' : btn.dataset.access;
+                this.browseAccessFilter = next;
+                if (next && this.browseTypeFilter === 'password') {
+                    this.browseTypeFilter = 'public';
+                    this.updatePrivateChip();
+                }
+                this.updateAccessMarkers();
+                this.filterChannels(searchInput?.value || '');
+            });
         });
         
         // Category chips
@@ -206,6 +246,8 @@ class ExploreUI {
         this.browseTypeFilter = 'public';
         this.browseCategoryFilter = '';
         this.browseLanguageFilterValue = '';
+        this.browseAccessFilter = '';
+        this.updateAccessMarkers();
         
         // Sync language dropdown
         const langDropdown = document.getElementById('explore-language-filter');
@@ -282,6 +324,19 @@ class ExploreUI {
         } else {
             filtered = filtered.filter(ch => ch.type !== 'password');
         }
+
+        // Access-type markers (N-D): Open = public; Gated vs Paid split by
+        // the on-chain gate MODE — an unresolved gate counts as Gated until
+        // its (cached) read lands and re-filters.
+        if (this.browseAccessFilter === 'open') {
+            filtered = filtered.filter(ch => ch.type === 'public');
+        } else if (this.browseAccessFilter === 'gated') {
+            filtered = filtered.filter(ch => ch.type === 'gated'
+                && this._gateCardInfo.get(ch.gateAddress)?.mode !== GATE_MODE.PAID);
+        } else if (this.browseAccessFilter === 'paid') {
+            filtered = filtered.filter(ch => ch.type === 'gated'
+                && this._gateCardInfo.get(ch.gateAddress)?.mode === GATE_MODE.PAID);
+        }
         
         // Apply category filter
         if (this.browseCategoryFilter) {
@@ -354,8 +409,19 @@ class ExploreUI {
             const categoryBadge = ch.category && ch.category !== 'general'
                 ? `<span class="px-1.5 py-1 bg-white/5 text-white/50 text-[11px] font-medium rounded">${escapeHtml(categoryNames[ch.category] || ch.category)}</span>`
                 : '';
-            const gatedBadge = ch.type === 'gated'
-                ? '<span class="px-1.5 py-1 bg-white/5 text-white/50 text-[11px] font-medium rounded">Gated</span>'
+            // Access info (N-D): the gate condition on the card — right side
+            // on desktop, centered under the content on mobile. Rendered
+            // inline when the mode is cached, patched async otherwise.
+            const gateCached = ch.type === 'gated' && ch.gateAddress
+                ? this._gateCardInfo.get(ch.gateAddress) : null;
+            const accessLabel = (gateCached && gateCached !== 'pending' && gateCached.label) || '';
+            const accessAttr = ch.type === 'gated' && ch.gateAddress
+                ? `data-gate-access="${escapeAttr(ch.gateAddress)}"` : '';
+            const accessDesktop = accessAttr
+                ? `<span ${accessAttr} class="${accessLabel ? EXPLORE_ACCESS_D_CLS : 'explore-gate-access-d hidden'}">${escapeHtml(accessLabel)}</span>`
+                : '';
+            const accessMobile = accessAttr
+                ? `<div ${accessAttr} class="${accessLabel ? EXPLORE_ACCESS_M_CLS : 'explore-gate-access-m hidden'}">${escapeHtml(accessLabel)}</div>`
                 : '';
             const languageBadge = ch.language
                 ? `<span class="px-1.5 py-1 bg-white/5 text-white/50 text-[11px] font-medium rounded">${escapeHtml(languageNames[ch.language] || ch.language.toUpperCase())}</span>`
@@ -414,18 +480,22 @@ class ExploreUI {
                             ${previewLine}
                         </div>
                     </div>
+                    ${accessDesktop}
                     <svg class="w-4 h-4 text-white/15 group-hover:text-white/30 flex-shrink-0 mt-0.5 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
                     </svg>
                 </div>
                 <div class="flex items-center gap-1.5 mt-2.5">
-                    ${gatedBadge}
                     ${categoryBadge}
                     ${languageBadge}
                 </div>
+                ${accessMobile}
             </div>
             `;
         }).join('');
+
+        // Resolve gate modes/labels for cards that missed the cache
+        this._resolveGateAccess(channels);
 
         // Lazy-fetch missing thumbnails (deduped by manager).
         // Public/password channels are publicly readable on -3, so this works
@@ -576,6 +646,57 @@ class ExploreUI {
                 }
             })
             ?.catch(() => {});
+    }
+
+    /**
+     * Resolve mode + access label for every gated card missing from the
+     * cache, patch the card slots when each read lands, and re-apply an
+     * active Gated/Paid marker (the split depends on the resolved mode).
+     */
+    _resolveGateAccess(channels) {
+        const pending = channels.filter(ch => ch.type === 'gated' && ch.gateAddress
+            && !this._gateCardInfo.has(ch.gateAddress));
+        for (const ch of pending) {
+            this._gateCardInfo.set(ch.gateAddress, 'pending');
+            import('../gate.js')
+                .then(({ gateManager }) => gateManager.gateCardInfo(ch.gateAddress))
+                .then((info) => {
+                    this._gateCardInfo.set(ch.gateAddress, info);
+                    this._patchGateAccess(ch.gateAddress, info);
+                    if (this.browseAccessFilter === 'gated' || this.browseAccessFilter === 'paid') {
+                        const searchInput = document.getElementById('explore-search-input');
+                        this.filterChannels(searchInput?.value || '');
+                    }
+                })
+                .catch(() => this._gateCardInfo.delete(ch.gateAddress));  // retried next render
+        }
+    }
+
+    _patchGateAccess(gateAddress, info) {
+        if (!info?.label) return;
+        const selector = `[data-gate-access="${CSS.escape(gateAddress)}"]`;
+        document.querySelectorAll(`.explore-gate-access-d${selector}`).forEach(el => {
+            el.textContent = info.label;
+            el.className = EXPLORE_ACCESS_D_CLS;
+        });
+        document.querySelectorAll(`.explore-gate-access-m${selector}`).forEach(el => {
+            el.textContent = info.label;
+            el.className = EXPLORE_ACCESS_M_CLS;
+        });
+    }
+
+    /**
+     * Update access markers UI state
+     */
+    updateAccessMarkers() {
+        document.querySelectorAll('.explore-access-marker').forEach(btn => {
+            const active = btn.dataset.access === this.browseAccessFilter;
+            btn.classList.toggle('bg-white', active);
+            btn.classList.toggle('text-black', active);
+            btn.classList.toggle('font-medium', active);
+            btn.classList.toggle('text-white/50', !active);
+            btn.classList.toggle('hover:text-white/80', !active);
+        });
     }
 
     /**
