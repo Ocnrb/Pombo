@@ -576,7 +576,21 @@ class ChatAreaUI {
                 !document.getElementById('dm-search-older-banner');
 
             if (isTerminalEmpty) {
-                this.messagesArea.innerHTML = `
+                // Epoch channels: an empty render while keys are missing means
+                // "cannot decrypt yet", not "nothing was said" — the refresh
+                // fired on key adoption re-renders and clears this state.
+                const waitingForKeys =
+                    (effectiveChannel?.type === 'native' || effectiveChannel?.type === 'gated') &&
+                    this.deps.epochKeyManager?.getWaitingInfo?.(effectiveChannel.messageStreamId)?.waiting;
+                this.messagesArea.innerHTML = waitingForKeys
+                    ? `
+                    <div class="flex flex-col items-center justify-center h-full text-white/40 gap-3">
+                        <div class="spinner" style="width: 24px; height: 24px;"></div>
+                        <span class="text-sm">Waiting for channel keys…</span>
+                        <span class="text-xs text-white/25">Another member needs to be online to share them</span>
+                    </div>
+                `
+                    : `
                     <div class="flex items-center justify-center h-full text-white/40">
                         No messages yet. Start the conversation!
                     </div>

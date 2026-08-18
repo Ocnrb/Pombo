@@ -508,7 +508,7 @@ class ExploreUI {
                 
                 // For password-protected and native (closed) channels: join directly (add to list)
                 // These require immediate commitment (password entry or permission check)
-                if (channelType === 'password' || channelType === 'native') {
+                if (channelType === 'password' || channelType === 'native' || channelType === 'gated') {
                     if (this.deps.joinPublicChannel) {
                         await this.deps.joinPublicChannel(streamId, channelInfo);
                     }

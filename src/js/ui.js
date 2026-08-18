@@ -4,6 +4,7 @@
  */
 
 import { channelManager } from './channels.js';
+import { epochKeyManager } from './epochKeyManager.js';
 import { authManager } from './auth.js';
 import { identityManager } from './identity.js';
 import { notificationManager } from './notifications.js';
@@ -469,6 +470,7 @@ class UIController {
         chatAreaUI.setDependencies({
             channelManager,
             authManager,
+            epochKeyManager,
             secureStorage,
             Logger,
             mediaController,

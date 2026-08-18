@@ -99,7 +99,7 @@ class JoinChannelUI {
         }
         
         // For native/Closed channels, show the special modal to get name + classification
-        if (channelInfo?.type === 'native') {
+        if (channelInfo?.type === 'native' || channelInfo?.type === 'gated') {
             channelModalsUI.showJoinClosedModal(streamId, channelInfo);
             return;
         }
@@ -174,7 +174,7 @@ class JoinChannelUI {
     async joinPublicChannel(streamId, channelInfo, showNotification, renderChannelList, selectChannel) {
         try {
             // For native/Closed channels, show the special modal to get name + classification
-            if (channelInfo?.type === 'native') {
+            if (channelInfo?.type === 'native' || channelInfo?.type === 'gated') {
                 channelModalsUI.showJoinClosedModal(streamId, channelInfo);
                 return;
             }

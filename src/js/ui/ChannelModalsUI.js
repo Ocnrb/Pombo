@@ -435,7 +435,7 @@ class ChannelModalsUI {
         // Update modal title based on channel type
         const modalTitle = document.querySelector('#join-closed-channel-modal h3');
         if (modalTitle) {
-            if (channelInfo?.type === 'native') {
+            if (channelInfo?.type === 'native' || channelInfo?.type === 'gated') {
                 modalTitle.textContent = 'Join Closed Channel';
             } else if (channelInfo) {
                 modalTitle.textContent = 'Name This Channel';
@@ -492,7 +492,7 @@ class ChannelModalsUI {
             this.notificationUI?.showLoadingToast('Joining channel...', 'This may take a moment');
             
             // Use actual channel type from Graph, or 'native' if unknown
-            const channelType = channelInfo?.type || 'native';
+            const channelType = channelInfo?.type || 'gated';
             
             await this.channelManager.joinChannel(streamId, null, {
                 name: localName,
@@ -521,12 +521,13 @@ class ChannelModalsUI {
         const password = this.elements.channelPasswordInput?.value;
         const membersText = this.elements.channelMembersInput?.value;
 
-        // Closed + "on-chain gate" toggle → gated channel (N-C): one PomboGate
-        // clone instead of per-member stream grants. Same form otherwise.
-        if (type === 'native' && document.getElementById('gated-channel-toggle')?.checked) {
+        // Closed channels are gate-backed (N-C, Q7): membership lives in a
+        // per-channel PomboGate clone (mode NONE). Legacy 'native' channels
+        // keep working but can no longer be created.
+        if (type === 'native') {
             type = 'gated';
         }
-        const isClosed = type === 'native' || type === 'gated';
+        const isClosed = type === 'gated';
 
         // Exposure and metadata (for visible channels)
         const exposure = isClosed ? 'hidden' : (this.currentExposure || 'hidden');
@@ -642,8 +643,10 @@ class ChannelModalsUI {
             // Total on-chain steps:
             //   public/password: 3× createStream + 3× setPermissions + 2× addToStorageNode + 2× setStorageDayCount = 10
             //   native adds the keys stream (-4): 4× create + 4× permissions + 3× addToStorageNode + 3× setStorageDayCount = 14
-            const streamCount = type === 'native' ? 4 : 3;
-            const totalSteps = type === 'native' ? 14 : 10;
+            // gated: gate deploy + 4× createStream + 4× setPermissions
+            //        + 3× addToStorageNode + 3× setStorageDayCount = 15
+            const streamCount = isClosed ? 4 : 3;
+            const totalSteps = isClosed ? 15 : 10;
             this.notificationUI?.showLoadingToast(
                 'Creating channel...',
                 'This may take a minute',
