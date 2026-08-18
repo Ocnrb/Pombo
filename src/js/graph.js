@@ -402,7 +402,10 @@ class GraphAPI {
                     exposure: pomboMetadata.e || 'hidden',
                     createdAt: pomboMetadata.ts || parseInt(stream.createdAt) * 1000,
                     updatedAt: parseInt(stream.updatedAt) * 1000,
-                    createdBy: stream.id.split('/')[0]
+                    createdBy: stream.id.split('/')[0],
+                    // Gated (N-D): the PomboGate clone — routes the Explore tap
+                    gateAddress: /^0x[0-9a-f]{40}$/.test(String(pomboMetadata.g || '').toLowerCase())
+                        ? String(pomboMetadata.g).toLowerCase() : null
                 };
             } catch (error) {
                 Logger.warn('Failed to get channel info:', error);
@@ -487,7 +490,10 @@ class GraphAPI {
                                 createdAt: pomboMetadata.ts || parseInt(stream.createdAt) * 1000,
                                 updatedAt: parseInt(stream.updatedAt) * 1000,
                                 // Owner is the first part of streamId (address/path format)
-                                createdBy: stream.id.split('/')[0]
+                                createdBy: stream.id.split('/')[0],
+                                // Gated (N-D): routes the Explore tap by mode
+                                gateAddress: /^0x[0-9a-f]{40}$/.test(String(pomboMetadata.g || '').toLowerCase())
+                                    ? String(pomboMetadata.g).toLowerCase() : null
                             });
                         }
                     } catch (parseError) {

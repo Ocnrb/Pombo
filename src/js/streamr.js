@@ -595,7 +595,15 @@ class StreamrController {
                 ]) {
                     if (!stream) continue;
                     try {
-                        await this.setStreamPermissions(stream.id, { public: false, members: gateMembers });
+                        // Visible gated channels are storefronts: -3 gains
+                        // public SUBSCRIBE so non-members (Explore) can read
+                        // the channel image. P0 (ADMIN_STATE) stays an epoch
+                        // envelope — the public only ever sees ciphertext.
+                        // Hidden channels keep the clone as the sole grantee.
+                        const perms = (stream === adminStream && exposure === 'visible')
+                            ? { public: true, publicPermissions: ['subscribe'], members: gateMembers }
+                            : { public: false, members: gateMembers };
+                        await this.setStreamPermissions(stream.id, perms);
                         Logger.info(`✓ ${label} stream: gate clone permissions set`);
                     } catch (e) {
                         Logger.error(`✗ ${label} stream permissions failed:`, e.message);
@@ -2007,7 +2015,12 @@ class StreamrController {
         try {
             const { channelManager } = await import('./channels.js');
             const base = String(streamId).replace(/-[1234]$/, '');
-            const channel = channelManager?.channels?.get(base + '-1');
+            const channel = channelManager?.channels?.get(base + '-1')
+                // Gated previews (Explore browse) live outside the map —
+                // without this fallback the preview's subscribes lose the
+                // erc1271 option and its ingest loses resolveAuthor.
+                ?? (channelManager?.previewChannel?.messageStreamId === base + '-1'
+                    ? channelManager.previewChannel : null);
             return channel?.gate?.address ? channel : null;
         } catch {
             return null;
@@ -2864,6 +2877,20 @@ class StreamrController {
             const { channelManager } = await import('./channels.js');
             const base = String(adminStreamId).replace(/-[1234]$/, '');
             const channel = channelManager.channels?.get(base + '-1');
+            // Visible channels are storefronts: the image IS the marketing and
+            // publishes in the CLEAR so non-members (Explore) can render it.
+            // Only the transport differs — gated still publishes as the clone.
+            // Hidden channels keep their image sealed (epoch/password).
+            if (channel?.exposure === 'visible') {
+                const clear = { ...payload, encrypted: false };
+                if (channel?.gate?.address) {
+                    return await this.publishAs(
+                        this._accountIdentity, adminStreamId,
+                        STREAM_CONFIG.ADMIN_STREAM.CHANNEL_IMAGE, clear,
+                        this._gateTransportOptions(channel));
+                }
+                return await this.publish(adminStreamId, STREAM_CONFIG.ADMIN_STREAM.CHANNEL_IMAGE, clear);
+            }
             if (channel?.type === 'native' || channel?.type === 'gated' || channel?.gate?.address) {
                 return await this.publishEpochEncrypted(
                     channel, adminStreamId, STREAM_CONFIG.ADMIN_STREAM.CHANNEL_IMAGE, payload);
@@ -2948,7 +2975,19 @@ class StreamrController {
                         const publisherId = await this.resolveAuthor(
                             adminStreamId, message, transportPublisher);
                         if (!publisherId) continue;
-                        if (!content.createdBy) content.createdBy = publisherId;
+                        // -3 authority for channels we have NOT joined
+                        // (Explore fetch of a visible gated storefront):
+                        // resolveAuthor passes the clone through when no
+                        // channel object exists, and the clone's grant is
+                        // every member's — the envelope signer must still be
+                        // the namespace owner or any member could plant an
+                        // image on the card.
+                        const owner = adminStreamId.split('/')[0].toLowerCase();
+                        if (publisherId.toLowerCase() !== owner) {
+                            const signer = recoverEnvelopeSigner(message);
+                            if ((signer || '').toLowerCase() !== owner) continue;
+                        }
+                        if (!content.createdBy) content.createdBy = owner;
                     }
 
                     latest = content;

@@ -5,6 +5,7 @@
 
 import { Logger } from '../logger.js';
 import { STREAM_CONFIG } from '../streamr.js';
+import { deriveKeysId } from '../streamConstants.js';
 import { mediaController } from '../media.js';
 import { secureStorage } from '../secureStorage.js';
 import { CONFIG } from '../config.js';
@@ -149,6 +150,17 @@ class PreviewModeUI {
                 if (gen !== this.previewGeneration) return;
             }
 
+            // Gated preview (N-D): a TOKEN/NFT holder browsing before
+            // committing needs the FULL gated context — the gate drives the
+            // erc1271 subscribe/transport and the -4 is where epoch keys
+            // come from. Without it the open dies on the SDK's subscribe guard.
+            const gatedPreview = channelInfo?.type === 'gated' && channelInfo?.gateAddress
+                ? {
+                    gate: { address: channelInfo.gateAddress },
+                    keysStreamId: deriveKeysId(streamId),
+                    members: []
+                } : null;
+
             // Store preview state
             this.previewChannel = {
                 streamId,
@@ -158,6 +170,7 @@ class PreviewModeUI {
                 name: this._getChannelDisplayName(streamId, channelInfo),
                 type: channelInfo?.type || 'public',
                 readOnly: channelInfo?.readOnly || false,
+                ...(gatedPreview || {}),
                 password: null, // Preview mode doesn't have password (public channels only)
                 // Admin/moderation layer (rebuilt on subscribe to -3/P0)
                 createdBy: channelInfo?.createdBy || streamId.split('/')[0] || null,
@@ -179,6 +192,31 @@ class PreviewModeUI {
             // the onHistoryComplete callback so a stale callback fired by
             // an old subscription cannot mutate a newer preview's state.
             const ownerChannel = this.previewChannel;
+
+            if (gatedPreview) {
+                // Shadow registration: _gatedChannelFor and the epoch refresh
+                // resolve channels through channelManager, and a preview lives
+                // outside the map — this is what lights the gated paths up.
+                channelManager.previewChannel = ownerChannel;
+                const { streamrController } = await import('../streamr.js');
+                const { epochKeyManager } = await import('../epochKeyManager.js');
+                await streamrController.subscribeToKeysStream(
+                    ownerChannel.keysStreamId,
+                    (data, publisherId, timestamp) =>
+                        epochKeyManager.handleKeysMessage(ownerChannel, data, publisherId, timestamp));
+                await epochKeyManager.ensureChannelKeys(ownerChannel);
+                if (gen !== this.previewGeneration) return;
+                // First visit: the wraps land AFTER the resend below (N-B
+                // rank delay) — re-enter once on adoption so history opens.
+                epochKeyManager.onKeyAdopted(streamId, () => {
+                    if (this.previewChannel !== ownerChannel) return;
+                    clearTimeout(this._previewKeyRefreshTimer);
+                    this._previewKeyRefreshTimer = setTimeout(() => {
+                        if (this.previewChannel !== ownerChannel) return;
+                        this.enterPreviewWithoutHistory(streamId, channelInfo).catch(() => {});
+                    }, 1500);
+                });
+            }
 
             // Subscribe to channel stream temporarily (without persisting)
             await subscriptionManager.setPreviewChannel(streamId, () => {
@@ -438,6 +476,8 @@ class PreviewModeUI {
                 name: name,
                 type: type,
                 readOnly: readOnly,
+                gateAddress: this.previewChannel.gate?.address
+                    || channelInfo?.gateAddress || null,
                 createdBy: channelInfo?.createdBy,
                 messages: messages || [],
                 reactions: reactionManager.exportAsObject(),
@@ -451,8 +491,14 @@ class PreviewModeUI {
                 pendingOverrides
             });
 
-            // Clear preview state
+            // Clear preview state. The gated shadow goes with it — the
+            // channel now lives in the real map, which every lookup prefers.
+            // The -4 subscription deliberately survives the promote.
             const previewStreamId = streamId;
+            if (channelManager.previewChannel === this.previewChannel) {
+                channelManager.previewChannel = null;
+            }
+            clearTimeout(this._previewKeyRefreshTimer);
             this.previewChannel = null;
 
             // Transfer subscription handlers from preview to channelManager
@@ -548,6 +594,19 @@ class PreviewModeUI {
 
             // Unsubscribe from preview channel
             await subscriptionManager.clearPreviewChannel();
+
+            // Gated preview: drop the -4 subscription and the shadow
+            // registration. The epoch keys themselves persist — they are
+            // the member's, and joining later reuses them.
+            if (this.previewChannel.keysStreamId) {
+                clearTimeout(this._previewKeyRefreshTimer);
+                const { streamrController } = await import('../streamr.js');
+                try { await streamrController.unsubscribe(this.previewChannel.keysStreamId); }
+                catch { /* not subscribed */ }
+            }
+            if (this.deps.channelManager.previewChannel === this.previewChannel) {
+                this.deps.channelManager.previewChannel = null;
+            }
 
             // Clear preview state
             this.previewChannel = null;

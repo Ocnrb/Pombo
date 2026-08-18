@@ -65,6 +65,7 @@ class ChannelSettingsUI {
 
         // Update channel info
         this.elements.channelSettingsType.innerHTML = this.deps.getChannelTypeLabel(currentChannel.type, effectiveReadOnly, true);
+        this._applyGateAccessLabel(currentChannel);
         this.elements.channelSettingsId.textContent = currentChannel.streamId;
 
         // Populate channel name (network name, local name, or display fallback)
@@ -1733,6 +1734,29 @@ class ChannelSettingsUI {
      */
     _hasPublicMetadata(channel) {
         return channel?.exposure === 'visible' || !!channel?.channelInfo?.name;
+    }
+
+    /**
+     * Access line by gate MODE (N-D): only Closed (NONE) keeps 'Verified
+     * Membership' — token/NFT show the condition, paid the price/period.
+     * Async on purpose: the sync type label stands until the (cached) chain
+     * reads answer, then only the label's text node is swapped.
+     */
+    async _applyGateAccessLabel(channel) {
+        const gate = channel?.gate?.address;
+        if (!gate || channel.type !== 'gated') return;
+        try {
+            const { gateManager } = await import('../gate.js');
+            const label = await gateManager.gateAccessLabel(gate);
+            const current = this.deps.channelManager?.getCurrentChannel?.();
+            if (current?.messageStreamId !== channel.messageStreamId) return;
+            const span = this.elements.channelSettingsType?.querySelector('span');
+            if (span && span.lastChild?.nodeType === Node.TEXT_NODE) {
+                span.lastChild.textContent = label;
+            }
+        } catch (e) {
+            Logger.debug('Gate access label failed (keeping default):', e?.message);
+        }
     }
 
     /**

@@ -31,6 +31,13 @@ class ChannelManager {
     constructor() {
         this.channels = new Map(); // streamId -> channel object
         this.currentChannel = null;
+        // Gated PREVIEW shadow (N-D): a token/NFT holder browsing from
+        // Explore. The preview lives outside `channels` on purpose (it must
+        // never persist or sync), but the gated paths — _gatedChannelFor,
+        // epoch refresh — resolve channels through this manager, so without
+        // the shadow a gated preview silently degrades to ungated handling.
+        // Set/cleared by PreviewModeUI.
+        this.previewChannel = null;
         this.switchGeneration = 0; // Incremented on every channel switch to detect stale async results
         this.messageHandlers = [];
         
@@ -999,9 +1006,18 @@ class ChannelManager {
                 messageStreamId: messageStreamId,
                 ephemeralStreamId: ephemeralStreamId,
                 adminStreamId: adminStreamId,
+                keysStreamId: (channelType === 'native' || channelType === 'gated')
+                    ? deriveKeysId(messageStreamId) : null,
                 streamId: messageStreamId,
                 name: channelName,
                 type: channelType,
+                // Gated (N-D preview promote): the gate MUST survive this
+                // path like every other restore path — without it the type
+                // says gated, every gated path is dead, and the composer
+                // reads our grantless address as read-only (brief Trap 2).
+                gate: channelType === 'gated' && previewInfo.gateAddress
+                    ? { address: String(previewInfo.gateAddress).toLowerCase() }
+                    : null,
                 createdAt: Date.now(),
                 joinedAt: Date.now(),
                 createdBy: previewInfo.createdBy || null,

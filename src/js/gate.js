@@ -458,6 +458,34 @@ class GateManager {
         return this._memberCall(gateAddress, 'pay');
     }
 
+    /**
+     * Channel Details access line, by gate MODE (N-D): only Closed (NONE)
+     * reads 'Verified Membership' — token/NFT show the condition, paid the
+     * price/period, mirroring the Create modal's lineup. Both reads cache.
+     */
+    async gateAccessLabel(gateAddress) {
+        const info = await this.getGateInfo(gateAddress);
+        if (info.mode === GATE_MODE.NONE) return 'Verified Membership';
+        const meta = await this.getTokenMeta(info.token);
+        const fmt = (value) => {
+            const s = ethers.formatUnits(value, meta.decimals ?? 0);
+            return s.endsWith('.0') ? s.slice(0, -2) : s;
+        };
+        if (info.mode === GATE_MODE.TOKEN_BALANCE) {
+            return `Gated · Hold ≥ ${fmt(info.minBalance)} ${meta.symbol}`;
+        }
+        if (info.mode === GATE_MODE.NFT_OWNERSHIP) {
+            return `Gated · Hold ${meta.symbol} NFT`;
+        }
+        const days = Number(info.duration) / 86400;
+        const daysLabel = Number.isInteger(days) ? String(days) : days.toFixed(1);
+        // WPOL-priced gates display POL: pay() auto-wraps, so plain POL is
+        // literally what the subscriber spends. PAID only — on a balance
+        // gate WPOL and native POL are different holdings.
+        const paySymbol = info.token === WRAPPED_NATIVE ? 'POL' : meta.symbol;
+        return `Paid · ${fmt(info.price)} ${paySymbol} / ${daysLabel} ${daysLabel === '1' ? 'day' : 'days'}`;
+    }
+
     /** Whether an address moderates this gate (v1 gates lack the getter → false). */
     async isModerator(gateAddress, userAddress) {
         try {

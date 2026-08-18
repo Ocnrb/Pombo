@@ -3,6 +3,7 @@
  * Handles the Explore view (front-page) for browsing public channels
  */
 
+import { Logger } from '../logger.js';
 import { escapeHtml, escapeAttr } from './utils.js';
 import { sanitizeText } from './sanitizer.js';
 import { loadCurationManifest, applyCuration } from '../exploreCuration.js';
@@ -515,9 +516,11 @@ class ExploreUI {
                 // Get channel info from cache
                 const channelInfo = this.cachedPublicChannels?.find(ch => ch.streamId === streamId);
                 
-                // For password-protected and native (closed) channels: join directly (add to list)
-                // These require immediate commitment (password entry or permission check)
-                if (channelType === 'password' || channelType === 'native' || channelType === 'gated') {
+                // Password/native: join directly (immediate commitment —
+                // password entry or permission check). Gated routes by MODE.
+                if (channelType === 'gated') {
+                    await this._openGated(streamId, channelInfo);
+                } else if (channelType === 'password' || channelType === 'native') {
                     if (this.deps.joinPublicChannel) {
                         await this.deps.joinPublicChannel(streamId, channelInfo);
                     }
@@ -573,6 +576,37 @@ class ExploreUI {
                 }
             })
             ?.catch(() => {});
+    }
+
+    /**
+     * Explore tap on a gated channel (N-D). Routing by MODE:
+     *  - TOKEN/NFT with access → PREVIEW (browse without committing; the
+     *    Join button adds it to the list)
+     *  - PAID, no access, or unreadable gate → the join flow, which lands
+     *    on the gate entry screen when the gate refuses (paying IS the
+     *    commitment)
+     */
+    async _openGated(streamId, channelInfo) {
+        try {
+            const gate = channelInfo?.gateAddress;
+            if (gate) {
+                const { gateManager, GATE_MODE } = await import('../gate.js');
+                const { authManager } = await import('../auth.js');
+                const info = await gateManager.getGateInfo(gate);
+                const holding = info.mode === GATE_MODE.TOKEN_BALANCE
+                    || info.mode === GATE_MODE.NFT_OWNERSHIP;
+                const me = authManager.getAddress();
+                if (holding && me && await gateManager.checkAccess(gate, me)) {
+                    await this.deps.enterPreviewMode(streamId, channelInfo);
+                    return;
+                }
+            }
+        } catch (e) {
+            Logger.debug('Explore gated routing failed, falling back to join:', e?.message);
+        }
+        if (this.deps.joinPublicChannel) {
+            await this.deps.joinPublicChannel(streamId, channelInfo);
+        }
     }
 
     /**

@@ -712,8 +712,11 @@ class ChannelModalsUI {
             if (info.mode === GATE_MODE.PAID) {
                 const days = Number(info.duration) / 86400;
                 const daysLabel = Number.isInteger(days) ? days : days.toFixed(1);
+                // WPOL-priced gates read POL everywhere the user sees a cost —
+                // pay() auto-wraps, plain POL is literally what they spend
+                const paySymbol = meta.symbol === 'WPOL' ? 'POL' : meta.symbol;
                 if (conditionEl) conditionEl.textContent =
-                    `${fmt(info.price, meta.decimals)} ${meta.symbol} for ${daysLabel} days. Renewing extends from the current end.`;
+                    `${fmt(info.price, meta.decimals)} ${paySymbol} for ${daysLabel} days. Renewing extends from the current end.`;
                 const until = me ? await gateManager.paidUntil(entry.gateAddress, me) : 0n;
                 const active = until * 1000n > BigInt(Date.now());
                 statusBox?.classList.remove('hidden');
@@ -732,7 +735,7 @@ class ChannelModalsUI {
                         actionBtn.textContent = 'Enter Channel';
                         actionBtn.onclick = () => finishJoin(gateManager);
                     } else {
-                        actionBtn.textContent = `Pay ${fmt(info.price, meta.decimals)} ${meta.symbol}`;
+                        actionBtn.textContent = `Pay ${fmt(info.price, meta.decimals)} ${paySymbol}`;
                         actionBtn.onclick = async () => {
                             actionBtn.disabled = true;
                             try {

@@ -856,7 +856,9 @@ class EpochKeyManager {
         s.lastMissingRefresh = now;
 
         import('./channels.js').then(({ channelManager }) => {
-            const channel = channelManager.channels?.get(messageStreamId);
+            const channel = channelManager.channels?.get(messageStreamId)
+                ?? (channelManager.previewChannel?.messageStreamId === messageStreamId
+                    ? channelManager.previewChannel : null);
             if (usesEpochKeys(channel)) {
                 this.ensureChannelKeys(channel).catch(e =>
                     Logger.warn('epochKeys: refresh after missing kid failed:', e.message));
