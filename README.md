@@ -9,7 +9,7 @@ it byte-for-byte so both talk on the same channels and DMs.
 
 · Website: [pombo.cc](https://pombo.cc)  
 
-· App: [pombo.cc](https://app.pombo.cc)  
+· App: [app.pombo.cc](https://app.pombo.cc)  
 
 · Docs: [docs.pombo.cc](https://docs.pombo.cc) 
 
