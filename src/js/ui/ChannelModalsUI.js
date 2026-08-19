@@ -775,6 +775,10 @@ class ChannelModalsUI {
                 }
                 const startPay = async () => {
                     actionBtn.disabled = true;
+                    // Renewal: the modal's job ends at the click — the toast
+                    // narrates the payment from here. (First-time pay keeps
+                    // the modal up: on failure it is the retry context.)
+                    if (entry.renewal) this.hideGateEntryModal();
                     try {
                         this.notificationUI?.showLoadingToast('Paying subscription...', 'Confirm may take a moment');
                         await gateManager.pay(entry.gateAddress, (step) => {
