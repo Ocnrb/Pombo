@@ -117,4 +117,54 @@ describe('epochKeyCrypto', () => {
             expect(JSON.stringify(envelope)).not.toContain('segredo');
         });
     });
+
+    describe('binary envelope (MEDIA_DATA frames)', () => {
+        const KID = '1.a1b2c3d4e5f6';
+
+        it('round-trips a binary frame and carries the kid in the clear', async () => {
+            const cryptoKey = await epochKeyCrypto.importEpochKey(epochKeyCrypto.generateEpochKey());
+            const frame = crypto.getRandomValues(new Uint8Array(1024));
+
+            const sealed = await epochKeyCrypto.sealBinaryWithEpochKey(frame, cryptoKey, KID);
+            expect(sealed[0]).toBe(0x04);
+            expect(epochKeyCrypto.isBinaryEpochEnvelope(sealed)).toBe(true);
+
+            const parsed = epochKeyCrypto.parseBinaryEpochEnvelope(sealed);
+            expect(parsed.kid).toBe(KID);
+
+            const opened = await epochKeyCrypto.decryptBinaryWithEpochKey(parsed, cryptoKey);
+            expect(opened).toEqual(frame);
+        });
+
+        it('does not open with another epoch key', async () => {
+            const keyA = await epochKeyCrypto.importEpochKey(epochKeyCrypto.generateEpochKey());
+            const keyB = await epochKeyCrypto.importEpochKey(epochKeyCrypto.generateEpochKey());
+            const sealed = await epochKeyCrypto.sealBinaryWithEpochKey(
+                new TextEncoder().encode('piece bytes'), keyA, KID);
+            const parsed = epochKeyCrypto.parseBinaryEpochEnvelope(sealed);
+            await expect(epochKeyCrypto.decryptBinaryWithEpochKey(parsed, keyB)).rejects.toThrow();
+        });
+
+        it('leaves the other MEDIA_DATA frame types untouched', () => {
+            // 0x01/0x03 media frames and 0x02 DM sealed envelopes must never
+            // be mistaken for an epoch envelope.
+            for (const lead of [0x01, 0x02, 0x03]) {
+                expect(epochKeyCrypto.isBinaryEpochEnvelope(new Uint8Array([lead, 0, 0]))).toBe(false);
+            }
+        });
+
+        it('rejects malformed envelopes instead of slicing garbage', () => {
+            expect(epochKeyCrypto.parseBinaryEpochEnvelope(new Uint8Array([0x04]))).toBeNull();
+            expect(epochKeyCrypto.parseBinaryEpochEnvelope(new Uint8Array([0x04, 0]))).toBeNull();
+            // kidLen pointing past the end of a truncated frame
+            expect(epochKeyCrypto.parseBinaryEpochEnvelope(
+                new Uint8Array([0x04, 200, 1, 2, 3]))).toBeNull();
+        });
+
+        it('refuses a kid that does not fit one length byte', async () => {
+            const cryptoKey = await epochKeyCrypto.importEpochKey(epochKeyCrypto.generateEpochKey());
+            await expect(epochKeyCrypto.sealBinaryWithEpochKey(
+                new Uint8Array([1]), cryptoKey, 'x'.repeat(256))).rejects.toThrow();
+        });
+    });
 });

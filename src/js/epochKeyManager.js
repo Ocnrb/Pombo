@@ -55,7 +55,7 @@ import { gateManager, GATE_MODE } from './gate.js';
  * everyone, ERC-1271) and in the KEY_REQUEST gate check — the state machine
  * is identical.
  */
-const usesEpochKeys = (channel) =>
+export const usesEpochKeys = (channel) =>
     (channel?.type === 'native' || !!channel?.gate?.address) && !!channel?.keysStreamId;
 
 // Re-request backoff: a pending request younger than this is not superseded.

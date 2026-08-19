@@ -48,6 +48,8 @@ import { channelManager } from './channels.js';
 import { getChannelIdentity } from './channelIdentity.js';
 import { dmManager } from './dm.js';
 import { STORAGE_FILE, MESSAGE_STREAM, storageChunkPartition } from './streamConstants.js';
+import { epochKeyManager, usesEpochKeys } from './epochKeyManager.js';
+import { epochKeyCrypto } from './epochKeyCrypto.js';
 
 const SM = APP_CONFIG.storageMedia;
 const SEAL_OVERHEAD = 28;              // [12B iv] + 16B GCM tag
@@ -1113,6 +1115,45 @@ class StorageMediaController {
                 overhead: SEAL_OVERHEAD
             };
         }
+        if (usesEpochKeys(channel)) {
+            // ONE epoch key per transfer, captured here: a rotation mid-upload
+            // does not re-key chunks already out, exactly as it does not re-key
+            // a sent message. Missing on the download side is fine — open()
+            // resolves each chunk's kid on its own.
+            let current = await epochKeyManager.getCurrentKey(channel.messageStreamId);
+            if (!current) {
+                await epochKeyManager.ensureChannelKeys(channel);
+                current = await epochKeyManager.getCurrentKey(channel.messageStreamId);
+            }
+            const messageStreamId = channel.messageStreamId;
+            return {
+                seal: (bytes) => {
+                    if (!current) {
+                        throw new Error(`No epoch key for ${messageStreamId} — cannot store media on an epoch channel without one`);
+                    }
+                    return epochKeyCrypto.sealBinaryWithEpochKey(bytes, current.cryptoKey, current.kid);
+                },
+                // ts: the chunk's transport timestamp — on gated channels the
+                // kid-freshness rule judges an old epoch's kid against the
+                // announce in force at that moment (no ts = rejected).
+                open: async (bytes, ts) => {
+                    const parsed = epochKeyCrypto.parseBinaryEpochEnvelope(bytes);
+                    if (!parsed) throw new Error('not an epoch envelope');
+                    const key = await epochKeyManager.getKeyForKid(
+                        messageStreamId, parsed.kid, { timestamp: ts });
+                    if (key === false) throw new Error(`stale epoch kid ${parsed.kid}`);
+                    if (!key) {
+                        epochKeyManager.noteMissingKid(messageStreamId, parsed.kid);
+                        throw new Error(`missing epoch key ${parsed.kid}`);
+                    }
+                    return epochKeyCrypto.decryptBinaryWithEpochKey(parsed, key);
+                },
+                encSalt: null,
+                // [1B version][1B kidLen][kid][12B iv][16B tag] + headroom for
+                // a longer kid if a rotation lands mid-transfer
+                overhead: 30 + (current ? new TextEncoder().encode(current.kid).byteLength : 24) + 8
+            };
+        }
         return {
             seal: (bytes) => bytes,
             open: (bytes) => bytes,
@@ -1465,12 +1506,15 @@ class StorageMediaController {
             // already goes out under the channel's ephemeral identity, so the
             // chunks must NOT fall back to the account — that would stamp the
             // wallet onto the channel's -1 stream next to an ephemeral
-            // announce, linking wallet→channel. Three cases:
+            // announce, linking wallet→channel. Four cases:
             //   DM            → a throwaway identity for the whole transfer
             //                   (sealed sender's per-message key would cost an
             //                   ECDH per chunk and buy nothing);
             //   public/pw     → the channel's own ephemeral identity, the SAME
             //                   pseudonym as the announce (one per channel);
+            //   gated         → the clone (ERC-1271, inside publishStorageChunk)
+            //                   — chunkIdentity stays null, verify expects the
+            //                   gate address;
             //   native/ro     → the account (D3) — chunkIdentity stays null,
             //                   and verify falls back to our wallet address.
             // chunkPublisher (whatever address the chunks carry) is what
@@ -1486,6 +1530,10 @@ class StorageMediaController {
                 chunkIdentity = EthereumKeyPairIdentity.fromPrivateKey(
                     dmCrypto.generateEphemeralPrivateKey());
                 chunkPublisher = await chunkIdentity.getUserId();
+            } else if (channel?.gate?.address) {
+                // Gated: publishStorageChunk rides the clone (ERC-1271), so
+                // that is the publisher the verify reads must match.
+                chunkPublisher = channel.gate.address.toLowerCase();
             } else if (!channelManager.usesAccountPublish(messageStreamId)) {
                 chunkIdentity = getChannelIdentity(messageStreamId).identity;
                 chunkPublisher = await chunkIdentity.getUserId();
@@ -2264,7 +2312,7 @@ class StorageMediaController {
                 // fail decryption or unpack — both are silently skipped).
                 let u = null;
                 try {
-                    const raw = await sealer.open(c);
+                    const raw = await sealer.open(c, msg.timestamp);
                     u = unpackChunkPayload(raw);
                 } catch (e) {
                     return;

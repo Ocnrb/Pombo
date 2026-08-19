@@ -2392,6 +2392,85 @@ class StreamrController {
     }
 
     /**
+     * Publish a binary MEDIA_DATA frame sealed with the current epoch key.
+     *
+     * The binary sibling of publishEpochEncrypted, with the same identity
+     * rules: the account is the on-wire publisher on native (its grant is
+     * per-member), the gate clone on gated (ERC-1271) — a channel-ephemeral
+     * key holds no grant on either, so the channel pseudonym cannot carry
+     * epoch pieces. Same fail-closed stance: no epoch key means NO publish.
+     *
+     * @param {Object} channel - Channel object (native/gated)
+     * @param {string} ephemeralStreamId - The channel's -2 stream
+     * @param {Uint8Array} data - Plaintext binary frame
+     * @returns {Promise<Object>} The published StreamMessage
+     */
+    async publishMediaDataEpoch(channel, ephemeralStreamId, data) {
+        if (!this._accountIdentity) {
+            throw new Error('Account identity unavailable — check streamr-bundle.js');
+        }
+        const { epochKeyManager } = await import('./epochKeyManager.js');
+        const { epochKeyCrypto } = await import('./epochKeyCrypto.js');
+
+        let key = await epochKeyManager.getCurrentKey(channel.messageStreamId);
+        if (!key) {
+            await epochKeyManager.ensureChannelKeys(channel);
+            key = await epochKeyManager.getCurrentKey(channel.messageStreamId);
+        }
+        if (!key) {
+            throw new Error(
+                `No epoch key for ${channel.messageStreamId} — cannot send media on an epoch channel without one`);
+        }
+
+        const sealed = await epochKeyCrypto.sealBinaryWithEpochKey(data, key.cryptoKey, key.kid);
+        return this.publishAs(
+            this._accountIdentity, ephemeralStreamId,
+            STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_DATA, sealed,
+            this._gateTransportOptions(channel, ephemeralStreamId)
+        );
+    }
+
+    /**
+     * Open a raw MEDIA_DATA payload as far as the transport layer can.
+     *
+     * Epoch envelopes (0x04) resolve their kid exactly like openEpochEnvelope:
+     * an unknown kid is NOT an error — note it (rate-limited KEY_REQUEST) and
+     * drop; pieces are live-only, the leecher's timeout re-requests them once
+     * the key lands. The 0x04 probe runs only without a password: password and
+     * epoch channels are disjoint, and encryptBinary output starts with random
+     * salt that would collide with the version byte 1 time in 256.
+     *
+     * @param {string} streamId - Stream the payload arrived on (-2)
+     * @param {Uint8Array} content - Raw payload
+     * @param {string|null} password - Channel password, if any
+     * @returns {Promise<Uint8Array|null>} plaintext frame, or null to skip
+     */
+    async _openBinaryMediaPayload(streamId, content, password) {
+        if (password) {
+            return await cryptoManager.decryptBinary(content, password);
+        }
+        const { epochKeyCrypto } = await import('./epochKeyCrypto.js');
+        if (!epochKeyCrypto.isBinaryEpochEnvelope(content)) return content;
+
+        const parsed = epochKeyCrypto.parseBinaryEpochEnvelope(content);
+        if (!parsed) return null;
+        const messageStreamId = String(streamId).replace(/-[234]$/, '-1');
+        const { epochKeyManager } = await import('./epochKeyManager.js');
+        const key = await epochKeyManager.getKeyForKid(messageStreamId, parsed.kid, { live: true });
+        if (key === false) return null;
+        if (!key) {
+            epochKeyManager.noteMissingKid(messageStreamId, parsed.kid);
+            return null;
+        }
+        try {
+            return await epochKeyCrypto.decryptBinaryWithEpochKey(parsed, key);
+        } catch (e) {
+            Logger.warn(`Epoch binary envelope failed to open (kid ${parsed.kid}):`, e.message);
+            return null;
+        }
+    }
+
+    /**
      * publishAs options for a channel's transport identity.
      *
      * Gated channels publish as the GATE CLONE with an ERC-1271 signature —
@@ -2655,6 +2734,25 @@ class StreamrController {
             // property, so returning it raw would silently fall back to
             // Date.now() and drift the window.
             return { timestamp: msg.messageId.timestamp, message: msg };
+        }
+        // Epoch channels (native/gated): client.publish on a members-only
+        // stream would wrap the chunk in the SDK's group-key AES — the HTTP
+        // hex reader then returns ciphertext, and the group-key exchange is
+        // the very publisher-online dependency the epoch protocol replaces.
+        // publishAs sends encryptionType NONE (the chunk is already epoch-
+        // sealed); native rides the account (per-member grant), gated the
+        // clone — so verify must expect the GATE address for gated rows.
+        let channelManager = null;
+        try { ({ channelManager } = await import('./channels.js')); } catch { /* early boot */ }
+        if (channelManager?.usesAccountPublish?.(messageStreamId)) {
+            const base = String(messageStreamId).replace(/-[1234]$/, '');
+            const channel = channelManager.channels?.get(base + '-1');
+            if (channel?.type === 'native' || channel?.type === 'gated' || channel?.gate?.address) {
+                const msg = await this.publishAs(
+                    this._accountIdentity, messageStreamId, partition, data,
+                    this._gateTransportOptions(channel));
+                return { timestamp: msg.messageId.timestamp, message: msg };
+            }
         }
         return await this.client.publish(
             { streamId: messageStreamId, partition },
@@ -3386,9 +3484,8 @@ class StreamrController {
 
                 // Handle binary content (Uint8Array from MEDIA_DATA partition)
                 if (content instanceof Uint8Array) {
-                    if (password) {
-                        data = await cryptoManager.decryptBinary(content, password);
-                    }
+                    data = await this._openBinaryMediaPayload(streamId, content, password);
+                    if (!data) return;
                     const transportPublisher = streamMessage && (typeof streamMessage.getPublisherId === 'function'
                         ? streamMessage.getPublisherId()
                         : streamMessage.publisherId);
@@ -4338,9 +4435,8 @@ class StreamrController {
 
                 // Handle binary content (Uint8Array from MEDIA_DATA partition)
                 if (content instanceof Uint8Array) {
-                    if (password) {
-                        data = await cryptoManager.decryptBinary(content, password);
-                    }
+                    data = await this._openBinaryMediaPayload(streamId, content, password);
+                    if (!data) return;
                     // Extract account and wrap binary with metadata
                     const transportPublisher = streamMessage && (typeof streamMessage.getPublisherId === 'function'
                         ? streamMessage.getPublisherId()

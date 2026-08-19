@@ -25,6 +25,11 @@ import { dmCrypto } from './dmCrypto.js';
 const KEYWRAP_HKDF_SALT = 'pombo-keywrap-v1';
 const WRAP_TAG_DOMAIN = 'POMBO_WRAP_TAG_V1';
 
+// Leading byte of an epoch-sealed binary envelope on the MEDIA_DATA partition.
+// The partition's other frames claim 0x01/0x03 (media) and 0x02 (dmCrypto's
+// sealed envelope) — never reuse any of them.
+export const BINARY_EPOCH_VERSION = 0x04;
+
 class EpochKeyCrypto {
     /**
      * Generate a fresh 256-bit epoch key.
@@ -186,6 +191,76 @@ class EpochKeyCrypto {
             dmCrypto.base64ToBuf(envelope.ct)
         );
         return JSON.parse(new TextDecoder().decode(plain));
+    }
+
+    /**
+     * Seal a binary media frame with an epoch key (MEDIA_DATA partition).
+     *
+     * Frame: [1B version=0x04] [1B kidLen] [kidLen B kid UTF-8] [12B iv] [ct].
+     * The kid travels in the clear for the same reason `k` does in the JSON
+     * envelope: receivers pick the key without trial decryption.
+     *
+     * @param {Uint8Array} bytes - Plaintext frame
+     * @param {CryptoKey} epochKey - From importEpochKey()
+     * @param {string} kid - Key id of the sealing epoch
+     * @returns {Promise<Uint8Array>}
+     */
+    async sealBinaryWithEpochKey(bytes, epochKey, kid) {
+        const kidBytes = new TextEncoder().encode(kid);
+        if (kidBytes.byteLength === 0 || kidBytes.byteLength > 255) {
+            throw new Error(`Epoch kid does not fit the binary envelope: ${kid}`);
+        }
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const ct = new Uint8Array(await crypto.subtle.encrypt(
+            { name: 'AES-GCM', iv }, epochKey, bytes
+        ));
+
+        const buf = new Uint8Array(2 + kidBytes.byteLength + 12 + ct.byteLength);
+        buf[0] = BINARY_EPOCH_VERSION;
+        buf[1] = kidBytes.byteLength;
+        buf.set(kidBytes, 2);
+        buf.set(iv, 2 + kidBytes.byteLength);
+        buf.set(ct, 2 + kidBytes.byteLength + 12);
+        return buf;
+    }
+
+    /**
+     * @param {*} buf - Raw MEDIA_DATA payload
+     * @returns {boolean} true if this is an epoch-sealed binary envelope
+     */
+    isBinaryEpochEnvelope(buf) {
+        return buf instanceof Uint8Array && buf.byteLength > 0
+            && buf[0] === BINARY_EPOCH_VERSION;
+    }
+
+    /**
+     * Split an epoch binary envelope into its parts.
+     * @param {Uint8Array} buf
+     * @returns {{kid: string, iv: Uint8Array, ct: Uint8Array}|null} null if malformed
+     */
+    parseBinaryEpochEnvelope(buf) {
+        if (!this.isBinaryEpochEnvelope(buf) || buf.byteLength < 2) return null;
+        const kidLen = buf[1];
+        // Minimum ct is the bare 16-byte GCM tag (empty plaintext)
+        if (kidLen === 0 || buf.byteLength < 2 + kidLen + 12 + 16) return null;
+        return {
+            kid: new TextDecoder().decode(buf.subarray(2, 2 + kidLen)),
+            iv: buf.slice(2 + kidLen, 2 + kidLen + 12),
+            ct: buf.slice(2 + kidLen + 12)
+        };
+    }
+
+    /**
+     * Open a parsed epoch binary envelope.
+     * @param {{iv: Uint8Array, ct: Uint8Array}} parsed - From parseBinaryEpochEnvelope()
+     * @param {CryptoKey} epochKey - From importEpochKey()
+     * @returns {Promise<Uint8Array>} plaintext frame
+     */
+    async decryptBinaryWithEpochKey(parsed, epochKey) {
+        const plain = await crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: parsed.iv }, epochKey, parsed.ct
+        );
+        return new Uint8Array(plain);
     }
 }
 

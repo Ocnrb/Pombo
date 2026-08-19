@@ -18,6 +18,7 @@ import { dmCrypto } from './dmCrypto.js';
 import { CONFIG as APP_CONFIG } from './config.js';
 import { getChannelIdentity } from './channelIdentity.js';
 import { recoverPublisherAccount } from './publisherProof.js';
+import { usesEpochKeys } from './epochKeyManager.js';
 
 // === CONFIGURATION ===
 const CONFIG = {
@@ -1872,7 +1873,8 @@ class MediaController {
 
         return new Promise((resolve, reject) => {
             const tempId = 'temp-' + crypto.randomUUID();
-            const isPrivateChannel = !!password;
+            const isPrivateChannel = !!password
+                || usesEpochKeys(channelManager.getChannel(messageStreamId));
             
             // Store temp reference with callback
             this.localFiles.set(tempId, {
@@ -2037,7 +2039,8 @@ class MediaController {
             metadata,
             streamId: messageStreamId, // Store messageStreamId for channel lookup and seeding
             password,
-            isPrivateChannel: !!password, // Password presence indicates private channel
+            isPrivateChannel: !!password
+                || usesEpochKeys(channelManager.getChannel(messageStreamId)),
             pieceStatus: new Array(pieceCount).fill('pending'),
             requestsInFlight: new Map(),
             pieceFailures: new Map(),
@@ -2473,7 +2476,7 @@ class MediaController {
     async handlePieceRequest(messageStreamId, data) {
         const myAddress = authManager.getAddress()?.toLowerCase();
         const targetAddress = data.targetSeederId?.toLowerCase();
-        
+
         if (!myAddress || targetAddress !== myAddress) {
             // Not for us - ignore silently
             return;
@@ -2576,6 +2579,15 @@ class MediaController {
             await streamrController.publishMediaDataAs(
                 ephemeralStreamId, sealed, sealer.identity);
             Logger.debug('Sent piece (binary sealed)', pieceIndex, 'of', fileId);
+        } else if (usesEpochKeys(channel)) {
+            // Epoch channels: the piece is sealed with the epoch key, no
+            // inline proof — authorship comes from the same place as the
+            // channel's messages (transport account on native, envelope
+            // signer on gated via resolveAuthor). The channel pseudonym
+            // cannot carry these: an ephemeral key holds no grant on either.
+            const payload = encodeFilePiece(fileId, pieceIndex, arrayBuffer);
+            await streamrController.publishMediaDataEpoch(channel, ephemeralStreamId, payload);
+            Logger.debug('Sent piece (binary epoch)', pieceIndex, 'of', fileId);
         } else {
             // Channels: the piece carries the proof inline. There is no single
             // recipient to seal to, and the channel password — or nothing, in a
