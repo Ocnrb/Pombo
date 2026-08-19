@@ -67,14 +67,42 @@ describe('sanitizer', () => {
 
             // Note: CSS expression() was IE-specific and is not relevant for modern browsers
             // DOMPurify does not sanitize it as it's not a threat in modern environments
+
+            it('should strip style attributes', () => {
+                const dirty = '<span style="position:fixed;inset:0;background:url(https://evil.tld/x)">x</span>';
+                const clean = sanitizeMessageHtml(dirty);
+                expect(clean).not.toContain('style');
+                expect(clean).toContain('x');
+            });
+
+            it('should strip title and data-* attributes', () => {
+                const dirty = '<span data-msg-id="1" data-emoji="🔥" title="t">x</span>';
+                const clean = sanitizeMessageHtml(dirty);
+                expect(clean).not.toContain('data-msg-id');
+                expect(clean).not.toContain('data-emoji');
+                expect(clean).not.toContain('title');
+                expect(clean).toContain('x');
+            });
         });
 
         describe('Allowed HTML', () => {
-            it('should allow basic formatting tags', () => {
-                const safe = '<p><strong>Bold</strong> and <em>italic</em></p>';
-                const clean = sanitizeMessageHtml(safe);
-                expect(clean).toContain('<strong>');
-                expect(clean).toContain('<em>');
+            // The whitelist is exactly what the text pipeline emits; user text
+            // reaches the sanitizer already escaped, so formatting tags are
+            // stripped (content kept) rather than rendered.
+            it('should strip formatting tags but keep their content', () => {
+                const clean = sanitizeMessageHtml('<p><strong>Bold</strong> and <em>italic</em></p>');
+                expect(clean).not.toContain('<strong>');
+                expect(clean).not.toContain('<em>');
+                expect(clean).toContain('Bold');
+                expect(clean).toContain('italic');
+            });
+
+            it('should strip code and pre tags but keep their content', () => {
+                const clean = sanitizeMessageHtml('<code>const x = 1;</code><pre>formatted</pre>');
+                expect(clean).not.toContain('<code>');
+                expect(clean).not.toContain('<pre>');
+                expect(clean).toContain('const x = 1;');
+                expect(clean).toContain('formatted');
             });
 
             it('should allow line breaks', () => {
@@ -83,16 +111,9 @@ describe('sanitizer', () => {
                 expect(clean).toContain('<br');
             });
 
-            it('should allow code tags', () => {
-                const safe = '<code>const x = 1;</code>';
-                const clean = sanitizeMessageHtml(safe);
-                expect(clean).toContain('<code>');
-            });
-
-            it('should allow pre tags', () => {
-                const safe = '<pre>formatted text</pre>';
-                const clean = sanitizeMessageHtml(safe);
-                expect(clean).toContain('<pre>');
+            it('should keep emoji spans as the pipeline emits them', () => {
+                const safe = 'hi <span class="inline-emoji">🐦</span>';
+                expect(sanitizeMessageHtml(safe)).toBe(safe);
             });
 
             it('should allow safe links with http', () => {
@@ -145,6 +166,14 @@ describe('sanitizer', () => {
                 const safe = '<iframe src="https://www.youtube-nocookie.com/embed/abc123"></iframe>';
                 const clean = sanitizeMessageHtml(safe);
                 expect(clean).toContain('youtube-nocookie.com');
+            });
+
+            it('should keep the full embed markup the pipeline emits', () => {
+                const embed = '<div class="youtube-embed"><iframe src="https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen loading="lazy"></iframe></div>';
+                const clean = sanitizeMessageHtml(embed);
+                expect(clean).toContain('class="youtube-embed"');
+                expect(clean).toContain('src="https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ"');
+                expect(clean).toContain('loading="lazy"');
             });
 
             it('should remove non-YouTube iframes', () => {

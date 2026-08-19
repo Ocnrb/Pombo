@@ -7,22 +7,22 @@
 import DOMPurify from 'dompurify';
 
 /**
- * DOMPurify configuration for message content
- * Restrictive whitelist allowing only safe formatting tags
+ * DOMPurify configuration for message content.
+ *
+ * The whitelist is exactly what the text pipeline emits (escapeHtml →
+ * linkify → embedYouTubeLinks → wrapInlineEmojis): user text arrives
+ * pre-escaped, so anything beyond that output only widens what a pipeline
+ * bug could slip through. In particular `style` stays out — style-src is
+ * 'unsafe-inline', so this whitelist is the only barrier against overlay
+ * and background:url() tricks.
  */
 const MESSAGE_CONFIG = {
-    ALLOWED_TAGS: [
-        'b', 'i', 'em', 'strong', 'u', 's', 'strike',
-        'br', 'span', 'a', 'code', 'pre', 'div', 'iframe'
-    ],
+    ALLOWED_TAGS: ['a', 'br', 'span', 'div', 'iframe'],
     ALLOWED_ATTR: [
-        'href', 'target', 'rel', 'class', 'style',
-        'data-media-id', 'data-msg-id', 'data-reply-to-id',
-        'data-emoji', 'data-emoji-only', 'title',
+        'href', 'target', 'rel', 'class',
         'src', 'frameborder', 'allow', 'allowfullscreen', 'loading'
     ],
-    // Only the data-* attributes listed above survive — a blanket allow
-    // plus attribute-driven event delegation is a combination to avoid.
+    // Attribute-driven event delegation makes a blanket data-* allow unsafe.
     ALLOW_DATA_ATTR: false,
     // Force all links to open in new tab with security attrs
     ADD_ATTR: ['target', 'rel'],
