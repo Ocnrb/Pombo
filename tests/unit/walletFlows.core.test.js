@@ -53,6 +53,7 @@ vi.mock('../../src/js/secureStorage.js', () => ({
 vi.mock('../../src/js/channels.js', () => ({
     channelManager: {
         loadChannels: vi.fn(),
+        reloadChannelsFromSync: vi.fn(),
         clearChannels: vi.fn()
     }
 }));
@@ -879,7 +880,7 @@ describe('WalletFlows Extended', () => {
             await walletFlows.restoreFromBackup(file);
 
             expect(secureStorage.cache.channels).toHaveLength(2);
-            expect(channelManager.loadChannels).toHaveBeenCalled();
+            expect(channelManager.reloadChannelsFromSync).toHaveBeenCalled();
             expect(uiController.renderChannelList).toHaveBeenCalled();
         });
 
@@ -1032,7 +1033,7 @@ describe('WalletFlows Extended', () => {
 
             await walletFlows.restoreFromBackup(file);
 
-            expect(channelManager.loadChannels).not.toHaveBeenCalled();
+            expect(channelManager.reloadChannelsFromSync).not.toHaveBeenCalled();
         });
 
         it('hides progress modal on error', async () => {

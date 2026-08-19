@@ -8,6 +8,7 @@ import { authManager } from './auth.js';
 import { secureStorage } from './secureStorage.js';
 import { channelManager } from './channels.js';
 import { uiController } from './ui.js';
+import { headerUI } from './ui/HeaderUI.js';
 import { Logger } from './logger.js';
 import { getAvatar, getAvatarHtml, generateAvatar } from './ui/AvatarGenerator.js';
 import { escapeHtml, escapeAttr } from './ui/utils.js';
@@ -21,6 +22,7 @@ import {
     setupPasswordStrengthValidation
 } from './ui/modalUtils.js';
 import { CONFIG } from './config.js';
+import { importBackupData } from './backupImport.js';
 
 /**
  * Store credentials in browser's password manager using Credential Management API
@@ -495,6 +497,19 @@ class WalletFlows {
                     lastUsed: Date.now()
                 };
                 localStorage.setItem(CONFIG.storageKeys.keystores, JSON.stringify(wallets));
+            } else if (result.data?.username) {
+                // An entry left by an earlier restore keeps its fallback name
+                // ("Restored 0x…") forever unless the backup's name replaces it.
+                wallets[keystoreAddress].name = result.data.username;
+                localStorage.setItem(CONFIG.storageKeys.keystores, JSON.stringify(wallets));
+            }
+
+            // Upgrading from Guest: tear the guest session down first, same as
+            // connectLocal/importPrivateKey — onWalletConnected must not
+            // re-enter over a live guest client, or the header never leaves
+            // guest state (body.guest-mode keeps "Create Account" visible).
+            if (authManager.isGuestMode()) {
+                await this._disconnectWallet();
             }
 
             // Now unlock the wallet with the same password
@@ -502,97 +517,8 @@ class WalletFlows {
 
             // Now import data into secure storage (which is now unlocked)
             const data = result.data;
-            let dataImported = false;
             if (data) {
-                // Import channels
-                if (data.channels && data.channels.length > 0) {
-                    if (!secureStorage.cache.channels) {
-                        secureStorage.cache.channels = [];
-                    }
-                    const existingIds = new Set(secureStorage.cache.channels.map(c => c.messageStreamId || c.streamId));
-                    for (const channel of data.channels) {
-                        const chId = channel.messageStreamId || channel.streamId;
-                        if (chId && !existingIds.has(chId)) {
-                            secureStorage.cache.channels.push(channel);
-                            dataImported = true;
-                        }
-                    }
-                }
-
-                // Import trusted contacts
-                if (data.trustedContacts) {
-                    if (!secureStorage.cache.trustedContacts) {
-                        secureStorage.cache.trustedContacts = {};
-                    }
-                    for (const [addr, contact] of Object.entries(data.trustedContacts)) {
-                        if (!secureStorage.cache.trustedContacts[addr]) {
-                            secureStorage.cache.trustedContacts[addr] = contact;
-                            dataImported = true;
-                        }
-                    }
-                }
-
-                // Import sent DM messages
-                if (data.sentMessages) {
-                    if (!secureStorage.cache.sentMessages) {
-                        secureStorage.cache.sentMessages = {};
-                    }
-                    for (const [streamId, msgs] of Object.entries(data.sentMessages)) {
-                        if (!secureStorage.cache.sentMessages[streamId]) {
-                            secureStorage.cache.sentMessages[streamId] = msgs;
-                            dataImported = true;
-                        }
-                    }
-                }
-
-                // Import sent DM reactions
-                if (data.sentReactions) {
-                    if (!secureStorage.cache.sentReactions) {
-                        secureStorage.cache.sentReactions = {};
-                    }
-                    for (const [streamId, reactions] of Object.entries(data.sentReactions)) {
-                        if (!secureStorage.cache.sentReactions[streamId]) {
-                            secureStorage.cache.sentReactions[streamId] = reactions;
-                            dataImported = true;
-                        }
-                    }
-                }
-
-                // Import username
-                if (data.username && !secureStorage.cache.username) {
-                    secureStorage.cache.username = data.username;
-                    dataImported = true;
-                }
-
-                // Import blocked peers (union — never lose a block)
-                if (data.blockedPeers && data.blockedPeers.length > 0) {
-                    if (!secureStorage.cache.blockedPeers) {
-                        secureStorage.cache.blockedPeers = [];
-                    }
-                    for (const addr of data.blockedPeers) {
-                        const normalized = addr.toLowerCase();
-                        if (!secureStorage.cache.blockedPeers.includes(normalized)) {
-                            secureStorage.cache.blockedPeers.push(normalized);
-                            dataImported = true;
-                        }
-                    }
-                }
-
-                // Import DM left-at timestamps (don't overwrite existing)
-                if (data.dmLeftAt) {
-                    if (!secureStorage.cache.dmLeftAt) {
-                        secureStorage.cache.dmLeftAt = {};
-                    }
-                    for (const [peer, ts] of Object.entries(data.dmLeftAt)) {
-                        if (!secureStorage.cache.dmLeftAt[peer]) {
-                            secureStorage.cache.dmLeftAt[peer] = ts;
-                            dataImported = true;
-                        }
-                    }
-                }
-
-                // Save to storage
-                await secureStorage.saveToStorage();
+                const summary = await importBackupData(data, { secureStorage, channelManager });
 
                 // Import image blobs from backup into IDB ledger
                 // (must happen AFTER loadWalletWithProgress → init → storageKey is set)
@@ -600,10 +526,15 @@ class WalletFlows {
                     await secureStorage.importImageBlobs(result.imageBlobs);
                 }
 
-                // If data was imported, reload channels and re-render UI
-                if (dataImported) {
-                    channelManager.loadChannels();
+                if (summary.changed) {
                     uiController.renderChannelList();
+                }
+
+                // onWalletConnected painted the header BEFORE this import ran,
+                // so the backup's display name never reached it — repaint now.
+                // A later ENS resolution still overrides, same as on connect.
+                if (secureStorage.cache.username) {
+                    headerUI.updateDisplayName(secureStorage.cache.username);
                 }
             }
 

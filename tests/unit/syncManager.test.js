@@ -560,6 +560,50 @@ describe('syncManager', () => {
             const imported = secureStorage.importFromSync.mock.calls[0][0];
             expect(imported.channels.map(c => c.messageStreamId)).toContain('ch-new');
         });
+
+        it('should keep a channel added to the cache while the merge ran', async () => {
+            authManager.wallet = { privateKey: '0x1234' };
+            authManager.getAddress.mockReturnValue('0xabc123');
+
+            const emptyState = {
+                sentMessages: {},
+                sentReactions: {},
+                channels: [],
+                channelsLeftAt: {},
+                blockedPeers: [],
+                dmLeftAt: {},
+                trustedContacts: {},
+                ensCache: {},
+                username: null,
+                graphApiKey: null
+            };
+            // First export feeds the merge; the second (the live re-merge
+            // after the merge completes) sees a channel imported meanwhile.
+            secureStorage.exportForBackup
+                .mockReturnValueOnce(emptyState)
+                .mockReturnValueOnce({
+                    ...emptyState,
+                    channels: [{ messageStreamId: 'ch-imported', name: 'Imported' }]
+                });
+
+            dmCrypto.decrypt.mockResolvedValue({
+                type: 'sync',
+                v: 1,
+                ts: 1000,
+                data: { channels: [{ messageStreamId: 'ch-remote', name: 'Remote' }] }
+            });
+
+            streamrController.fetchPartitionHistory.mockResolvedValue([
+                { content: { ct: 'enc' }, publisherId: '0xABC123', timestamp: 1000 }
+            ]);
+
+            await syncManager.pullSync();
+
+            const imported = secureStorage.importFromSync.mock.calls[0][0];
+            const ids = imported.channels.map(c => c.messageStreamId);
+            expect(ids).toContain('ch-imported');
+            expect(ids).toContain('ch-remote');
+        });
     });
 
     describe('mergeState', () => {

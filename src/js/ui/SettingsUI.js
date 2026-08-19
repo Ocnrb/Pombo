@@ -3,6 +3,7 @@ import { getAvatarHtml } from './AvatarGenerator.js';
 import { GasEstimator } from './GasEstimator.js';
 import { CONFIG, getNetworkParams } from '../config.js';
 import { MESSAGE_STREAM } from '../streamConstants.js';
+import { importBackupData } from '../backupImport.js';
 
 /**
  * Settings UI Manager
@@ -545,91 +546,10 @@ class SettingsUI {
             }
 
             // Import data into current account's secure storage
-            const data = result.data;
-            let channelsImported = 0;
-            let contactsImported = 0;
-
-            // Import channels
-            if (data.channels && data.channels.length > 0) {
-                const existingIds = new Set((this.secureStorage.cache.channels || []).map(c => c.messageStreamId || c.streamId));
-                for (const channel of data.channels) {
-                    const chId = channel.messageStreamId || channel.streamId;
-                    if (chId && !existingIds.has(chId)) {
-                        this.secureStorage.cache.channels.push(channel);
-                        channelsImported++;
-                    }
-                }
-            }
-
-            // Import trusted contacts
-            if (data.trustedContacts) {
-                for (const [addr, contact] of Object.entries(data.trustedContacts)) {
-                    if (!this.secureStorage.cache.trustedContacts[addr]) {
-                        this.secureStorage.cache.trustedContacts[addr] = contact;
-                        contactsImported++;
-                    }
-                }
-            }
-
-            // Import sent DM messages
-            let dmImported = 0;
-            if (data.sentMessages) {
-                if (!this.secureStorage.cache.sentMessages) {
-                    this.secureStorage.cache.sentMessages = {};
-                }
-                for (const [streamId, msgs] of Object.entries(data.sentMessages)) {
-                    if (!this.secureStorage.cache.sentMessages[streamId]) {
-                        this.secureStorage.cache.sentMessages[streamId] = msgs;
-                        dmImported++;
-                    }
-                }
-            }
-
-            // Import sent DM reactions
-            if (data.sentReactions) {
-                if (!this.secureStorage.cache.sentReactions) {
-                    this.secureStorage.cache.sentReactions = {};
-                }
-                for (const [streamId, reactions] of Object.entries(data.sentReactions)) {
-                    if (!this.secureStorage.cache.sentReactions[streamId]) {
-                        this.secureStorage.cache.sentReactions[streamId] = reactions;
-                        dmImported++;
-                    }
-                }
-            }
-
-            // Import username (only if not set)
-            if (data.username && !this.secureStorage.cache.username) {
-                this.secureStorage.cache.username = data.username;
-            }
-
-            // Import blocked peers (union — never lose a block)
-            if (data.blockedPeers && data.blockedPeers.length > 0) {
-                if (!this.secureStorage.cache.blockedPeers) {
-                    this.secureStorage.cache.blockedPeers = [];
-                }
-                for (const addr of data.blockedPeers) {
-                    const normalized = addr.toLowerCase();
-                    if (!this.secureStorage.cache.blockedPeers.includes(normalized)) {
-                        this.secureStorage.cache.blockedPeers.push(normalized);
-                    }
-                }
-            }
-
-            // Import DM left-at timestamps (don't overwrite existing)
-            if (data.dmLeftAt) {
-                if (!this.secureStorage.cache.dmLeftAt) {
-                    this.secureStorage.cache.dmLeftAt = {};
-                }
-                for (const [peer, ts] of Object.entries(data.dmLeftAt)) {
-                    if (!this.secureStorage.cache.dmLeftAt[peer]) {
-                        this.secureStorage.cache.dmLeftAt[peer] = ts;
-                    }
-                }
-            }
-
-            // Save
-            await this.secureStorage.saveToStorage();
+            const summary = await importBackupData(result.data, {
+                secureStorage: this.secureStorage,
+                channelManager: this.channelManager
+            });
 
             // Import image blobs from backup into IDB ledger
             if (result.imageBlobs && result.imageBlobs.length > 0) {
@@ -637,18 +557,17 @@ class SettingsUI {
             }
 
             this.showNotification(
-                `Imported: ${channelsImported} channels, ${contactsImported} contacts` +
-                (dmImported > 0 ? `, ${dmImported} DM histories` : ''),
+                `Imported: ${summary.channelsImported} channels, ${summary.contactsImported} contacts` +
+                (summary.dmHistories > 0 ? `, ${summary.dmHistories} DM histories` : ''),
                 'success'
             );
 
-            if (channelsImported > 0) {
-                this.channelManager.loadChannels();
+            if (summary.changed) {
                 this.deps.renderChannelList?.();
             }
 
             // Reload trusted contacts in identity manager
-            if (contactsImported > 0) {
+            if (summary.contactsImported > 0) {
                 this.identityManager?.loadTrustedContacts?.();
             }
 

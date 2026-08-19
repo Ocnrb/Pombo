@@ -23,7 +23,7 @@ import { dmCrypto } from './dmCrypto.js';
 import { channelManager } from './channels.js';
 import { dmManager } from './dm.js';
 import { identityManager } from './identity.js';
-import { mergePayloadSeries as mergeSyncPayloadSeries, mergeSentMessages as mergeSyncSentMessages, mergeSentReactions as mergeSyncSentReactions, mergeState as mergeSyncState } from './syncMerge.js';
+import { mergePayloadSeries as mergeSyncPayloadSeries, mergeSentMessages as mergeSyncSentMessages, mergeSentReactions as mergeSyncSentReactions, mergeState as mergeSyncState, mergeChannels as mergeSyncChannels } from './syncMerge.js';
 import { syncWorkerClient } from './workers/syncWorkerClient.js';
 
 const getNow = () => (
@@ -520,6 +520,22 @@ class SyncManager {
                 CONFIG.dm.maxSentMessages
             );
             const mergeCompletedAt = getNow();
+
+            // The worker merged against a snapshot, and importFromSync
+            // replaces the channel slice wholesale — a channel added while
+            // the merge ran (a backup import, a join) would be dropped.
+            // Channels form an LWW-element-set, so re-merging against the
+            // live cache is idempotent and keeps every entry added since the
+            // snapshot while leave tombstones still remove theirs.
+            const liveState = secureStorage.exportForBackup();
+            const rebasedChannels = mergeSyncChannels(
+                liveState.channels,
+                merged.channels,
+                liveState.channelsLeftAt,
+                merged.channelsLeftAt
+            );
+            merged.channels = rebasedChannels.channels;
+            merged.channelsLeftAt = rebasedChannels.channelsLeftAt;
 
             // Apply final merged state
             const importStartedAt = getNow();
