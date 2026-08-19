@@ -646,13 +646,11 @@ class ChannelModalsUI {
         this.deps.modalManager?.show('gate-entry-modal');
 
         const titleEl = document.getElementById('gate-entry-title');
-        const subtitleEl = document.getElementById('gate-entry-subtitle');
         if (titleEl) {
             titleEl.textContent = renewal
                 ? (name ? `Renew ${name}` : 'Renew Subscription')
                 : (name ? `Join ${name}` : 'Join Gated Channel');
         }
-        if (subtitleEl) subtitleEl.textContent = streamId;
 
         const cancelBtn = document.getElementById('gate-entry-cancel-btn');
         if (cancelBtn) cancelBtn.onclick = () => this.hideGateEntryModal();
@@ -669,15 +667,47 @@ class ChannelModalsUI {
         const entry = this._gateEntry;
         if (!entry) return;
         const conditionEl = document.getElementById('gate-entry-condition');
-        const statusBox = document.getElementById('gate-entry-status-box');
+        const stackEl = document.getElementById('gate-entry-stack');
+        const verbEl = document.getElementById('gate-entry-verb');
+        const valueEl = document.getElementById('gate-entry-value');
+        const qualifierEl = document.getElementById('gate-entry-qualifier');
         const statusEl = document.getElementById('gate-entry-status');
         const noteEl = document.getElementById('gate-entry-note');
         const actionBtn = document.getElementById('gate-entry-action-btn');
         const recheckBtn = document.getElementById('gate-entry-recheck-btn');
         const joinBtn = document.getElementById('gate-entry-join-btn');
 
-        if (conditionEl) conditionEl.textContent = 'Loading…';
-        statusBox?.classList.add('hidden');
+        // Access stack (Explore card anatomy) for real gates; the prose line
+        // stays for NONE mode and while loading.
+        const showStack = (verb, value, qualifier, paid) => {
+            if (verbEl) {
+                verbEl.textContent = verb;
+                verbEl.className = paid
+                    ? 'text-[10px] uppercase tracking-[0.2em] text-[#F6851B]/70'
+                    : 'text-[10px] uppercase tracking-[0.2em] text-white/40';
+            }
+            if (valueEl) valueEl.textContent = value;
+            if (qualifierEl) qualifierEl.textContent = qualifier;
+            stackEl?.classList.remove('hidden');
+            conditionEl?.classList.add('hidden');
+        };
+        // One line, state-colored: green = access granted, red = blocked,
+        // dim = neutral.
+        const showStatus = (text, tone) => {
+            if (!statusEl) return;
+            statusEl.textContent = text;
+            statusEl.className = 'mt-4 text-sm text-center ' + (
+                tone === 'ok' ? 'text-emerald-400/90'
+                    : tone === 'bad' ? 'text-red-400/80'
+                        : 'text-white/50');
+        };
+
+        if (conditionEl) {
+            conditionEl.textContent = 'Loading…';
+            conditionEl.classList.remove('hidden');
+        }
+        stackEl?.classList.add('hidden');
+        statusEl?.classList.add('hidden');
         noteEl?.classList.add('hidden');
         actionBtn?.classList.add('hidden');
         recheckBtn?.classList.add('hidden');
@@ -725,20 +755,23 @@ class ChannelModalsUI {
                 // WPOL-priced gates read POL everywhere the user sees a cost —
                 // pay() auto-wraps, plain POL is literally what they spend
                 const paySymbol = meta.symbol === 'WPOL' ? 'POL' : meta.symbol;
-                if (conditionEl) conditionEl.textContent =
-                    `${fmt(info.price, meta.decimals)} ${paySymbol} for ${daysLabel} days. Renewing extends from the current end.`;
+                showStack('Subscribe', `${fmt(info.price, meta.decimals)} ${paySymbol}`,
+                    `per ${daysLabel} ${days === 1 ? 'day' : 'days'}`, true);
                 const until = me ? await gateManager.paidUntil(entry.gateAddress, me) : 0n;
                 const msLeft = Number(until) * 1000 - Date.now();
                 const active = msLeft > 0;
-                statusBox?.classList.remove('hidden');
-                if (statusEl) {
-                    statusEl.textContent = active
-                        ? `Subscribed until ${new Date(Number(until) * 1000).toLocaleString()} (${formatRemaining(msLeft)} left)`
-                        : (until > 0n ? 'Subscription expired' : 'No active subscription');
+                if (active) {
+                    const when = new Date(Number(until) * 1000)
+                        .toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+                    showStatus(`Active until ${when} · ${formatRemaining(msLeft)} left`, 'ok');
+                } else if (until > 0n) {
+                    showStatus('Subscription expired', 'bad');
+                } else {
+                    showStatus('No active subscription', 'dim');
                 }
-                if (!active && meta.symbol === 'WPOL' && noteEl) {
+                if (noteEl && entry.renewal) {
                     noteEl.classList.remove('hidden');
-                    noteEl.textContent = 'Plain POL works — it is wrapped automatically when you pay.';
+                    noteEl.textContent = 'Renewing extends from the current end.';
                 }
                 const startPay = async () => {
                     actionBtn.disabled = true;
@@ -780,18 +813,17 @@ class ChannelModalsUI {
 
             // TOKEN_BALANCE / NFT_OWNERSHIP
             const isNft = info.mode === GATE_MODE.NFT_OWNERSHIP;
-            if (conditionEl) {
-                conditionEl.textContent = isNft
-                    ? `Hold a ${meta.symbol} NFT.`
-                    : `Hold at least ${fmt(info.minBalance, meta.decimals)} ${meta.symbol}.`;
-            }
+            showStack('Hold',
+                isNft ? `${meta.symbol} NFT` : `${fmt(info.minBalance, meta.decimals)} ${meta.symbol}`,
+                'in your wallet', false);
             const balance = me ? await gateManager.getTokenBalance(info.token, me) : 0n;
             const holds = isNft ? balance > 0n : balance >= info.minBalance;
-            statusBox?.classList.remove('hidden');
-            if (statusEl) {
-                statusEl.textContent = isNft
-                    ? (holds ? `You hold ${balance} — access granted` : 'You hold none — acquire one to enter')
-                    : `Your balance: ${fmt(balance, meta.decimals)} ${meta.symbol}${holds ? ' — access granted' : ''}`;
+            if (isNft) {
+                if (holds) showStatus(`You hold ${balance} · access granted`, 'ok');
+                else showStatus('You hold none', 'bad');
+            } else {
+                const bal = `Balance: ${fmt(balance, meta.decimals)} ${meta.symbol}`;
+                showStatus(holds ? `${bal} · access granted` : bal, holds ? 'ok' : 'bad');
             }
             if (holds && actionBtn) {
                 actionBtn.classList.remove('hidden');

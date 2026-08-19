@@ -2471,6 +2471,10 @@ video {
   letter-spacing: 0.08em;
 }
 
+.tracking-\[0\.2em\] {
+  letter-spacing: 0.2em;
+}
+
 .tracking-tight {
   letter-spacing: -0.025em;
 }
@@ -2545,6 +2549,10 @@ video {
 .text-emerald-400 {
   --tw-text-opacity: 1;
   color: rgb(52 211 153 / var(--tw-text-opacity, 1));
+}
+
+.text-emerald-400\/90 {
+  color: rgb(52 211 153 / 0.9);
 }
 
 .text-emerald-500 {

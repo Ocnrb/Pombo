@@ -711,6 +711,18 @@ body {
     padding: 0.25rem 0.5rem;
 }
 
+/* Bubble-less content closing a group (jumbo emoji, media cards): the 12px
+   overhang is drawn against a bubble's frame. Without one the group's bottom
+   edge is the footer (timestamp) hanging under the content, so the avatar
+   rises past it — 4px bare-bubble padding + the 16px footer line — and
+   aligns with the CONTENT's bottom instead. */
+.message-group:has(.message-group-stack > .message-entry:last-child[data-emoji-only]) .message-group-avatar-rail,
+.message-group:has(.message-group-stack > .message-entry:last-child[data-type="file_announce"]) .message-group-avatar-rail,
+.message-group:has(.message-group-stack > .message-entry:last-child[data-type="storage_file_announce"]) .message-group-avatar-rail,
+.message-group:has(.message-group-stack > .message-entry:last-child[data-type="image"]) .message-group-avatar-rail {
+    margin-bottom: 20px;
+}
+
 .message-entry[data-emoji-only="true"] .message-content {
     font-size: 2.0rem;
     line-height: 1.3;

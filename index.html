@@ -1431,34 +1431,36 @@
     <!-- Modal: Gate Entry (Gated/Paid channels — requirement, standing, pay/join) -->
     <div id="gate-entry-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50">
         <div class="bg-[#111113] rounded-2xl p-5 w-[380px] max-w-full mx-4 border border-white/[0.06]">
-            <h3 id="gate-entry-title" class="text-base font-medium mb-1 text-white">Join Gated Channel</h3>
-            <p id="gate-entry-subtitle" class="text-xs text-white/40 mb-4 break-all"></p>
+            <h3 id="gate-entry-title" class="text-base font-medium text-center text-white">Join Gated Channel</h3>
 
-            <div class="space-y-3">
-                <div class="bg-white/[0.05] rounded-xl p-3 border border-white/[0.08]">
-                    <p class="text-xs text-white/30 uppercase tracking-wide mb-1">Requirement</p>
-                    <p id="gate-entry-condition" class="text-sm text-white/80 leading-relaxed">Loading…</p>
-                </div>
-                <div id="gate-entry-status-box" class="bg-white/[0.05] rounded-xl p-3 border border-white/[0.08] hidden">
-                    <p class="text-xs text-white/30 uppercase tracking-wide mb-1">Your Status</p>
-                    <p id="gate-entry-status" class="text-sm text-white/80 leading-relaxed"></p>
-                </div>
-                <p id="gate-entry-note" class="text-xs text-white/30 hidden"></p>
-                <button id="gate-entry-join-btn" class="text-xs text-white/40 hover:text-white/70 underline hidden">
+            <!-- Access stack: same anatomy as the Explore cards -->
+            <div id="gate-entry-stack" class="hidden mt-5 text-center">
+                <p id="gate-entry-verb" class="text-[10px] uppercase tracking-[0.2em] text-white/40"></p>
+                <p id="gate-entry-value" class="text-xl font-semibold text-white mt-1"></p>
+                <p id="gate-entry-qualifier" class="text-xs text-white/40 mt-1"></p>
+            </div>
+            <p id="gate-entry-condition" class="mt-5 text-sm text-white/70 text-center leading-relaxed">Loading…</p>
+
+            <p id="gate-entry-status" class="hidden mt-4 text-sm text-center"></p>
+            <p id="gate-entry-note" class="hidden mt-3 text-xs text-white/30 text-center"></p>
+            <div class="text-center">
+                <button id="gate-entry-join-btn" class="mt-3 text-xs text-white/40 hover:text-white/70 underline hidden">
                     Register membership on-chain (1 tx)
                 </button>
             </div>
 
-            <div class="flex gap-2 mt-5">
-                <button id="gate-entry-cancel-btn" class="flex-1 bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] text-white/50 text-sm font-medium px-3 py-2.5 rounded-xl transition">
-                    Cancel
-                </button>
-                <button id="gate-entry-recheck-btn" class="flex-1 bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] text-white/70 text-sm font-medium px-3 py-2.5 rounded-xl transition hidden">
-                    Check Again
-                </button>
-                <button id="gate-entry-action-btn" class="flex-1 bg-white hover:bg-[#f0f0f0] text-black text-sm font-medium px-3 py-2.5 rounded-xl transition hidden">
+            <div class="mt-6 space-y-2">
+                <button id="gate-entry-action-btn" class="w-full bg-white hover:bg-[#f0f0f0] text-black text-sm font-medium px-3 py-2.5 rounded-xl transition hidden">
                     Enter
                 </button>
+                <div class="flex gap-2">
+                    <button id="gate-entry-cancel-btn" class="flex-1 bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] text-white/50 text-sm font-medium px-3 py-2.5 rounded-xl transition">
+                        Cancel
+                    </button>
+                    <button id="gate-entry-recheck-btn" class="flex-1 bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] text-white/70 text-sm font-medium px-3 py-2.5 rounded-xl transition hidden">
+                        Check Again
+                    </button>
+                </div>
             </div>
         </div>
     </div>
