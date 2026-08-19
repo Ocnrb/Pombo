@@ -37,6 +37,7 @@ import { channelSettingsUI } from './ui/ChannelSettingsUI.js';
 import { contactsUI } from './ui/ContactsUI.js';
 import { messageContextMenuUI } from './ui/MessageContextMenuUI.js';
 import { pinnedBannerUI } from './ui/PinnedBannerUI.js';
+import { subscriptionBannerUI } from './ui/SubscriptionBannerUI.js';
 import { channelListUI } from './ui/ChannelListUI.js';
 import { chatAreaUI } from './ui/ChatAreaUI.js';
 import { inputUI } from './ui/InputUI.js';
@@ -222,6 +223,38 @@ class UIController {
             getActiveChannel: () => this.getActiveChannel()
         });
 
+        // SubscriptionBannerUI — paid-gate expiry warning + renew flow (N-F)
+        subscriptionBannerUI.setDependencies({
+            Logger,
+            channelManager,
+            authManager,
+            onRenew: (channel) => {
+                channelModalsUI.showGateEntryModal({
+                    streamId: channel.streamId,
+                    gateAddress: channel.gate.address,
+                    name: channel.name,
+                    renewal: true,
+                    retry: async () => {
+                        subscriptionBannerUI.noteRenewed(channel.streamId);
+                        // Key requests sent while expired were refused
+                        // silently — ask again now that the chain grants us
+                        try { await epochKeyManager.retryRequestIfWaiting(channel); }
+                        catch (e) { Logger.debug('post-renewal key request failed:', e.message); }
+                        chatAreaUI.renderMessages(channel.messages || [],
+                            () => this.attachReactionListeners());
+                    }
+                });
+            },
+            onStatusResolved: (streamId) => {
+                // Swap the empty-state ("waiting for keys" ↔ "expired") once
+                // the chain read lands; cheap, only fires on an empty timeline
+                const ch = channelManager.getCurrentChannel?.();
+                if (ch?.streamId === streamId && !(ch.messages?.length > 0)) {
+                    chatAreaUI.renderMessages(ch.messages || []);
+                }
+            }
+        });
+
         // ChannelListUI
         channelListUI.setDependencies({
             channelManager,
@@ -291,6 +324,10 @@ class UIController {
             pinnedBannerName: document.getElementById('pinned-banner-name'),
             pinnedBannerText: document.getElementById('pinned-banner-text'),
             pinnedBannerClose: document.getElementById('pinned-banner-close'),
+            subscriptionBanner: document.getElementById('subscription-banner'),
+            subscriptionBannerText: document.getElementById('subscription-banner-text'),
+            subscriptionBannerRenew: document.getElementById('subscription-banner-renew'),
+            subscriptionBannerDismiss: document.getElementById('subscription-banner-dismiss'),
             messageInput: document.getElementById('message-input'),
             messageInputContainer: document.getElementById('message-input-container'),
             sendMessageBtn: document.getElementById('send-message-btn'),
@@ -1247,6 +1284,14 @@ class UIController {
             name: this.elements.pinnedBannerName,
             text: this.elements.pinnedBannerText,
             closeBtn: this.elements.pinnedBannerClose
+        });
+
+        // Initialize paid-subscription banner UI
+        subscriptionBannerUI.init({
+            banner: this.elements.subscriptionBanner,
+            text: this.elements.subscriptionBannerText,
+            renewBtn: this.elements.subscriptionBannerRenew,
+            dismissBtn: this.elements.subscriptionBannerDismiss
         });
 
         // Initialize DM modals UI

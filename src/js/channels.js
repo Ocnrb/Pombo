@@ -2177,7 +2177,8 @@ class ChannelManager {
                         canGrant: m.isOwner || m.moderator,
                         canEdit: m.isOwner,
                         canDelete: m.isOwner,
-                        isOwner: m.isOwner
+                        isOwner: m.isOwner,
+                        paidUntil: m.paidUntil || 0
                     });
                 }
             } catch (error) {
@@ -2838,6 +2839,16 @@ class ChannelManager {
         } finally {
             channel.initialLoadInProgress = false;
             channel._epochRefreshRunning = false;
+        }
+        // The -3 artifacts fetched at open were epoch-sealed and unreadable
+        // until this key arrived — pins/moderation and a hidden channel's
+        // image need their own re-pull (the refresh above only covers -1;
+        // the admin poller would take up to a full tick to converge).
+        await this.refreshAdminState(messageStreamId);
+        const adminId = channel.adminStreamId || deriveAdminId(messageStreamId);
+        if (adminId) {
+            channelImageManager.get(adminId, { password: channel.password || null, force: true })
+                .catch(() => {});
         }
         this.notifyHandlers('initial_history_complete', { streamId: messageStreamId });
     }

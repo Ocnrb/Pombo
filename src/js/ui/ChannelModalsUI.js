@@ -4,6 +4,7 @@
  */
 
 import { GasEstimator } from './GasEstimator.js';
+import { formatRemaining } from './SubscriptionBannerUI.js';
 import { authManager } from '../auth.js';
 import { streamrController } from '../streamr.js';
 import { CONFIG } from '../config.js';
@@ -634,14 +635,23 @@ class ChannelModalsUI {
      * reads the gate mode on-chain and shows the requirement, the user's
      * standing, and the pay()/join() actions. `retry` re-runs the join that
      * was denied with GATE_ACCESS_DENIED.
+     *
+     * `renewal: true` reuses the screen for a member renewing from inside a
+     * paid channel: the pay action is always offered (renewing early extends
+     * from the current end), there is no "Enter Channel", and `retry` runs
+     * after payment instead of re-joining.
      */
-    async showGateEntryModal({ streamId, gateAddress, name = null, retry = null }) {
-        this._gateEntry = { streamId, gateAddress, name, retry };
+    async showGateEntryModal({ streamId, gateAddress, name = null, retry = null, renewal = false }) {
+        this._gateEntry = { streamId, gateAddress, name, retry, renewal };
         this.deps.modalManager?.show('gate-entry-modal');
 
         const titleEl = document.getElementById('gate-entry-title');
         const subtitleEl = document.getElementById('gate-entry-subtitle');
-        if (titleEl) titleEl.textContent = name ? `Join ${name}` : 'Join Gated Channel';
+        if (titleEl) {
+            titleEl.textContent = renewal
+                ? (name ? `Renew ${name}` : 'Renew Subscription')
+                : (name ? `Join ${name}` : 'Join Gated Channel');
+        }
         if (subtitleEl) subtitleEl.textContent = streamId;
 
         const cancelBtn = document.getElementById('gate-entry-cancel-btn');
@@ -718,44 +728,51 @@ class ChannelModalsUI {
                 if (conditionEl) conditionEl.textContent =
                     `${fmt(info.price, meta.decimals)} ${paySymbol} for ${daysLabel} days. Renewing extends from the current end.`;
                 const until = me ? await gateManager.paidUntil(entry.gateAddress, me) : 0n;
-                const active = until * 1000n > BigInt(Date.now());
+                const msLeft = Number(until) * 1000 - Date.now();
+                const active = msLeft > 0;
                 statusBox?.classList.remove('hidden');
                 if (statusEl) {
                     statusEl.textContent = active
-                        ? `Subscribed until ${new Date(Number(until) * 1000).toLocaleString()}`
-                        : 'No active subscription';
+                        ? `Subscribed until ${new Date(Number(until) * 1000).toLocaleString()} (${formatRemaining(msLeft)} left)`
+                        : (until > 0n ? 'Subscription expired' : 'No active subscription');
                 }
                 if (!active && meta.symbol === 'WPOL' && noteEl) {
                     noteEl.classList.remove('hidden');
                     noteEl.textContent = 'Plain POL works — it is wrapped automatically when you pay.';
                 }
+                const startPay = async () => {
+                    actionBtn.disabled = true;
+                    try {
+                        this.notificationUI?.showLoadingToast('Paying subscription...', 'Confirm may take a moment');
+                        await gateManager.pay(entry.gateAddress, (step) => {
+                            this.notificationUI?.showLoadingToast(
+                                step === 'wrap' ? 'Wrapping POL...'
+                                    : step === 'approve' ? 'Approving token...'
+                                        : 'Paying subscription...',
+                                'Waiting for the transaction'
+                            );
+                        });
+                        this.notificationUI?.hideLoadingToast();
+                        await finishJoin(gateManager);
+                    } catch (error) {
+                        this.notificationUI?.hideLoadingToast();
+                        this.showNotification('Payment failed: ' + error.message, 'error');
+                        actionBtn.disabled = false;
+                    }
+                };
                 if (actionBtn) {
                     actionBtn.classList.remove('hidden');
-                    if (active) {
+                    if (entry.renewal) {
+                        actionBtn.textContent = active
+                            ? `Renew — ${fmt(info.price, meta.decimals)} ${paySymbol}`
+                            : `Pay ${fmt(info.price, meta.decimals)} ${paySymbol}`;
+                        actionBtn.onclick = startPay;
+                    } else if (active) {
                         actionBtn.textContent = 'Enter Channel';
                         actionBtn.onclick = () => finishJoin(gateManager);
                     } else {
                         actionBtn.textContent = `Pay ${fmt(info.price, meta.decimals)} ${paySymbol}`;
-                        actionBtn.onclick = async () => {
-                            actionBtn.disabled = true;
-                            try {
-                                this.notificationUI?.showLoadingToast('Paying subscription...', 'Confirm may take a moment');
-                                await gateManager.pay(entry.gateAddress, (step) => {
-                                    this.notificationUI?.showLoadingToast(
-                                        step === 'wrap' ? 'Wrapping POL...'
-                                            : step === 'approve' ? 'Approving token...'
-                                                : 'Paying subscription...',
-                                        'Waiting for the transaction'
-                                    );
-                                });
-                                this.notificationUI?.hideLoadingToast();
-                                await finishJoin(gateManager);
-                            } catch (error) {
-                                this.notificationUI?.hideLoadingToast();
-                                this.showNotification('Payment failed: ' + error.message, 'error');
-                                actionBtn.disabled = false;
-                            }
-                        };
+                        actionBtn.onclick = startPay;
                     }
                 }
                 return;

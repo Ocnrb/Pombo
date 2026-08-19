@@ -583,9 +583,13 @@ class StreamrController {
                 // contract (publish/subscribe with erc1271Contract), so
                 // membership changes are gate transactions, not stream txs.
                 //
-                // -3 note: the clone necessarily holds publish there too, so
-                // the transport no longer enforces owner-only writes — that
-                // moved to ingest (resolveAuthor drops non-admin signers).
+                // -3 is the exception: the clone is SUBSCRIBE-only there.
+                // Members read moderation through it (erc1271 subscribe), but
+                // PUBLISH stays the owner's — the creator keeps their registry
+                // permissions — so the transport enforces owner-only admin
+                // writes exactly like native channels. The owner publishes -3
+                // as the ACCOUNT; their address is the streamId prefix, so
+                // this leaks nothing new.
                 const gateMembers = [options.gateAddress];
                 for (const [stream, label] of [
                     [messageStream, 'Message'],
@@ -600,8 +604,13 @@ class StreamrController {
                         // the channel image. P0 (ADMIN_STATE) stays an epoch
                         // envelope — the public only ever sees ciphertext.
                         // Hidden channels keep the clone as the sole grantee.
-                        const perms = (stream === adminStream && exposure === 'visible')
-                            ? { public: true, publicPermissions: ['subscribe'], members: gateMembers }
+                        const perms = stream === adminStream
+                            ? (exposure === 'visible'
+                                ? {
+                                    public: true, publicPermissions: ['subscribe'],
+                                    members: gateMembers, memberPermissions: ['subscribe']
+                                }
+                                : { public: false, members: gateMembers, memberPermissions: ['subscribe'] })
                             : { public: false, members: gateMembers };
                         await this.setStreamPermissions(stream.id, perms);
                         Logger.info(`✓ ${label} stream: gate clone permissions set`);
@@ -2057,17 +2066,36 @@ class StreamrController {
      * the channel admin (with the clone holding the publish grant, the
      * transport no longer enforces owner-only writes — this check replaces it).
      *
+     * `live: true` (subscription handlers only, never resends) additionally
+     * drops authors whose CURRENT gate access has lapsed — the transport
+     * accepts an expired subscriber's messages until the next rotation
+     * (membership is sticky by design, §7.11), so honest clients cut them at
+     * ingest. Fail-OPEN: an unreachable chain renders the message rather
+     * than hiding legitimate traffic; the fail-closed side stays in the key
+     * layer. Storage resends are exempt on purpose — without storedAt (Q11)
+     * a resent message's write-time cannot be judged.
+     *
      * @param {string} streamId
      * @param {Object} streamMessage - Raw SDK StreamMessage
      * @param {string} publisherId - Transport publisher already read off it
+     * @param {Object} [options]
+     * @param {boolean} [options.live=false] - Live delivery (not a resend)
      * @returns {Promise<string|null>} Author address, or null to drop
      */
-    async resolveAuthor(streamId, streamMessage, publisherId) {
+    async resolveAuthor(streamId, streamMessage, publisherId, { live = false } = {}) {
         const channel = await this._gatedChannelFor(streamId);
         if (!channel) return publisherId ?? null;
 
         const gateAddress = channel.gate.address.toLowerCase();
         if ((publisherId || '').toLowerCase() !== gateAddress) {
+            // -3 as the ACCOUNT: the owner publishes the admin stream under
+            // their own address — the transport already validated the plain
+            // EVM signature, and the namespace prefix IS the authority.
+            // (Clone-published -3 below stays for pre-switch history.)
+            if (isAdminStream(streamId)) {
+                const admin = (channel.messageStreamId?.split('/')[0] || '').toLowerCase();
+                if ((publisherId || '').toLowerCase() === admin) return admin;
+            }
             // Not published through the clone — a foreign publisher on a gated
             // stream has no business here (permissions are clone-only).
             return null;
@@ -2081,6 +2109,14 @@ class StreamrController {
             const admin = (channel.messageStreamId?.split('/')[0] || '').toLowerCase();
             if (signer !== admin) {
                 Logger.warn(`resolveAuthor: non-admin ${signer} on gated admin stream — dropping`);
+                return null;
+            }
+        }
+        if (live && !isAdminStream(streamId) && !isKeysStream(streamId)) {
+            const { gateManager } = await import('./gate.js');
+            const access = await gateManager.checkAccessOrNull(channel.gate.address, signer);
+            if (access === false) {
+                Logger.info(`resolveAuthor: lapsed gate access for ${signer} — dropping live message`);
                 return null;
             }
         }
@@ -2351,7 +2387,7 @@ class StreamrController {
 
         return this.publishAs(
             this._accountIdentity, streamId, partition, envelope,
-            this._gateTransportOptions(channel)
+            this._gateTransportOptions(channel, streamId)
         );
     }
 
@@ -2362,8 +2398,15 @@ class StreamrController {
      * the account key signs the envelope, the clone is the on-wire publisher,
      * and receivers recover authorship from that signature (resolveAuthor).
      * Native channels return {} and keep the account as publisher (D3).
+     *
+     * The admin stream (-3) is the exception even in gated channels: its only
+     * legitimate writer is the owner, whose address is already the streamId
+     * prefix — publishing as the ACCOUNT (plain EVM) lets the network enforce
+     * owner-only writes there (new channels grant the clone subscribe-only on
+     * -3; old channels' clone grant stays, covered by the ingest check).
      */
-    _gateTransportOptions(channel) {
+    _gateTransportOptions(channel, streamId = null) {
+        if (streamId && isAdminStream(streamId)) return {};
         if (!channel?.gate?.address) {
             // A gated channel without its gate address (repair pending) must
             // fail LOUDLY: publishing as the account or an ephemeral key would
@@ -2745,9 +2788,9 @@ class StreamrController {
             const base = String(adminStreamId).replace(/-[1234]$/, '');
             const channel = channelManager.channels?.get(base + '-1');
             if (channel?.type === 'native' || channel?.type === 'gated' || channel?.gate?.address) {
-                // Gated: publishEpochEncrypted adds the ERC-1271 transport;
-                // owner-only authority on -3 is enforced at ingest by
-                // resolveAuthor (envelope signer must be the namespace admin).
+                // -3 publishes as the ACCOUNT on gated too (_gateTransportOptions):
+                // owner-only writes are the transport's job again. resolveAuthor
+                // keeps validating clone-published -3 for pre-switch history.
                 return await this.publishEpochEncrypted(
                     channel, adminStreamId, STREAM_CONFIG.ADMIN_STREAM.MODERATION, state);
             }
@@ -2894,15 +2937,16 @@ class StreamrController {
             const channel = channelManager.channels?.get(base + '-1');
             // Visible channels are storefronts: the image IS the marketing and
             // publishes in the CLEAR so non-members (Explore) can render it.
-            // Only the transport differs — gated still publishes as the clone.
             // Hidden channels keep their image sealed (epoch/password).
             if (channel?.exposure === 'visible') {
                 const clear = { ...payload, encrypted: false };
                 if (channel?.gate?.address) {
+                    // -3 publishes as the ACCOUNT in gated too — owner-only
+                    // writes are the transport's again (_gateTransportOptions)
                     return await this.publishAs(
                         this._accountIdentity, adminStreamId,
                         STREAM_CONFIG.ADMIN_STREAM.CHANNEL_IMAGE, clear,
-                        this._gateTransportOptions(channel));
+                        this._gateTransportOptions(channel, adminStreamId));
                 }
                 return await this.publish(adminStreamId, STREAM_CONFIG.ADMIN_STREAM.CHANNEL_IMAGE, clear);
             }
@@ -3348,7 +3392,7 @@ class StreamrController {
                     const transportPublisher = streamMessage && (typeof streamMessage.getPublisherId === 'function'
                         ? streamMessage.getPublisherId()
                         : streamMessage.publisherId);
-                    const publisherId = await this.resolveAuthor(streamId, streamMessage, transportPublisher);
+                    const publisherId = await this.resolveAuthor(streamId, streamMessage, transportPublisher, { live: true });
                     if (!publisherId) return;
                     await handler(data, publisherId);
                     return;
@@ -3375,7 +3419,7 @@ class StreamrController {
                     const transportPublisher = typeof streamMessage.getPublisherId === 'function'
                         ? streamMessage.getPublisherId()
                         : streamMessage.publisherId;
-                    const publisherId = await this.resolveAuthor(streamId, streamMessage, transportPublisher);
+                    const publisherId = await this.resolveAuthor(streamId, streamMessage, transportPublisher, { live: true });
                     if (!publisherId) return;
                     this.attachAccount(data, publisherId);
                 }
@@ -4301,7 +4345,7 @@ class StreamrController {
                     const transportPublisher = streamMessage && (typeof streamMessage.getPublisherId === 'function'
                         ? streamMessage.getPublisherId()
                         : streamMessage.publisherId);
-                    const publisherId = await this.resolveAuthor(streamId, streamMessage, transportPublisher);
+                    const publisherId = await this.resolveAuthor(streamId, streamMessage, transportPublisher, { live: true });
                     if (!publisherId) return;
                     await handler(data, publisherId);
                     return;
@@ -4329,7 +4373,7 @@ class StreamrController {
                     const transportPublisher = typeof streamMessage.getPublisherId === 'function'
                         ? streamMessage.getPublisherId()
                         : streamMessage.publisherId;
-                    const publisherId = await this.resolveAuthor(streamId, streamMessage, transportPublisher);
+                    const publisherId = await this.resolveAuthor(streamId, streamMessage, transportPublisher, { live: true });
                     if (!publisherId) return;
                     this.attachAccount(data, publisherId);
                 }

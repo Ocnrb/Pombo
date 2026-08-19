@@ -5,6 +5,7 @@
  */
 import { Logger } from '../logger.js';
 import { pinnedBannerUI } from './PinnedBannerUI.js';
+import { subscriptionBannerUI } from './SubscriptionBannerUI.js';
 
 // Forward declarations - dependencies injected via setDependencies()
 let channelManager = null;
@@ -231,6 +232,7 @@ class ChannelViewUI {
         
         // Hide pinned banner (no active channel)
         pinnedBannerUI.update();
+        subscriptionBannerUI.update();
         
         // Reset online users
         this._resetOnlineUsers();
@@ -278,6 +280,7 @@ class ChannelViewUI {
         
         // Hide pinned banner in Explore view
         pinnedBannerUI.update();
+        subscriptionBannerUI.update();
         
         // Close button: hide on mobile (pill nav handles navigation), show close on desktop
         if (isMobile) {
@@ -325,6 +328,7 @@ class ChannelViewUI {
         
         // Hide pinned banner (disconnected)
         pinnedBannerUI.update();
+        subscriptionBannerUI.update();
         
         // Reset online users
         this._resetOnlineUsers();

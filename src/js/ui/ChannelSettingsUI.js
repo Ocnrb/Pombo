@@ -1189,6 +1189,13 @@ class ChannelSettingsUI {
             } else if (canGrant) {
                 badgeHtml += '<span class="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded-full">Admin</span>';
             }
+            // Paid gates: each subscriber's own clock (N-F). Rows here passed
+            // the access filter, so the date is normally in the future.
+            const paidUntil = typeof member === 'object' ? (member.paidUntil || 0) : 0;
+            if (paidUntil > 0 && !memberIsOwner) {
+                const expired = paidUntil * 1000 <= Date.now();
+                badgeHtml += `<span class="text-xs ${expired ? 'text-red-400/80' : 'text-white/40'}">${expired ? 'expired' : 'until'} ${new Date(paidUntil * 1000).toLocaleDateString()}</span>`;
+            }
             if (isMe) {
                 badgeHtml += '<span class="text-xs text-white/60 ml-1">(you)</span>';
             }
@@ -1554,9 +1561,16 @@ class ChannelSettingsUI {
                     else if (m.allowed) tag = '<span class="text-xs text-white/40">Member</span>';
                     else if (m.everMember) tag = '<span class="text-xs text-white/25">Ex-member</span>';
                     else tag = '<span class="text-xs text-white/25">—</span>';
-                    html += `<div class="flex justify-between items-center py-1.5 px-2.5 bg-white/5 rounded-lg">
+                    // Paid gates: the subscription clock explains the tag —
+                    // "Ex-member · expired 3 Sep" is a lapsed subscriber
+                    let paidTag = '';
+                    if (m.paidUntil > 0 && !m.isOwner) {
+                        const expired = m.paidUntil * 1000 <= Date.now();
+                        paidTag = `<span class="text-xs ${expired ? 'text-red-400/60' : 'text-white/40'}">${expired ? 'expired' : 'until'} ${new Date(m.paidUntil * 1000).toLocaleDateString()}</span>`;
+                    }
+                    html += `<div class="flex justify-between items-center gap-2 py-1.5 px-2.5 bg-white/5 rounded-lg">
                         <span class="font-mono text-white/60">${escapeHtml(short)}</span>
-                        ${tag}
+                        <span class="flex items-center gap-2">${paidTag}${tag}</span>
                     </div>`;
                 }
                 this.elements.permissionsList.innerHTML = html
@@ -1741,12 +1755,16 @@ class ChannelSettingsUI {
      * Membership' — token/NFT show the condition, paid the price/period.
      * Async on purpose: the sync type label stands until the (cached) chain
      * reads answer, then only the label's text node is swapped.
+     *
+     * PAID member view adds the subscription clock as a second line ("6h
+     * left" / "Subscription expired") — this is the timer's home; the chat
+     * header stays clean (N-F).
      */
     async _applyGateAccessLabel(channel) {
         const gate = channel?.gate?.address;
         if (!gate || channel.type !== 'gated') return;
         try {
-            const { gateManager } = await import('../gate.js');
+            const { gateManager, GATE_MODE } = await import('../gate.js');
             const label = await gateManager.gateAccessLabel(gate);
             const current = this.deps.channelManager?.getCurrentChannel?.();
             if (current?.messageStreamId !== channel.messageStreamId) return;
@@ -1754,9 +1772,36 @@ class ChannelSettingsUI {
             if (span && span.lastChild?.nodeType === Node.TEXT_NODE) {
                 span.lastChild.textContent = label;
             }
+            await this._applyPaidClock(channel, gate, gateManager, GATE_MODE);
         } catch (e) {
             Logger.debug('Gate access label failed (keeping default):', e?.message);
         }
+    }
+
+    async _applyPaidClock(channel, gate, gateManager, GATE_MODE) {
+        const container = this.elements.channelSettingsType;
+        if (!container) return;
+        container.querySelector('#channel-settings-paid-left')?.remove();
+        const me = this.deps.authManager?.getAddress?.();
+        if (!me) return;
+        const info = await gateManager.getGateInfo(gate);
+        if (info.mode !== GATE_MODE.PAID || info.owner === me.toLowerCase()) return;
+        const until = await gateManager.paidUntilCached(gate, me);
+        if (until === null || until === 0) return; // unreadable, or never paid (moderator)
+        const current = this.deps.channelManager?.getCurrentChannel?.();
+        if (current?.messageStreamId !== channel.messageStreamId) return;
+        const { formatRemaining, WARNING_MS } = await import('./SubscriptionBannerUI.js');
+        const msLeft = until * 1000 - Date.now();
+        const line = document.createElement('div');
+        line.id = 'channel-settings-paid-left';
+        if (msLeft > 0) {
+            line.className = msLeft < WARNING_MS ? 'text-xs text-yellow-400/80 mt-1' : 'text-xs text-white/40 mt-1';
+            line.textContent = `${formatRemaining(msLeft)} left`;
+        } else {
+            line.className = 'text-xs text-red-400/80 mt-1';
+            line.textContent = 'Subscription expired';
+        }
+        container.appendChild(line);
     }
 
     /**

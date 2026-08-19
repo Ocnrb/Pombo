@@ -97,6 +97,8 @@ class GateManager {
         this._rpcIndex = 0;
         // (gate, user) → { value, at } — TTL'd like the SDK's ERC-1271 cache
         this._accessCache = new Map();
+        // (gate, user) → { until, at } — paidUntil in unix seconds, same TTL
+        this._paidCache = new Map();
         // gate → immutable params ({ owner, mode, token, minBalance, price, duration })
         this._infoCache = new Map();
         // token → { symbol, decimals } — immutable, fetched once
@@ -200,6 +202,22 @@ class GateManager {
      * (N-B backoff) and a healthy responder or recovered RPC answers then.
      */
     async checkAccess(gateAddress, userAddress) {
+        const value = await this.checkAccessOrNull(gateAddress, userAddress);
+        if (value === null) {
+            Logger.warn('gate: checkAccess unavailable — failing closed');
+            return false;
+        }
+        return value;
+    }
+
+    /**
+     * checkAccess for CONTENT filtering: null when the chain is unreachable,
+     * so callers can render the message (fail-open) instead of hiding
+     * legitimate traffic on an RPC hiccup. Key distribution must keep using
+     * the fail-closed checkAccess above. Failures are never cached.
+     * @returns {Promise<boolean|null>}
+     */
+    async checkAccessOrNull(gateAddress, userAddress) {
         const key = `${gateAddress.toLowerCase()}|${userAddress.toLowerCase()}`;
         const cached = this._accessCache.get(key);
         if (cached && Date.now() - cached.at < CONFIG.gate.checkAccessCacheMs) {
@@ -210,8 +228,8 @@ class GateManager {
             value = await this._withProvider(() =>
                 this._readContract(gateAddress).checkAccess(userAddress));
         } catch (error) {
-            Logger.warn('gate: checkAccess failed (fail-closed):', error.message);
-            return false;
+            Logger.warn('gate: checkAccess read failed:', error.message);
+            return null;
         }
         this._accessCache.set(key, { value, at: Date.now() });
         if (this._accessCache.size > 2000) {
@@ -231,6 +249,35 @@ class GateManager {
     paidUntil(gateAddress, userAddress) {
         return this._withProvider(() =>
             this._readContract(gateAddress).paidUntil(userAddress));
+    }
+
+    /**
+     * Cached paidUntil for UI chrome (banner, header, members panel) — one
+     * RPC read per TTL window instead of one per render. Cleared alongside
+     * the access cache, so a renewal is visible immediately.
+     * @returns {Promise<number|null>} Unix seconds (0 = never paid), or null
+     *   when the chain is unreachable — callers keep their last rendered
+     *   state instead of flashing "expired" on an RPC hiccup.
+     */
+    async paidUntilCached(gateAddress, userAddress) {
+        const key = `${gateAddress.toLowerCase()}|${userAddress.toLowerCase()}`;
+        const cached = this._paidCache.get(key);
+        if (cached && Date.now() - cached.at < CONFIG.gate.checkAccessCacheMs) {
+            return cached.until;
+        }
+        let until;
+        try {
+            until = Number(await this.paidUntil(gateAddress, userAddress));
+        } catch (error) {
+            Logger.warn('gate: paidUntil read failed:', error.message);
+            return null;
+        }
+        this._paidCache.set(key, { until, at: Date.now() });
+        if (this._paidCache.size > 2000) {
+            const oldest = this._paidCache.keys().next().value;
+            this._paidCache.delete(oldest);
+        }
+        return until;
     }
 
     /**
@@ -275,9 +322,13 @@ class GateManager {
      * @param {string} gateAddress
      * @param {string[]} [candidates] - Addresses to check (owner is implicit)
      * @returns {Promise<Array<{address: string, isOwner: boolean, access: boolean,
-     *   allowed: boolean, banned: boolean, everMember: boolean, erased: boolean}>>}
+     *   allowed: boolean, banned: boolean, everMember: boolean, erased: boolean,
+     *   paidUntil: number}>>}
      */
     async getGateMembers(gateAddress, candidates = []) {
+        // paidUntil is only meaningful (and only read) on PAID gates
+        const isPaid = await this.getGateInfo(gateAddress)
+            .then((info) => info.mode === GATE_MODE.PAID).catch(() => false);
         return this._withProvider(async () => {
             const gate = this._readContract(gateAddress);
             const owner = (await gate.owner()).toLowerCase();
@@ -290,15 +341,16 @@ class GateManager {
             }
 
             const members = await Promise.all(Array.from(addresses).map(async (address) => {
-                const [allowed, banned, everMember, erased, moderator, access] = await Promise.all([
+                const [allowed, banned, everMember, erased, moderator, access, paidUntil] = await Promise.all([
                     gate.allowlist(address), gate.banned(address),
                     gate.everMember(address), gate.erased(address),
                     // v1 gates predate the moderators getter — read as false
                     gate.moderators(address).catch(() => false),
-                    gate.checkAccess(address).catch(() => false)
+                    gate.checkAccess(address).catch(() => false),
+                    isPaid ? gate.paidUntil(address).then(Number).catch(() => 0) : 0
                 ]);
                 return {
-                    address, allowed, banned, everMember, erased, moderator, access,
+                    address, allowed, banned, everMember, erased, moderator, access, paidUntil,
                     isOwner: address === owner
                 };
             }));
@@ -312,10 +364,12 @@ class GateManager {
     /** Drop cached access for one user (after allow/ban) or a whole gate. */
     invalidateAccess(gateAddress, userAddress = null) {
         const prefix = gateAddress.toLowerCase();
-        for (const key of this._accessCache.keys()) {
-            if (!key.startsWith(prefix)) continue;
-            if (userAddress && key !== `${prefix}|${userAddress.toLowerCase()}`) continue;
-            this._accessCache.delete(key);
+        for (const cache of [this._accessCache, this._paidCache]) {
+            for (const key of cache.keys()) {
+                if (!key.startsWith(prefix)) continue;
+                if (userAddress && key !== `${prefix}|${userAddress.toLowerCase()}`) continue;
+                cache.delete(key);
+            }
         }
     }
 

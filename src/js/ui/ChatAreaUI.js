@@ -10,6 +10,7 @@ import { reactionManager } from './ReactionManager.js';
 import { mediaHandler } from './MediaHandler.js';
 import { previewModeUI } from './PreviewModeUI.js';
 import { pinnedBannerUI } from './PinnedBannerUI.js';
+import { subscriptionBannerUI } from './SubscriptionBannerUI.js';
 import { analyzeMessageGroups, getGroupPositionClass, analyzeSpacing, getSpacingClass, shouldGroup } from './MessageGrouper.js';
 import { escapeHtml, formatAddress } from './utils.js';
 import { getAvatarHtml } from './AvatarGenerator.js';
@@ -533,6 +534,7 @@ class ChatAreaUI {
         // Refresh pinned-message banner whenever we re-render (channel switch,
         // admin update, history complete, etc.).
         pinnedBannerUI.update();
+        subscriptionBannerUI.update();
 
         // While initial history reconciliation is in progress, render cached
         // messages if any exist (avoids hiding persisted state behind a spinner
@@ -582,19 +584,39 @@ class ChatAreaUI {
                 const waitingForKeys =
                     (effectiveChannel?.type === 'native' || effectiveChannel?.type === 'gated') &&
                     this.deps.epochKeyManager?.getWaitingInfo?.(effectiveChannel.messageStreamId)?.waiting;
-                this.messagesArea.innerHTML = waitingForKeys
-                    ? `
+                // On a paid gate an expired subscription is indistinguishable
+                // from "admin offline" at the key layer (refusals are silent),
+                // so the chain-read status decides which state to show.
+                const paidStatus = waitingForKeys && effectiveChannel?.gate?.address
+                    ? subscriptionBannerUI.getStatus(effectiveChannel.streamId)
+                    : null;
+                const subscriptionExpired = paidStatus?.paid
+                    && paidStatus.until * 1000 <= Date.now() && !paidStatus.accessNow;
+                if (subscriptionExpired) {
+                    this.messagesArea.innerHTML = `
+                    <div class="flex flex-col items-center justify-center h-full text-white/40 gap-3">
+                        <span class="text-sm">Your subscription has expired</span>
+                        <span class="text-xs text-white/25">Messages stay locked until you renew — renewing extends from the current end</span>
+                        <button id="empty-state-renew-btn" class="subscription-banner-renew">Renew subscription</button>
+                    </div>
+                `;
+                    this.messagesArea.querySelector('#empty-state-renew-btn')
+                        ?.addEventListener('click', () => subscriptionBannerUI.renewCurrent());
+                } else {
+                    this.messagesArea.innerHTML = waitingForKeys
+                        ? `
                     <div class="flex flex-col items-center justify-center h-full text-white/40 gap-3">
                         <div class="spinner" style="width: 24px; height: 24px;"></div>
                         <span class="text-sm">Waiting for channel keys…</span>
                         <span class="text-xs text-white/25">Another member needs to be online to share them</span>
                     </div>
                 `
-                    : `
+                        : `
                     <div class="flex items-center justify-center h-full text-white/40">
                         No messages yet. Start the conversation!
                     </div>
                 `;
+                }
             } else {
                 this.messagesArea.innerHTML = `
                     <div class="flex flex-col items-center justify-center h-full text-white/40 gap-3">
