@@ -141,6 +141,43 @@ export async function importBackupData(data, { secureStorage, channelManager }) 
         }
     }
 
+    // ---- Epoch keys (channel keys, per channel: union, local wins) ----
+    // The keys-stream protocol cannot always replace these: paid gates never
+    // re-distribute past epochs, and announces beyond the -4 retention can't
+    // anchor a re-adopted key. The manager picks them up from storage on the
+    // next channel open (loadPersistedState).
+    if (data.epochKeys && typeof data.epochKeys === 'object') {
+        if (!cache.epochKeys) cache.epochKeys = {};
+        for (const [streamId, incoming] of Object.entries(data.epochKeys)) {
+            if (!incoming || typeof incoming !== 'object') continue;
+            const local = cache.epochKeys[streamId];
+            if (!local) {
+                cache.epochKeys[streamId] = incoming;
+                summary.changed = true;
+                continue;
+            }
+            if (!local.epochs) local.epochs = {};
+            for (const [keyId, entry] of Object.entries(incoming.epochs || {})) {
+                if (!local.epochs[keyId]) {
+                    local.epochs[keyId] = entry;
+                    summary.changed = true;
+                }
+            }
+            if (!local.announces) local.announces = {};
+            for (const [epoch, ann] of Object.entries(incoming.announces || {})) {
+                if (!local.announces[epoch]) {
+                    local.announces[epoch] = ann;
+                    summary.changed = true;
+                }
+            }
+            if (typeof incoming.currentEpoch === 'number'
+                && incoming.currentEpoch > (local.currentEpoch || 0)) {
+                local.currentEpoch = incoming.currentEpoch;
+                summary.changed = true;
+            }
+        }
+    }
+
     if (summary.changed) {
         await secureStorage.saveToStorage();
         // Standard post-save hook (app.js wires it to a debounced sync push):

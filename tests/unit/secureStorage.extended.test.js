@@ -426,6 +426,86 @@ describe('secureStorage extended', () => {
             }
         });
 
+        it('applies the backup policy to the encrypted payload', async () => {
+            const mockEthers = {
+                randomBytes: (n) => new Uint8Array(n).fill(42),
+                toUtf8Bytes: (str) => new TextEncoder().encode(str),
+                scrypt: vi.fn().mockResolvedValue('0x' + 'ab'.repeat(32)),
+                getBytes: () => new Uint8Array(32).fill(0xab),
+                hexlify: (arr) => '0x' + Array.from(arr instanceof ArrayBuffer ? new Uint8Array(arr) : arr).map(b => b.toString(16).padStart(2, '0')).join('')
+            };
+
+            secureStorage.cache.ensCache = { '0xa': 'a.eth' };
+            secureStorage.cache.sliceTs = { username: 5 };
+            secureStorage.cache.epochKeys = { 'ch-1': { epochs: {}, currentEpoch: 2 } };
+            secureStorage.cache.sentMessages = {
+                peerInbox: [
+                    { id: 'm1', type: 'image', imageId: 'img-sent' },
+                    { id: 'm2', type: 'text', text: 'hi' }
+                ]
+            };
+
+            const blobsSpy = vi.spyOn(secureStorage, 'exportImageBlobs').mockResolvedValue([]);
+            const mockCryptoKey = await crypto.subtle.generateKey(
+                { name: 'AES-GCM', length: 256 }, false, ['encrypt']
+            );
+            const importKeySpy = vi.spyOn(crypto.subtle, 'importKey').mockResolvedValue(mockCryptoKey);
+            let plaintext;
+            const encryptSpy = vi.spyOn(crypto.subtle, 'encrypt').mockImplementation(async (alg, key, pt) => {
+                plaintext = pt;
+                return new ArrayBuffer(32);
+            });
+
+            const origEthers = globalThis.ethers;
+            globalThis.ethers = mockEthers;
+
+            try {
+                await secureStorage.exportAccountBackup({}, 'pass');
+
+                const payload = JSON.parse(new TextDecoder().decode(plaintext));
+                expect(payload.data.ensCache).toBeUndefined();
+                expect(payload.data.sliceTs).toBeUndefined();
+                expect(payload.data.epochKeys['ch-1'].currentEpoch).toBe(2);
+                expect(payload.data.username).toBe('backupuser');
+                // Media restricted to blobs the sent-message record references
+                expect([...blobsSpy.mock.calls[0][0]]).toEqual(['img-sent']);
+            } finally {
+                globalThis.ethers = origEthers;
+                importKeySpy.mockRestore();
+                encryptSpy.mockRestore();
+                blobsSpy.mockRestore();
+            }
+        });
+
+        it('exports no media when includeSentDmMedia is off', async () => {
+            const mockEthers = {
+                randomBytes: (n) => new Uint8Array(n).fill(42),
+                toUtf8Bytes: (str) => new TextEncoder().encode(str),
+                scrypt: vi.fn().mockResolvedValue('0x' + 'ab'.repeat(32)),
+                getBytes: () => new Uint8Array(32).fill(0xab),
+                hexlify: (arr) => '0x' + Array.from(arr instanceof ArrayBuffer ? new Uint8Array(arr) : arr).map(b => b.toString(16).padStart(2, '0')).join('')
+            };
+            const blobsSpy = vi.spyOn(secureStorage, 'exportImageBlobs').mockResolvedValue([]);
+            const mockCryptoKey = await crypto.subtle.generateKey(
+                { name: 'AES-GCM', length: 256 }, false, ['encrypt']
+            );
+            const importKeySpy = vi.spyOn(crypto.subtle, 'importKey').mockResolvedValue(mockCryptoKey);
+            const encryptSpy = vi.spyOn(crypto.subtle, 'encrypt').mockResolvedValue(new ArrayBuffer(32));
+
+            const origEthers = globalThis.ethers;
+            globalThis.ethers = mockEthers;
+
+            try {
+                await secureStorage.exportAccountBackup({}, 'pass', null, { includeSentDmMedia: false });
+                expect(blobsSpy).not.toHaveBeenCalled();
+            } finally {
+                globalThis.ethers = origEthers;
+                importKeySpy.mockRestore();
+                encryptSpy.mockRestore();
+                blobsSpy.mockRestore();
+            }
+        });
+
         it('should call progress callback during export', async () => {
             const mockEthers = {
                 randomBytes: (n) => new Uint8Array(n).fill(42),

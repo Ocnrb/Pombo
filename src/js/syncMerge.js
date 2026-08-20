@@ -121,6 +121,45 @@ export function mergeChannels(baseChannels, incomingChannels, baseLeftAt, incomi
 }
 
 /**
+ * Union-merge the epoch-key slice ({ messageStreamId: { epochs, announces,
+ * currentEpoch } }). Entries are content-addressed (keyId → immutable key,
+ * epoch → immutable announce), so union is exact: base wins per entry — a key
+ * this device already adopted must never regress — and currentEpoch only moves
+ * forward. `keepIds` (when given) drops channels the channel merge itself
+ * dropped, so a leave tombstone retires the keys the same way it retires the
+ * channel.
+ *
+ * @param {Object} base - Base epochKeys slice
+ * @param {Object} incoming - Incoming epochKeys slice
+ * @param {Set<string>|null} keepIds - Channel ids that survived the merge
+ * @returns {Object}
+ */
+export function mergeEpochKeys(base, incoming, keepIds = null) {
+    const result = {};
+    const streamIds = new Set([
+        ...Object.keys(base || {}),
+        ...Object.keys(incoming || {})
+    ]);
+
+    for (const streamId of streamIds) {
+        if (keepIds && !keepIds.has(streamId)) continue;
+        const b = base?.[streamId];
+        const i = incoming?.[streamId];
+        if (!b || !i) {
+            const only = b || i;
+            if (only && typeof only === 'object') result[streamId] = only;
+            continue;
+        }
+        const epochs = { ...(i.epochs || {}), ...(b.epochs || {}) };
+        const announces = { ...(i.announces || {}), ...(b.announces || {}) };
+        const currentEpoch = Math.max(b.currentEpoch || 0, i.currentEpoch || 0);
+        result[streamId] = { epochs, announces, currentEpoch };
+    }
+
+    return result;
+}
+
+/**
  * Defaults for the timestamped latest-wins slices.
  */
 const SLICE_DEFAULTS = {
@@ -186,6 +225,11 @@ export function mergeState(base, incoming, maxSentMessages = CONFIG.dm.maxSentMe
         ),
         channels,
         channelsLeftAt,
+        epochKeys: mergeEpochKeys(
+            base?.epochKeys,
+            incoming?.epochKeys,
+            new Set(channels.map(c => c.messageStreamId))
+        ),
         blockedPeers: pickSlice('blockedPeers'),
         dmLeftAt: pickSlice('dmLeftAt'),
         trustedContacts: pickSlice('trustedContacts'),

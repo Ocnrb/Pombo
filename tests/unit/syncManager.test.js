@@ -607,6 +607,67 @@ describe('syncManager', () => {
     });
 
     describe('mergeState', () => {
+        it('should union-merge epoch keys, base wins per entry', () => {
+            const base = {
+                channels: [{ messageStreamId: 'ch-1', joinedAt: 1000 }],
+                epochKeys: {
+                    'ch-1': {
+                        epochs: { kid2: { keyHex: '0xlocal', epoch: 2 } },
+                        announces: { 2: { keyId: 'kid2' } },
+                        currentEpoch: 2
+                    }
+                }
+            };
+            const incoming = {
+                channels: [{ messageStreamId: 'ch-1', joinedAt: 1000 }],
+                epochKeys: {
+                    'ch-1': {
+                        epochs: {
+                            kid1: { keyHex: '0xold', epoch: 1 },
+                            kid2: { keyHex: '0xremote', epoch: 2 }
+                        },
+                        announces: { 1: { keyId: 'kid1' } },
+                        currentEpoch: 1
+                    }
+                }
+            };
+
+            const result = syncManager.mergeState(base, incoming);
+
+            expect(result.epochKeys['ch-1'].epochs.kid1.keyHex).toBe('0xold');
+            expect(result.epochKeys['ch-1'].epochs.kid2.keyHex).toBe('0xlocal');
+            expect(result.epochKeys['ch-1'].announces[1].keyId).toBe('kid1');
+            expect(result.epochKeys['ch-1'].currentEpoch).toBe(2);
+        });
+
+        it('should keep epoch keys when the incoming payload predates the slice', () => {
+            const base = {
+                channels: [{ messageStreamId: 'ch-1', joinedAt: 1000 }],
+                epochKeys: { 'ch-1': { epochs: { kid1: { keyHex: '0xaa' } }, currentEpoch: 1 } }
+            };
+            const incoming = { channels: [{ messageStreamId: 'ch-1', joinedAt: 1000 }] };
+
+            const result = syncManager.mergeState(base, incoming);
+
+            expect(result.epochKeys['ch-1'].epochs.kid1.keyHex).toBe('0xaa');
+        });
+
+        it('should retire epoch keys with the channel their tombstone removed', () => {
+            const base = {
+                channels: [{ messageStreamId: 'ch-1', joinedAt: 1000 }],
+                epochKeys: { 'ch-1': { epochs: { kid1: { keyHex: '0xaa' } }, currentEpoch: 1 } }
+            };
+            const incoming = {
+                channels: [],
+                channelsLeftAt: { 'ch-1': 2000 }
+            };
+
+            const result = syncManager.mergeState(base, incoming);
+
+            expect(result.channels).toHaveLength(0);
+            expect(result.epochKeys['ch-1']).toBeUndefined();
+        });
+
         it('should merge sent messages by ID', () => {
             const base = {
                 sentMessages: {

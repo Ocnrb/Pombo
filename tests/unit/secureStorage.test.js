@@ -1316,6 +1316,7 @@ describe('secureStorage', () => {
                 expect(result).toEqual({
                     hasChanges: true,
                     channelsUpdated: true,
+                    epochKeysUpdated: false,
                     contactsUpdated: false,
                     blockedPeersUpdated: false,
                     usernameUpdated: false,
@@ -1333,6 +1334,7 @@ describe('secureStorage', () => {
                 expect(result).toEqual({
                     hasChanges: true,
                     channelsUpdated: false,
+                    epochKeysUpdated: false,
                     contactsUpdated: false,
                     blockedPeersUpdated: false,
                     usernameUpdated: true,
@@ -1377,6 +1379,7 @@ describe('secureStorage', () => {
                 expect(result).toEqual({
                     hasChanges: false,
                     channelsUpdated: false,
+                    epochKeysUpdated: false,
                     contactsUpdated: false,
                     blockedPeersUpdated: false,
                     usernameUpdated: false,

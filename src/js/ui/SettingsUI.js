@@ -291,10 +291,13 @@ class SettingsUI {
                             (progressModal.querySelector('p').textContent = 'Encrypting data with scrypt...');
 
                         // Create backup with scrypt (progress 0.4 to 1.0)
+                        const includeSentDmMedia =
+                            document.getElementById('backup-include-media')?.checked !== false;
                         const backup = await this.secureStorage.exportAccountBackup(
                             keystore,
                             password,
-                            (progress) => this.updateProgressModal(progressModal, 0.4 + progress * 0.6)
+                            (progress) => this.updateProgressModal(progressModal, 0.4 + progress * 0.6),
+                            { includeSentDmMedia }
                         );
 
                         this.hideProgressModal(progressModal);

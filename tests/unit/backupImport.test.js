@@ -176,6 +176,57 @@ describe('importBackupData', () => {
         expect(secureStorage.saveToStorage).toHaveBeenCalled();
     });
 
+    it('imports epoch keys for channels without local state', async () => {
+        const { secureStorage, channelManager, cache } = makeDeps();
+        const data = {
+            epochKeys: {
+                'ch-1': {
+                    epochs: { kid1: { keyHex: '0xaa', keyHash: '0xhh', epoch: 1 } },
+                    announces: { 1: { keyId: 'kid1', keyHash: '0xhh' } },
+                    currentEpoch: 1
+                }
+            }
+        };
+
+        const summary = await importBackupData(data, { secureStorage, channelManager });
+
+        expect(cache.epochKeys['ch-1'].epochs.kid1.keyHex).toBe('0xaa');
+        expect(summary.changed).toBe(true);
+        expect(secureStorage.saveToStorage).toHaveBeenCalled();
+    });
+
+    it('union-merges epoch keys, local wins per entry', async () => {
+        const { secureStorage, channelManager, cache } = makeDeps({
+            epochKeys: {
+                'ch-1': {
+                    epochs: { kid2: { keyHex: '0xlocal', keyHash: '0xh2', epoch: 2 } },
+                    announces: { 2: { keyId: 'kid2' } },
+                    currentEpoch: 2
+                }
+            }
+        });
+        const data = {
+            epochKeys: {
+                'ch-1': {
+                    epochs: {
+                        kid1: { keyHex: '0xold', keyHash: '0xh1', epoch: 1 },
+                        kid2: { keyHex: '0xbackup', keyHash: '0xh2', epoch: 2 }
+                    },
+                    announces: { 1: { keyId: 'kid1' } },
+                    currentEpoch: 1
+                }
+            }
+        };
+
+        await importBackupData(data, { secureStorage, channelManager });
+
+        const merged = cache.epochKeys['ch-1'];
+        expect(merged.epochs.kid1.keyHex).toBe('0xold');      // gap filled from backup
+        expect(merged.epochs.kid2.keyHex).toBe('0xlocal');    // local entry kept
+        expect(merged.announces[1].keyId).toBe('kid1');
+        expect(merged.currentEpoch).toBe(2);                  // never regresses
+    });
+
     it('returns an empty summary when data is null or storage is locked', async () => {
         const { secureStorage, channelManager } = makeDeps();
 

@@ -192,6 +192,19 @@ class EpochKeyManager {
         }
     }
 
+    /**
+     * Re-pull persisted keys into every already-hydrated in-memory state.
+     * A sync pull can land keys for channels this session loaded before the
+     * pull ran — loadPersistedState is once-per-channel, so without this the
+     * synced keys only take effect after a restart. _loadPersisted unions
+     * (never overwrites), so adopted keys are untouched.
+     */
+    refreshPersisted() {
+        for (const [messageStreamId, s] of this.state) {
+            if (s.loaded) this._loadPersisted(messageStreamId, s);
+        }
+    }
+
     /** Does the channel hold a usable current key right now? */
     hasCurrentKey(messageStreamId) {
         const s = this.state.get(messageStreamId);

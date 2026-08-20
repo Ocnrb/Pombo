@@ -16,6 +16,7 @@ import { subscriptionManager } from './subscriptionManager.js';
 import { relayManager } from './relayManager.js';
 import { dmManager } from './dm.js';
 import { syncManager } from './syncManager.js';
+import { epochKeyManager } from './epochKeyManager.js';
 import { Logger } from './logger.js';
 import { CONFIG } from './config.js';
 import { headerUI } from './ui/HeaderUI.js';
@@ -272,6 +273,9 @@ class App {
     async applyPulledSyncChanges(changes) {
         if (!changes) return;
 
+        if (changes.epochKeysUpdated) {
+            epochKeyManager.refreshPersisted();
+        }
         if (changes.channelsUpdated || changes.contactsUpdated) {
             uiController.renderChannelList();
         }

@@ -1659,6 +1659,7 @@ class SecureStorage {
             sentReactions: this.cache.sentReactions || {},
             channels: this.cache.channels || [],
             channelsLeftAt: this.cache.channelsLeftAt || {},
+            epochKeys: this.cache.epochKeys || {},
             blockedPeers: this.cache.blockedPeers || [],
             dmLeftAt: this.cache.dmLeftAt || {},
             trustedContacts: this.cache.trustedContacts || {},
@@ -1684,6 +1685,7 @@ class SecureStorage {
         const changes = {
             hasChanges: false,
             channelsUpdated: false,
+            epochKeysUpdated: false,
             contactsUpdated: false,
             blockedPeersUpdated: false,
             usernameUpdated: false,
@@ -1709,6 +1711,11 @@ class SecureStorage {
         }
         if (data.channelsLeftAt !== undefined && !isEqual(this.cache.channelsLeftAt, data.channelsLeftAt)) {
             this.cache.channelsLeftAt = data.channelsLeftAt;
+            changes.hasChanges = true;
+        }
+        if (data.epochKeys !== undefined && !isEqual(this.cache.epochKeys, data.epochKeys)) {
+            this.cache.epochKeys = data.epochKeys;
+            changes.epochKeysUpdated = true;
             changes.hasChanges = true;
         }
         if (data.blockedPeers !== undefined && !isEqual(this.cache.blockedPeers, data.blockedPeers)) {
@@ -1777,18 +1784,31 @@ class SecureStorage {
      * @param {Function} progressCallback - Optional progress callback (0-1)
      * @returns {Promise<Object>} - Complete backup object
      */
-    async exportAccountBackup(keystore, password, progressCallback = null) {
+    async exportAccountBackup(keystore, password, progressCallback = null, options = {}) {
         if (!this.isUnlocked || !this.cache) {
             throw new Error('Storage not unlocked');
         }
+        const includeSentDmMedia = options.includeSentDmMedia !== false;
 
-        // Prepare data to encrypt — full state including images
+        // Backup policy: only state with no other durable copy. Received
+        // messages and media re-fetch from the storage nodes within retention;
+        // the ENS cache re-resolves; slice timestamps describe the sync merge,
+        // not the account. Epoch keys DO enter (via exportForBackup): paid
+        // gates never re-distribute past epochs (D14), and an announce older
+        // than the -4 retention can no longer anchor a re-adopted key — the
+        // backup is the only recovery path for that history.
+        const data = this.exportForBackup();
+        delete data.ensCache;
+        delete data.sliceTs;
+
         const dataToBackup = {
             version: 1,
             exportedAt: new Date().toISOString(),
             address: this.address,
-            data: this.exportForBackup(),
-            imageBlobs: await this.exportImageBlobs()
+            data,
+            imageBlobs: includeSentDmMedia
+                ? await this.exportImageBlobs(this.sentImageIds())
+                : []
         };
 
         // Generate random salt for scrypt (different from keystore's salt)
@@ -1979,6 +1999,7 @@ class SecureStorage {
             sentReactions: this.cache.sentReactions || {},
             channels: this.cache.channels || [],
             channelsLeftAt: this.cache.channelsLeftAt || {},
+            epochKeys: this.cache.epochKeys || {},
             blockedPeers: this.cache.blockedPeers || [],
             dmLeftAt: this.cache.dmLeftAt || {},
             trustedContacts: this.cache.trustedContacts || {},
@@ -1990,11 +2011,29 @@ class SecureStorage {
     }
 
     /**
-     * Export all images from the IndexedDB ledger for backup.
+     * Image ids referenced by the sent-message record — DMs and write-only
+     * channels. These blobs have no other durable copy anywhere: an outgoing
+     * DM lands in the PEER's inbox (owner-only reads) and a write-only stream
+     * cannot be resent.
+     * @returns {Set<string>}
+     */
+    sentImageIds() {
+        const ids = new Set();
+        for (const msgs of Object.values(this.cache?.sentMessages || {})) {
+            for (const m of msgs) {
+                if (m?.type === 'image' && m.imageId) ids.add(m.imageId);
+            }
+        }
+        return ids;
+    }
+
+    /**
+     * Export images from the IndexedDB ledger for backup.
      * Decrypts each image so the backup is self-contained.
+     * @param {Set<string>|null} filterIds - When given, only these imageIds are exported
      * @returns {Promise<Array<{imageId: string, streamId: string, data: string}>>}
      */
-    async exportImageBlobs() {
+    async exportImageBlobs(filterIds = null) {
         if (!this.imageDB || !this.storageKey) return [];
         try {
             const records = await new Promise((resolve, reject) => {
@@ -2013,6 +2052,7 @@ class SecureStorage {
             });
             const blobs = [];
             for (const record of records) {
+                if (filterIds && !filterIds.has(record.imageId)) continue;
                 try {
                     const data = await this.decryptBlob(record.encryptedData, record.iv);
                     blobs.push({ imageId: record.imageId, streamId: record.streamId, data });

@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="pt">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-vvt4KWwuNr51XfE5m+hzeNEGhiOfZzG97ccfqGsPwvE='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; connect-src 'self' https: wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://eth.drpc.org https://polygon-bor-rpc.publicnode.com https://ethereum-rpc.publicnode.com https://cloudflare-eth.com https://gasstation.polygon.technology https://*.llamarpc.com https://1rpc.io https://*.meowrpc.com https://*.gateway.tenderly.co https://*.thegraph.com https://*.ens.domains https://euc.li https://fcm.googleapis.com https://*.push.services.mozilla.com https://updates.push.services.mozilla.com; base-uri 'self'; form-action 'self'">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Pombo - Own Your Communications</title>
+    <link rel="canonical" href="https://app.pombo.cc/">
 
     <!-- Favicons -->
     <link rel="icon" type="image/svg+xml" href="/favicon/favicon.svg">
@@ -12,7 +13,7 @@
     <link rel="shortcut icon" href="/favicon/favicon.ico">
     <link rel="apple-touch-icon" sizes="180x180" href="/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/favicon/site.webmanifest">
-    <meta name="description" content="Pombo is your gateway to decentralized communications. Own your channels, messages, and identity with zero central servers and no compromise.">
+    <meta name="description" content="Pombo is a home for encrypted group chats, communities, and private messages — no sign-ups, no phone number, no central servers. Free, open source, and yours.">
     <meta name="theme-color" content="#000000">
     <!-- Android: additional theme colors for dark mode detection -->
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">
@@ -2140,6 +2141,10 @@
                                         Import
                                     </button>
                                 </div>
+                                <label class="flex items-center gap-2 mt-3 cursor-pointer select-none">
+                                    <input type="checkbox" id="backup-include-media" checked class="accent-white/80 w-3.5 h-3.5" />
+                                    <span class="text-xs text-white/40">Include sent DM media</span>
+                                </label>
                                 <p class="text-xs text-white/30 mt-3">Passwords not included — you'll need them to unlock</p>
                             </div>
                         </div>

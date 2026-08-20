@@ -23,7 +23,7 @@ import { dmCrypto } from './dmCrypto.js';
 import { channelManager } from './channels.js';
 import { dmManager } from './dm.js';
 import { identityManager } from './identity.js';
-import { mergePayloadSeries as mergeSyncPayloadSeries, mergeSentMessages as mergeSyncSentMessages, mergeSentReactions as mergeSyncSentReactions, mergeState as mergeSyncState, mergeChannels as mergeSyncChannels } from './syncMerge.js';
+import { mergePayloadSeries as mergeSyncPayloadSeries, mergeSentMessages as mergeSyncSentMessages, mergeSentReactions as mergeSyncSentReactions, mergeState as mergeSyncState, mergeChannels as mergeSyncChannels, mergeEpochKeys as mergeSyncEpochKeys } from './syncMerge.js';
 import { syncWorkerClient } from './workers/syncWorkerClient.js';
 
 const getNow = () => (
@@ -536,6 +536,10 @@ class SyncManager {
             );
             merged.channels = rebasedChannels.channels;
             merged.channelsLeftAt = rebasedChannels.channelsLeftAt;
+            // Same race, worse cost: an epoch key adopted while the merge ran
+            // would be dropped by the slice replace, and for a paid gate the
+            // network never re-serves it.
+            merged.epochKeys = mergeSyncEpochKeys(liveState.epochKeys, merged.epochKeys);
 
             // Apply final merged state
             const importStartedAt = getNow();
