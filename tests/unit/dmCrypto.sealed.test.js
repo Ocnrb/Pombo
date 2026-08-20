@@ -282,3 +282,42 @@ describe('dmCrypto — sealed sender', () => {
         });
     });
 });
+
+describe('dmCrypto.sealToPublicKey — push-relay variant (§9.1 #3)', () => {
+    const relay = new ethers.Wallet('0x' + '44'.repeat(32));
+    const relayPub = () => new ethers.SigningKey(relay.privateKey).compressedPublicKey;
+    const SALT = 'pombo-push-sealed-v1';
+
+    const openAsRelay = async (envelope) => {
+        const key = await dmCrypto.deriveSealedKey(relay.privateKey, envelope.epk, SALT);
+        return dmCrypto.decrypt({ ct: envelope.ct, iv: envelope.iv, e: 'aes-256-gcm' }, key);
+    };
+
+    it('round-trips a registration payload with no identity inside', async () => {
+        const payload = { type: 'registration', tag: 'e7', subscription: '{"fcmToken":"t"}', timestamp: 1 };
+        const { envelope, ephemeralPrivateKey } = await dmCrypto.sealToPublicKey(payload, relayPub(), SALT);
+
+        expect(envelope.v).toBe(1);
+        expect(envelope.epk.startsWith('0x0')).toBe(true);
+        const opened = await openAsRelay(envelope);
+        expect(opened).toEqual(payload);
+        // No proof field — the relay must never learn the account
+        expect(opened.p).toBeUndefined();
+        // The ephemeral is the transport identity for this publish
+        expect(new ethers.SigningKey(ephemeralPrivateKey).compressedPublicKey).toBe(envelope.epk);
+    });
+
+    it('the push salt domain-separates from the DM scheme', async () => {
+        const { envelope } = await dmCrypto.sealToPublicKey({ x: 1 }, relayPub(), SALT);
+        const dmKey = await dmCrypto.deriveSealedKey(relay.privateKey, envelope.epk); // DM salt
+        await expect(dmCrypto.decrypt({ ct: envelope.ct, iv: envelope.iv, e: 'aes-256-gcm' }, dmKey))
+            .rejects.toThrow();
+    });
+
+    it('a different key cannot open it', async () => {
+        const { envelope } = await dmCrypto.sealToPublicKey({ x: 1 }, relayPub(), SALT);
+        const strangerKey = await dmCrypto.deriveSealedKey('0x' + '55'.repeat(32), envelope.epk, SALT);
+        await expect(dmCrypto.decrypt({ ct: envelope.ct, iv: envelope.iv, e: 'aes-256-gcm' }, strangerKey))
+            .rejects.toThrow();
+    });
+});

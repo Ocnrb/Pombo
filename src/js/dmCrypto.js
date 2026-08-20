@@ -239,13 +239,15 @@ class DMCrypto {
      * recipient.pub), recipient passes (own.priv, ephemeral.pub).
      *
      * Uses a different HKDF salt from v1 so the two schemes can never produce
-     * the same key from the same secret (domain separation).
+     * the same key from the same secret (domain separation). Other sealed
+     * consumers (the push relay) pass their own salt for the same reason.
      *
      * @param {string} privateKeyHex
      * @param {string} publicKeyHex - Compressed secp256k1 public key
+     * @param {string} [salt] - HKDF salt (domain separator)
      * @returns {Promise<CryptoKey>} AES-256-GCM key
      */
-    async deriveSealedKey(privateKeyHex, publicKeyHex) {
+    async deriveSealedKey(privateKeyHex, publicKeyHex, salt = 'pombo-dm-sealed-v2') {
         const signingKey = new ethers.SigningKey(privateKeyHex);
         const sharedSecretHex = signingKey.computeSharedSecret(publicKeyHex);
         const sharedBytes = ethers.getBytes(sharedSecretHex).slice(1, 33);
@@ -258,7 +260,7 @@ class DMCrypto {
             {
                 name: 'HKDF',
                 hash: 'SHA-256',
-                salt: new TextEncoder().encode('pombo-dm-sealed-v2'),
+                salt: new TextEncoder().encode(salt),
                 info: new TextEncoder().encode('aes-256-gcm')
             },
             keyMaterial,
@@ -266,6 +268,31 @@ class DMCrypto {
             false,
             ['encrypt', 'decrypt']
         );
+    }
+
+    /**
+     * Seal a payload to a bare public key with NO sender identity inside —
+     * the push-relay variant (§9.1 #3): confidentiality without authorship.
+     * Unlike seal(), the plaintext carries no proof — the relay maps
+     * tags→endpoints and must never learn accounts. The caller's salt keeps
+     * the derived keys domain-separated from the DM scheme.
+     *
+     * @param {Object} message - Plaintext payload
+     * @param {string} recipientPublicKey - Compressed secp256k1 public key
+     * @param {string} salt - HKDF salt (e.g. 'pombo-push-sealed-v1')
+     * @returns {Promise<{envelope: Object, ephemeralPrivateKey: string}>}
+     *   envelope = { v: 1, epk, ct, iv }; ephemeralPrivateKey doubles as the
+     *   transport publishing identity, like seal().
+     */
+    async sealToPublicKey(message, recipientPublicKey, salt) {
+        const ephemeralPrivateKey = this.generateEphemeralPrivateKey();
+        const epk = new ethers.SigningKey(ephemeralPrivateKey).compressedPublicKey;
+        const aesKey = await this.deriveSealedKey(ephemeralPrivateKey, recipientPublicKey, salt);
+        const sealed = await this.encrypt(message, aesKey);
+        return {
+            envelope: { v: 1, epk, ct: sealed.ct, iv: sealed.iv },
+            ephemeralPrivateKey
+        };
     }
 
     /**

@@ -2696,11 +2696,54 @@ class StreamrController {
         if (!EthereumKeyPairIdentity) {
             throw new Error('EthereumKeyPairIdentity not exposed — check streamr-bundle.js');
         }
+        // Registrations carry the push endpoint/FCM token — sealed to the
+        // relay's static key (§9.1 #3), so they never cross the observable
+        // stream in the clear. Wake signals are 1-byte k-anonymous tags and
+        // stay in the clear — they carry nothing sensitive and must stay
+        // cheap. FAIL-CLOSED: no plaintext fallback, or a hostile Graph/RPC
+        // could strip the key and downgrade every registration; the caller's
+        // re-registration cadence retries a transient failure.
+        if (payload?.type === 'registration') {
+            const relayPk = await this._getRelayPublicKey();
+            const { dmCrypto } = await import('./dmCrypto.js');
+            const { envelope, ephemeralPrivateKey } = await dmCrypto.sealToPublicKey(
+                payload, relayPk, 'pombo-push-sealed-v1');
+            const identity = EthereumKeyPairIdentity.fromPrivateKey(ephemeralPrivateKey);
+            return this.publishAs(identity, CONFIG.push.pushStreamId, 0,
+                { type: 'sealed', ...envelope });
+        }
         const bytes = crypto.getRandomValues(new Uint8Array(32));
         const ephemeralPrivateKey = '0x' + Array.from(bytes)
             .map(b => b.toString(16).padStart(2, '0')).join('');
         const identity = EthereumKeyPairIdentity.fromPrivateKey(ephemeralPrivateKey);
         return this.publishAs(identity, CONFIG.push.pushStreamId, 0, payload);
+    }
+
+    /**
+     * The push relay's static public key, from the push stream's on-chain
+     * metadata, PINNED to the known relay address (computeAddress(pk) must
+     * recover it — the mirror of the DM peer-key pin, §9.1 #2: tampered
+     * metadata or a hostile Graph endpoint yields a key that fails the pin
+     * and is rejected, never a silent MITM on every push endpoint).
+     * Cached for the session — the key only changes with a relay migration.
+     * @returns {Promise<string>} Compressed secp256k1 public key
+     */
+    async _getRelayPublicKey() {
+        if (this._relayPublicKey) return this._relayPublicKey;
+        const { graphAPI } = await import('./graph.js');
+        const stream = await graphAPI.getStream(CONFIG.push.pushStreamId);
+        const outer = JSON.parse(stream?.metadata || '{}');
+        const meta = JSON.parse(outer.description || '{}');
+        const pk = typeof meta.pk === 'string' ? meta.pk : null;
+        if (!pk) throw new Error('Push stream metadata carries no relay key');
+        const owner = ethers.computeAddress(pk).toLowerCase();
+        const known = (CONFIG.push.relays || []).some(
+            (r) => r.address?.toLowerCase() === owner);
+        if (!known) {
+            throw new Error(`Relay key pin failed: ${owner} is not a configured relay`);
+        }
+        this._relayPublicKey = pk;
+        return pk;
     }
 
     /**
