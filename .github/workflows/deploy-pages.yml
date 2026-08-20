@@ -1,0 +1,61 @@
+# Builds the site from src/ and deploys the artifact to GitHub Pages
+# (app.pombo.cc). Audit #7: with Pages sourced from this workflow, what is
+# served is provably the committed source — there is no checked-in bundle to
+# tamper with.
+#
+# js/install-pre.js and js/install-modal.js are hand-written SOURCE that
+# happens to live in js/ (webpack does not produce them) — they ship with
+# the artifact via the js/ copy and must stay in the repository.
+
+name: Deploy Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp index.html sw.js CNAME _site/
+          cp -r js css favicon curation _site/
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
