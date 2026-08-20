@@ -4,3 +4,11 @@ coverage/
 *.log
 
 
+
+# Generated build outputs — built by CI (.github/workflows/deploy-pages.yml)
+# and deployed as the Pages artifact; never committed (audit #7).
+# js/install-pre.js and js/install-modal.js are hand-written SOURCE in js/
+# and stay tracked.
+js/*.bundle.js
+js/*.LICENSE.txt
+css/
