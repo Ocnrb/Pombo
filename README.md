@@ -4,8 +4,9 @@
 [Streamr](https://streamr.network) network — own your channels, messages, and
 identity with zero central servers. This is the web client (also installable
 as a PWA), live at [app.pombo.cc](https://app.pombo.cc). It is the reference
-implementation of the Pombo wire protocol; the native Android client mirrors
-it byte-for-byte so both talk on the same channels and DMs.
+implementation of the Pombo wire protocol; the Android client (a native
+Compose UI over this same JavaScript protocol stack) mirrors it byte-for-byte
+so both talk on the same channels and DMs.
 
 · Website: [pombo.cc](https://pombo.cc)  
 
