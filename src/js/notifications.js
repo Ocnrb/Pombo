@@ -15,8 +15,11 @@ import { dmCrypto } from './dmCrypto.js';
 import { secureStorage } from './secureStorage.js';
 
 class NotificationManager {
+    /** Newest dismissed records kept for the bell's "All" view — see dismissInvite. */
+    static MAX_DISMISSED_INVITES = 50;
+
     constructor() {
-        this.pendingInvites = new Map(); // inviteId -> invite data
+        this.pendingInvites = new Map(); // inviteId -> invite data (dismissed ones stay, flagged)
         this.initialized = false;
         this.muted = false;
     }
@@ -142,7 +145,38 @@ class NotificationManager {
      * Handle channel invite notification
      * @param {Object} invite - Invite data
      */
-    handleChannelInvite(invite) {
+    async handleChannelInvite(invite, { replay = false } = {}) {
+        const existing = this.pendingInvites.get(invite.inviteId);
+        // A re-delivered invite the user already dismissed stays dismissed —
+        // the record is retained (flagged, not deleted) exactly so it cannot
+        // resurface as pending.
+        if (existing?.dismissed) return;
+
+        if (replay) {
+            // dm.js replayInvites: historical P3 rows, classified silently.
+            if (existing) return;
+            // Moot invites — the channel is already joined — resurface in no
+            // state at all.
+            const { channelManager } = await import('./channels.js');
+            if (invite.channel?.streamId && channelManager.getChannel(invite.channel.streamId)) return;
+            if (this._answeredIds().has(invite.inviteId)) {
+                // Answered before the ledger retained full records (or the
+                // record was pruned): re-file the replayed content as a
+                // dismissed record so the "All" view can offer it.
+                invite.dismissed = true;
+                invite.dismissedAt = invite.timestamp || Date.now();
+                this.pendingInvites.set(invite.inviteId, invite);
+                this._pruneDismissed();
+            } else {
+                // Never answered, and older than any tab that was open to see
+                // it live — pending is the honest state, minus the toast.
+                this.pendingInvites.set(invite.inviteId, invite);
+            }
+            this.savePendingInvites();
+            this.onChanged?.();
+            return;
+        }
+
         // P3 is only subscribed when not muted, so receiving means invites are active
         this.pendingInvites.set(invite.inviteId, invite);
         this.savePendingInvites();
@@ -249,8 +283,10 @@ class NotificationManager {
                 }
             );
 
-            // Remove from pending
+            // Remove from pending; ledger the id so a P3 replay cannot
+            // resurrect it (accepted = answered, same as Android's resolve).
             this.pendingInvites.delete(inviteId);
+            this.markAnswered(inviteId);
             this.savePendingInvites();
             this.onChanged?.();
 
@@ -269,14 +305,65 @@ class NotificationManager {
     }
 
     /**
-     * Dismiss invite
+     * Dismiss invite. The record is FLAGGED, not deleted: the bell's "All"
+     * view lists dismissed invites so one swiped away by mistake can still be
+     * accepted, and the flag doubles as re-delivery suppression (see
+     * handleChannelInvite). Bounded — only the newest MAX_DISMISSED_INVITES
+     * dismissed records are kept.
      * @param {string} inviteId - Invite ID
      */
     dismissInvite(inviteId) {
-        this.pendingInvites.delete(inviteId);
+        const invite = this.pendingInvites.get(inviteId);
+        if (!invite || invite.dismissed) return;
+        invite.dismissed = true;
+        invite.dismissedAt = Date.now();
+        this.markAnswered(inviteId);
+        this._pruneDismissed();
         this.savePendingInvites();
         this.onChanged?.();
         Logger.info('Invite dismissed:', inviteId);
+    }
+
+    /** Keep only the newest MAX_DISMISSED_INVITES dismissed records. */
+    _pruneDismissed() {
+        const dismissed = Array.from(this.pendingInvites.values())
+            .filter(i => i.dismissed)
+            .sort((a, b) => (b.dismissedAt || 0) - (a.dismissedAt || 0));
+        for (const stale of dismissed.slice(NotificationManager.MAX_DISMISSED_INVITES)) {
+            this.pendingInvites.delete(stale.inviteId);
+        }
+    }
+
+    // ---- answered-invite ledger ----
+    // Ids of accepted/dismissed invites, so a P3 replay (dm.js replayInvites)
+    // can classify historical rows instead of resurrecting answered ones as
+    // pending — the web-side mirror of Android's InviteStore id ledger, same
+    // 200-id bound. Ids carry no secrets, so plain localStorage is fine (and
+    // stays writable when secure storage is locked).
+
+    _answeredKey() {
+        const address = authManager.getAddress();
+        return address ? `pombo_invites_answered_${address.toLowerCase()}` : null;
+    }
+
+    _answeredIds() {
+        try {
+            const key = this._answeredKey();
+            return key ? new Set(JSON.parse(localStorage.getItem(key) || '[]')) : new Set();
+        } catch {
+            return new Set();
+        }
+    }
+
+    markAnswered(inviteId) {
+        try {
+            const key = this._answeredKey();
+            if (!key) return;
+            const ids = Array.from(this._answeredIds()).filter(id => id !== inviteId);
+            ids.push(inviteId);
+            while (ids.length > 200) ids.shift();
+            localStorage.setItem(key, JSON.stringify(ids));
+        } catch { /* quota/private mode — ledger is best-effort */ }
     }
 
     /**
@@ -284,7 +371,18 @@ class NotificationManager {
      * @returns {Array} - Array of pending invites
      */
     getPendingInvites() {
-        return Array.from(this.pendingInvites.values());
+        return Array.from(this.pendingInvites.values()).filter(i => !i.dismissed);
+    }
+
+    /**
+     * Dismissed-but-retained invites, newest dismissal first (the bell's
+     * "All" view).
+     * @returns {Array}
+     */
+    getDismissedInvites() {
+        return Array.from(this.pendingInvites.values())
+            .filter(i => i.dismissed)
+            .sort((a, b) => (b.dismissedAt || 0) - (a.dismissedAt || 0));
     }
 
     /**

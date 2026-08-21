@@ -109,11 +109,21 @@
                     </svg>
                     <span id="notif-bell-badge" class="hidden absolute -top-1 -right-1 min-w-[16px] h-4 px-1 bg-[#F6851B] rounded-full text-[9px] font-bold text-white flex items-center justify-center">0</span>
                 </button>
-                <div id="notif-bell-dropdown" class="hidden absolute top-full right-0 mt-1.5 w-[300px] bg-[#16161b] border border-white/[0.1] rounded-xl py-1 shadow-2xl z-50">
-                    <div class="px-3.5 py-2 text-[10px] font-semibold tracking-widest text-white/35">CHANNEL INVITES</div>
+                <div id="notif-bell-dropdown" class="hidden absolute top-full right-0 mt-1.5 w-[320px] bg-[#16161b] border border-white/[0.1] rounded-xl py-1 shadow-2xl z-50">
+                    <div class="px-3.5 py-2 flex items-center justify-between">
+                        <span class="text-[10px] font-semibold tracking-widest text-white/35">CHANNEL INVITES</span>
+                        <div class="flex items-center gap-1.5 text-[10px] font-medium">
+                            <button id="notif-invites-mode-pending" class="text-white/70 transition">Pending</button>
+                            <span class="text-white/20">·</span>
+                            <button id="notif-invites-mode-all" class="text-white/30 hover:text-white/50 transition">All</button>
+                        </div>
+                    </div>
                     <div id="notif-invites-list"></div>
                     <div class="mx-3 my-1 border-t border-white/[0.08]"></div>
-                    <div class="px-3.5 py-2 text-[10px] font-semibold tracking-widest text-white/35">ACTIVE TRANSFERS</div>
+                    <div class="px-3.5 py-2 flex items-center justify-between">
+                        <span class="text-[10px] font-semibold tracking-widest text-white/35">TRANSFERS</span>
+                        <button id="notif-transfers-inactive" class="text-[10px] font-medium text-white/30 hover:text-white/50 transition">Show inactive</button>
+                    </div>
                     <div id="notif-transfers-list" class="pb-1"></div>
                 </div>
             </div>
@@ -748,6 +758,31 @@
                                     </svg>
                                 </button>
                             </div>
+
+                            <!-- Confirm step: opens on password field focus, closes once it matches -->
+                            <div id="password-confirm-section" class="hidden mt-3 space-y-3">
+                                <div class="p-3 bg-amber-500/5 rounded-xl border border-amber-500/10">
+                                    <p class="text-xs text-amber-400/80 flex items-start gap-2">
+                                        <svg class="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+                                        <span>Use a strong password — anyone who has it can join this channel.</span>
+                                    </p>
+                                </div>
+                                <div class="relative">
+                                    <input
+                                        type="password"
+                                        id="channel-password-confirm-input"
+                                        name="channel-password-confirm"
+                                        placeholder="Confirm password"
+                                        autocomplete="off"
+                                        data-lpignore="true"
+                                        data-1p-ignore="true"
+                                        data-form-type="other"
+                                        spellcheck="false"
+                                        style="-webkit-text-security: disc;"
+                                        class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20"
+                                    />
+                                </div>
+                            </div>
                         </div>
 
                         <!-- Native fields (shown only for Closed tab) -->
@@ -960,7 +995,7 @@
 
                         <!-- Storage Provider Selection -->
                         <div id="storage-section" class="space-y-3">
-                            <label class="block text-xs font-medium text-white/80 uppercase tracking-wider">Message Storage</label>
+                            <label class="block text-xs font-medium text-white/80 uppercase tracking-wider">Storage Provider</label>
                             <div class="flex gap-2">
                                 <button type="button" data-storage="streamr" class="storage-provider-tab flex-1 px-3 py-2.5 rounded-lg text-xs font-medium transition bg-white/10 text-white border border-white/10">
                                     <div class="flex items-center gap-2 justify-center">
@@ -995,7 +1030,7 @@
                             <div id="storage-days-section" class="mt-3">
                                 <div class="flex items-center justify-between mb-3">
                                     <label class="text-xs font-medium text-white/80 uppercase tracking-wider">Message Retention</label>
-                                    <span id="storage-days-value" class="text-sm font-medium text-[#F6851B]">180 days</span>
+                                    <span id="storage-days-value" class="text-sm font-medium text-[#F6851B]">6 months</span>
                                 </div>
                                 <div class="relative">
                                     <input type="range" id="storage-days-input" min="1" max="365" value="180" class="storage-slider w-full h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer">
@@ -1251,7 +1286,7 @@
 
                     <!-- Storage Provider Selection -->
                     <div id="dm-storage-section" class="space-y-3">
-                        <label class="block text-xs font-medium text-white/80 uppercase tracking-wider">Message Storage</label>
+                        <label class="block text-xs font-medium text-white/80 uppercase tracking-wider">Storage Provider</label>
                         <div class="flex gap-2">
                             <button type="button" data-dm-storage="streamr" class="dm-storage-provider-tab flex-1 px-3 py-2.5 rounded-lg text-xs font-medium transition bg-white/10 text-white border border-white/10">
                                 <div class="flex items-center gap-2 justify-center">
@@ -1286,7 +1321,7 @@
                         <div id="dm-storage-days-section" class="mt-3">
                             <div class="flex items-center justify-between mb-3">
                                 <label class="text-xs font-medium text-white/80 uppercase tracking-wider">Message Retention</label>
-                                <span id="dm-storage-days-value" class="text-sm font-medium text-[#F6851B]">180 days</span>
+                                <span id="dm-storage-days-value" class="text-sm font-medium text-[#F6851B]">6 months</span>
                             </div>
                             <div class="relative">
                                 <input type="range" id="dm-storage-days-input" min="1" max="365" value="180" class="storage-slider w-full h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer">

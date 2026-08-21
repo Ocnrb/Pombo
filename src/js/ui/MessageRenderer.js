@@ -15,7 +15,7 @@ class MessageRenderer {
 
     /**
      * Set dependencies
-     * @param {Object} deps - { getCurrentAddress, getMessageReactions, registerMedia, getImage, cacheImage, loadImageFromLedger, getCurrentChannel, getFileUrl, isSeeding, isVideoPlayable }
+     * @param {Object} deps - { getCurrentAddress, getMessageReactions, registerMedia, getImage, cacheImage, loadImageFromLedger, getCurrentChannel, getFileUrl, isSeeding, isSaved, isVideoPlayable, getStorageFileUrl, isStorageDownloading, getStorageDownloadProgress, getStorageUploadState, getStorageResumePercent, isStorageSaved }
      */
     setDependencies(deps) {
         this.deps = { ...this.deps, ...deps };
@@ -232,6 +232,10 @@ class MessageRenderer {
         return `<svg class="${cls}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17.25 3H5.25A2.25 2.25 0 0 0 3 5.25v13.5A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V6.75L17.25 3Z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7.5 3v4.5h8.25V3"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7.5 21v-6.75h9V21"/></svg>`;
     }
 
+    iconCheck(cls) {
+        return `<svg class="${cls}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m4.5 12.75 6 6 9-13.5"/></svg>`;
+    }
+
     /**
      * Tiny transport pill ("mesh" / "storage") — the action glyphs are unified
      * now, so this is what tells the two transports apart at a glance.
@@ -302,11 +306,16 @@ class MessageRenderer {
         ` : '';
 
         // One action slot on the avatar side: arrow = download, dimmed arrow =
-        // transfer running (no spinner — the bar carries the busy state), floppy
-        // = the bytes are here, save. Green marks ready-to-save.
+        // transfer running (no spinner — the bar carries the busy state).
+        // Saving is automatic once the bytes are here — the floppy only shows
+        // as a fallback if that auto-save didn't happen yet; once it has, a
+        // plain checkmark confirms it (not a link — nothing left to click).
         let action = '';
         if (fileUrl) {
-            action = `
+            action = this.deps.isSaved?.(fileId) ? `
+            <div title="Saved" class="file-card-action flex-shrink-0 w-10 h-10 rounded-lg bg-white/[0.06] flex items-center justify-center">
+                ${this.iconCheck('w-5 h-5 text-green-400/70')}
+            </div>` : `
             <a href="${fileUrl}" download="${attrFileName}" title="Save file"
                class="file-card-action flex-shrink-0 w-10 h-10 rounded-lg bg-white/[0.06] hover:bg-white/[0.14] flex items-center justify-center transition">
                 ${this.iconFloppy('w-5 h-5 text-green-400/70')}
@@ -469,12 +478,17 @@ class MessageRenderer {
             : '';
 
         // One action slot on the avatar side, unified with the mesh card:
-        // arrow = download, up-arrow dimmed = own upload running, arrow dimmed =
-        // download running, floppy = saved bytes ready.
+        // arrow = download, up-arrow dimmed = own upload running, arrow dimmed
+        // = download running. Saving is automatic once the bytes are here —
+        // the floppy is only a fallback for the rare case that didn't happen;
+        // once it has, a plain checkmark confirms it.
         const canDownload = !fileUrl && !active && !msg.pending && Number.isFinite(metadata.totalChunks);
         let action = '';
         if (fileUrl) {
-            action = `
+            action = this.deps.isStorageSaved?.(tid) ? `
+            <div title="Saved" class="file-card-action flex-shrink-0 w-10 h-10 rounded-lg bg-white/[0.06] flex items-center justify-center">
+                ${this.iconCheck('w-5 h-5 text-green-400/70')}
+            </div>` : `
             <a href="${fileUrl}" download="${attrFileName}" title="Save file"
                class="file-card-action flex-shrink-0 w-10 h-10 rounded-lg bg-white/[0.06] hover:bg-white/[0.14] flex items-center justify-center transition">
                 ${this.iconFloppy('w-5 h-5 text-green-400/70')}

@@ -979,10 +979,16 @@ async function fetchWindow(sid, w, onMessage, base) {
  * windows across the node rotation. Empty rotation → every window goes through
  * SDK resend.
  */
-async function fetchWindowsParallel(sid, windows, onMessage, concurrency, bases) {
+/**
+ * @param {() => boolean} [shouldStop] - Checked between windows (not mid-fetch)
+ *   so a pause takes effect within one window's worth of latency instead of
+ *   waiting for the whole batch — see StorageMediaController.pauseDownload.
+ */
+async function fetchWindowsParallel(sid, windows, onMessage, concurrency, bases, shouldStop) {
     let next = 0;
     const worker = async () => {
         while (next < windows.length) {
+            if (shouldStop?.()) return;
             const idx = next++;
             const w = windows[idx];
             const base = (bases && bases.length) ? bases[idx % bases.length] : null;
@@ -1003,6 +1009,10 @@ class StorageMediaController {
         this.downloads = new Map();
         // transferId → {url, blob, metadata} for completed downloads (session cache)
         this.completedFiles = new Map();
+        // transferIds whose resume was requested but whose new downloadFile run
+        // hasn't flipped the status back to 'downloading' yet (endpoint rotation
+        // alone can take seconds) — the bell shows "Resuming…" off this
+        this.resumingIds = new Set();
         // streamId → true once chunk partitions were warm-up pinged this session
         this.warmedUp = new Set();
         this.warmUpPromises = new Map();
@@ -1035,9 +1045,75 @@ class StorageMediaController {
     isUploading(tid) { return this.uploads.has(tid); }
     getUploadState(tid) { return this.uploads.get(tid) || null; }
     isDownloading(tid) { return this.downloads.get(tid)?.status === 'downloading'; }
+
+    /**
+     * Pauses a running storage download: the fetch loop stops between windows
+     * (see fetchWindowsParallel's shouldStop) and preserves whatever is
+     * already staged to disk, same as the "incomplete, preserve for retry"
+     * path. [resumeDownload] continues from there.
+     */
+    pauseDownload(tid) {
+        const transfer = this.downloads.get(tid);
+        if (!transfer || transfer.status !== 'downloading') return;
+        transfer.paused = true;
+    }
+
+    /**
+     * Resumes a download [pauseDownload] stopped — deliberately does NOT go
+     * through the UI's handleStorageFileDownload (which needs the transfer's
+     * channel to be the one currently open): the Active Transfers list this
+     * is called from is not scoped to any open channel, so the announce and
+     * channel come from this controller's own cache instead. downloadFile()'s
+     * own resume logic (backed by saveResumeMeta) picks up from the paused
+     * point — nothing already staged gets re-fetched.
+     */
+    resumeDownload(tid) {
+        const transfer = this.downloads.get(tid);
+        if (!transfer) return;
+        if (transfer.status === 'downloading') {
+            // Pause was requested but the fetch loop has not unwound yet —
+            // undo the request in place; the retry passes still ahead of the
+            // loop pick the missing chunks back up, nothing to restart.
+            transfer.paused = false;
+            return;
+        }
+        if (transfer.status !== 'paused') return;
+        this.resumingIds.add(tid);
+        const channel = channelManager.getChannel(transfer.streamId);
+        this.downloadFile(transfer.streamId, { metadata: transfer.metadata, timestamp: transfer.announceTs }, channel?.password)
+            .catch(() => { /* surfaced via fileErrorCallback */ })
+            .finally(() => this.resumingIds.delete(tid));
+    }
+
+    /** Whether a resumeDownload() is still spinning its new run up for [tid]. */
+    isResuming(tid) { return this.resumingIds.has(tid); }
+
+    /**
+     * Cancels a storage download — mesh cancelDownload's meaning, "I do not
+     * want this": unlike pauseDownload, the staged bytes and resume record
+     * are deleted. A running fetch loop stops between windows (the same
+     * brake pause uses) and finishes the cleanup itself; a paused one has
+     * nothing running, so the cleanup happens here.
+     */
+    cancelDownload(tid) {
+        const transfer = this.downloads.get(tid);
+        if (!transfer) return;
+        this.resumingIds.delete(tid);
+        if (transfer.status === 'downloading') {
+            transfer.cancelled = true;
+            transfer.paused = true;
+            return;
+        }
+        this.downloads.delete(tid);
+        const meta = getResumeMeta(tid);
+        if (meta?.stagingName) opfsDelete(meta.stagingName);
+        clearResumeMeta(tid);
+        Logger.info('Storage download cancelled:', tid);
+    }
+
     getDownloadProgress(tid) {
         const t = this.downloads.get(tid);
-        if (!t || t.status !== 'downloading') return null;
+        if (!t || (t.status !== 'downloading' && t.status !== 'paused')) return null;
         const received = t.chunks.size;
         const total = t.totalChunks;
         const now = performance.now();
@@ -1054,7 +1130,12 @@ class StorageMediaController {
             avgBps: t.firstByteTime ? t.bytesReceived / Math.max(0.001, (now - t.firstByteTime) / 1000) : null,
             etaSec: (cps && cps > 0) ? (total - received) / cps : null,
             phase: t.phase || null,
-            resumedCount: t.resumedCount || 0
+            resumedCount: t.resumedCount || 0,
+            // The *request* flag, not t.status === 'paused' — that only
+            // flips once the fetch loop actually unwinds (fetchWindowsParallel
+            // checks it between windows, so a network read in flight can lag
+            // a tap by a moment), which read as the pause button not responding.
+            paused: !!t.paused
         };
     }
     getFileUrl(tid) { return this.completedFiles.get(tid)?.url || null; }
@@ -2210,6 +2291,14 @@ class StorageMediaController {
 
         const transfer = {
             metadata: meta,
+            // For the Active Transfers list to navigate to this transfer's
+            // channel (web mesh's equivalent field is transfer.streamId).
+            streamId: messageStreamId,
+            // The announce's own timestamp — the chunk read windows are
+            // computed around it, so resumeDownload() has to hand it back
+            // (files without firstChunkTs anchor entirely on this; a
+            // Date.now() fallback would put old chunks outside the window).
+            announceTs: announceMsg.timestamp || null,
             chunks: new Map(),
             totalChunks: meta.totalChunks,
             status: 'downloading',
@@ -2217,8 +2306,13 @@ class StorageMediaController {
             bytesReceived: 0,
             etaHistory: [],
             firstByteTime: null,
-            resumedCount: 0
+            resumedCount: 0,
+            // Set by pauseDownload()/resumeDownload() — fetchWindowsParallel()
+            // checks this between windows and stops early, without discarding
+            // any chunk already staged to disk.
+            paused: false
         };
+        const shouldStop = () => transfer.paused;
         this.downloads.set(tid, transfer);
         this.activeTransfers++;
         this.acquireWakeLock();
@@ -2360,21 +2454,22 @@ class StorageMediaController {
                 const missing0 = [];
                 for (let i = 0; i < transfer.totalChunks; i++) if (!transfer.chunks.has(i)) missing0.push(i);
                 const windows0 = buildMissingWindows(meta, missing0, fromT, toT);
-                await fetchWindowsParallel(chunkStreamId, windows0, onChunkMessage, DL_CONC, bases);
+                await fetchWindowsParallel(chunkStreamId, windows0, onChunkMessage, DL_CONC, bases, shouldStop);
             } else {
                 const fullWindows = chunkWindowsFor(meta, fromT, toT);
-                await fetchWindowsParallel(chunkStreamId, fullWindows, onChunkMessage, DL_CONC, bases);
+                await fetchWindowsParallel(chunkStreamId, fullWindows, onChunkMessage, DL_CONC, bases, shouldStop);
             }
 
             let retryPass = 0;
-            while (transfer.chunks.size < transfer.totalChunks && retryPass < SM.downloadRetryPasses) {
+            while (!transfer.paused && transfer.chunks.size < transfer.totalChunks && retryPass < SM.downloadRetryPasses) {
                 retryPass++;
                 await sleep(2000 * retryPass);
+                if (transfer.paused) break;
                 const missingNow = [];
                 for (let i = 0; i < transfer.totalChunks; i++) if (!transfer.chunks.has(i)) missingNow.push(i);
                 const windows = buildMissingWindows(meta, missingNow, fromT, toT);
                 Logger.warn(`Storage download retry ${retryPass}/${SM.downloadRetryPasses}: ${missingNow.length} chunks missing → ${windows.length} window(s)`);
-                await fetchWindowsParallel(chunkStreamId, windows, onChunkMessage, DL_CONC, bases);
+                await fetchWindowsParallel(chunkStreamId, windows, onChunkMessage, DL_CONC, bases, shouldStop);
                 const recovered = transfer.chunks.size - (transfer.totalChunks - missingNow.length);
                 if (recovered === 0) {
                     Logger.warn(`Storage retry made no progress: the storage does not have the ${missingNow.length} missing chunks — incomplete upload`);
@@ -2489,6 +2584,33 @@ class StorageMediaController {
                 emitProgress();
                 try { this.fileCompleteCallback?.(tid, meta, url, blob); } catch (e) { /* UI */ }
                 Logger.info(`Storage download complete: ${meta.fileName} (${transfer.totalChunks} chunks)`);
+            } else if (transfer.cancelled) {
+                // Cancel is "I do not want this": staged bytes, resume record
+                // and the transfer entry all go. Ordered before the paused
+                // branch — cancel sets the paused brake too to stop the loop.
+                if (staging) {
+                    try { await staging.writable.abort(); } catch (e) { /* dead */ }
+                    staging = null;
+                }
+                if (stagingName) opfsDelete(stagingName);
+                clearResumeMeta(tid);
+                this.downloads.delete(tid);
+                Logger.info('Storage download cancelled:', tid);
+            } else if (transfer.paused && !stagingError) {
+                // pauseDownload() stopped the fetch loop early — not an error,
+                // so no fileErrorCallback. Same "preserve to disk" write as the
+                // incomplete branch below: resumeDownload() picks it back up.
+                transfer.status = 'paused';
+                if (staging) {
+                    try {
+                        await writeChain;
+                        await staging.writable.close();
+                        saveResumeMeta(tid, { stagingName, upc: upcDl, indices: Array.from(transfer.chunks.keys()), totalChunks: meta.totalChunks, compressedSize: meta.compressedSize, fileName: meta.fileName, savedAt: Date.now() });
+                        Logger.info(`Storage download paused: ${transfer.chunks.size}/${transfer.totalChunks} chunks preserved on disk`);
+                    } catch (e2) { Logger.error(`storage pause commit failed: ${e2.message}`); }
+                    staging = null;
+                }
+                emitProgress();
             } else {
                 transfer.status = 'error';
                 transfer.error = stagingError

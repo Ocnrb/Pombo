@@ -8,6 +8,7 @@ import { formatRemaining } from './SubscriptionBannerUI.js';
 import { authManager } from '../auth.js';
 import { streamrController } from '../streamr.js';
 import { CONFIG } from '../config.js';
+import { snapRetentionDays, retentionLabel } from '../utils/retention.js';
 
 class ChannelModalsUI {
     constructor() {
@@ -63,6 +64,8 @@ class ChannelModalsUI {
             this.elements.channelPasswordInput.type = 'password';
             this.elements.channelPasswordInput.style.webkitTextSecurity = 'disc';
         }
+        if (this.elements.channelPasswordConfirmInput) this.elements.channelPasswordConfirmInput.value = '';
+        this.elements.passwordConfirmSection?.classList.add('hidden');
         // Reset password eye icons
         const eyeOpen = document.getElementById('channel-pw-eye-open');
         const eyeOff = document.getElementById('channel-pw-eye-off');
@@ -118,6 +121,36 @@ class ChannelModalsUI {
     hide() {
         document.body.classList.remove('new-channel-open');
         this.deps.modalManager?.hideNewChannelModal();
+    }
+
+    /**
+     * Open the confirm-password step: the warning banner and the confirm
+     * field. Fires on every focus of the password field, not just the
+     * first — an edited password always needs re-confirming, so the confirm
+     * field is cleared each time this opens.
+     */
+    expandPasswordConfirm() {
+        const confirmInput = this.elements.channelPasswordConfirmInput;
+        if (confirmInput) confirmInput.value = '';
+        this.elements.passwordConfirmSection?.classList.remove('hidden');
+    }
+
+    /**
+     * Collapse the confirm-password step once the two fields match — the
+     * password itself stays filled in, only the confirm UI goes away.
+     */
+    checkPasswordMatch() {
+        const password = this.elements.channelPasswordInput?.value || '';
+        const confirmInput = this.elements.channelPasswordConfirmInput;
+        const confirm = confirmInput?.value || '';
+        if (!confirmInput) return;
+
+        if (confirm && password === confirm) {
+            confirmInput.classList.remove('border-red-400');
+            this.elements.passwordConfirmSection?.classList.add('hidden');
+        } else {
+            confirmInput.classList.toggle('border-red-400', confirm.length > 0);
+        }
     }
 
     /**
@@ -475,28 +508,26 @@ class ChannelModalsUI {
     }
 
     /**
-     * Update storage days slider display and progress
+     * Update storage days slider display and progress. The slider itself
+     * stays a proportional 1-365 day range; above the 30-day mark the
+     * effective value is magnet-snapped to the nearest exact month so the
+     * label never shows an ambiguous in-between day count, and the thumb
+     * snaps along with it.
      */
-    updateStorageDaysDisplay(days) {
-        days = parseInt(days, 10);
+    updateStorageDaysDisplay(rawDays) {
+        const days = snapRetentionDays(rawDays);
         const label = document.getElementById('storage-days-value');
         const slider = document.getElementById('storage-days-input');
-        
-        if (days === 1) {
-            if (label) label.textContent = '1 day';
-        } else if (days < 30) {
-            if (label) label.textContent = `${days} days`;
-        } else if (days < 365) {
-            const months = Math.round(days / 30);
-            if (label) label.textContent = months === 1 ? '1 month' : `${months} months`;
-        } else {
-            if (label) label.textContent = '1 year';
-        }
-        
+
+        if (label) label.textContent = retentionLabel(days);
+
         if (slider) {
+            if (slider.value !== String(days)) slider.value = String(days);
             const progress = ((days - 1) / (365 - 1)) * 100;
             slider.style.setProperty('--slider-progress', `${progress}%`);
         }
+
+        return days;
     }
 
     /**
@@ -900,7 +931,7 @@ class ChannelModalsUI {
 
         // Storage provider selection
         const storageProvider = this.currentStorageProvider || 'streamr';
-        const storageDays = parseInt(document.getElementById('storage-days-input')?.value || '180', 10);
+        const storageDays = snapRetentionDays(document.getElementById('storage-days-input')?.value || '180');
         let customStorageAddress = null;
 
         if (storageProvider === 'custom') {
@@ -928,6 +959,12 @@ class ChannelModalsUI {
 
         if (type === 'password' && !password) {
             this.showNotification('Please enter a password', 'warning');
+            return;
+        }
+
+        if (type === 'password' && !this.elements.passwordConfirmSection?.classList.contains('hidden')) {
+            this.showNotification('Please confirm the password — retype it to make sure it matches', 'warning');
+            this.elements.channelPasswordConfirmInput?.focus();
             return;
         }
 

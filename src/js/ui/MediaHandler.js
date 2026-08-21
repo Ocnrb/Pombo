@@ -23,6 +23,71 @@ class MediaHandler {
         this.deps = {};
         this._lightboxOpen = false;
         this._popstateHandler = this._onPopState.bind(this);
+
+        // Auto-save bookkeeping: which completed transfers already had their
+        // save triggered, so a re-render doesn't re-trigger the browser's
+        // download for the same file. Separate sets because mesh fileIds and
+        // storage transferIds are independent ID spaces. Session-scoped —
+        // a reload loses the in-memory blob URL too, so there is nothing to
+        // re-save until the user downloads again.
+        this.savedFileIds = new Set();
+        this.savedTransferIds = new Set();
+    }
+
+    /** Mesh transfer: has this fileId's auto-save already run? */
+    isSaved(fileId) {
+        return this.savedFileIds.has(fileId);
+    }
+
+    /** Storage transfer: has this transferId's auto-save already run? */
+    isStorageSaved(transferId) {
+        return this.savedTransferIds.has(transferId);
+    }
+
+    /**
+     * Trigger the browser's normal save/download behavior for a blob URL
+     * without waiting for a click — the same `<a download>` mechanism the
+     * manual floppy button uses, just invoked programmatically.
+     * @param {string} url - blob: URL of the completed file
+     * @param {string} fileName
+     */
+    autoSaveFile(url, fileName) {
+        if (!url) return;
+        try {
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName || 'download';
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        } catch (e) {
+            Logger.warn('Auto-save failed, floppy fallback stays available:', e);
+        }
+    }
+
+    /**
+     * Auto-save a completed mesh file once, idempotently.
+     * @param {string} fileId
+     * @param {string} url - blob: URL
+     * @param {string} fileName
+     */
+    autoSaveOnce(fileId, url, fileName) {
+        if (this.savedFileIds.has(fileId)) return;
+        this.autoSaveFile(url, fileName);
+        this.savedFileIds.add(fileId);
+    }
+
+    /**
+     * Auto-save a completed storage file once, idempotently.
+     * @param {string} transferId
+     * @param {string} url - blob: URL
+     * @param {string} fileName
+     */
+    autoSaveStorageOnce(transferId, url, fileName) {
+        if (this.savedTransferIds.has(transferId)) return;
+        this.autoSaveFile(url, fileName);
+        this.savedTransferIds.add(transferId);
     }
 
     /**

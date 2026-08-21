@@ -413,7 +413,20 @@ class App {
             // (pending invites are already loaded from storage).
             try {
                 const { notificationBellUI } = await import('./ui/NotificationBellUI.js');
-                notificationBellUI.init({ notificationManager, mediaController });
+                const { storageMediaController } = await import('./storageMedia.js');
+                notificationBellUI.init({
+                    notificationManager,
+                    mediaController,
+                    storageMediaController,
+                    // Reseed availability check for inactive rows: no channel
+                    // (left it) = no password for the announce, delete only.
+                    getChannel: (streamId) => channelManager.getChannel(streamId),
+                    openChannel: (streamId) => uiController.selectChannel(streamId),
+                    resumeStorageDownload: (transferId) => storageMediaController.resumeDownload(transferId),
+                    // Deep P3 replay backing the invites "All" view — once per
+                    // session, classified silently (see dm.replayInvites)
+                    fetchAllInvites: () => dmManager.replayInvites().catch(() => {})
+                });
             } catch (bellError) {
                 Logger.warn('Failed to init notification bell (non-critical):', bellError);
             }

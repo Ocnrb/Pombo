@@ -6,6 +6,7 @@
 import { GasEstimator } from './GasEstimator.js';
 import { authManager } from '../auth.js';
 import { streamrController } from '../streamr.js';
+import { snapRetentionDays, retentionLabel } from '../utils/retention.js';
 
 class DMModalsUI {
     constructor() {
@@ -106,9 +107,7 @@ class DMModalsUI {
         if (storageDaysSlider) {
             this.updateSliderProgress(storageDaysSlider);
             storageDaysSlider.addEventListener('input', () => {
-                const value = parseInt(storageDaysSlider.value);
-                this.selectedStorageDays = value;
-                this.updateStorageDaysDisplay(value);
+                this.selectedStorageDays = this.updateStorageDaysDisplay(storageDaysSlider.value);
                 this.updateSliderProgress(storageDaysSlider);
             });
         }
@@ -185,13 +184,19 @@ class DMModalsUI {
     }
 
     /**
-     * Update storage days display
+     * Update storage days display. The slider stays a proportional 1-365 day
+     * range; above the 30-day mark the effective value is magnet-snapped to
+     * the nearest exact month, and the thumb snaps along with it.
      */
-    updateStorageDaysDisplay(days) {
+    updateStorageDaysDisplay(rawDays) {
+        const days = snapRetentionDays(rawDays);
+        const slider = document.getElementById('dm-storage-days-input');
+        if (slider && slider.value !== String(days)) slider.value = String(days);
+
         const display = document.getElementById('dm-storage-days-value');
-        if (display) {
-            display.textContent = `${days} day${days !== 1 ? 's' : ''}`;
-        }
+        if (display) display.textContent = retentionLabel(days);
+
+        return days;
     }
 
     /**
@@ -239,7 +244,10 @@ class DMModalsUI {
         // Reset UI
         this.selectStorageProvider('streamr');
         const slider = document.getElementById('dm-storage-days-input');
-        if (slider) slider.value = '180';
+        if (slider) {
+            slider.value = '180';
+            this.updateSliderProgress(slider);
+        }
         this.updateStorageDaysDisplay(180);
         const customAddrInput = document.getElementById('dm-custom-storage-address');
         if (customAddrInput) customAddrInput.value = '';

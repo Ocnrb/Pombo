@@ -1771,7 +1771,8 @@ class MediaController {
             received: receivedCount,
             total: metadata.pieceCount,
             fileSize: metadata.fileSize,
-            bytesPerSec: this.getTransferRate(transfer)
+            bytesPerSec: this.getTransferRate(transfer),
+            paused: !!transfer.paused
         };
     }
 
@@ -2059,6 +2060,9 @@ class MediaController {
             seederDiscoveryTimer: null,
             noSeederRetryTimer: null,
             downloadStarted: false,
+            // Set by pauseDownload()/resumeDownload() — see cancelDownload's
+            // doc comment for why pause keeps everything cancelDownload deletes.
+            paused: false,
             // Adaptive request window (AIMD): grows per delivered piece, halves on timeout
             window: CONFIG.PIECE_WINDOW_START,
             lastWindowBackoffAt: 0,
@@ -2115,8 +2119,8 @@ class MediaController {
         // Setup discovery timer for retries
         const discoveryLoop = async () => {
             const currentTransfer = this.incomingFiles.get(fileId);
-            if (!currentTransfer) return; // Download completed or cancelled
-            
+            if (!currentTransfer || currentTransfer.paused) return; // Completed, cancelled, or paused
+
             // Push-mode already started — no more discovery needed
             if (currentTransfer.downloadStarted) return;
             
@@ -2354,8 +2358,8 @@ class MediaController {
      */
     manageDownload(fileId) {
         const transfer = this.incomingFiles.get(fileId);
-        if (!transfer) return;
-        
+        if (!transfer || transfer.paused) return;
+
         const seeders = this.fileSeeders.get(fileId);
         if (!seeders || seeders.size === 0) {
             // No seeders yet - seeder discovery will trigger us when ready
@@ -3056,13 +3060,65 @@ class MediaController {
         
         this.incomingFiles.delete(fileId);
         this.fileSeeders.delete(fileId);
-        
+
         // Clean up IndexedDB
         if (this.db) {
             this.clearFileFromIndexedDB(fileId);
         }
-        
+
         Logger.info('Download cancelled:', fileId);
+    }
+
+    /**
+     * Pause a download: stop the discovery/request timers, but — unlike
+     * cancelDownload — keep the transfer entry and its IndexedDB pieces
+     * intact so resumeDownload() picks up exactly where this left off.
+     */
+    pauseDownload(fileId) {
+        const transfer = this.incomingFiles.get(fileId);
+        if (!transfer || transfer.paused) return;
+        transfer.paused = true;
+
+        if (transfer.seederDiscoveryTimer) {
+            clearTimeout(transfer.seederDiscoveryTimer);
+            transfer.seederDiscoveryTimer = null;
+        }
+        if (transfer.noSeederRetryTimer) {
+            clearTimeout(transfer.noSeederRetryTimer);
+            transfer.noSeederRetryTimer = null;
+        }
+
+        // Requests already sent get no further timeout handling — put their
+        // pieces back to 'pending' so resumeDownload() re-requests them,
+        // exactly like a timeout would, instead of leaving them stuck as
+        // 'requested' forever with a dead timer.
+        for (const [pieceIndex, request] of transfer.requestsInFlight) {
+            clearTimeout(request.timeoutId);
+            transfer.pieceStatus[pieceIndex] = 'pending';
+        }
+        transfer.requestsInFlight.clear();
+
+        Logger.info('Download paused:', fileId);
+    }
+
+    /**
+     * Resume a download paused by pauseDownload(): re-kicks seeder discovery
+     * if needed and refills the request window from whatever is already
+     * known — nothing already in IndexedDB gets re-fetched.
+     */
+    resumeDownload(fileId) {
+        const transfer = this.incomingFiles.get(fileId);
+        if (!transfer || !transfer.paused) return;
+        transfer.paused = false;
+
+        const seeders = this.fileSeeders.get(fileId);
+        if (!seeders || seeders.size === 0) {
+            this.fireAndForget('startSeederDiscovery (resume)', this.startSeederDiscovery(fileId));
+        } else {
+            this.manageDownload(fileId);
+        }
+
+        Logger.info('Download resumed:', fileId);
     }
 
     // ==================== INDEXEDDB HELPERS ====================
@@ -3291,7 +3347,14 @@ class MediaController {
                     expiredCount++;
                     continue;
                 }
-                
+
+                // User-stopped seeds stay stopped across reloads — only an
+                // explicit reseed (Transfers list) flips them back.
+                if (record.active === false) {
+                    skippedCount++;
+                    continue;
+                }
+
                 // Restore to memory
                 const blob = new Blob([record.fileData], { type: record.metadata.fileType });
                 const url = URL.createObjectURL(blob);
@@ -3391,6 +3454,21 @@ class MediaController {
     }
 
     /**
+     * Get one seed file record from IndexedDB
+     */
+    async getSeedFile(fileId) {
+        if (!this.db) return null;
+
+        return new Promise((resolve, reject) => {
+            const tx = this.db.transaction('seedFiles', 'readonly');
+            const store = tx.objectStore('seedFiles');
+            const request = store.get(fileId);
+            request.onsuccess = () => resolve(request.result || null);
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    /**
      * Get all seed files from IndexedDB
      */
     async getAllSeedFiles() {
@@ -3419,6 +3497,82 @@ class MediaController {
             request.onsuccess = () => resolve(request.result || []);
             request.onerror = () => reject(request.error);
         });
+    }
+
+    /**
+     * Stops SERVING a file: out of localFiles (handlePieceRequest checks
+     * membership there, so requests stop being answered) and the blob URL is
+     * revoked — but the IndexedDB record stays, flagged inactive, so the
+     * Transfers list can offer a reseed without a re-download. Reloads honor
+     * the flag (loadPersistedSeedFiles skips inactive records); only
+     * removeSeedFile actually forgets the file.
+     */
+    async stopSeeding(fileId) {
+        const localFile = this.localFiles.get(fileId);
+        if (localFile?.metadata?.fileSize) {
+            this.persistedStorageSize -= localFile.metadata.fileSize;
+        }
+        const url = this.downloadedUrls.get(fileId);
+        if (url) {
+            URL.revokeObjectURL(url);
+            this.downloadedUrls.delete(fileId);
+        }
+        this.localFiles.delete(fileId);
+
+        const record = await this.getSeedFile(fileId).catch(() => null);
+        if (record) {
+            record.active = false;
+            await this.saveSeedFile(record);
+        }
+        Logger.info('Stopped seeding (bytes kept):', fileId);
+    }
+
+    /**
+     * Re-activates an inactive seed from its IndexedDB record: back into
+     * localFiles, blob URL recreated, and the channel's seeds re-announced —
+     * the reverse of stopSeeding, no re-download involved.
+     * @returns {Promise<boolean>} false when the record is gone or foreign
+     */
+    async reseedFile(fileId) {
+        if (this.localFiles.has(fileId)) return true;
+        const record = await this.getSeedFile(fileId).catch(() => null);
+        if (!record) return false;
+        const owner = record.ownerAddress?.toLowerCase();
+        if (!owner || owner !== this.currentOwnerAddress) return false;
+
+        record.active = true;
+        await this.saveSeedFile(record);
+
+        const blob = new Blob([record.fileData], { type: record.metadata.fileType });
+        this.localFiles.set(fileId, {
+            file: blob,
+            metadata: record.metadata,
+            streamId: record.streamId,
+            persisted: true
+        });
+        this.downloadedUrls.set(fileId, URL.createObjectURL(blob));
+        this.persistedStorageSize += record.metadata.fileSize;
+
+        const channel = channelManager.getChannel(record.streamId);
+        await this.reannounceForChannel(record.streamId, channel?.password || null);
+        Logger.info('Reseeding:', fileId, record.metadata.fileName);
+        return true;
+    }
+
+    /**
+     * Seed records held on disk for the current owner but not currently
+     * served — the Transfers list's "inactive" rows. On the web this is
+     * mostly user-stopped seeds: everything else loads at wallet connect.
+     */
+    async getInactiveSeedFiles() {
+        if (!this.currentOwnerAddress) return [];
+        const all = await this.getAllSeedFiles().catch(() => []);
+        const now = Date.now();
+        const expireMs = CONFIG.SEED_FILES_EXPIRE_DAYS * 24 * 60 * 60 * 1000;
+        return all.filter(record =>
+            record.ownerAddress?.toLowerCase() === this.currentOwnerAddress
+            && now - record.timestamp <= expireMs
+            && !this.localFiles.has(record.fileId));
     }
 
     /**

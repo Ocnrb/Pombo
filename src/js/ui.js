@@ -127,6 +127,7 @@ class UIController {
             getCurrentChannel: () => this.getActiveChannel(),
             getFileUrl: (fileId) => mediaController.getFileUrl(fileId),
             isSeeding: (fileId) => mediaController.isSeeding(fileId),
+            isSaved: (fileId) => mediaHandler.isSaved(fileId),
             isDownloading: (fileId) => mediaController.isDownloading(fileId),
             getDownloadProgress: (fileId) => mediaController.getDownloadProgress(fileId),
             isVideoPlayable: (fileType) => mediaController.isVideoPlayable(fileType),
@@ -136,7 +137,8 @@ class UIController {
             isStorageDownloading: (tid) => storageMediaController.isDownloading(tid),
             getStorageDownloadProgress: (tid) => storageMediaController.getDownloadProgress(tid),
             getStorageUploadState: (tid) => storageMediaController.getUploadState(tid),
-            getStorageResumePercent: (tid) => storageMediaController.getResumePercent(tid)
+            getStorageResumePercent: (tid) => storageMediaController.getResumePercent(tid),
+            isStorageSaved: (tid) => mediaHandler.isStorageSaved(tid)
         });
         
         // SettingsUI - All settings functionality
@@ -336,6 +338,8 @@ class UIController {
             newChannelModal: document.getElementById('new-channel-modal'),
             channelNameInput: document.getElementById('channel-name-input'),
             channelPasswordInput: document.getElementById('channel-password-input'),
+            channelPasswordConfirmInput: document.getElementById('channel-password-confirm-input'),
+            passwordConfirmSection: document.getElementById('password-confirm-section'),
             channelMembersInput: document.getElementById('channel-members-input'),
             // Exposure/visibility fields
             exposureSection: document.getElementById('exposure-section'),
@@ -736,6 +740,20 @@ class UIController {
             input.style.webkitTextSecurity = isPassword ? 'none' : 'disc';
             eyeOpen?.classList.toggle('hidden', isPassword);
             eyeOff?.classList.toggle('hidden', !isPassword);
+        });
+
+        // Password confirm step: reopens whenever the password field gets
+        // focus, closes again once the two fields match.
+        const channelPasswordInput = document.getElementById('channel-password-input');
+        const channelPasswordConfirmInput = document.getElementById('channel-password-confirm-input');
+        channelPasswordInput?.addEventListener('focus', () => {
+            channelModalsUI.expandPasswordConfirm();
+        });
+        channelPasswordInput?.addEventListener('input', () => {
+            channelModalsUI.checkPasswordMatch();
+        });
+        channelPasswordConfirmInput?.addEventListener('input', () => {
+            channelModalsUI.checkPasswordMatch();
         });
 
         // Classification tabs (for Closed channels) - switch between personal/community
@@ -1952,6 +1970,8 @@ class UIController {
         
         // File complete - show video player with seeding badge
         mediaController.onFileComplete((fileId, metadata, url, blob) => {
+            mediaHandler.autoSaveOnce(fileId, url, metadata.fileName);
+
             const container = document.querySelector(`[data-file-id="${CSS.escape(fileId)}"]`);
             if (container) {
                 const isSeeding = mediaController.isSeeding(fileId);
@@ -2148,6 +2168,9 @@ class UIController {
         // Download finished — re-render as the completed card (save link /
         // inline player); the controller's deps now report the blob URL
         storageMediaController.onFileComplete((tid, metadata) => {
+            const url = storageMediaController.getFileUrl(tid);
+            mediaHandler.autoSaveStorageOnce(tid, url, metadata.fileName);
+
             const container = document.querySelector(`[data-file-id="${CSS.escape(tid)}"]`);
             if (container) {
                 container.outerHTML = messageRenderer.renderStorageFileBubble({ metadata });

@@ -893,6 +893,57 @@ class DMManager {
     }
 
     /**
+     * On-demand P3 replay backing the bell's "All" invites view. The live
+     * subscription only ever sees invites that arrive while a tab is open;
+     * the storage node holds the rest for the inbox's retention. Every
+     * replayed envelope goes through the same open/attribute funnel as
+     * routeNotification, but the notification manager files it SILENTLY —
+     * answered ids become dismissed records, unseen ones become pending,
+     * and no toast fires per row. Once per session: the toggle is a filter,
+     * not a refresh button.
+     * @param {number} count - How many P3 entries to ask the storage node for
+     */
+    async replayInvites(count = 100) {
+        if (this._invitesReplayed) return;
+        if (!this.inboxMessageStreamId || !streamrController.client) return;
+        this._invitesReplayed = true;
+
+        const { notificationManager } = await import('./notifications.js');
+        const myAddress = authManager.getAddress()?.toLowerCase();
+        try {
+            const resend = await streamrController.client.resend(
+                { streamId: this.inboxMessageStreamId, partition: STREAM_CONFIG.MESSAGE_STREAM.NOTIFICATIONS },
+                { last: count }
+            );
+            const iterator = resend[Symbol.asyncIterator]();
+            for (;;) {
+                let message;
+                try {
+                    const result = await iterator.next();
+                    if (result.done) break;
+                    message = result.value;
+                } catch {
+                    // Undecryptable/foreign rows are expected on a shared inbox
+                    continue;
+                }
+                try {
+                    let data = message.content ?? message;
+                    data = await this.openDMEnvelope(data);
+                    if (!data?.account) continue;
+                    const sender = data.account.toLowerCase();
+                    if (sender === myAddress) continue;
+                    if (secureStorage.isBlocked(sender)) continue;
+                    if (data.type === 'CHANNEL_INVITE') {
+                        await notificationManager.handleChannelInvite(data, { replay: true });
+                    }
+                } catch { /* not for us */ }
+            }
+        } catch (e) {
+            Logger.warn('DM: invite replay failed:', e.message);
+        }
+    }
+
+    /**
      * Route an incoming notification from DM-1 partition 3.
      * Decrypts the E2E envelope and delegates to NotificationManager.
      * @param {Object} data - Encrypted notification with account from Streamr publisherId

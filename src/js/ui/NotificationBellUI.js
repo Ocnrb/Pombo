@@ -23,6 +23,15 @@ class NotificationBellUI {
         this.deps = {};
         this.open = false;
         this.refreshTimer = null;
+        // 'pending' (default) hides dismissed invites; 'all' appends them,
+        // dimmed, with Accept still available (a dismiss can be a mis-tap).
+        // Session-scoped on purpose — the dropdown always reopens on Pending.
+        this.invitesMode = 'pending';
+        // Inactive seeds (stopped, bytes kept) hidden by default; same
+        // reopen-on-default rule. The rows come from IndexedDB, so they are
+        // fetched async into this cache when toggled on.
+        this.showInactive = false;
+        this._inactiveSeeds = [];
     }
 
     /**
@@ -57,6 +66,12 @@ class NotificationBellUI {
         dropdown.addEventListener('click', (e) => e.stopPropagation());
         document.addEventListener('click', () => { if (this.open) this.toggle(false); });
 
+        document.getElementById('notif-invites-mode-pending')?.addEventListener('click', () => this.setInvitesMode('pending'));
+        document.getElementById('notif-invites-mode-all')?.addEventListener('click', () => this.setInvitesMode('all'));
+        document.getElementById('notif-transfers-inactive')?.addEventListener('click', () => {
+            this.setShowInactive(!this.showInactive);
+        });
+
         // The manager pings on every invite arrival/accept/dismiss, so the
         // badge stays honest without the bell polling for it.
         deps.notificationManager.onChanged = () => {
@@ -66,12 +81,50 @@ class NotificationBellUI {
         this.updateBadge();
     }
 
+    setInvitesMode(mode) {
+        this.invitesMode = mode;
+        const pendingBtn = document.getElementById('notif-invites-mode-pending');
+        const allBtn = document.getElementById('notif-invites-mode-all');
+        const active = 'text-white/70 transition';
+        const idle = 'text-white/30 hover:text-white/50 transition';
+        if (pendingBtn) pendingBtn.className = mode === 'pending' ? active : idle;
+        if (allBtn) allBtn.className = mode === 'all' ? active : idle;
+        // Historical invites live on the storage node, not in memory — the
+        // replay backfills them (once per session) the moment the view can
+        // show them; rows land via onChanged re-renders as they arrive.
+        if (mode === 'all') this.deps.fetchAllInvites?.();
+        this.renderInvites();
+    }
+
+    async setShowInactive(show) {
+        this.showInactive = show;
+        const btn = document.getElementById('notif-transfers-inactive');
+        if (btn) {
+            btn.textContent = show ? 'Hide inactive' : 'Show inactive';
+            btn.className = show
+                ? 'text-[10px] font-medium text-white/70 transition'
+                : 'text-[10px] font-medium text-white/30 hover:text-white/50 transition';
+        }
+        await this._refreshInactive();
+        this.renderTransfers();
+    }
+
+    /** Re-reads the inactive seed records (IndexedDB) into the render cache. */
+    async _refreshInactive() {
+        this._inactiveSeeds = this.showInactive
+            ? await this.deps.mediaController?.getInactiveSeedFiles?.().catch(() => []) || []
+            : [];
+    }
+
     toggle(force) {
         const dropdown = document.getElementById('notif-bell-dropdown');
         if (!dropdown) return;
         this.open = force !== undefined ? force : !this.open;
         dropdown.classList.toggle('hidden', !this.open);
         if (this.open) {
+            // Always reopen on the default views.
+            if (this.invitesMode !== 'pending') this.setInvitesMode('pending');
+            if (this.showInactive) this.setShowInactive(false);
             this.render();
             // Speeds move while the menu is open; once a second is enough for
             // a rate readout and cheap enough to not matter.
@@ -102,6 +155,13 @@ class NotificationBellUI {
         return this.formatBytes(bytesPerSec) + '/s';
     }
 
+    /** Play (resume) or pause glyph, shared by mesh and storage download rows. */
+    pauseIconSvg(paused) {
+        return paused
+            ? `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z"/></svg>`
+            : `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.75 5.25v13.5m-7.5-13.5v13.5"/></svg>`;
+    }
+
     render() {
         this.renderInvites();
         this.renderTransfers();
@@ -111,21 +171,28 @@ class NotificationBellUI {
     renderInvites() {
         const list = document.getElementById('notif-invites-list');
         if (!list) return;
-        const invites = this.deps.notificationManager?.getPendingInvites?.() || [];
-        if (invites.length === 0) {
-            list.innerHTML = '<div class="px-3.5 pb-2 text-[13px] text-white/40">No pending invites</div>';
+        const pending = this.deps.notificationManager?.getPendingInvites?.() || [];
+        const dismissed = this.invitesMode === 'all'
+            ? (this.deps.notificationManager?.getDismissedInvites?.() || [])
+            : [];
+        if (pending.length === 0 && dismissed.length === 0) {
+            list.innerHTML = `<div class="px-3.5 pb-2 text-[13px] text-white/40">${this.invitesMode === 'all' ? 'No invites' : 'No pending invites'}</div>`;
             return;
         }
-        list.innerHTML = invites.map(invite => `
-            <div class="px-3.5 py-1.5" data-invite-id="${escapeHtml(invite.inviteId)}">
+        // Dismissed rows: dimmed, Accept only — the whole point of the "All"
+        // view is recovering a dismiss that was a mis-tap.
+        const inviteRow = (invite, isDismissed) => `
+            <div class="px-3.5 py-1.5${isDismissed ? ' opacity-50' : ''}" data-invite-id="${escapeHtml(invite.inviteId)}">
                 <div class="text-[13px] font-medium text-white/90">${escapeHtml(sanitizeText(invite.channel?.name || 'Channel'))}</div>
                 <div class="text-[11px] text-white/40">From: ${escapeHtml((invite.from || '').slice(0, 6))}…${escapeHtml((invite.from || '').slice(-4))}</div>
                 <div class="mt-1.5 mb-1 flex gap-2">
                     <button class="notif-invite-accept bg-white/90 hover:bg-white text-[#0a0a0a] px-3 py-1 rounded-md text-[11px] font-medium transition">Accept</button>
-                    <button class="notif-invite-dismiss bg-white/10 hover:bg-white/20 text-white/70 px-3 py-1 rounded-md text-[11px] font-medium transition">Dismiss</button>
+                    ${isDismissed ? '' : '<button class="notif-invite-dismiss bg-white/10 hover:bg-white/20 text-white/70 px-3 py-1 rounded-md text-[11px] font-medium transition">Dismiss</button>'}
                 </div>
             </div>
-        `).join('');
+        `;
+        list.innerHTML = pending.map(i => inviteRow(i, false)).join('')
+            + dismissed.map(i => inviteRow(i, true)).join('');
         list.querySelectorAll('[data-invite-id]').forEach(row => {
             const id = row.dataset.inviteId;
             row.querySelector('.notif-invite-accept')?.addEventListener('click', () => {
@@ -152,20 +219,73 @@ class NotificationBellUI {
             if (!p || !transfer.metadata) continue;
             const transferred = p.total > 0 ? (p.received / p.total) * p.fileSize : 0;
             const speed = this.formatSpeed(p.bytesPerSec);
+            const stats = p.paused
+                ? `Paused · ${this.formatBytes(transferred)} of ${this.formatBytes(p.fileSize)}`
+                : `${this.formatBytes(transferred)} of ${this.formatBytes(p.fileSize)}${speed ? ` · ${speed}` : ''}`;
+            const pauseIcon = p.paused
+                ? `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z"/></svg>`
+                : `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.75 5.25v13.5m-7.5-13.5v13.5"/></svg>`;
             rows.push(`
-                <div class="px-3.5 py-1.5 flex items-center gap-2" data-transfer-dl="${escapeHtml(fileId)}">
+                <div class="px-3.5 py-1.5 flex items-center gap-2 hover:bg-white/[0.04] cursor-pointer transition" data-transfer-dl="${escapeHtml(fileId)}" data-transfer-paused="${p.paused ? '1' : '0'}" data-stream-id="${escapeHtml(transfer.streamId || '')}" title="Open channel">
                     <svg class="w-3.5 h-3.5 flex-shrink-0 text-[#F6851B]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.5v15m0 0 6-6m-6 6-6-6"/>
                     </svg>
                     <div class="min-w-0 flex-1">
                         <div class="text-[12px] text-white/90 truncate">${escapeHtml(sanitizeText(transfer.metadata.fileName || fileId))}</div>
-                        <div class="text-[10px] text-white/40 truncate">${this.formatBytes(transferred)} of ${this.formatBytes(p.fileSize)}${speed ? ` · ${speed}` : ''}</div>
+                        <div class="text-[10px] text-white/40 truncate">${stats}</div>
                     </div>
+                    <button class="notif-pause-dl flex-shrink-0 text-white/45 hover:text-white transition" title="${p.paused ? 'Resume download' : 'Pause download'}">
+                        ${pauseIcon}
+                    </button>
                     <button class="notif-cancel-dl flex-shrink-0 text-white/45 hover:text-white transition" title="Cancel download">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18 18 6M6 6l12 12"/></svg>
                     </button>
                 </div>
             `);
+        }
+
+        // Storage-node downloads in flight — same shape as the mesh rows
+        // above, no cancel yet (only pause/resume; see resumeStorageDownload).
+        const storage = this.deps.storageMediaController;
+        if (storage) {
+            for (const [tid, transfer] of storage.downloads) {
+                if (transfer.status !== 'downloading' && transfer.status !== 'paused') continue;
+                const p = storage.getDownloadProgress(tid);
+                if (!p || !transfer.metadata) continue;
+                const transferred = p.total > 0 ? (p.received / p.total) * p.fileSize : 0;
+                const speed = this.formatSpeed(p.bytesPerSec);
+                // The tap-to-confirmation gap: "Pausing…" while the fetch loop
+                // unwinds, "Resuming…" while the new run spins up (endpoint
+                // rotation can take seconds). The icon tracks the request, the
+                // text names the gap — replacing the speed, which is stale in
+                // both states anyway.
+                const pausing = transfer.status === 'downloading' && transfer.paused;
+                const resuming = transfer.status === 'paused' && storage.isResuming?.(tid);
+                const showPaused = (pausing || transfer.status === 'paused') && !resuming;
+                const base = `${this.formatBytes(transferred)} of ${this.formatBytes(p.fileSize)}`;
+                let stats;
+                if (pausing) stats = `${base} · Pausing…`;
+                else if (resuming) stats = `${base} · Resuming…`;
+                else if (transfer.status === 'paused') stats = `Paused · ${base}`;
+                else stats = `${base}${speed ? ` · ${speed}` : ''}`;
+                rows.push(`
+                    <div class="px-3.5 py-1.5 flex items-center gap-2 hover:bg-white/[0.04] cursor-pointer transition" data-storage-dl="${escapeHtml(tid)}" data-transfer-paused="${showPaused ? '1' : '0'}" data-stream-id="${escapeHtml(transfer.streamId || '')}" title="Open channel">
+                        <svg class="w-3.5 h-3.5 flex-shrink-0 text-[#8B5CF6]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.5v15m0 0 6-6m-6 6-6-6"/>
+                        </svg>
+                        <div class="min-w-0 flex-1">
+                            <div class="text-[12px] text-white/90 truncate">${escapeHtml(sanitizeText(transfer.metadata.fileName || tid))}</div>
+                            <div class="text-[10px] text-white/40 truncate">${stats}</div>
+                        </div>
+                        <button class="notif-pause-storage-dl flex-shrink-0 text-white/45 hover:text-white transition" title="${showPaused ? 'Resume download' : 'Pause download'}">
+                            ${this.pauseIconSvg(showPaused)}
+                        </button>
+                        <button class="notif-cancel-storage-dl flex-shrink-0 text-white/45 hover:text-white transition" title="Cancel download">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18 18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                `);
+            }
         }
 
         // Files this device serves. localFiles also holds transient hashing
@@ -178,7 +298,7 @@ class NotificationBellUI {
             const stats = [this.formatBytes(info.metadata.fileSize), rate && `↑ ${rate}`, peers]
                 .filter(Boolean).join(' · ');
             rows.push(`
-                <div class="px-3.5 py-1.5 flex items-center gap-2" data-transfer-seed="${escapeHtml(fileId)}">
+                <div class="px-3.5 py-1.5 flex items-center gap-2 hover:bg-white/[0.04] cursor-pointer transition" data-transfer-seed="${escapeHtml(fileId)}" data-stream-id="${escapeHtml(info.streamId || '')}" title="Open channel">
                     <svg class="w-3.5 h-3.5 flex-shrink-0 text-green-400/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19.5v-15m0 0-6 6m6-6 6 6"/>
                     </svg>
@@ -193,25 +313,123 @@ class NotificationBellUI {
             `);
         }
 
+        // Inactive seeds: stopped (bytes kept) or otherwise held-but-unserved.
+        // Play = reseed — needs the channel for the announce, so it is only
+        // offered while still a member; X = delete for good.
+        for (const record of this._inactiveSeeds) {
+            const channel = this.deps.getChannel?.(record.streamId);
+            rows.push(`
+                <div class="px-3.5 py-1.5 flex items-center gap-2 opacity-50 hover:bg-white/[0.04] transition${channel ? ' cursor-pointer' : ''}" data-inactive-seed="${escapeHtml(record.fileId)}" data-stream-id="${escapeHtml(channel ? record.streamId : '')}" ${channel ? 'title="Open channel"' : ''}>
+                    <svg class="w-3.5 h-3.5 flex-shrink-0 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19.5v-15m0 0-6 6m6-6 6 6"/>
+                    </svg>
+                    <div class="min-w-0 flex-1">
+                        <div class="text-[12px] text-white/90 truncate">${escapeHtml(sanitizeText(record.metadata?.fileName || record.fileId))}</div>
+                        <div class="text-[10px] text-white/40 truncate">${this.formatBytes(record.metadata?.fileSize || 0)} · Inactive</div>
+                    </div>
+                    ${channel ? `
+                    <button class="notif-reseed flex-shrink-0 text-white/45 hover:text-white transition" title="Reseed">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z"/></svg>
+                    </button>` : ''}
+                    <button class="notif-delete-seed flex-shrink-0 text-white/45 hover:text-red-400/90 transition" title="Delete file">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18 18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+            `);
+        }
+
         list.innerHTML = rows.length
             ? rows.join('')
-            : '<div class="px-3.5 pb-2 text-[13px] text-white/40">No active transfers</div>';
+            : `<div class="px-3.5 pb-2 text-[13px] text-white/40">${this.showInactive ? 'No transfers' : 'No active transfers'}</div>`;
 
         list.querySelectorAll('[data-transfer-dl]').forEach(row => {
-            row.querySelector('.notif-cancel-dl')?.addEventListener('click', () => {
+            row.querySelector('.notif-cancel-dl')?.addEventListener('click', (e) => {
+                e.stopPropagation();
                 this.deps.mediaController.cancelDownload(row.dataset.transferDl);
                 this.render();
             });
-        });
-        list.querySelectorAll('[data-transfer-seed]').forEach(row => {
-            row.querySelector('.notif-stop-seed')?.addEventListener('click', async () => {
-                try {
-                    await this.deps.mediaController.removeSeedFile(row.dataset.transferSeed);
-                } catch (e) {
-                    Logger.warn('Stop seeding failed:', e.message);
+            row.querySelector('.notif-pause-dl')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const fileId = row.dataset.transferDl;
+                if (row.dataset.transferPaused === '1') {
+                    this.deps.mediaController.resumeDownload(fileId);
+                } else {
+                    this.deps.mediaController.pauseDownload(fileId);
                 }
                 this.render();
             });
+            this._wireRowNavigation(row);
+        });
+        list.querySelectorAll('[data-storage-dl]').forEach(row => {
+            row.querySelector('.notif-cancel-storage-dl')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.deps.storageMediaController?.cancelDownload(row.dataset.storageDl);
+                this.render();
+            });
+            row.querySelector('.notif-pause-storage-dl')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const tid = row.dataset.storageDl;
+                if (row.dataset.transferPaused === '1') {
+                    this.deps.resumeStorageDownload?.(tid);
+                } else {
+                    this.deps.storageMediaController?.pauseDownload(tid);
+                }
+                this.render();
+            });
+            this._wireRowNavigation(row);
+        });
+        list.querySelectorAll('[data-transfer-seed]').forEach(row => {
+            row.querySelector('.notif-stop-seed')?.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                try {
+                    // Non-destructive: the bytes and record stay, flagged
+                    // inactive — the row moves to the "Show inactive" view.
+                    await this.deps.mediaController.stopSeeding(row.dataset.transferSeed);
+                } catch (e2) {
+                    Logger.warn('Stop seeding failed:', e2.message);
+                }
+                await this._refreshInactive();
+                this.render();
+            });
+            this._wireRowNavigation(row);
+        });
+        list.querySelectorAll('[data-inactive-seed]').forEach(row => {
+            const fileId = row.dataset.inactiveSeed;
+            row.querySelector('.notif-reseed')?.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                try {
+                    await this.deps.mediaController.reseedFile(fileId);
+                } catch (e2) {
+                    Logger.warn('Reseed failed:', e2.message);
+                }
+                await this._refreshInactive();
+                this.render();
+            });
+            row.querySelector('.notif-delete-seed')?.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                try {
+                    await this.deps.mediaController.removeSeedFile(fileId);
+                } catch (e2) {
+                    Logger.warn('Delete seed failed:', e2.message);
+                }
+                await this._refreshInactive();
+                this.render();
+            });
+            this._wireRowNavigation(row);
+        });
+    }
+
+    /**
+     * Tapping a transfer row (outside its action buttons, which stop
+     * propagation) opens the channel it belongs to and closes the dropdown.
+     * @private
+     */
+    _wireRowNavigation(row) {
+        const streamId = row.dataset.streamId;
+        if (!streamId) return;
+        row.addEventListener('click', () => {
+            this.toggle(false);
+            this.deps.openChannel?.(streamId);
         });
     }
 }
