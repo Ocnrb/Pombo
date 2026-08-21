@@ -1980,6 +1980,28 @@ body {
 }
 
 /* ===========================================
+   EXPLORE VIEW SCROLL (all viewports)
+   Only the global header (#chat-header included) stays put; search,
+   filters, chips and the channel list scroll as one region. Scoped to
+   body.explore-open exclusively, so chat's own scroll (main stays
+   overflow-hidden, .messages-area scrolls itself) is never touched.
+   =========================================== */
+body.explore-open #chat-area main {
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+body.explore-open .explore-view {
+    height: auto;
+    min-height: 100%;
+}
+
+body.explore-open #explore-channels-list {
+    flex: 0 0 auto;
+    overflow-y: visible;
+}
+
+/* ===========================================
    MOBILE (< 768px) + LANDSCAPE SHORT SCREENS
    Sidebar = initial view, Chat = push navigation
    Also applies to landscape devices with ≤500px height
@@ -2258,7 +2280,9 @@ body {
     /* ----- PILL NAVIGATION BAR ----- */
     #mobile-pill-nav {
         position: fixed;
-        bottom: 2rem;
+        /* Was 2rem; brought down per user call (2026-08-21), matching the
+           Android app's PILL_NAV_BOTTOM_OFFSET — still clear of the edge. */
+        bottom: 1.25rem;
         left: 50%;
         transform: translateX(-50%);
         z-index: 100;
@@ -2266,18 +2290,6 @@ body {
         display: flex;
         flex-direction: column;
         align-items: center;
-    }
-
-    .pill-guest-label {
-        color: #F6851B;
-        font-size: 0.6875rem;
-        font-weight: 500;
-        margin-top: 0.35rem;
-        white-space: nowrap;
-    }
-
-    .pill-guest-label.hidden {
-        display: none;
     }
 
     .pill-nav-inner {
@@ -2418,6 +2430,26 @@ body {
         border-top: 1px solid rgba(255, 255, 255, 0.06);
         margin-top: 0.25rem;
         padding-top: 0.5rem;
+    }
+
+    .pill-dropdown-item-locked {
+        color: rgba(255, 255, 255, 0.35);
+        cursor: default;
+    }
+
+    .pill-dropdown-item-locked:hover,
+    .pill-dropdown-item-locked:active {
+        background: none;
+    }
+
+    .pill-dropdown-soon {
+        font-size: 0.5625rem;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        color: rgba(255, 255, 255, 0.4);
+        background: rgba(255, 255, 255, 0.08);
+        border-radius: 9999px;
+        padding: 0.15rem 0.4rem;
     }
 
     /* ----- SETTINGS DROPDOWN ----- */

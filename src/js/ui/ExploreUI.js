@@ -52,6 +52,9 @@ class ExploreUI {
         // resolved once per gate (both reads cache in gateManager)
         this._gateCardInfo = new Map();
         
+        // Search starts collapsed to an icon; expands into the input on tap.
+        this._searchExpanded = false;
+
         // Cached channels
         this.cachedPublicChannels = null;
         this._handleCategoryViewportChange = () => {
@@ -106,54 +109,74 @@ class ExploreUI {
             return `<button type="button" data-category="${chip.category}" class="${classes}">${chip.label}</button>`;
         }).join('');
 
+        const languageOptions = [
+            ['', 'All Languages'], ['en', 'English'], ['pt', 'Português'],
+            ['es', 'Español'], ['fr', 'Français'], ['de', 'Deutsch'],
+            ['it', 'Italiano'], ['zh', '中文'], ['ja', '日本語'],
+            ['ko', '한국어'], ['ru', 'Русский'], ['ar', 'العربية'],
+            ['other', 'Other']
+        ];
+        const languageMenuItems = languageOptions.map(([value, label]) => `
+            <button type="button" data-language="${value}" class="explore-language-option w-full text-left px-3 py-2 rounded-lg text-[13px] text-white/70 hover:bg-white/[0.06] transition">${escapeHtml(label)}</button>
+        `).join('');
+        const accessMarkersHtml = `
+            <div class="flex items-center gap-1 text-sm flex-shrink-0">
+                ${['open', 'gated', 'paid'].map((t, i) => `
+                    ${i > 0 ? '<span class="text-white/15 px-1">|</span>' : ''}
+                    <button type="button" data-access="${t}" class="explore-access-marker px-2 py-1 rounded-md transition text-white/50 hover:text-white/80">
+                        ${t[0].toUpperCase() + t.slice(1)}
+                    </button>`).join('')}
+            </div>`;
+
         return `
             <div class="explore-view flex flex-col h-full bg-[#0f0f12]">
                 <!-- Filters Section -->
                 <div class="px-4 pt-3 pb-3 space-y-3">
-                    <!-- Search + Language Filter -->
-                    <div class="flex gap-3">
-                        <div class="flex-1 relative">
-                            <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
-                            </svg>
-                            <input
-                                type="search"
-                                id="explore-search-input"
-                                name="pombo_explore_filter"
-                                placeholder="Search channels..."
-                                autocomplete="off"
-                                data-lpignore="true"
-                                data-1p-ignore="true"
-                                data-form-type="other"
-                                class="w-full bg-white/5 border border-white/10 text-white pl-10 pr-4 py-2.5 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/30"
-                            />
+                    <!-- Access filters left, search + language icons right
+                         (2026-08-21 redesign, was bookended). Search
+                         collapses to an icon and expands in place — up to
+                         the language icon, never pushing the pills down —
+                         only when tapped; language drops its "All Languages"
+                         text label for an icon-only trigger. -->
+                    <div class="flex items-center gap-2">
+                        ${accessMarkersHtml}
+                        <div class="flex-1 flex items-center justify-end min-w-0">
+                            <button type="button" id="explore-search-toggle-btn" aria-label="Search channels" class="flex-shrink-0 w-[38px] h-[38px] flex items-center justify-center bg-white/5 border border-white/10 rounded-xl text-white/50 hover:text-white/80 transition">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+                                </svg>
+                            </button>
+                            <div class="hidden items-center gap-2 bg-white/[0.06] border border-[#F6851B]/40 rounded-xl px-3 h-[38px] w-full" id="explore-search-expanded-row">
+                                <svg class="w-4 h-4 text-[#F6851B] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+                                </svg>
+                                <input
+                                    type="search"
+                                    id="explore-search-input"
+                                    name="pombo_explore_filter"
+                                    placeholder="Search"
+                                    autocomplete="off"
+                                    data-lpignore="true"
+                                    data-1p-ignore="true"
+                                    data-form-type="other"
+                                    class="flex-1 min-w-0 bg-transparent text-white text-sm focus:outline-none placeholder:text-white/30"
+                                />
+                                <button type="button" id="explore-search-close-btn" aria-label="Close search" class="flex-shrink-0 text-white/40 hover:text-white/70 transition">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M6 6l12 12M18 6L6 18"/></svg>
+                                </button>
+                            </div>
                         </div>
-                        <select id="explore-language-filter" class="bg-white/5 border border-white/10 text-white/80 px-3 py-2.5 rounded-xl text-sm focus:outline-none focus:border-white/30 transition cursor-pointer">
-                            <option value="" selected>All Languages</option>
-                            <option value="en">English</option>
-                            <option value="pt">Português</option>
-                            <option value="es">Español</option>
-                            <option value="fr">Français</option>
-                            <option value="de">Deutsch</option>
-                            <option value="it">Italiano</option>
-                            <option value="zh">中文</option>
-                            <option value="ja">日本語</option>
-                            <option value="ko">한국어</option>
-                            <option value="ru">Русский</option>
-                            <option value="ar">العربية</option>
-                            <option value="other">Other</option>
-                        </select>
-                    </div>
-
-                    <!-- Access-type markers (N-D): Open / Gated / Paid.
-                         Toggles — none active shows every type. Gated vs
-                         Paid is the on-chain gate MODE, resolved per card. -->
-                    <div class="flex items-center justify-center gap-1 text-sm" id="explore-access-markers">
-                        ${['open', 'gated', 'paid'].map((t, i) => `
-                            ${i > 0 ? '<span class="text-white/15 px-1">|</span>' : ''}
-                            <button type="button" data-access="${t}" class="explore-access-marker px-2 py-1 rounded-md transition text-white/50 hover:text-white/80">
-                                ${t[0].toUpperCase() + t.slice(1)}
-                            </button>`).join('')}
+                        <div class="relative flex-shrink-0">
+                            <button type="button" id="explore-language-toggle-btn" aria-label="Language filter" class="w-[38px] h-[38px] flex items-center justify-center bg-white/5 border border-white/10 rounded-xl text-white/50 hover:text-white/80 transition">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <circle cx="12" cy="12" r="9"/>
+                                    <path stroke-linecap="round" d="M3 12h18M12 3c2.4 2.4 3.8 5.7 3.8 9s-1.4 6.6-3.8 9c-2.4-2.4-3.8-5.7-3.8-9s1.4-6.6 3.8-9z"/>
+                                </svg>
+                            </button>
+                            <div id="explore-language-dropdown" class="hidden absolute top-full right-0 mt-1.5 w-44 max-h-72 overflow-y-auto bg-[#16161b] border border-white/[0.1] rounded-xl p-1.5 shadow-2xl z-30">
+                                ${languageMenuItems}
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Category Chips (collapsible) -->
@@ -198,7 +221,47 @@ class ExploreUI {
         searchInput?.addEventListener('input', (e) => {
             this.filterChannels(e.target.value);
         });
-        
+
+        // Search collapses to an icon; expands in place — up to the language
+        // icon, pills stay put — only on tap (2026-08-21 redesign, was a
+        // second row). Autofocuses so typing starts immediately.
+        const searchToggleBtn = document.getElementById('explore-search-toggle-btn');
+        const expandedRow = document.getElementById('explore-search-expanded-row');
+        searchToggleBtn?.addEventListener('click', () => {
+            this._searchExpanded = true;
+            searchToggleBtn.classList.add('hidden');
+            expandedRow?.classList.remove('hidden');
+            expandedRow?.classList.add('flex');
+            searchInput?.focus();
+        });
+        document.getElementById('explore-search-close-btn')?.addEventListener('click', () => {
+            this._searchExpanded = false;
+            if (searchInput) searchInput.value = '';
+            expandedRow?.classList.add('hidden');
+            expandedRow?.classList.remove('flex');
+            searchToggleBtn?.classList.remove('hidden');
+            this.filterChannels('');
+        });
+
+        // Language: icon-only trigger + a custom dropdown (2026-08-20/21
+        // redesign, was a native <select> showing "All Languages" in full).
+        const languageDropdown = document.getElementById('explore-language-dropdown');
+        document.getElementById('explore-language-toggle-btn')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            languageDropdown?.classList.toggle('hidden');
+        });
+        document.addEventListener('click', () => languageDropdown?.classList.add('hidden'));
+        document.querySelectorAll('.explore-language-option').forEach(opt => {
+            opt.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.browseLanguageFilterValue = opt.dataset.language;
+                this.updateLanguageToggle();
+                languageDropdown?.classList.add('hidden');
+                this.filterChannels(searchInput?.value || '');
+            });
+        });
+        this.updateLanguageToggle();
+
         // Private chip toggle
         const privateChip = document.getElementById('explore-private-chip');
         privateChip?.addEventListener('click', () => {
@@ -251,12 +314,21 @@ class ExploreUI {
         
         // Check if categories need expand button
         this.checkCategoriesOverflow();
-        
-        // Language filter
-        const langFilter = document.getElementById('explore-language-filter');
-        langFilter?.addEventListener('change', (e) => {
-            this.browseLanguageFilterValue = e.target.value;
-            this.filterChannels(searchInput?.value || '');
+    }
+
+    /** Highlights the language icon + the picked option when a specific language is active. */
+    updateLanguageToggle() {
+        const btn = document.getElementById('explore-language-toggle-btn');
+        const active = !!this.browseLanguageFilterValue;
+        btn?.classList.toggle('text-[#F6851B]', active);
+        btn?.classList.toggle('border-[#F6851B]/50', active);
+        btn?.classList.toggle('text-white/50', !active);
+        btn?.classList.toggle('border-white/10', !active);
+        document.querySelectorAll('.explore-language-option').forEach(opt => {
+            const picked = opt.dataset.language === this.browseLanguageFilterValue;
+            opt.classList.toggle('text-white', picked);
+            opt.classList.toggle('bg-white/[0.06]', picked);
+            opt.classList.toggle('text-white/70', !picked);
         });
     }
 
@@ -269,13 +341,8 @@ class ExploreUI {
         this.browseLanguageFilterValue = '';
         this.browseAccessFilter = 'open';
         this.updateAccessMarkers();
-        
-        // Sync language dropdown
-        const langDropdown = document.getElementById('explore-language-filter');
-        if (langDropdown) {
-            langDropdown.value = this.browseLanguageFilterValue;
-        }
-        
+        this.updateLanguageToggle();
+
         // Sync tab and chip UI to match reset state
         this.updatePrivateChip();
         this.updateCategoryChips();

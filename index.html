@@ -164,19 +164,22 @@
         <aside id="sidebar" class="sidebar w-80 lg:w-[380px] bg-[#09090b] flex flex-col flex-shrink-0">
             <!-- Channel Controls -->
             <div class="px-3 pb-2 space-y-2.5 pt-4">
-                <div class="flex items-center justify-between">
-                    <span class="text-[11px] font-semibold text-white/30 uppercase tracking-widest">Channels</span>
-                </div>
-                
                 <!-- Explore + Create row (desktop only, mobile uses pill nav) -->
                 <div class="hidden md:flex items-center gap-2">
                     <button id="browse-channels-btn" class="flex-1 min-w-0 bg-white/[0.08] hover:bg-white/[0.12] border border-white/[0.07] px-3 py-2 rounded-xl text-sm text-white/80 hover:text-white transition-all duration-200 flex items-center justify-center gap-1.5">
                         <svg id="browse-btn-icon" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"/>
                         </svg>
-                        <span id="browse-btn-text">Explore</span>
+                        <span id="browse-btn-text">Threads</span>
                     </button>
-                    <button id="new-channel-btn" class="w-[28%] bg-[#F6851B]/15 hover:bg-[#F6851B]/25 border border-[#F6851B]/30 py-2 px-3 rounded-xl text-white hover:text-white transition-all duration-200 flex items-center justify-center gap-1.5 flex-shrink-0 hover:shadow-lg hover:shadow-[#F6851B]/10 text-sm font-medium" title="Create Channel">
+                    <button id="browse-livestreams-btn" class="flex-1 min-w-0 bg-white/[0.04] border border-white/[0.05] px-3 py-2 rounded-xl text-sm text-white/30 transition-all duration-200 flex items-center justify-center gap-1.5 cursor-default" title="Coming soon">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 10.5l4.72-2.362A1 1 0 0122 9v6a1 1 0 01-1.53.862L15.75 13.5m-9.75 6h6a2.25 2.25 0 002.25-2.25v-8.5A2.25 2.25 0 0012 6.5H4.5A2.25 2.25 0 002.25 8.75v8.5A2.25 2.25 0 004.5 19.5z"/>
+                        </svg>
+                        <span>Live</span>
+                        <span class="pill-dropdown-soon">SOON</span>
+                    </button>
+                    <button id="new-channel-btn" class="w-[22%] bg-[#F6851B]/15 hover:bg-[#F6851B]/25 border border-[#F6851B]/30 py-2 px-3 rounded-xl text-white hover:text-white transition-all duration-200 flex items-center justify-center gap-1.5 flex-shrink-0 hover:shadow-lg hover:shadow-[#F6851B]/10 text-sm font-medium" title="Create Channel">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4.5v15m7.5-7.5h-15"/>
                         </svg>
@@ -259,16 +262,31 @@
             <div class="pill-nav-inner">
                 <button id="pill-chats-btn" class="pill-nav-item" data-pill-tab="chats">
                     <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 11L12 3l9 8M5 10.5V20a1 1 0 001 1h12a1 1 0 001-1v-9.5M10 21v-5h4v5"/>
                     </svg>
-                    <span>Chats</span>
+                    <span>Home</span>
                 </button>
-                <button id="pill-explore-btn" class="pill-nav-item" data-pill-tab="explore">
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"/>
-                    </svg>
-                    <span>Explore</span>
-                </button>
+                <div class="pill-nav-item pill-settings-wrapper" data-pill-tab="explore">
+                    <button id="pill-explore-btn" class="pill-settings-btn">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <circle cx="12" cy="12" r="9" stroke-width="1.5"/>
+                            <path stroke-width="1.5" stroke-linejoin="round" fill="currentColor" d="M15.02 8.98l-2.1 4.14-4.14 2.1 2.1-4.14 4.14-2.1z"/>
+                        </svg>
+                        <span>Explore</span>
+                    </button>
+                    <!-- Explore dropdown (appears above pill) -->
+                    <div id="pill-explore-dropdown" class="pill-settings-dropdown hidden">
+                        <button id="pill-explore-threads-btn" class="pill-dropdown-item">
+                            <svg class="w-4 h-4 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"/></svg>
+                            Threads
+                        </button>
+                        <button id="pill-explore-livestreams-btn" class="pill-dropdown-item pill-dropdown-item-locked" disabled>
+                            <svg class="w-4 h-4 text-white/25" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 10.5l4.72-2.362A1 1 0 0122 9v6a1 1 0 01-1.53.862L15.75 13.5m-9.75 6h6a2.25 2.25 0 002.25-2.25v-8.5A2.25 2.25 0 0012 6.5H4.5A2.25 2.25 0 002.25 8.75v8.5A2.25 2.25 0 004.5 19.5z"/></svg>
+                            <span class="flex-1">Live Streams</span>
+                            <span class="pill-dropdown-soon">SOON</span>
+                        </button>
+                    </div>
+                </div>
                 <button id="contacts-btn" class="pill-nav-item" data-pill-tab="contacts">
                     <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/>
@@ -357,7 +375,6 @@
                     </div>
                 </div>
             </div>
-            <div id="pill-guest-label" class="pill-guest-label hidden">Guest mode — data not saved</div>
         </div>
 
         <!-- Right Content Area (Chat) -->

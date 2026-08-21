@@ -971,8 +971,9 @@ class SettingsUI {
 
         settingsBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            // Close profile dropdown if open
+            // Close other pill dropdowns if open
             document.getElementById('pill-profile-dropdown')?.classList.add('hidden');
+            document.getElementById('pill-explore-dropdown')?.classList.add('hidden');
             dropdown.classList.toggle('hidden');
         });
 

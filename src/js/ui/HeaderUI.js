@@ -130,7 +130,6 @@ class HeaderUI {
                 document.body.classList.add('guest-mode');
                 pill.connectFloat?.classList.add('hidden');
                 pill.pillNav?.classList.remove('hidden');
-                pill.guestLabel?.classList.remove('hidden');
                 // Update profile avatar in pill (guest address)
                 if (pill.profileBtn) {
                     pill.profileBtn.innerHTML = generateAvatar(address, 32, 0.5);
@@ -169,7 +168,6 @@ class HeaderUI {
                 document.body.classList.remove('guest-mode');
                 pill.connectFloat?.classList.add('hidden');
                 pill.pillNav?.classList.remove('hidden');
-                pill.guestLabel?.classList.add('hidden');
                 // Mobile only: restore create channel button
                 document.getElementById('new-channel-btn')?.classList.remove('hidden');
                 // Update profile avatar in pill
@@ -210,7 +208,6 @@ class HeaderUI {
             document.body.classList.remove('guest-mode');
             pill.connectFloat?.classList.add('hidden');
             pill.pillNav?.classList.add('hidden');
-            pill.guestLabel?.classList.add('hidden');
             // Restore default state
             document.getElementById('new-channel-btn')?.classList.remove('hidden');
         }
@@ -526,13 +523,14 @@ class HeaderUI {
                 pillNav: document.getElementById('mobile-pill-nav'),
                 pillChatsBtn: document.getElementById('pill-chats-btn'),
                 pillExploreBtn: document.getElementById('pill-explore-btn'),
+                pillExploreDropdown: document.getElementById('pill-explore-dropdown'),
+                pillExploreThreadsBtn: document.getElementById('pill-explore-threads-btn'),
                 pillJoinIdBtn: document.getElementById('pill-join-id-btn'),
                 profileBtn: document.getElementById('pill-profile-btn'),
                 profileDropdown: document.getElementById('pill-profile-dropdown'),
                 profileAddress: document.getElementById('pill-profile-address'),
                 profileAccounts: document.getElementById('pill-profile-accounts'),
-                disconnectBtn: document.getElementById('pill-disconnect-btn'),
-                guestLabel: document.getElementById('pill-guest-label')
+                disconnectBtn: document.getElementById('pill-disconnect-btn')
             };
         }
         return this._pillElements;
@@ -550,10 +548,24 @@ class HeaderUI {
             onConnect?.();
         });
 
-        // Explore pill tab
-        pill.pillExploreBtn?.addEventListener('click', () => {
+        // Explore pill tab opens a dropdown (Threads / Live Streams), mirroring Settings
+        pill.pillExploreBtn?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleExploreDropdown();
+        });
+
+        pill.pillExploreThreadsBtn?.addEventListener('click', () => {
+            this._closeExploreDropdown();
             this._setActivePillTab('explore');
             onExploreTab?.();
+        });
+
+        // Close explore dropdown on outside click
+        document.addEventListener('click', (e) => {
+            if (!pill.pillExploreDropdown || pill.pillExploreDropdown.classList.contains('hidden')) return;
+            if (!pill.pillExploreBtn?.contains(e.target) && !pill.pillExploreDropdown.contains(e.target)) {
+                this._closeExploreDropdown();
+            }
         });
 
         // Create Channel from header button (explore view)
@@ -616,8 +628,9 @@ class HeaderUI {
         if (this._profileDropdownOpen) {
             this._closeProfileDropdown();
         } else {
-            // Close settings dropdown if open
+            // Close other pill dropdowns if open
             document.getElementById('pill-settings-dropdown')?.classList.add('hidden');
+            this._closeExploreDropdown();
             pill.profileDropdown.classList.remove('hidden');
             pill.profileDropdown.classList.add('dropdown-animate-open-up');
             this._profileDropdownOpen = true;
@@ -633,6 +646,34 @@ class HeaderUI {
         pill.profileDropdown.classList.add('hidden');
         pill.profileDropdown.classList.remove('dropdown-animate-open-up');
         this._profileDropdownOpen = false;
+    }
+
+    /**
+     * Toggle the Explore pill dropdown (Threads / Live Streams)
+     */
+    _toggleExploreDropdown() {
+        const pill = this._getPillElements();
+        if (!pill.pillExploreDropdown) return;
+
+        if (this._exploreDropdownOpen) {
+            this._closeExploreDropdown();
+        } else {
+            // Close other pill dropdowns if open
+            document.getElementById('pill-settings-dropdown')?.classList.add('hidden');
+            this._closeProfileDropdown();
+            pill.pillExploreDropdown.classList.remove('hidden');
+            this._exploreDropdownOpen = true;
+        }
+    }
+
+    /**
+     * Close the Explore pill dropdown
+     */
+    _closeExploreDropdown() {
+        const pill = this._getPillElements();
+        if (!pill.pillExploreDropdown) return;
+        pill.pillExploreDropdown.classList.add('hidden');
+        this._exploreDropdownOpen = false;
     }
 
     /**
