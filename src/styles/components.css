@@ -236,6 +236,17 @@ body {
         align-items: center;
         justify-content: center;
     }
+
+    /* Create sits directly under the account controls, so the two have to
+       share a right edge: #chat-header carries px-2 for the chat view, while
+       the global header uses px-5, and the 12px difference read as a
+       misalignment. The extra vertical padding is breathing room between the
+       two rows, which were only 23px apart. */
+    body.explore-open #chat-header {
+        padding-right: 1.25rem;
+        padding-top: 1rem;
+        padding-bottom: 0.75rem;
+    }
 }
 
 @media (max-width: 767px) {
