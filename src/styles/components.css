@@ -2370,7 +2370,7 @@ body.explore-open #explore-channels-list {
         bottom: calc(100% + 0.5rem);
         right: 0;
         min-width: 200px;
-        background: rgba(22, 22, 27, 0.92);
+        background: rgba(22, 22, 27, 0.97);
         backdrop-filter: blur(20px);
         -webkit-backdrop-filter: blur(20px);
         border: 1px solid rgba(255, 255, 255, 0.1);
@@ -2378,7 +2378,20 @@ body.explore-open #explore-channels-list {
         padding: 0.5rem;
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
         z-index: 50;
-        transform-origin: bottom right;
+        /* Grow out of the caret, which sits over the profile avatar. */
+        transform-origin: calc(100% - 1.5rem) bottom;
+        transition: opacity 0.16s ease-out, transform 0.16s ease-out;
+    }
+
+    /* Same open/close transition contract as .pill-settings-dropdown. */
+    .pill-profile-dropdown.hidden {
+        display: block;
+        opacity: 0;
+        transform: scale(0.95) translateY(4px);
+        visibility: hidden;
+        pointer-events: none;
+        transition: opacity 0.12s ease-in, transform 0.12s ease-in,
+            visibility 0s linear 0.12s;
     }
 
     .pill-dropdown-address {
@@ -2488,7 +2501,7 @@ body.explore-open #explore-channels-list {
         bottom: calc(100% - 0.15rem);
         right: -2rem;
         min-width: 200px;
-        background: rgba(22, 22, 27, 0.92);
+        background: rgba(22, 22, 27, 0.97);
         backdrop-filter: blur(20px);
         -webkit-backdrop-filter: blur(20px);
         border: 1px solid rgba(255, 255, 255, 0.1);
@@ -2496,12 +2509,57 @@ body.explore-open #explore-channels-list {
         padding: 0.5rem;
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
         z-index: 50;
-        transform-origin: bottom right;
-        animation: dropdownOpenUp 0.18s ease-out;
+        /* Grow out of the caret, which sits over the owning pill icon. */
+        transform-origin: calc(100% - 4.4rem) bottom;
+        transition: opacity 0.16s ease-out, transform 0.16s ease-out;
     }
 
+    /* Kept as display:block so open AND close transition; visibility carries
+       the actual hiding (it waits for the transition, display cannot). */
     .pill-settings-dropdown.hidden {
-        display: none;
+        display: block;
+        opacity: 0;
+        transform: scale(0.95) translateY(4px);
+        visibility: hidden;
+        pointer-events: none;
+        transition: opacity 0.12s ease-in, transform 0.12s ease-in,
+            visibility 0s linear 0.12s;
+    }
+
+    /* Caret pointing at the pill icon that owns the open dropdown. Anchored
+       to the wrapper (not the dropdown) so it centres on the icon; solid fill
+       so the card's bottom border does not show through the junction. */
+    .pill-settings-wrapper::after,
+    .pill-profile-wrapper::after {
+        content: '';
+        position: absolute;
+        left: 50%;
+        width: 12px;
+        height: 12px;
+        background: rgb(22, 22, 27);
+        border-right: 1px solid rgba(255, 255, 255, 0.1);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        border-bottom-right-radius: 2px;
+        z-index: 51;
+        opacity: 0;
+        pointer-events: none;
+        transform: translateX(-50%) translateY(4px) rotate(45deg);
+        transition: opacity 0.12s ease-in, transform 0.12s ease-in;
+    }
+
+    .pill-settings-wrapper::after {
+        bottom: calc(100% - 0.15rem - 6px);
+    }
+
+    .pill-profile-wrapper::after {
+        bottom: calc(100% + 0.5rem - 6px);
+    }
+
+    .pill-settings-wrapper:has(.pill-settings-dropdown:not(.hidden))::after,
+    .pill-profile-wrapper:has(.pill-profile-dropdown:not(.hidden))::after {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0) rotate(45deg);
+        transition: opacity 0.16s ease-out, transform 0.16s ease-out;
     }
     
     /* Channel filter tabs - lighter on mobile */

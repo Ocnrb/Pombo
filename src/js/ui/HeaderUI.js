@@ -632,7 +632,6 @@ class HeaderUI {
             document.getElementById('pill-settings-dropdown')?.classList.add('hidden');
             this._closeExploreDropdown();
             pill.profileDropdown.classList.remove('hidden');
-            pill.profileDropdown.classList.add('dropdown-animate-open-up');
             this._profileDropdownOpen = true;
         }
     }
@@ -644,7 +643,6 @@ class HeaderUI {
         const pill = this._getPillElements();
         if (!pill.profileDropdown) return;
         pill.profileDropdown.classList.add('hidden');
-        pill.profileDropdown.classList.remove('dropdown-animate-open-up');
         this._profileDropdownOpen = false;
     }
 
