@@ -217,6 +217,27 @@ body {
     }
 }
 
+/* ----- CREATE CHANNEL ----- */
+/* Desktop keeps this in the Explore view's own header, beside the title, and
+   nowhere else — the sidebar row it used to share with Threads/Live now gives
+   those two the full width. Mobile has a separate button in the global header
+   (#header-create-channel-btn), so this one stays hidden there. A guest cannot
+   create a channel, matching Android and the mobile rule. */
+#new-channel-btn {
+    display: none;
+}
+
+/* The height clause keeps this in step with isMobileView(), which counts a
+   short landscape window as mobile however wide it is — there the whole
+   #chat-header is hidden and #header-create-channel-btn takes over. */
+@media (min-width: 768px) and (min-height: 501px) {
+    body.explore-open:not(.guest-mode) #new-channel-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+}
+
 @media (max-width: 767px) {
     .global-sync-indicator {
         position: absolute;

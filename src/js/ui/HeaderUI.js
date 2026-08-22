@@ -169,8 +169,6 @@ class HeaderUI {
                 document.body.classList.remove('guest-mode');
                 pill.connectFloat?.classList.add('hidden');
                 pill.pillNav?.classList.remove('hidden');
-                // Mobile only: restore create channel button
-                document.getElementById('new-channel-btn')?.classList.remove('hidden');
                 // Update profile avatar in pill
                 if (pill.profileBtn) {
                     const ensAvatar = identityManager.getCachedENSAvatar(address);
@@ -209,8 +207,6 @@ class HeaderUI {
             document.body.classList.remove('guest-mode');
             pill.connectFloat?.classList.add('hidden');
             pill.pillNav?.classList.add('hidden');
-            // Restore default state
-            document.getElementById('new-channel-btn')?.classList.remove('hidden');
         }
     }
 
