@@ -3,9 +3,10 @@
 # served is provably the committed source — there is no checked-in bundle to
 # tamper with.
 #
-# js/install-pre.js and js/install-modal.js are hand-written SOURCE that
-# happens to live in js/ (webpack does not produce them) — they ship with
-# the artifact via the js/ copy and must stay in the repository.
+# js/install-pre.js, js/install-modal.js and js/frame-guard.js are
+# hand-written SOURCE that happens to live in js/ (webpack does not produce
+# them) — they ship with the artifact via the js/ copy and must stay in the
+# repository.
 
 name: Deploy Pages
 
@@ -24,7 +25,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run test:run
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

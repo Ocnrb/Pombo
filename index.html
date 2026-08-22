@@ -2,8 +2,14 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-vvt4KWwuNr51XfE5m+hzeNEGhiOfZzG97ccfqGsPwvE='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; connect-src 'self' https: wss: https://*.streamr.network https://*.streamr.network:8002 https://rpc.ankr.com https://polygon.drpc.org https://eth.drpc.org https://polygon-bor-rpc.publicnode.com https://ethereum-rpc.publicnode.com https://cloudflare-eth.com https://gasstation.polygon.technology https://*.llamarpc.com https://1rpc.io https://*.meowrpc.com https://*.gateway.tenderly.co https://*.thegraph.com https://*.ens.domains https://euc.li https://fcm.googleapis.com https://*.push.services.mozilla.com https://updates.push.services.mozilla.com; base-uri 'self'; form-action 'self'">
+    <!-- The script-src hash allows exactly one inline script: the live-reload
+         snippet VS Code Live Server injects during local dev. Production pages
+         have no inline scripts. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-vvt4KWwuNr51XfE5m+hzeNEGhiOfZzG97ccfqGsPwvE='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-src https://www.youtube-nocookie.com; connect-src 'self' https: wss:; base-uri 'self'; form-action 'self'">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <!-- Framing defense for hosts without header support (GitHub Pages) — see js/frame-guard.js -->
+    <script src="./js/frame-guard.js"></script>
     <title>Pombo - Own Your Communications</title>
     <link rel="canonical" href="https://app.pombo.cc/">
 

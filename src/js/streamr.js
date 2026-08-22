@@ -197,7 +197,8 @@ class StreamrController {
      */
     async init(signer) {
         try {
-            // Get StreamrClient from global window object (loaded via CDN)
+            // Get StreamrClient from the global window object (exposed by the
+            // self-hosted vendor bundle — see src/streamr-bundle.js)
             if (!window.StreamrClient) {
                 throw new Error('StreamrClient not found. Make sure the Streamr SDK is loaded.');
             }

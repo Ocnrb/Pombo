@@ -342,12 +342,45 @@ describe('NotificationManager', () => {
 
     // ==================== dismissInvite() ====================
     describe('dismissInvite()', () => {
-        it('should remove invite and save', () => {
+        it('should flag invite as dismissed, keep it for the "All" view, and save', () => {
             notificationManager.pendingInvites.set('inv_1', { inviteId: 'inv_1' });
 
             notificationManager.dismissInvite('inv_1');
 
+            const invite = notificationManager.pendingInvites.get('inv_1');
+            expect(invite.dismissed).toBe(true);
+            expect(invite.dismissedAt).toEqual(expect.any(Number));
+            expect(notificationManager.getPendingInvites()).toHaveLength(0);
+            expect(notificationManager.getDismissedInvites()).toHaveLength(1);
+            expect(secureStorage.setPendingInvites).toHaveBeenCalled();
+        });
+
+        it('should ignore unknown or already-dismissed invites', () => {
+            notificationManager.pendingInvites.set('inv_1', {
+                inviteId: 'inv_1', dismissed: true, dismissedAt: 123
+            });
+
+            notificationManager.dismissInvite('inv_1');
+            notificationManager.dismissInvite('inv_missing');
+
+            expect(notificationManager.pendingInvites.get('inv_1').dismissedAt).toBe(123);
+            expect(secureStorage.setPendingInvites).not.toHaveBeenCalled();
+        });
+
+        it('should prune the oldest dismissed invites beyond the retention cap', () => {
+            const cap = 50;
+            for (let i = 1; i <= cap; i++) {
+                notificationManager.pendingInvites.set(`inv_${i}`, {
+                    inviteId: `inv_${i}`, dismissed: true, dismissedAt: i
+                });
+            }
+            notificationManager.pendingInvites.set('inv_new', { inviteId: 'inv_new' });
+
+            notificationManager.dismissInvite('inv_new');
+
+            expect(notificationManager.getDismissedInvites()).toHaveLength(cap);
             expect(notificationManager.pendingInvites.has('inv_1')).toBe(false);
+            expect(notificationManager.pendingInvites.has('inv_new')).toBe(true);
         });
     });
 

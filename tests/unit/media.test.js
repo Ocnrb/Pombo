@@ -465,7 +465,8 @@ describe('media.js', () => {
                     total: 10,
                     fileSize: 1024000,
                     // No delivery samples yet, so there is nothing to measure
-                    bytesPerSec: null
+                    bytesPerSec: null,
+                    paused: false
                 });
             });
 
