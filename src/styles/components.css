@@ -242,10 +242,13 @@ body {
        the global header uses px-5, and the 12px difference read as a
        misalignment. The extra vertical padding is breathing room between the
        two rows, which were only 23px apart. */
+    /* Symmetric, so Create stays centred in the band: #chat-header centres its
+       children in the content box, and uneven padding shifts that box off the
+       strip's own middle. */
     body.explore-open #chat-header {
         padding-right: 1.25rem;
         padding-top: 1rem;
-        padding-bottom: 0.75rem;
+        padding-bottom: 1rem;
     }
 }
 
