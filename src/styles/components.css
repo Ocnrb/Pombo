@@ -242,13 +242,19 @@ body {
        the global header uses px-5, and the 12px difference read as a
        misalignment. The extra vertical padding is breathing room between the
        two rows, which were only 23px apart. */
-    /* Symmetric, so Create stays centred in the band: #chat-header centres its
-       children in the content box, and uneven padding shifts that box off the
-       strip's own middle. */
     body.explore-open #chat-header {
         padding-right: 1.25rem;
-        padding-top: 1rem;
-        padding-bottom: 1rem;
+    }
+
+    /* One height for every state of this row. Its content does not have a
+       constant height — Explore drops the channel-info line, and Create only
+       exists in Explore — so left to itself the row measured 61px on first
+       paint and 71px once Explore settled, which read as the header jumping
+       as the view loaded. Fixing it, as the global header already fixes its
+       own, also keeps chat and Explore the same height. Sits above what any
+       state needs, so nothing is clipped. */
+    #chat-header {
+        min-height: 4rem;
     }
 }
 

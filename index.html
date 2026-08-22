@@ -414,7 +414,11 @@
                             </svg>
                         </button>
                     </div>
-                    <div class="flex items-center gap-1.5 text-sm text-white/30 min-h-[20px]">
+                    <!-- Starts hidden: the app opens on Explore, which has no
+                         channel info to show and hides this anyway. Leaving it
+                         in made the first paint taller than the view that
+                         replaced it. Opening a channel restores it. -->
+                    <div class="hidden flex items-center gap-1.5 text-sm text-white/30 min-h-[20px]">
                         <span id="current-channel-info" class="inline-flex items-center"></span>
                         <span id="online-separator" class="hidden leading-none">·</span>
                         <div class="relative inline-flex items-center">
