@@ -238,7 +238,9 @@ body {
     }
 
     body.explore-open #chat-header {
-        transition: margin-top 220ms ease;
+        /* Short and front-loaded: the row has to be out of the way before the
+           reader's eye follows the scroll, and a long ease reads as drag. */
+        transition: margin-top 170ms cubic-bezier(0.22, 0.61, 0.36, 1);
     }
 
     /* The header is pinned outside the scroller, so browsing kept a bar whose
