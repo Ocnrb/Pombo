@@ -1346,7 +1346,6 @@ class UIController {
      * @param {string} streamId - Stream ID
      */
     async selectChannel(streamId) {
-        document.body.classList.remove('explore-open');
         return channelViewUI.selectChannel(streamId, { pushHistory: true });
     }
 
@@ -1632,7 +1631,6 @@ class UIController {
      * @private
      */
     async _selectChannelWithoutHistory(streamId) {
-        document.body.classList.remove('explore-open');
         return channelViewUI.selectChannel(streamId, { pushHistory: false });
     }
 
@@ -1640,7 +1638,6 @@ class UIController {
      * Show Explore view inline in messages area (delegates to ChannelViewUI)
      */
     async showExploreView() {
-        document.body.classList.add('explore-open');
         return channelViewUI.showExploreView();
     }
 

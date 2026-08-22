@@ -237,16 +237,7 @@ body {
         justify-content: center;
     }
 
-    /* Create sits directly under the account controls, so the two have to
-       share a right edge: #chat-header carries px-2 for the chat view, while
-       the global header uses px-5, and the 12px difference read as a
-       misalignment. The extra vertical padding is breathing room between the
-       two rows, which were only 23px apart. */
     body.explore-open #chat-header {
-        padding-right: 1.25rem;
-        /* Match the px-4 the Explore view gives its filters, chips and cards,
-           so the title heads that column instead of hanging 8px left of it. */
-        padding-left: 1rem;
         transition: margin-top 220ms ease;
     }
 
@@ -265,15 +256,19 @@ body {
         }
     }
 
-    /* One height for every state of this row. Its content does not have a
-       constant height — Explore drops the channel-info line, and Create only
-       exists in Explore — so left to itself the row measured 61px on first
-       paint and 71px once Explore settled, which read as the header jumping
-       as the view loaded. Fixing it, as the global header already fixes its
-       own, also keeps chat and Explore the same height. Sits above what any
-       state needs, so nothing is clipped. */
+    /* One height and one horizontal rhythm for every state of this row.
+       Neither is constant on its own: Explore drops the channel-info line and
+       Create exists only there, so the row measured 61px on first paint and
+       71px once Explore settled; and the markup's px-2 left the caption 8px
+       adrift of the column beneath it, which shifted as one view replaced the
+       other. Pinning both, as the global header already pins its own, keeps
+       chat and Explore identical — the caption starts in the same place and
+       the right-hand actions share the global header's px-5 edge. The height
+       sits above what any state needs, so nothing is clipped. */
     #chat-header {
         min-height: 4rem;
+        padding-left: 1rem;
+        padding-right: 1.25rem;
     }
 }
 
