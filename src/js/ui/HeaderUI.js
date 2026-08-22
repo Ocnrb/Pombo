@@ -10,6 +10,7 @@ import { identityManager } from '../identity.js';
 import { channelImageManager } from '../channelImageManager.js';
 import { deriveAdminId } from '../streamConstants.js';
 import { escapeAttr } from './utils.js';
+import { positionPillDropdown } from './pillDropdown.js';
 
 class HeaderUI {
     constructor() {
@@ -631,6 +632,7 @@ class HeaderUI {
             // Close other pill dropdowns if open
             document.getElementById('pill-settings-dropdown')?.classList.add('hidden');
             this._closeExploreDropdown();
+            positionPillDropdown(pill.profileDropdown);
             pill.profileDropdown.classList.remove('hidden');
             this._profileDropdownOpen = true;
         }
@@ -659,6 +661,7 @@ class HeaderUI {
             // Close other pill dropdowns if open
             document.getElementById('pill-settings-dropdown')?.classList.add('hidden');
             this._closeProfileDropdown();
+            positionPillDropdown(pill.pillExploreDropdown);
             pill.pillExploreDropdown.classList.remove('hidden');
             this._exploreDropdownOpen = true;
         }
