@@ -10,6 +10,7 @@ import { identityManager } from '../identity.js';
 import { channelImageManager } from '../channelImageManager.js';
 import { deriveAdminId } from '../streamConstants.js';
 import { escapeAttr } from './utils.js';
+import { positionPillDropdown } from './pillDropdown.js';
 
 class HeaderUI {
     constructor() {
@@ -168,8 +169,6 @@ class HeaderUI {
                 document.body.classList.remove('guest-mode');
                 pill.connectFloat?.classList.add('hidden');
                 pill.pillNav?.classList.remove('hidden');
-                // Mobile only: restore create channel button
-                document.getElementById('new-channel-btn')?.classList.remove('hidden');
                 // Update profile avatar in pill
                 if (pill.profileBtn) {
                     const ensAvatar = identityManager.getCachedENSAvatar(address);
@@ -208,8 +207,6 @@ class HeaderUI {
             document.body.classList.remove('guest-mode');
             pill.connectFloat?.classList.add('hidden');
             pill.pillNav?.classList.add('hidden');
-            // Restore default state
-            document.getElementById('new-channel-btn')?.classList.remove('hidden');
         }
     }
 
@@ -631,8 +628,8 @@ class HeaderUI {
             // Close other pill dropdowns if open
             document.getElementById('pill-settings-dropdown')?.classList.add('hidden');
             this._closeExploreDropdown();
+            positionPillDropdown(pill.profileDropdown);
             pill.profileDropdown.classList.remove('hidden');
-            pill.profileDropdown.classList.add('dropdown-animate-open-up');
             this._profileDropdownOpen = true;
         }
     }
@@ -644,7 +641,6 @@ class HeaderUI {
         const pill = this._getPillElements();
         if (!pill.profileDropdown) return;
         pill.profileDropdown.classList.add('hidden');
-        pill.profileDropdown.classList.remove('dropdown-animate-open-up');
         this._profileDropdownOpen = false;
     }
 
@@ -661,6 +657,7 @@ class HeaderUI {
             // Close other pill dropdowns if open
             document.getElementById('pill-settings-dropdown')?.classList.add('hidden');
             this._closeProfileDropdown();
+            positionPillDropdown(pill.pillExploreDropdown);
             pill.pillExploreDropdown.classList.remove('hidden');
             this._exploreDropdownOpen = true;
         }

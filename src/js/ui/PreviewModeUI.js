@@ -119,9 +119,6 @@ class PreviewModeUI {
         // after their awaits and bail out without touching UI/state.
         const gen = ++this.previewGeneration;
 
-        // No longer in explore view
-        document.body.classList.remove('explore-open');
-
         try {
             // Exit any existing preview first (only one preview at a time).
             // Use the internal teardown so it does NOT bump generation again
@@ -307,6 +304,12 @@ class PreviewModeUI {
 
         const elements = this.ui.elements;
         const { headerUI } = this.deps;
+
+        // Leave Explore here rather than when the tap arrives: entering a
+        // preview subscribes and fetches first, and dropping the class up
+        // there left the Explore list on screen without the layout rules it
+        // is built on, under a header still captioned Explore.
+        document.body.classList.remove('explore-open', 'explore-header-retracted');
 
         // Clear messages area first and show loading spinner
         elements.messagesArea.innerHTML = `

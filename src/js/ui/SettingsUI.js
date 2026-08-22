@@ -4,6 +4,7 @@ import { GasEstimator } from './GasEstimator.js';
 import { CONFIG, getNetworkParams } from '../config.js';
 import { MESSAGE_STREAM } from '../streamConstants.js';
 import { importBackupData } from '../backupImport.js';
+import { positionPillDropdown } from './pillDropdown.js';
 
 /**
  * Settings UI Manager
@@ -974,6 +975,7 @@ class SettingsUI {
             // Close other pill dropdowns if open
             document.getElementById('pill-profile-dropdown')?.classList.add('hidden');
             document.getElementById('pill-explore-dropdown')?.classList.add('hidden');
+            if (dropdown.classList.contains('hidden')) positionPillDropdown(dropdown);
             dropdown.classList.toggle('hidden');
         });
 

@@ -23,6 +23,12 @@ import { identityManager } from '../identity.js';
 const EXPLORE_ACCESS_D_CLS = 'explore-gate-access-d hidden md:flex absolute inset-y-3 left-1/2 right-10 items-center justify-center border-l border-white/[0.06] pointer-events-none';
 const EXPLORE_ACCESS_M_CLS = 'explore-gate-access-m md:hidden mt-2 flex justify-center';
 
+/** Scroll movement below this is noise — a trackpad nudge, or the reflow the
+ *  header's own retraction causes — and must not toggle it. */
+const EXPLORE_HEADER_SCROLL_DEADZONE = 8;
+/** Keep the header until the list has scrolled past roughly its own height. */
+const EXPLORE_HEADER_RETRACT_AFTER = 72;
+
 /**
  * The 3-line access stack: VERB / VALUE / QUALIFIER. The verb carries the
  * semantic split — Subscribe (recurring, accent-tinted) vs Hold (mere
@@ -63,7 +69,29 @@ class ExploreUI {
         this._handleCategoryRailScroll = () => {
             this._syncCategoryCarouselHints();
         };
-        
+
+        // Explore's header is pinned outside the scroller, so browsing left a
+        // bar on screen whose own filters had already scrolled away. It now
+        // retracts on the way down and comes back on the way up.
+        this._lastExploreScrollTop = 0;
+        this._handleExploreHeaderScroll = () => {
+            // Shared with the chat view, which scrolls the same element.
+            if (!document.body.classList.contains('explore-open')) return;
+            const scroller = document.getElementById('messages-area');
+            if (!scroller) return;
+            const top = scroller.scrollTop;
+            const delta = top - this._lastExploreScrollTop;
+            // Overscroll bounce reports positions outside the range; letting
+            // those through flickers the header at either end of the list.
+            if (top < 0 || top > scroller.scrollHeight - scroller.clientHeight) return;
+            this._lastExploreScrollTop = top;
+            if (Math.abs(delta) < EXPLORE_HEADER_SCROLL_DEADZONE) return;
+            // Retracting while its own row is still on screen would pull the
+            // list up from under a bar the reader can still see.
+            const retract = delta > 0 && top > EXPLORE_HEADER_RETRACT_AFTER;
+            document.body.classList.toggle('explore-header-retracted', retract);
+        };
+
         this.deps = {};
     }
 
@@ -311,6 +339,16 @@ class ExploreUI {
 
         window.removeEventListener('resize', this._handleCategoryViewportChange);
         window.addEventListener('resize', this._handleCategoryViewportChange);
+
+        // Explore re-renders into #messages-area, but the element itself
+        // survives, so the listener has to be swapped rather than stacked.
+        const scroller = document.getElementById('messages-area');
+        if (scroller) {
+            scroller.removeEventListener('scroll', this._handleExploreHeaderScroll);
+            scroller.addEventListener('scroll', this._handleExploreHeaderScroll, { passive: true });
+        }
+        this._lastExploreScrollTop = 0;
+        document.body.classList.remove('explore-header-retracted');
         
         // Check if categories need expand button
         this.checkCategoriesOverflow();

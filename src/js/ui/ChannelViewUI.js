@@ -104,7 +104,11 @@ class ChannelViewUI {
         await secureStorage.setLastOpenedChannel(streamId);
         subscriptionManager.clearUnreadCount(streamId);
         
-        // Update header
+        // Update header. Leaving Explore belongs here, with the caption and
+        // thumb that replace it — the subscribe above can take a while, and
+        // dropping the class at tap time stranded the Explore list without
+        // its layout rules while the header still read Explore.
+        document.body.classList.remove('explore-open', 'explore-header-retracted');
         this.elements.currentChannelName.textContent = channel.name;
         this.elements.currentChannelInfo.innerHTML = headerUI.getChannelTypeLabel(channel.type, channel.readOnly);
         this.elements.currentChannelInfo.parentElement.classList.remove('hidden');
@@ -261,7 +265,9 @@ class ChannelViewUI {
         // Remove padding for edge-to-edge explore
         this.elements.messagesArea?.classList.remove('p-4');
         
-        // Update header
+        // Update header. Entering Explore is applied here, alongside the
+        // caption, so the class and the content it styles change together.
+        document.body.classList.add('explore-open');
         const isMobile = this.deps.isMobileView();
         if (!isMobile) {
             this.elements.currentChannelName.textContent = 'Explore Channels';
