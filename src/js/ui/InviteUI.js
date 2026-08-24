@@ -4,6 +4,7 @@
  * direct invites, and QR code generation.
  */
 import { Logger } from '../logger.js';
+import { identityManager } from '../identity.js';
 
 // Forward declarations - dependencies injected via setDependencies()
 let channelManager = null;
@@ -108,15 +109,34 @@ class InviteUI {
      * Handle send invite to address
      */
     async handleSendInvite() {
-        const address = this.elements.inviteAddressInput?.value.trim();
-        if (!address) {
-            this.deps.showNotification('Please enter a user address', 'warning');
+        const input = this.elements.inviteAddressInput?.value.trim();
+        if (!input) {
+            this.deps.showNotification('Enter an address or ENS name', 'warning');
             return;
         }
 
         const currentChannel = channelManager.getCurrentChannel();
         if (!currentChannel) {
             this.deps.showNotification('No channel selected', 'error');
+            return;
+        }
+
+        let address = input;
+        if (!input.startsWith('0x') && input.includes('.')) {
+            this.deps.showLoading('Resolving name...');
+            try {
+                address = await identityManager.resolveAddress(input);
+            } finally {
+                this.deps.hideLoading();
+            }
+            if (!address) {
+                this.deps.showNotification(`Could not resolve ENS name: ${input}`, 'error');
+                return;
+            }
+        }
+
+        if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+            this.deps.showNotification('Invalid address or ENS name', 'error');
             return;
         }
 

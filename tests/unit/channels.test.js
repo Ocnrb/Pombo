@@ -626,36 +626,51 @@ describe('ChannelManager', () => {
             global.window = { location: { origin: 'https://pombo.app', pathname: '/' } };
         });
         
-        it('should generate invite link with clean hash format', async () => {
-            const channel = { 
-                streamId: 'stream1', 
-                name: 'Test Channel', 
-                type: 'public' 
+        it('should link a passwordless channel by its stream id', async () => {
+            const channel = {
+                streamId: '0xabc/my-channel-1',
+                name: 'Test Channel',
+                type: 'public'
             };
-            channelManager.channels.set('stream1', channel);
-            
-            const link = await channelManager.generateInviteLink('stream1');
-            
-            expect(link).toContain('https://pombo.app/#/invite/');
+            channelManager.channels.set('0xabc/my-channel-1', channel);
+
+            const link = await channelManager.generateInviteLink('0xabc/my-channel-1');
+
+            expect(link).toBe('https://pombo.app/#/channel/0xabc/my-channel-1');
         });
-        
-        it('should round-trip channel name and type via encrypted token', async () => {
-            const channel = { 
-                streamId: 'stream1', 
-                name: 'My Channel', 
-                type: 'private' 
+
+        it('should link a gated channel by stream id — the gate is on-chain', async () => {
+            const channel = {
+                streamId: 'stream1',
+                name: 'Token Gated',
+                type: 'gated',
+                gate: { address: '0xgate' }
             };
             channelManager.channels.set('stream1', channel);
-            
+
+            const link = await channelManager.generateInviteLink('stream1');
+
+            expect(link).toBe('https://pombo.app/#/channel/stream1');
+        });
+
+        it('should round-trip channel name and type via encrypted token', async () => {
+            const channel = {
+                streamId: 'stream1',
+                name: 'My Channel',
+                type: 'password',
+                password: 'secret123'
+            };
+            channelManager.channels.set('stream1', channel);
+
             const link = await channelManager.generateInviteLink('stream1');
             const token = link.split('#/invite/')[1];
             const decoded = await channelManager.parseInviteLink(token);
-            
+
             expect(decoded.streamId).toBe('stream1');
             expect(decoded.name).toBe('My Channel');
-            expect(decoded.type).toBe('private');
+            expect(decoded.type).toBe('password');
         });
-        
+
         it('should include password when channel has one', async () => {
             const channel = { 
                 streamId: 'stream1', 
@@ -680,18 +695,23 @@ describe('ChannelManager', () => {
 
     describe('parseInviteLink()', () => {
         it('should parse valid invite code', async () => {
-            const channel = { streamId: 'stream1', name: 'Test Channel', type: 'public' };
+            const channel = {
+                streamId: 'stream1',
+                name: 'Test Channel',
+                type: 'password',
+                password: 'secret123'
+            };
             channelManager.channels.set('stream1', channel);
             const link = await channelManager.generateInviteLink('stream1');
             const token = link.split('#/invite/')[1];
-            
+
             const result = await channelManager.parseInviteLink(token);
-            
+
             expect(result).toEqual({
                 streamId: 'stream1',
                 name: 'Test Channel',
-                type: 'public',
-                password: undefined
+                type: 'password',
+                password: 'secret123'
             });
         });
         

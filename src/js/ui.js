@@ -19,6 +19,7 @@ import { historyManager } from './historyManager.js';
 import { relayManager } from './relayManager.js';
 import { dmManager } from './dm.js';
 import { syncManager } from './syncManager.js';
+import { openUnjoinedChannel } from './channelEntry.js';
 import { CONFIG } from './config.js';
 
 // UI Modules
@@ -1609,9 +1610,7 @@ class UIController {
                         await this._selectChannelWithoutHistory(state.streamId);
                         historyManager.replaceState(state);
                     } else {
-                        // Channel not in list - try preview mode
-                        await previewModeUI.enterPreviewWithoutHistory(state.streamId, null);
-                        historyManager.replaceState({ view: 'preview', streamId: state.streamId });
+                        await this._openDeepLinkedChannel(state.streamId);
                     }
                 }
                 break;
@@ -1627,6 +1626,42 @@ class UIController {
                 await this.showExploreView();
                 historyManager.replaceState({ view: 'explore' });
                 break;
+        }
+    }
+
+    /**
+     * Open a `#/channel/<streamId>` link for a channel the user has not
+     * joined. A link carries nothing but the id, so the type, name and gate
+     * come from the chain and the routing is the one Explore uses for a card
+     * tap: password prompts, gated raises the gate screen, public previews.
+     * @private
+     */
+    async _openDeepLinkedChannel(streamId) {
+        let channelInfo = null;
+        try {
+            channelInfo = await graphAPI.getChannelInfo(streamId);
+        } catch (e) {
+            Logger.warn('Deep link: could not read channel metadata:', e.message);
+        }
+
+        await openUnjoinedChannel(streamId, channelInfo, {
+            enterPreviewMode: async (id, info) => {
+                await previewModeUI.enterPreviewWithoutHistory(id, info);
+                historyManager.replaceState({ view: 'preview', streamId: id });
+            },
+            joinPublicChannel: (id, info) => this.joinPublicChannel(id, info)
+        });
+
+        // A join can end without a channel: the password prompt and the gate
+        // screen both return before the user has answered them. The URL still
+        // points at the channel, so without this the app boots into an empty
+        // pane behind the modal. The history entry a modal pushed for its own
+        // back-button dismissal must survive, hence the guard.
+        if (!channelManager.getCurrentChannel() && !previewModeUI.isInPreviewMode()) {
+            await this._showDefaultConnectedView();
+            if (!modalManager.hasOpenHistoryModal()) {
+                historyManager.replaceState({ view: 'explore' });
+            }
         }
     }
 
