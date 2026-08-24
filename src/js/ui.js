@@ -18,6 +18,7 @@ import { subscriptionManager } from './subscriptionManager.js';
 import { historyManager } from './historyManager.js';
 import { relayManager } from './relayManager.js';
 import { dmManager } from './dm.js';
+import { syncManager } from './syncManager.js';
 import { CONFIG } from './config.js';
 
 // UI Modules
@@ -157,6 +158,7 @@ class UIController {
             notificationUI,
             contactsUI,
             dmManager,
+            syncManager,
             showCreateDMInboxModal: () => dmModalsUI.showCreateInboxModal(),
             showNotification: (msg, type) => this.showNotification(msg, type),
             updateWalletInfo: (address, isGuest) => headerUI.updateWalletInfo(address, isGuest),
@@ -325,6 +327,7 @@ class UIController {
             pinnedBanner: document.getElementById('pinned-banner'),
             pinnedBannerName: document.getElementById('pinned-banner-name'),
             pinnedBannerText: document.getElementById('pinned-banner-text'),
+            pinnedBannerCount: document.getElementById('pinned-banner-count'),
             pinnedBannerClose: document.getElementById('pinned-banner-close'),
             subscriptionBanner: document.getElementById('subscription-banner'),
             subscriptionBannerText: document.getElementById('subscription-banner-text'),
@@ -1301,6 +1304,7 @@ class UIController {
             banner: this.elements.pinnedBanner,
             name: this.elements.pinnedBannerName,
             text: this.elements.pinnedBannerText,
+            count: this.elements.pinnedBannerCount,
             closeBtn: this.elements.pinnedBannerClose
         });
 

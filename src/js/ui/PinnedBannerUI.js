@@ -8,7 +8,9 @@
  *  - Reads `channel.adminState.pins` from the active channel (or preview
  *    channel) and shows the most recently pinned message.
  *  - Click on the banner → scroll to the pinned message in the timeline.
- *  - Close (×) button → dismiss locally for the current session. Tracked
+ *  - A "+N" counter shows how many older pins a dismissal would reveal.
+ *  - Close (×) button → dismiss locally for the current session, revealing
+ *    the pin before it, or hiding the banner once they run out. Tracked
  *    per-channel; resets when a new pin arrives or the user reopens the
  *    channel via the "Pinned" channel-menu action.
  *  - DOMPurify-safe: text rendered via `textContent` only.
@@ -35,7 +37,7 @@ class PinnedBannerUI {
     }
 
     /**
-     * @param {Object} elements - { banner, text, closeBtn }
+     * @param {Object} elements - { banner, name, text, count, closeBtn }
      */
     init(elements) {
         this.elements = elements;
@@ -116,18 +118,22 @@ class PinnedBannerUI {
         const pins = Array.isArray(channel.adminState?.pins) ? channel.adminState.pins : [];
         if (pins.length === 0) {
             banner.classList.add('hidden');
+            this._renderCount(0);
             this._currentPin = null;
             this._currentStreamId = channel.streamId;
             return;
         }
 
-        // Most recent pin first
-        const sorted = [...pins].sort((a, b) => (b.pinnedAt || 0) - (a.pinnedAt || 0));
+        // Ordered by array position, not pinnedAt: Android restamps every pin
+        // on each ADMIN_STATE republish. Both clients append new pins last.
+        const newestFirst = [...pins].reverse();
         const dismissed = this._dismissed.get(channel.streamId) || new Set();
-        const visible = sorted.find(p => !dismissed.has(p.targetId));
+        const undismissed = newestFirst.filter(p => !dismissed.has(p.targetId));
+        const visible = undismissed[0];
 
         if (!visible) {
             banner.classList.add('hidden');
+            this._renderCount(0);
             this._currentPin = null;
             this._currentStreamId = channel.streamId;
             return;
@@ -140,8 +146,26 @@ class PinnedBannerUI {
         const { senderLabel, body } = this._buildPreviewParts(visible, channel);
         if (this.elements.name) this.elements.name.textContent = senderLabel || '';
         if (this.elements.text) this.elements.text.textContent = body;
+        this._renderCount(undismissed.length - 1);
 
         banner.classList.remove('hidden');
+    }
+
+    /**
+     * @param {number} remaining - Pins a dismissal would still reveal
+     */
+    _renderCount(remaining) {
+        const el = this.elements?.count;
+        if (!el) return;
+        if (remaining > 0) {
+            el.textContent = `+${remaining}`;
+            el.title = `${remaining} more pinned message${remaining === 1 ? '' : 's'}`;
+            el.classList.remove('hidden');
+        } else {
+            el.textContent = '';
+            el.removeAttribute('title');
+            el.classList.add('hidden');
+        }
     }
 
     /**

@@ -370,6 +370,7 @@ export const CONFIG = {
         invitesMuted: (addr) => `pombo_invites_muted_${addr.toLowerCase()}`,
         dmPush: (addr) => `pombo_dm_push_${addr.toLowerCase()}`,
         syncDirty: (addr) => `pombo_sync_dirty_${addr.toLowerCase()}`,
+        syncMode: (addr) => `pombo_sync_mode_${addr.toLowerCase()}`,
         syncAppliedTs: (addr) => `pombo_sync_applied_ts_${addr.toLowerCase()}`,
 
         // Per-stream keys

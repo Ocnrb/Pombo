@@ -1084,6 +1084,23 @@ body {
     margin-top: 1px;
 }
 
+.pinned-banner-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.pinned-banner-count {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.4);
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.pinned-banner-count.hidden {
+    display: none;
+}
+
 .pinned-banner-close {
     flex-shrink: 0;
     padding: 0.375rem;
@@ -2569,6 +2586,10 @@ body.explore-open #explore-channels-list {
         /* Grow out of the caret, which sits over the owning pill icon. */
         transform-origin: calc(100% - 4.4rem) bottom;
         transition: opacity 0.16s ease-out, transform 0.16s ease-out;
+        /* Grows upward from the pill: a short viewport would push the top
+           items off screen with no way to reach them. */
+        max-height: calc(100vh - 7rem);
+        overflow-y: auto;
     }
 
     /* Kept as display:block so open AND close transition; visibility carries
