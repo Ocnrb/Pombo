@@ -38,4 +38,8 @@ describe('assetlinks.json', () => {
     it('is copied into the Pages artifact by the deploy workflow', () => {
         expect(read('.github/workflows/deploy-pages.yml')).toMatch(/cp -r \.well-known _site\//);
     });
+
+    it('survives the artifact packing, which strips dot entries by default', () => {
+        expect(read('.github/workflows/deploy-pages.yml')).toMatch(/include-hidden-files: true/);
+    });
 });
