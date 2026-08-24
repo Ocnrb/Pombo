@@ -185,21 +185,24 @@
         <aside id="sidebar" class="sidebar w-80 lg:w-[380px] bg-[#09090b] flex flex-col flex-shrink-0">
             <!-- Channel Controls -->
             <div class="px-3 pb-2 space-y-2.5 pt-4">
-                <!-- Explore + Create row (desktop only, mobile uses pill nav) -->
-                <div class="hidden md:flex items-center gap-2">
-                    <button id="browse-channels-btn" class="flex-1 min-w-0 bg-white/[0.08] hover:bg-white/[0.12] border border-white/[0.07] px-3 py-2 rounded-xl text-sm text-white/80 hover:text-white transition-all duration-200 flex items-center justify-center gap-1.5">
-                        <svg id="browse-btn-icon" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"/>
-                        </svg>
-                        <span id="browse-btn-text">Threads</span>
-                    </button>
-                    <button id="browse-livestreams-btn" class="flex-1 min-w-0 bg-white/[0.04] border border-white/[0.05] px-3 py-2 rounded-xl text-sm text-white/30 transition-all duration-200 flex items-center justify-center gap-1.5 cursor-default" title="Coming soon">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 10.5l4.72-2.362A1 1 0 0122 9v6a1 1 0 01-1.53.862L15.75 13.5m-9.75 6h6a2.25 2.25 0 002.25-2.25v-8.5A2.25 2.25 0 0012 6.5H4.5A2.25 2.25 0 002.25 8.75v8.5A2.25 2.25 0 004.5 19.5z"/>
-                        </svg>
-                        <span>Live</span>
-                        <span class="pill-dropdown-soon">SOON</span>
-                    </button>
+                <!-- Explore mode switch (desktop only, mobile uses pill nav) -->
+                <div class="hidden md:block">
+                    <div class="text-center text-[10px] font-medium uppercase tracking-widest text-white/30 mb-1.5">Explore</div>
+                    <div class="flex explore-mode-switch">
+                        <button id="browse-channels-btn" class="explore-mode-btn">
+                            <svg id="browse-btn-icon" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"/>
+                            </svg>
+                            <span id="browse-btn-text">Threads</span>
+                        </button>
+                        <button id="browse-livestreams-btn" class="explore-mode-btn" title="Coming soon" disabled>
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 10.5l4.72-2.362A1 1 0 0122 9v6a1 1 0 01-1.53.862L15.75 13.5m-9.75 6h6a2.25 2.25 0 002.25-2.25v-8.5A2.25 2.25 0 0012 6.5H4.5A2.25 2.25 0 002.25 8.75v8.5A2.25 2.25 0 004.5 19.5z"/>
+                            </svg>
+                            <span>Live</span>
+                            <span class="explore-mode-soon">SOON</span>
+                        </button>
+                    </div>
                 </div>
                 
                 <!-- Channel Filter Tabs -->
