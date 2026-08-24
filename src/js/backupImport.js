@@ -20,8 +20,7 @@ import { Logger } from './logger.js';
 import { mergeChannels } from './syncMerge.js';
 
 /**
- * Apply backup state to the unlocked secure storage and the live channel
- * manager.
+ * Apply backup state to the unlocked secure storage and the live managers.
  *
  * The cache write and the manager-map reload happen in the same synchronous
  * block, before the first await: saveChannels() persists the manager map
@@ -29,17 +28,24 @@ import { mergeChannels } from './syncMerge.js';
  * its conversation row, a metadata refresh) would erase whatever the cache
  * held that the map did not.
  *
+ * identityManager holds the username and the trusted contacts in memory from
+ * its own init(), which has already run by the time a restore gets here: a
+ * cache write alone stays invisible to every reader that goes through it,
+ * including the `senderName` stamped on outgoing message payloads.
+ *
  * @param {Object} data - Decrypted backup state (may be null/undefined)
  * @param {Object} deps
  * @param {Object} deps.secureStorage - Unlocked secure storage instance
  * @param {Object} deps.channelManager - Live channel manager instance
- * @returns {Promise<{channelsImported: number, contactsImported: number, dmHistories: number, changed: boolean}>}
+ * @param {Object} [deps.identityManager] - Live identity manager instance
+ * @returns {Promise<{channelsImported: number, contactsImported: number, dmHistories: number, usernameImported: boolean, changed: boolean}>}
  */
-export async function importBackupData(data, { secureStorage, channelManager }) {
+export async function importBackupData(data, { secureStorage, channelManager, identityManager }) {
     const summary = {
         channelsImported: 0,
         contactsImported: 0,
         dmHistories: 0,
+        usernameImported: false,
         changed: false
     };
     if (!data) return summary;
@@ -86,6 +92,7 @@ export async function importBackupData(data, { secureStorage, channelManager }) 
                 summary.changed = true;
             }
         }
+        if (summary.contactsImported > 0) identityManager?.loadTrustedContacts?.();
     }
 
     // ---- Sent DM messages (per stream, only when absent) ----
@@ -115,7 +122,9 @@ export async function importBackupData(data, { secureStorage, channelManager }) 
     // ---- Username (only if not set) ----
     if (data.username && !cache.username) {
         cache.username = data.username;
+        summary.usernameImported = true;
         summary.changed = true;
+        identityManager?.loadUsername?.();
     }
 
     // ---- Blocked peers (union — never lose a block) ----

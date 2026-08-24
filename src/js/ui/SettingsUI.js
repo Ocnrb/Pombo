@@ -553,7 +553,8 @@ class SettingsUI {
             // Import data into current account's secure storage
             const summary = await importBackupData(result.data, {
                 secureStorage: this.secureStorage,
-                channelManager: this.channelManager
+                channelManager: this.channelManager,
+                identityManager: this.identityManager
             });
 
             // Import image blobs from backup into IDB ledger
@@ -571,9 +572,8 @@ class SettingsUI {
                 this.deps.renderChannelList?.();
             }
 
-            // Reload trusted contacts in identity manager
-            if (summary.contactsImported > 0) {
-                this.identityManager?.loadTrustedContacts?.();
+            if (summary.usernameImported) {
+                this.deps.updateDisplayName?.(this.identityManager?.getUsername?.());
             }
 
         } catch (error) {

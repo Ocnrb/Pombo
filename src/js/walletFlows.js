@@ -22,6 +22,7 @@ import {
     setupPasswordStrengthValidation
 } from './ui/modalUtils.js';
 import { CONFIG } from './config.js';
+import { identityManager } from './identity.js';
 import { importBackupData } from './backupImport.js';
 
 /**
@@ -518,7 +519,11 @@ class WalletFlows {
             // Now import data into secure storage (which is now unlocked)
             const data = result.data;
             if (data) {
-                const summary = await importBackupData(data, { secureStorage, channelManager });
+                const summary = await importBackupData(data, {
+                    secureStorage,
+                    channelManager,
+                    identityManager
+                });
 
                 // Import image blobs from backup into IDB ledger
                 // (must happen AFTER loadWalletWithProgress → init → storageKey is set)
