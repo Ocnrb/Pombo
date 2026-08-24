@@ -53,6 +53,7 @@ describe('ExploreUI', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         exploreUI.browseTypeFilter = 'public';
+        exploreUI.browseAccessFilter = 'open';
         exploreUI.browseCategoryFilter = '';
         exploreUI.browseLanguageFilterValue = '';
         exploreUI.cachedPublicChannels = null;
@@ -101,6 +102,54 @@ describe('ExploreUI', () => {
         expect(exploreUI.browseCategoryFilter).toBe('');
         expect(allChip.classList.contains('bg-white')).toBe(true);
         expect(adultChip.classList.contains('bg-white')).toBe(false);
+    });
+
+    it('tapping the active access marker leaves it on', () => {
+        exploreUI.setupListeners();
+
+        const open = document.querySelector('.explore-access-marker[data-access="open"]');
+        open.click();
+
+        expect(exploreUI.browseAccessFilter).toBe('open');
+        expect(open.classList.contains('bg-white')).toBe(true);
+    });
+
+    it('tapping another access marker switches to it', () => {
+        exploreUI.setupListeners();
+
+        const open = document.querySelector('.explore-access-marker[data-access="open"]');
+        const paid = document.querySelector('.explore-access-marker[data-access="paid"]');
+        paid.click();
+
+        expect(exploreUI.browseAccessFilter).toBe('paid');
+        expect(paid.classList.contains('bg-white')).toBe(true);
+        expect(open.classList.contains('bg-white')).toBe(false);
+    });
+
+    it('tapping Private while it is active leaves it on', () => {
+        exploreUI.setupListeners();
+
+        const privateChip = document.getElementById('explore-private-chip');
+        privateChip.click();
+        privateChip.click();
+
+        expect(exploreUI.browseTypeFilter).toBe('password');
+        expect(privateChip.classList.contains('bg-white')).toBe(true);
+    });
+
+    it('an access marker is the way out of the Private view', () => {
+        exploreUI.setupListeners();
+
+        const privateChip = document.getElementById('explore-private-chip');
+        const gated = document.querySelector('.explore-access-marker[data-access="gated"]');
+        privateChip.click();
+        expect(exploreUI.browseAccessFilter).toBe('');
+
+        gated.click();
+
+        expect(exploreUI.browseTypeFilter).toBe('public');
+        expect(exploreUI.browseAccessFilter).toBe('gated');
+        expect(privateChip.classList.contains('bg-white')).toBe(false);
     });
 
     it('uses a horizontal carousel when collapsed and keeps wrapped mode for expand', () => {

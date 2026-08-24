@@ -335,29 +335,27 @@ class ExploreUI {
         });
         this.updateLanguageToggle();
 
-        // Private chip toggle
+        // Private chip. Selecting only — tapping it while active does nothing.
         const privateChip = document.getElementById('explore-private-chip');
         privateChip?.addEventListener('click', () => {
-            const isActive = this.browseTypeFilter === 'password';
-            this.browseTypeFilter = isActive ? 'public' : 'password';
-            if (!isActive) {
-                this.browseCategoryFilter = '';
-                this.updateCategoryChips();
-                // Password view and the access markers are disjoint universes
-                this.browseAccessFilter = '';
-                this.updateAccessMarkers();
-            }
+            if (this.browseTypeFilter === 'password') return;
+            this.browseTypeFilter = 'password';
+            this.browseCategoryFilter = '';
+            this.updateCategoryChips();
+            // Password view and the access markers are disjoint universes
+            this.browseAccessFilter = '';
+            this.updateAccessMarkers();
             this.updatePrivateChip();
             this.filterChannels(searchInput?.value || '');
         });
 
-        // Access-type markers (Open / Gated / Paid) — exclusive toggles;
-        // tapping the active one clears it (every type shown again)
+        // Access-type markers (Open / Gated / Paid) — exclusive, and selecting
+        // only: tapping the active one does nothing.
         document.querySelectorAll('.explore-access-marker').forEach(btn => {
             btn.addEventListener('click', () => {
-                const next = this.browseAccessFilter === btn.dataset.access ? '' : btn.dataset.access;
-                this.browseAccessFilter = next;
-                if (next && this.browseTypeFilter === 'password') {
+                if (this.browseAccessFilter === btn.dataset.access) return;
+                this.browseAccessFilter = btn.dataset.access;
+                if (this.browseTypeFilter === 'password') {
                     this.browseTypeFilter = 'public';
                     this.updatePrivateChip();
                 }
