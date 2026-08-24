@@ -34,6 +34,26 @@ const getNow = () => (
 
 const roundDuration = (duration) => Number(duration.toFixed(1));
 
+/**
+ * How eagerly cross-device sync runs (Settings → Device Sync). These gate the
+ * unprompted triggers only — the manual "Sync Devices" action runs in every
+ * mode.
+ */
+export const SYNC_MODES = {
+    /** Connect, foreground return, after a local change, and on hide. */
+    AUTOMATIC: 'automatic',
+    /** Skips the connect-time run; the foreground pull catches up. */
+    NOT_ON_START: 'not_on_start',
+    /** Nothing unprompted. Local changes wait for the next manual run. */
+    MANUAL_ONLY: 'manual_only'
+};
+
+export const SYNC_MODE_LABELS = {
+    [SYNC_MODES.AUTOMATIC]: 'Automatic',
+    [SYNC_MODES.NOT_ON_START]: 'Skip on start',
+    [SYNC_MODES.MANUAL_ONLY]: 'Manual only'
+};
+
 class SyncManager {
     constructor() {
         this.syncSubscription = null;
@@ -45,6 +65,67 @@ class SyncManager {
         this.autoPushTimeout = null;
         this.autoPushRetryCount = 0;
         this.pushQueued = false;
+    }
+
+    // ==================== Sync Mode (which unprompted triggers fire) ====================
+
+    /**
+     * localStorage key for the per-account sync mode.
+     * @returns {string|null}
+     */
+    _syncModeKey() {
+        const address = authManager.getAddress();
+        if (!address) return null;
+        const keyFn = CONFIG.storageKeys?.syncMode;
+        return keyFn ? keyFn(address) : `pombo_sync_mode_${address.toLowerCase()}`;
+    }
+
+    /**
+     * An unrecognised stored value falls back to AUTOMATIC.
+     * @returns {string} - One of SYNC_MODES
+     */
+    getSyncMode() {
+        const key = this._syncModeKey();
+        if (!key) return SYNC_MODES.AUTOMATIC;
+        try {
+            const stored = localStorage.getItem(key);
+            return Object.values(SYNC_MODES).includes(stored) ? stored : SYNC_MODES.AUTOMATIC;
+        } catch {
+            return SYNC_MODES.AUTOMATIC;
+        }
+    }
+
+    /**
+     * Persist the sync mode for the current account.
+     * @param {string} mode - One of SYNC_MODES
+     * @returns {boolean} - False if the mode was rejected or could not be saved
+     */
+    setSyncMode(mode) {
+        if (!Object.values(SYNC_MODES).includes(mode)) return false;
+        const key = this._syncModeKey();
+        if (!key) return false;
+        try {
+            localStorage.setItem(key, mode);
+        } catch {
+            return false;
+        }
+        // A push already on the debounce timer would still fire after the switch.
+        if (mode === SYNC_MODES.MANUAL_ONLY) this.cancelAutoPush();
+        Logger.info(`Sync: mode set to ${mode}`);
+        this.notifyHandlers('sync_mode_changed', { mode });
+        return true;
+    }
+
+    /**
+     * Whether an unprompted sync may run now.
+     * @param {string} trigger - 'start' | 'foreground' | 'change' | 'hide'
+     * @returns {boolean}
+     */
+    isAutoSyncAllowed(trigger) {
+        const mode = this.getSyncMode();
+        if (mode === SYNC_MODES.MANUAL_ONLY) return false;
+        if (mode === SYNC_MODES.NOT_ON_START && trigger === 'start') return false;
+        return true;
     }
 
     // ==================== Dirty Flag (unsynced local state) ====================
@@ -1012,7 +1093,10 @@ class SyncManager {
     scheduleAutoPush(delay = 15000) {
         if (authManager.isGuestMode()) return;
 
+        // Recorded before the gate: "Manual only" defers the publish, it does
+        // not discard the change.
         this.markDirty();
+        if (!this.isAutoSyncAllowed('change')) return;
 
         // Clear existing timeout
         if (this.autoPushTimeout) {
@@ -1056,6 +1140,8 @@ class SyncManager {
      */
     async forcePushNow() {
         this.cancelAutoPush();
+        // Leaving the page is still an unprompted publish; the dirty flag survives.
+        if (!this.isAutoSyncAllowed('hide')) return;
         if (!authManager.isGuestMode() && !this.isSyncing) {
             try {
                 await this.pushSync();

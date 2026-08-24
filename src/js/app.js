@@ -243,6 +243,7 @@ class App {
             if (document.visibilityState === 'hidden') {
                 pushOnHide();
             } else if (document.visibilityState === 'visible') {
+                if (!syncManager.isAutoSyncAllowed('foreground')) return;
                 this.pullSyncedStateAndBlobs().catch((error) => {
                     Logger.debug('Sync: Auto-pull on foreground failed (non-critical):', error.message);
                 });
@@ -550,7 +551,9 @@ class App {
                             }
                         });
                     };
-                    runInitialSync();
+                    if (syncManager.isAutoSyncAllowed('start')) {
+                        runInitialSync();
+                    }
                 }
             } catch (dmError) {
                 Logger.warn('Failed to init DM manager (non-critical):', dmError);

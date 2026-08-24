@@ -15,7 +15,7 @@ class SettingsUI {
     constructor() {
         this.deps = {};
         this.elements = {};
-        this.settingsTabOrder = ['profile', 'wallet', 'notifications', 'api', 'linkpreviews', 'privacy', 'security', 'repair', 'about'];
+        this.settingsTabOrder = ['profile', 'devicesync', 'wallet', 'notifications', 'api', 'linkpreviews', 'privacy', 'security', 'repair', 'about'];
         this.currentSettingsTabIndex = 0;
         this.isAnimating = false; // Prevent multiple simultaneous animations
     }
@@ -41,6 +41,7 @@ class SettingsUI {
     get relayManager() { return this.deps.relayManager; }
     get notificationUI() { return this.deps.notificationUI; }
     get dmManager() { return this.deps.dmManager; }
+    get syncManager() { return this.deps.syncManager; }
     get showCreateDMInboxModal() { return this.deps.showCreateDMInboxModal; }
     get isMobileView() { return this.deps.isMobileView; }
     get showExploreView() { return this.deps.showExploreView; }
@@ -780,8 +781,53 @@ class SettingsUI {
             });
         }
 
+        // Device Sync mode radios
+        document.querySelectorAll('input[name="sync-mode-radio"]').forEach(radio => {
+            radio.addEventListener('change', (e) => this.handleSyncModeChange(e));
+        });
+
         // Initialize repair inbox UI
         this.initRepairUI();
+    }
+
+    /**
+     * Reflect the stored sync mode in the Device Sync panel. The choice is
+     * disabled without a DM inbox: sync travels through it, so push and pull
+     * both bail and the setting would change nothing.
+     */
+    updateSyncModeDisplay() {
+        const options = document.getElementById('sync-mode-options');
+        if (!options) return;
+
+        const isGuest = !!this.authManager?.isGuestMode?.();
+        const available = !isGuest && !!this.dmManager?.inboxReady;
+
+        const notice = document.getElementById('sync-mode-no-inbox');
+        const noticeText = document.getElementById('sync-mode-no-inbox-text');
+        if (noticeText) {
+            noticeText.textContent = isGuest
+                ? 'Sync belongs to a real account. Connect a wallet to move your state between devices.'
+                : 'Sync travels through your own DM inbox. Create it first to turn these options on.';
+        }
+        notice?.classList.toggle('hidden', available);
+        options.classList.toggle('opacity-40', !available);
+
+        const mode = this.syncManager?.getSyncMode?.() || 'automatic';
+        options.querySelectorAll('input[name="sync-mode-radio"]').forEach(radio => {
+            radio.checked = radio.value === mode;
+            radio.disabled = !available;
+        });
+    }
+
+    /**
+     * Persist a sync mode picked in the Device Sync panel.
+     */
+    handleSyncModeChange(e) {
+        const saved = this.syncManager?.setSyncMode?.(e.target.value);
+        if (!saved) {
+            this.showNotification('Could not save sync preference', 'error');
+        }
+        this.updateSyncModeDisplay();
     }
 
     /**
@@ -878,6 +924,9 @@ class SettingsUI {
             if (youtubeEmbedsToggle) {
                 youtubeEmbedsToggle.checked = this.secureStorage.getYouTubeEmbedsEnabled();
             }
+
+            // Update Device Sync mode selection
+            this.updateSyncModeDisplay();
 
             // Select first tab by default
             this.selectSettingsTab('profile');
@@ -1092,6 +1141,7 @@ class SettingsUI {
 
         const tabLabels = {
             'profile': 'Account',
+            'devicesync': 'Device Sync',
             'wallet': 'Wallet',
             'notifications': 'Notifications',
             'api': 'API',
@@ -1168,6 +1218,10 @@ class SettingsUI {
         document.querySelectorAll('#pill-settings-dropdown .pill-dropdown-item[data-settings-tab]').forEach(item => {
             item.classList.toggle('active-tab', item.dataset.settingsTab === tabName);
         });
+
+        if (tabName === 'devicesync') {
+            this.updateSyncModeDisplay();
+        }
 
         // Render blocked peers list when privacy tab is selected
         if (tabName === 'privacy') {
