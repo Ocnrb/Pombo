@@ -17,7 +17,11 @@ const makeDeps = (cacheOverrides = {}) => {
         reloadChannelsFromSync: vi.fn(),
         onChannelsSaved: vi.fn()
     };
-    return { secureStorage, channelManager, cache };
+    const identityManager = {
+        loadUsername: vi.fn(),
+        loadTrustedContacts: vi.fn()
+    };
+    return { secureStorage, channelManager, identityManager, cache };
 };
 
 // Android's Channel.toJson() serializes absent optionals as JSON null and
@@ -159,6 +163,43 @@ describe('importBackupData', () => {
         expect(cache.dmLeftAt).toEqual({ '0xpeer1': 100, '0xpeer2': 300 });
         expect(summary.contactsImported).toBe(1);
         expect(summary.dmHistories).toBe(2);
+    });
+
+    it('reloads the identity manager for the slices it caches in memory', async () => {
+        const { secureStorage, channelManager, identityManager } = makeDeps();
+        const data = {
+            username: 'Restored',
+            trustedContacts: { '0xfriend': { address: '0xfriend' } }
+        };
+
+        const summary = await importBackupData(
+            data,
+            { secureStorage, channelManager, identityManager }
+        );
+
+        expect(summary.usernameImported).toBe(true);
+        expect(identityManager.loadUsername).toHaveBeenCalledTimes(1);
+        expect(identityManager.loadTrustedContacts).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves the identity manager alone when no cached slice changed', async () => {
+        const { secureStorage, channelManager, identityManager } = makeDeps({
+            username: 'Kept',
+            trustedContacts: { '0xfriend': { address: '0xfriend' } }
+        });
+        const data = {
+            username: 'Ignored',
+            trustedContacts: { '0xfriend': { address: '0xfriend', nickname: 'Ignored' } }
+        };
+
+        const summary = await importBackupData(
+            data,
+            { secureStorage, channelManager, identityManager }
+        );
+
+        expect(summary.usernameImported).toBe(false);
+        expect(identityManager.loadUsername).not.toHaveBeenCalled();
+        expect(identityManager.loadTrustedContacts).not.toHaveBeenCalled();
     });
 
     it('schedules the post-save hook only when something changed', async () => {
