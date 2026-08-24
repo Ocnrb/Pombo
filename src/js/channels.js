@@ -5109,7 +5109,15 @@ class ChannelManager {
     }
 
     /**
-     * Generate invite link for a channel
+     * Generate invite link for a channel.
+     *
+     * A password is the only part of an invite that cannot be recovered from
+     * the chain, so it is the only case that still needs the encrypted token.
+     * Everything else — name, type, gate address — is in the channel's stream
+     * metadata, which the joiner reads for itself, so those channels get the
+     * plain `#/channel/<streamId>` route instead: shorter, a smaller QR code,
+     * and readable by a human deciding whether to open it.
+     *
      * @param {string} streamId - Stream ID
      * @returns {string} - Invite link
      */
@@ -5119,6 +5127,11 @@ class ChannelManager {
             throw new Error('Channel not found');
         }
 
+        const base = `${window.location.origin}${window.location.pathname}`;
+        if (!channel.password) {
+            return `${base}#/channel/${streamId}`;
+        }
+
         // Use short keys to minimize QR code data size
         const inviteData = {
             s: streamId,      // streamId
@@ -5126,9 +5139,7 @@ class ChannelManager {
             t: channel.type   // type
         };
 
-        if (channel.password) {
-            inviteData.p = channel.password;  // password
-        }
+        inviteData.p = channel.password;  // password
 
         // Gated (N-C, §7.14): the gate clone address. Everything else about
         // the gate (mode, token, price, duration) is read from the chain by
@@ -5160,7 +5171,7 @@ class ChannelManager {
             this.bytesToBase64Url(keyBytes)
         ].join('.');
 
-            return `${window.location.origin}${window.location.pathname}#/invite/${token}`;
+        return `${base}#/invite/${token}`;
     }
 
     /**

@@ -3,7 +3,6 @@
  * Handles the Explore view (front-page) for browsing public channels
  */
 
-import { Logger } from '../logger.js';
 import { GATE_MODE } from '../gate.js';
 import { escapeHtml, escapeAttr } from './utils.js';
 import { sanitizeText } from './sanitizer.js';
@@ -14,6 +13,7 @@ import { deriveAdminId } from '../streamConstants.js';
 import { getAvatarHtml } from './AvatarGenerator.js';
 import { formatPreviewLine } from './channelPreviewFormatter.js';
 import { identityManager } from '../identity.js';
+import { openUnjoinedChannel } from '../channelEntry.js';
 
 // Explore card access-info styling: the 3-line pricing stack absolutely
 // centered in the card's right half on desktop (anchored to the CARD, not
@@ -775,21 +775,15 @@ class ExploreUI {
                 
                 if (!streamId) return;
                 
-                // Get channel info from cache
-                const channelInfo = this.cachedPublicChannels?.find(ch => ch.streamId === streamId);
-                
-                // Password/native: join directly (immediate commitment —
-                // password entry or permission check). Gated routes by MODE.
-                if (channelType === 'gated') {
-                    await this._openGated(streamId, channelInfo);
-                } else if (channelType === 'password' || channelType === 'native') {
-                    if (this.deps.joinPublicChannel) {
-                        await this.deps.joinPublicChannel(streamId, channelInfo);
-                    }
-                } else {
-                    // For public/open channels: enter preview mode (try before adding)
-                    await this.deps.enterPreviewMode(streamId, channelInfo);
-                }
+                // The card's own type stands in when the cache has no entry
+                // for this row, so routing never falls back to public.
+                const cached = this.cachedPublicChannels?.find(ch => ch.streamId === streamId);
+                const channelInfo = cached || (channelType ? { type: channelType } : null);
+
+                await openUnjoinedChannel(streamId, channelInfo, {
+                    enterPreviewMode: this.deps.enterPreviewMode,
+                    joinPublicChannel: this.deps.joinPublicChannel
+                });
             });
         });
     }
@@ -890,37 +884,6 @@ class ExploreUI {
             btn.classList.toggle('text-white/50', !active);
             btn.classList.toggle('hover:text-white/80', !active);
         });
-    }
-
-    /**
-     * Explore tap on a gated channel (N-D). Routing by MODE:
-     *  - TOKEN/NFT with access → PREVIEW (browse without committing; the
-     *    Join button adds it to the list)
-     *  - PAID, no access, or unreadable gate → the join flow, which lands
-     *    on the gate entry screen when the gate refuses (paying IS the
-     *    commitment)
-     */
-    async _openGated(streamId, channelInfo) {
-        try {
-            const gate = channelInfo?.gateAddress;
-            if (gate) {
-                const { gateManager, GATE_MODE } = await import('../gate.js');
-                const { authManager } = await import('../auth.js');
-                const info = await gateManager.getGateInfo(gate);
-                const holding = info.mode === GATE_MODE.TOKEN_BALANCE
-                    || info.mode === GATE_MODE.NFT_OWNERSHIP;
-                const me = authManager.getAddress();
-                if (holding && me && await gateManager.checkAccess(gate, me)) {
-                    await this.deps.enterPreviewMode(streamId, channelInfo);
-                    return;
-                }
-            }
-        } catch (e) {
-            Logger.debug('Explore gated routing failed, falling back to join:', e?.message);
-        }
-        if (this.deps.joinPublicChannel) {
-            await this.deps.joinPublicChannel(streamId, channelInfo);
-        }
     }
 
     /**
