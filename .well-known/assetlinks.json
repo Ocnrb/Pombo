@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.pombo.android",
+      "sha256_cert_fingerprints": [
+        "95:9F:19:9F:AA:93:0A:09:53:59:2B:67:C4:20:43:78:2D:B9:44:6E:67:A6:69:48:B0:F1:BA:22:95:DA:99:42"
+      ]
+    }
+  }
+]
