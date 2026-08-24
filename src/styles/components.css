@@ -2400,7 +2400,6 @@ body.explore-open #explore-channels-list {
     }
 
     .pill-nav-item.active {
-        color: #F6851B;
         background: rgba(246, 133, 27, 0.12);
     }
 
@@ -2560,10 +2559,6 @@ body.explore-open #explore-channels-list {
         cursor: pointer;
         transition: all 0.2s ease;
         white-space: nowrap;
-    }
-
-    .pill-settings-wrapper.active .pill-settings-btn {
-        color: inherit;
     }
 
     .pill-settings-btn:active {

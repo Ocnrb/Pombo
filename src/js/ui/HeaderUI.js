@@ -658,6 +658,7 @@ class HeaderUI {
             document.getElementById('pill-settings-dropdown')?.classList.add('hidden');
             this._closeProfileDropdown();
             positionPillDropdown(pill.pillExploreDropdown);
+            pill.pillExploreThreadsBtn?.classList.toggle('active-tab', document.body.classList.contains('explore-open'));
             pill.pillExploreDropdown.classList.remove('hidden');
             this._exploreDropdownOpen = true;
         }
