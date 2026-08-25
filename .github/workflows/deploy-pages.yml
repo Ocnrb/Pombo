@@ -58,7 +58,7 @@ jobs:
         run: |
           mkdir -p _site
           cp index.html sw.js CNAME robots.txt sitemap.xml _site/
-          cp -r js css favicon curation _site/
+          cp -r js css fonts favicon curation _site/
           # Android App Links: the site has to serve this for the OS to accept
           # that com.pombo.android may open app.pombo.cc links. Unverified,
           # Android 12+ drops the app from the chooser entirely.
