@@ -1,5 +1,5 @@
 import { escapeHtml as _escapeHtml, escapeAttr as _escapeAttr } from './utils.js';
-import { getAvatarHtml } from './AvatarGenerator.js';
+import { getAvatarHtml, downgradeEnsAvatars } from './AvatarGenerator.js';
 import { GasEstimator } from './GasEstimator.js';
 import { CONFIG, getNetworkParams } from '../config.js';
 import { MESSAGE_STREAM } from '../streamConstants.js';
@@ -781,6 +781,15 @@ class SettingsUI {
             });
         }
 
+        // ENS avatars toggle
+        const ensAvatarsToggle = document.getElementById('ens-avatars-enabled');
+        if (ensAvatarsToggle) {
+            ensAvatarsToggle.addEventListener('change', async (e) => {
+                await this.secureStorage.setEnsAvatarsEnabled(e.target.checked);
+                if (!e.target.checked) downgradeEnsAvatars();
+            });
+        }
+
         // Device Sync mode radios
         document.querySelectorAll('input[name="sync-mode-radio"]').forEach(radio => {
             radio.addEventListener('change', (e) => this.handleSyncModeChange(e));
@@ -923,6 +932,12 @@ class SettingsUI {
             const youtubeEmbedsToggle = document.getElementById('youtube-embeds-enabled');
             if (youtubeEmbedsToggle) {
                 youtubeEmbedsToggle.checked = this.secureStorage.getYouTubeEmbedsEnabled();
+            }
+
+            // Update ENS avatars toggle state
+            const ensAvatarsToggle = document.getElementById('ens-avatars-enabled');
+            if (ensAvatarsToggle) {
+                ensAvatarsToggle.checked = this.secureStorage.getEnsAvatarsEnabled();
             }
 
             // Update Device Sync mode selection

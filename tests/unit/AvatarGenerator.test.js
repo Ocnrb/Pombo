@@ -10,8 +10,11 @@ import {
     getAvatar,
     clearAvatarCache,
     getAddressColor,
+    getAvatarHtml,
+    downgradeEnsAvatars,
     avatarGenerator
 } from '../../src/js/ui/AvatarGenerator.js';
+import { CONFIG } from '../../src/js/config.js';
 
 /**
  * Normalize SVG by removing unique clipPath IDs
@@ -578,6 +581,41 @@ describe('AvatarGenerator', () => {
             }
             // Should find at least one tilted face in 200 attempts
             expect(foundTiltedFace).toBe(true);
+        });
+    });
+
+    describe('getAvatarHtml — ENS avatars setting', () => {
+        const address = '0x1234567890abcdef1234567890abcdef12345678';
+        const remote = 'https://avatars.example/pic.png';
+
+        beforeEach(() => {
+            localStorage.removeItem(CONFIG.storageKeys.ensAvatarsEnabled);
+        });
+
+        it('renders the remote image while the setting is on', () => {
+            expect(getAvatarHtml(address, 32, 0.5, remote)).toContain(remote);
+        });
+
+        it('renders the generated avatar instead once the setting is off', () => {
+            localStorage.setItem(CONFIG.storageKeys.ensAvatarsEnabled, '0');
+            const html = getAvatarHtml(address, 32, 0.5, remote);
+            expect(html).not.toContain(remote);
+            expect(html).toContain('<svg');
+        });
+
+        it('blocks an ipfs gateway URL too', () => {
+            localStorage.setItem(CONFIG.storageKeys.ensAvatarsEnabled, '0');
+            const html = getAvatarHtml(address, 32, 0.5, `${CONFIG.identity.ipfsGateway}QmHash`);
+            expect(html).not.toContain('ipfs');
+            expect(html).toContain('<svg');
+        });
+
+        it('downgrades avatars already on screen', () => {
+            document.body.innerHTML = `<div id="slot">${getAvatarHtml(address, 32, 0.5, remote)}</div>`;
+            expect(document.querySelectorAll('img.ens-avatar').length).toBe(1);
+            downgradeEnsAvatars();
+            expect(document.querySelectorAll('img.ens-avatar').length).toBe(0);
+            expect(document.getElementById('slot').innerHTML).toContain('<svg');
         });
     });
 });

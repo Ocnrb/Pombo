@@ -353,6 +353,11 @@ export const CONFIG = {
         // Static keys (no per-account scoping)
         keystores: 'pombo_keystores',
         rpcPreference: 'pombo_rpc_preference',
+        // Plain mirror of the encrypted "ENS Avatars" setting ('0' = off). Device
+        // global, not per address: the renderer only knows whose face it draws,
+        // never who is looking, and the unlock/account modals draw avatars
+        // before any account is unlocked.
+        ensAvatarsEnabled: 'pombo_ens_avatars_enabled',
         pushRegistration: 'pombo_push_registration',
         pushRegistrationChannels: (addr) =>
             addr ? `pombo_push_registration_channels_${addr.toLowerCase()}`

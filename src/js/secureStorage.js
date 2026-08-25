@@ -115,6 +115,8 @@ class SecureStorage {
                 localStorage.removeItem(CONFIG.storageKeys.username(this.address));
             }
 
+            this.mirrorEnsAvatarsEnabled();
+
             Logger.info('🔓 Secure storage unlocked for:', this.address.slice(0, 8) + '...');
             
             return true;
@@ -136,6 +138,7 @@ class SecureStorage {
         
         // Initialize empty cache in memory (never persisted)
         this.cache = this.createEmptyCache();
+        this.mirrorEnsAvatarsEnabled();
         
         Logger.info('🔓 Guest storage initialized (memory only):', this.address.slice(0, 8) + '...');
         return true;
@@ -700,6 +703,37 @@ class SecureStorage {
         if (!this.isUnlocked) return;
         this.cache.youtubeEmbedsEnabled = enabled;
         await this.saveToStorage();
+    }
+
+    /**
+     * Get remote ENS avatar images enabled setting (default: true)
+     */
+    getEnsAvatarsEnabled() {
+        if (!this.isUnlocked) return true;
+        return this.cache.ensAvatarsEnabled !== false; // Default true
+    }
+
+    /**
+     * Set remote ENS avatar images enabled setting
+     */
+    async setEnsAvatarsEnabled(enabled) {
+        if (!this.isUnlocked) return;
+        this.cache.ensAvatarsEnabled = enabled;
+        this.mirrorEnsAvatarsEnabled();
+        await this.saveToStorage();
+    }
+
+    /**
+     * Republish the setting to plain localStorage. The avatar renderer is a
+     * leaf module with no access to this store, and the unlock/account modals
+     * draw avatars while it is still locked.
+     */
+    mirrorEnsAvatarsEnabled() {
+        if (this.cache?.ensAvatarsEnabled === false) {
+            localStorage.setItem(CONFIG.storageKeys.ensAvatarsEnabled, '0');
+        } else {
+            localStorage.removeItem(CONFIG.storageKeys.ensAvatarsEnabled);
+        }
     }
 
     /**

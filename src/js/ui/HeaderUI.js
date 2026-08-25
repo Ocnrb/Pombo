@@ -366,21 +366,22 @@ class HeaderUI {
         const sizeStyle = 'width:38px;height:38px';
         const radiusCls = 'rounded-full';
         const spinnerHtml = `<div class="${radiusCls} flex items-center justify-center bg-white/[0.04]" style="${sizeStyle}"><div class="thumb-spinner" style="width:18px;height:18px"></div></div>`;
-        const fallbackHtml = (seed) => `<div class="${radiusCls} overflow-hidden" style="${sizeStyle}">${getAvatarHtml(seed, sizePx, 0.5, null)}</div>`;
+        const avatarHtml = (seed, ensUrl) => `<div class="${radiusCls} overflow-hidden" style="${sizeStyle}">${getAvatarHtml(seed, sizePx, 0.5, ensUrl)}</div>`;
+        const fallbackHtml = (seed) => avatarHtml(seed, null);
         const imgHtml = (url) => `<img class="${radiusCls} object-cover" alt="" src="${escapeAttr(url)}" style="${sizeStyle}" />`;
 
         const renderDM = () => {
             const peer = channel.peerAddress;
             const seed = peer || channel.streamId;
             const ens = peer ? (identityManager.getCachedENSAvatar?.(peer) || null) : null;
-            if (ens) { slot.innerHTML = imgHtml(ens); return; }
+            if (ens) { slot.innerHTML = avatarHtml(seed, ens); return; }
             // No cached ENS — show spinner while resolving
             if (peer && identityManager.resolveENSAvatar) {
                 slot.innerHTML = spinnerHtml;
                 identityManager.resolveENSAvatar(peer)
                     .then(url => {
                         if (this.elements.currentChannelThumb !== slot) return;
-                        slot.innerHTML = url ? imgHtml(url) : fallbackHtml(seed);
+                        slot.innerHTML = avatarHtml(seed, url);
                     })
                     .catch(() => {
                         if (this.elements.currentChannelThumb !== slot) return;

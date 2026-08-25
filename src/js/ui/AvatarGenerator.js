@@ -5,6 +5,8 @@
  * 5 eyes × 6 mouths × 4 expressions = 120 unique face personalities
  */
 
+import { CONFIG } from '../config.js';
+
 // ==========================================
 // Constants 
 // ==========================================
@@ -739,6 +741,21 @@ export function getAddressColor(address) {
 // ==========================================
 
 /**
+ * Whether the viewer allows ENS avatar images at all. Rendering one hands the
+ * reader's IP to whatever host the record points at, so the setting has to be
+ * honoured everywhere an avatar is drawn — including the pre-unlock modals,
+ * which is why it is read from the plain mirror rather than from secureStorage.
+ * @returns {boolean}
+ */
+function ensAvatarsEnabled() {
+    try {
+        return localStorage.getItem(CONFIG.storageKeys.ensAvatarsEnabled) !== '0';
+    } catch (e) {
+        return true;
+    }
+}
+
+/**
  * Get avatar HTML that uses ENS avatar image if available, with SVG fallback.
  * Returns an <img> if avatarUrl is provided, otherwise the generated SVG.
  * The <img> has onerror fallback to the generated SVG.
@@ -750,7 +767,7 @@ export function getAddressColor(address) {
  */
 export function getAvatarHtml(address, size = 32, borderRadius = 0.2, avatarUrl = null) {
     const svgFallback = getAvatar(address, size, borderRadius);
-    if (!avatarUrl) return svgFallback;
+    if (!avatarUrl || !ensAvatarsEnabled()) return svgFallback;
 
     // Sanitize URL - only allow https: and data: schemes
     if (!avatarUrl.startsWith('https://') && !avatarUrl.startsWith('data:')) {
@@ -760,15 +777,33 @@ export function getAvatarHtml(address, size = 32, borderRadius = 0.2, avatarUrl 
     return `<img src="${avatarUrl}" alt="" width="${size}" height="${size}" class="ens-avatar" data-fallback="${encodeURIComponent(svgFallback)}" style="width:100%;height:100%;object-fit:cover;display:block;" />`;
 }
 
+/**
+ * Replace one rendered ENS avatar with the generated one it carries.
+ * @param {HTMLImageElement} img
+ */
+function swapToFallback(img) {
+    if (!img.dataset.fallback) return;
+    const wrapper = document.createElement('span');
+    wrapper.innerHTML = decodeURIComponent(img.dataset.fallback);
+    img.replaceWith(wrapper.firstChild);
+}
+
+/**
+ * Downgrade every ENS avatar already on screen to its generated fallback.
+ * Turning the setting off has to take effect on the views behind the settings
+ * modal, which hold <img> tags rendered while it was still on.
+ */
+export function downgradeEnsAvatars() {
+    if (typeof document === 'undefined') return;
+    document.querySelectorAll('img.ens-avatar').forEach(swapToFallback);
+}
+
 // Global delegated error handler for ENS avatar images (CSP-safe)
 if (typeof document !== 'undefined') {
     document.addEventListener('error', (e) => {
         const img = e.target;
-        if (img.tagName === 'IMG' && img.classList.contains('ens-avatar') && img.dataset.fallback) {
-            const svgHtml = decodeURIComponent(img.dataset.fallback);
-            const wrapper = document.createElement('span');
-            wrapper.innerHTML = svgHtml;
-            img.replaceWith(wrapper.firstChild);
+        if (img.tagName === 'IMG' && img.classList.contains('ens-avatar')) {
+            swapToFallback(img);
         }
     }, true);
 }
