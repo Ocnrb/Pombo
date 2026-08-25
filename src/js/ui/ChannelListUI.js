@@ -638,7 +638,7 @@ class ChannelListUI {
         if (channelViewModel.type === 'dm') {
             const seed = channelViewModel.peerAddress || channelViewModel.streamId;
             if (channelViewModel.peerEnsAvatar) {
-                iconSlot = `<img class="channel-item-image rounded-full object-cover" alt="" src="${escapeAttr(channelViewModel.peerEnsAvatar)}" draggable="true" style="width:44px;height:44px" />`;
+                iconSlot = `<div class="rounded-full overflow-hidden" style="width:44px;height:44px">${getAvatarHtml(seed, 44, 0.5, channelViewModel.peerEnsAvatar)}</div>`;
             } else if (channelViewModel.peerAddress && !this._resolvedDMPeers.has(channelViewModel.peerAddress)) {
                 iconSlot = spinnerSlot;
             } else {
