@@ -33,10 +33,10 @@
  *
  * Epoch keys are channel keys, not identities: they persist in secureStorage
  * (encrypted at rest, out of the service worker's reach) so a session restart
- * does not cost a request round-trip. History policy is D14: all retained
- * epochs are handed out (holding access IS the condition) — except PAID
- * gates, which hand out only the current epoch: a subscription buys the
- * future, never the channel's past.
+ * does not cost a request round-trip. History policy: every retained epoch is
+ * handed out to whoever passes the current gate, regardless of gate mode —
+ * holding access is the condition; an unreadable gate fails closed to the
+ * current epoch only.
  */
 
 import { Logger } from './logger.js';
@@ -47,7 +47,7 @@ import { cryptoManager } from './crypto.js';
 import { authManager } from './auth.js';
 import { CONFIG } from './config.js';
 import { KEYS_MSG_TYPE } from './streamConstants.js';
-import { gateManager, GATE_MODE } from './gate.js';
+import { gateManager } from './gate.js';
 
 /**
  * Channels running the epoch-key protocol (gated, N-A/N-C): the gate clone
@@ -692,10 +692,10 @@ class EpochKeyManager {
     }
 
     /**
-     * Answer with wraps for every epoch we hold that the requester asked for
-     * (D14: all retained epochs; PAID gates only the current one) MINUS the
-     * epochs an observed wrap already covers — the N-B suppression that turns
-     * thirty identical envelopes into one.
+     * Answer with wraps for every epoch we hold that the requester asked
+     * for, regardless of gate mode, MINUS the epochs an observed wrap
+     * already covers — the suppression that turns thirty identical
+     * envelopes into one.
      */
     async _answerRequest(channel, request) {
         const s = this.state.get(channel.messageStreamId);
@@ -717,16 +717,16 @@ class EpochKeyManager {
             return;
         }
 
-        // D14: a PAID gate hands out ONLY the current epoch — the history
-        // scope of a subscription is the future. Fail-closed on an unreadable
-        // gate config: missing old epochs get re-requested and answered once
-        // the RPC heals, leaked ones cannot be taken back.
+        // Every gate mode receives all retained epochs — holding access is
+        // the condition, a paid subscription included. The gate read is a
+        // readability probe (its result is unused): an unreadable gate fails
+        // closed to the current epoch — missing old epochs get re-requested
+        // once the RPC heals, leaked ones cannot be taken back.
         let currentEpochOnly = false;
         try {
-            const info = await gateManager.getGateInfo(channel.gate.address);
-            currentEpochOnly = info.mode === GATE_MODE.PAID;
+            await gateManager.getGateInfo(channel.gate.address);
         } catch (e) {
-            Logger.warn('epochKeys: gate mode unreadable, answering current epoch only:', e.message);
+            Logger.warn('epochKeys: gate unreadable, answering current epoch only:', e.message);
             currentEpochOnly = true;
         }
 

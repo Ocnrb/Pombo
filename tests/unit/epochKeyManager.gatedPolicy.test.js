@@ -1,10 +1,9 @@
 /**
  * N-D gated-channel key policy:
  *
- *  - D14 per-mode history scope in _answerRequest: TOKEN/NFT/NONE gates hand
- *    out every retained epoch, PAID gates ONLY the current one (a
- *    subscription buys the future, never the channel's past), and an
- *    unreadable gate config fails closed to current-only.
+ *  - History scope in _answerRequest: EVERY gate mode (TOKEN/NFT/PAID/NONE)
+ *    hands out every retained epoch — a paid subscription buys the past
+ *    too. Only an unreadable gate fails closed to current-only.
  *  - rotateEpoch accepts any epoch-key channel — an earlier guard rejected
  *    gated channels, which silently disabled the post-ban rotation that cuts
  *    an ex-member's reads.
@@ -37,7 +36,7 @@ function seedState(streamId) {
     return s;
 }
 
-describe('epochKeyManager._answerRequest (D14 per-mode scope)', () => {
+describe('epochKeyManager._answerRequest (history scope)', () => {
     let published;
 
     beforeEach(() => {
@@ -56,7 +55,7 @@ describe('epochKeyManager._answerRequest (D14 per-mode scope)', () => {
 
     const request = { requestId: 'req-1', pubkey: 'aa'.repeat(33), fromEpoch: 1, requester: REQUESTER };
 
-    it('PAID gate: only the current epoch is wrapped', async () => {
+    it('PAID gate: every retained epoch is wrapped (a subscription buys the past)', async () => {
         const streamId = '0xaaa/paid-answer';
         seedState(streamId);
         vi.spyOn(gateManager, 'getGateInfo').mockResolvedValue({ mode: GATE_MODE.PAID });
@@ -64,7 +63,7 @@ describe('epochKeyManager._answerRequest (D14 per-mode scope)', () => {
         const channel = { messageStreamId: streamId, keysStreamId: streamId + '-4', gate: { address: GATE } };
         await epochKeyManager._answerRequest(channel, request);
 
-        expect(published.map(m => m.keyId)).toEqual(['kid-3']);
+        expect(published.map(m => m.keyId).sort()).toEqual(['kid-1', 'kid-2', 'kid-3']);
     });
 
     it('TOKEN gate: every retained epoch is wrapped', async () => {
