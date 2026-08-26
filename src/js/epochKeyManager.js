@@ -370,6 +370,9 @@ class EpochKeyManager {
         s.pubAnnounceFreshness = Date.now();
         await this._persist(channel.messageStreamId, s);
         Logger.info(`epochKeys: publish key re-keyed to rev ${rev} on`, channel.keysStreamId.slice(-30));
+        // Members cannot write until this announce is readable from storage —
+        // verify retention exactly like a fresh epoch announce.
+        this._ensureAnnounceRetained(channel, announce).catch(() => {});
         return rev;
     }
 
@@ -603,6 +606,7 @@ class EpochKeyManager {
         s.pubAnnounceFreshness = Date.now();
         await this._persist(channel.messageStreamId, s);
         Logger.info('epochKeys: publish key announced on', channel.keysStreamId.slice(-30));
+        this._ensureAnnounceRetained(channel, announce).catch(() => {});
     }
 
     /**
@@ -664,7 +668,7 @@ class EpochKeyManager {
                 try {
                     const entries = await streamrController.resendKeysMessages(keysStreamId, { last: 100 });
                     const found = entries.some(({ data }) =>
-                        data?.t === KEYS_MSG_TYPE.KEY_ANNOUNCE && data.keyId === announce.keyId);
+                        data?.t === announce.t && data.keyId === announce.keyId);
                     if (found) {
                         Logger.info(`epochKeys: announce ${announce.keyId} retained on -4 (after ${attempt} cycle${attempt > 1 ? 's' : ''})`);
                         return;
