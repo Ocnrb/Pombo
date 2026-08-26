@@ -122,12 +122,15 @@ export function mergeChannels(baseChannels, incomingChannels, baseLeftAt, incomi
 
 /**
  * Union-merge the epoch-key slice ({ messageStreamId: { epochs, announces,
- * currentEpoch } }). Entries are content-addressed (keyId → immutable key,
- * epoch → immutable announce), so union is exact: base wins per entry — a key
- * this device already adopted must never regress — and currentEpoch only moves
- * forward. `keepIds` (when given) drops channels the channel merge itself
- * dropped, so a leave tombstone retires the keys the same way it retires the
- * channel.
+ * currentEpoch, pendingRequests, helloEpochs } }). Entries are
+ * content-addressed (keyId → immutable key, epoch → immutable announce,
+ * requestId → immutable pending id), so union is exact: base wins per entry —
+ * a key this device already adopted must never regress — and currentEpoch
+ * only moves forward. Pending request ids union so a wrap answered days later
+ * opens on EVERY device of the account; helloEpochs union so a second device
+ * does not re-hello an epoch the first already announced itself in. `keepIds`
+ * (when given) drops channels the channel merge itself dropped, so a leave
+ * tombstone retires the keys the same way it retires the channel.
  *
  * @param {Object} base - Base epochKeys slice
  * @param {Object} incoming - Incoming epochKeys slice
@@ -153,7 +156,11 @@ export function mergeEpochKeys(base, incoming, keepIds = null) {
         const epochs = { ...(i.epochs || {}), ...(b.epochs || {}) };
         const announces = { ...(i.announces || {}), ...(b.announces || {}) };
         const currentEpoch = Math.max(b.currentEpoch || 0, i.currentEpoch || 0);
-        result[streamId] = { epochs, announces, currentEpoch };
+        const pendingRequests = { ...(i.pendingRequests || {}), ...(b.pendingRequests || {}) };
+        const helloEpochs = [...new Set([
+            ...(b.helloEpochs || []), ...(i.helloEpochs || [])
+        ])].filter(Number.isInteger).sort((x, y) => x - y);
+        result[streamId] = { epochs, announces, currentEpoch, pendingRequests, helloEpochs };
     }
 
     return result;

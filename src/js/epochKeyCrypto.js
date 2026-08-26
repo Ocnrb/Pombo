@@ -7,23 +7,29 @@
  *
  * Distribution (see UNIFIED_IMPLEMENTATION_PLAN.md §5.4, D12–D14):
  *   - Admin announces { epoch, keyId, keyHash } — the trust anchor.
- *   - A joiner publishes KEY_REQUEST carrying a fresh EPHEMERAL request pubkey.
+ *   - A joiner publishes KEY_REQUEST carrying a fresh EPHEMERAL request pubkey
+ *     and, since wrap v2, its STATIC account pubkey (`spk`).
  *   - Any member holding the key answers with KEY_WRAP: the epoch key sealed
- *     via ECIES to that request pubkey, addressed by
- *     tag = sha256(requestPubkey ‖ keyId) — O(1) lookup, and because the tag is
- *     over a throwaway key it confirms nothing about who is in the channel.
+ *     via ECIES to the request pubkey (v1: tag over the throwaway pubkey, so
+ *     the tag confirms nothing about who is in the channel) or to the static
+ *     pubkey (v2: tag over the random requestId — NEVER over the static key,
+ *     which would give observers a per-account dictionary to test against).
  *   - The joiner verifies sha256(unwrapped) === announced keyHash before
  *     adopting. A malicious wrapper can only waste bandwidth.
  *
  * ECIES here is the same construction as dmCrypto's sealed sender (secp256k1
- * ECDH + HKDF + AES-256-GCM) with its own HKDF salt for domain separation —
- * the two schemes can never derive the same key from the same secret.
+ * ECDH + HKDF + AES-256-GCM) with its own HKDF salt per scheme for domain
+ * separation — no two schemes can derive the same key from the same secret.
+ * The v2 (static-addressed) wrap has its own salt for the same reason: a DM
+ * and an epoch wrap sealed to the same account key must never coincide.
  */
 
 import { dmCrypto } from './dmCrypto.js';
 
 const KEYWRAP_HKDF_SALT = 'pombo-keywrap-v1';
+const KEYWRAP_STATIC_HKDF_SALT = 'pombo-keywrap-static-v2';
 const WRAP_TAG_DOMAIN = 'POMBO_WRAP_TAG_V1';
+const WRAP_TAG_DOMAIN_V2 = 'POMBO_WRAP_TAG_V2';
 
 // Leading byte of an epoch-sealed binary envelope on the MEDIA_DATA partition.
 // The partition's other frames claim 0x01/0x03 (media) and 0x02 (dmCrypto's
@@ -76,14 +82,30 @@ class EpochKeyCrypto {
     }
 
     /**
+     * v2 wrap address tag: derived from the request's random id, never from
+     * the requester's static key — a static-key-derived tag would let any
+     * observer precompute per-account tags and confirm membership from the
+     * public -4 resend.
+     * @param {string} requestId - The KEY_REQUEST's random id
+     * @param {string} keyId - Announced key id
+     * @returns {Promise<string>} 0x-prefixed sha256 hex
+     */
+    async computeWrapTagV2(requestId, keyId) {
+        const canonical = `${WRAP_TAG_DOMAIN_V2}|${requestId}|${keyId}`;
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+        return ethers.hexlify(new Uint8Array(digest));
+    }
+
+    /**
      * ECIES key for wrap/unwrap. Symmetric: the wrapper passes
      * (wrapEphemeral.priv, requestPub); the requester passes
      * (request.priv, wrapEphemeral.pub from the envelope).
      * @param {string} privateKeyHex
      * @param {string} publicKeyHex - Compressed secp256k1 public key
+     * @param {string} [salt] - HKDF salt; each wrap scheme has its own
      * @returns {Promise<CryptoKey>} AES-256-GCM key
      */
-    async deriveWrapKey(privateKeyHex, publicKeyHex) {
+    async deriveWrapKey(privateKeyHex, publicKeyHex, salt = KEYWRAP_HKDF_SALT) {
         const signingKey = new ethers.SigningKey(privateKeyHex);
         const sharedSecretHex = signingKey.computeSharedSecret(publicKeyHex);
         const sharedBytes = ethers.getBytes(sharedSecretHex).slice(1, 33);
@@ -96,7 +118,7 @@ class EpochKeyCrypto {
             {
                 name: 'HKDF',
                 hash: 'SHA-256',
-                salt: new TextEncoder().encode(KEYWRAP_HKDF_SALT),
+                salt: new TextEncoder().encode(salt),
                 info: new TextEncoder().encode('aes-256-gcm')
             },
             keyMaterial,
@@ -138,6 +160,56 @@ class EpochKeyCrypto {
      */
     async unwrapEpochKey(wrapped, requestPrivateKeyHex) {
         const aesKey = await this.deriveWrapKey(requestPrivateKeyHex, wrapped.epk);
+        const plain = await crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: dmCrypto.base64ToBuf(wrapped.iv) },
+            aesKey,
+            dmCrypto.base64ToBuf(wrapped.ct)
+        );
+        const bytes = new Uint8Array(plain);
+        if (bytes.byteLength !== 32) {
+            throw new Error(`Unwrapped epoch key has wrong length: ${bytes.byteLength}`);
+        }
+        return ethers.hexlify(bytes);
+    }
+
+    /**
+     * Seal an epoch key to a STATIC account pubkey (wrap v2). Same ECIES as
+     * wrapEpochKey with the v2 salt — a wrap and a DM sealed to the same
+     * account key must never derive the same AES key.
+     * @param {string} epochKeyHex - 0x-prefixed 32-byte hex
+     * @param {string} staticPubkeyHex - The requester's compressed account pubkey (`spk`)
+     * @returns {Promise<{epk: string, iv: string, ct: string}>} epk hex, iv/ct base64
+     */
+    async wrapEpochKeyToStatic(epochKeyHex, staticPubkeyHex) {
+        const wrapEphemeralKey = dmCrypto.generateEphemeralPrivateKey();
+        const epk = new ethers.SigningKey(wrapEphemeralKey).compressedPublicKey;
+
+        const aesKey = await this.deriveWrapKey(
+            wrapEphemeralKey, staticPubkeyHex, KEYWRAP_STATIC_HKDF_SALT);
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const ct = await crypto.subtle.encrypt(
+            { name: 'AES-GCM', iv }, aesKey, ethers.getBytes(epochKeyHex)
+        );
+
+        return {
+            epk,
+            iv: dmCrypto.bufToBase64(iv),
+            ct: dmCrypto.bufToBase64(ct)
+        };
+    }
+
+    /**
+     * Open a v2 wrap with the account's static private key. Works in any
+     * session of any device holding the account key — the whole point of the
+     * v2 format.
+     * @param {{epk: string, iv: string, ct: string}} wrapped
+     * @param {string} accountPrivateKeyHex - The wallet private key
+     * @returns {Promise<string>} epoch key, 0x-prefixed 32-byte hex
+     * @throws if the envelope does not decrypt or has the wrong length
+     */
+    async unwrapEpochKeyStatic(wrapped, accountPrivateKeyHex) {
+        const aesKey = await this.deriveWrapKey(
+            accountPrivateKeyHex, wrapped.epk, KEYWRAP_STATIC_HKDF_SALT);
         const plain = await crypto.subtle.decrypt(
             { name: 'AES-GCM', iv: dmCrypto.base64ToBuf(wrapped.iv) },
             aesKey,

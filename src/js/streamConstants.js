@@ -37,9 +37,14 @@
  *   (public/password: public subscribe; gated: clone subscribe).
  *
  * KEYS STREAM (-4) — gated channels only:
- *   Single partition carrying the epoch-key protocol (KEY_ANNOUNCE / KEY_REQUEST /
- *   KEY_WRAP). Content on -1 is encrypted with a channel-wide epoch key versioned
- *   by `kid`; this stream is how members obtain those keys.
+ *   P0 carries the epoch-key protocol (KEY_ANNOUNCE / KEY_REQUEST / KEY_WRAP).
+ *   Content on -1 is encrypted with a channel-wide epoch key versioned by
+ *   `kid`; this stream is how members obtain those keys.
+ *   P1 carries the member roster (MEMBER_HELLO): one hello per member per
+ *   epoch, ALWAYS sealed with that epoch's key — the -4 resend is publicly
+ *   readable over HTTP, so a cleartext roster would be the worst membership
+ *   leak in the system. Channels created before P1 existed have a
+ *   single-partition -4 (capability = on-chain partition count).
  *   Permissions: members publish AND subscribe (any member may answer a request
  *   with a KEY_WRAP — k-of-n distribution). KEY_ANNOUNCE authority is app-layer:
  *   accepted only from the admin set (v1: channel owner), never inferred from
@@ -115,10 +120,11 @@ export const ADMIN_STREAM = Object.freeze({
 
 export const KEYS_STREAM = Object.freeze({
     SUFFIX: STREAM_SUFFIX.KEYS,
-    PARTITIONS: 1,
+    PARTITIONS: 2,
 
     // Partition indexes
-    KEY_EXCHANGE: 0       // KEY_ANNOUNCE, KEY_REQUEST, KEY_WRAP
+    KEY_EXCHANGE: 0,      // KEY_ANNOUNCE, KEY_REQUEST, KEY_WRAP
+    ROSTER: 1             // MEMBER_HELLO (epoch-sealed; channels created with a 2-partition -4 only)
 });
 
 /**
@@ -127,17 +133,33 @@ export const KEYS_STREAM = Object.freeze({
  *
  *   KEY_ANNOUNCE  admin only (app-layer check against the admin set):
  *                 { epoch, keyId, keyHash, validFrom }
- *   KEY_REQUEST   any member: { pubkey, fromEpoch, requestId } — `pubkey` is an
- *                 ephemeral per-request key (D12); wraps are addressed to it
- *   KEY_WRAP      any member holding the key:
- *                 { keyId, epoch, tag, requestId, wrapped }
- *                 tag = sha256(requestPubkey ‖ keyId); receivers verify
- *                 sha256(unwrapped) === announced keyHash before adopting
+ *   KEY_REQUEST   any member: { pubkey, fromEpoch, requestId, spk? } —
+ *                 `pubkey` is an ephemeral per-request key (D12); `spk` is the
+ *                 requester's STATIC account pubkey (the DM key), anchored to
+ *                 the account by the request's envelope signature; responders
+ *                 verify computeAddress(spk) === envelope signer before using it
+ *   KEY_WRAP      any member holding the key. Two formats:
+ *                 v1 (no `v`): { keyId, epoch, tag, requestId, epk, iv, ct }
+ *                 addressed to the request's ephemeral pubkey,
+ *                 tag = sha256(POMBO_WRAP_TAG_V1|requestPubkey|keyId) — dies
+ *                 with the requester's session (D12).
+ *                 v2 ({ v: 2 }): same fields, ECIES to the request's `spk`,
+ *                 tag = sha256(POMBO_WRAP_TAG_V2|requestId|keyId) — NEVER
+ *                 derived from the static key (that is the dictionary attack
+ *                 D12 killed); opens in any session of any device holding the
+ *                 account key, so retained requests answer asynchronously.
+ *                 Receivers verify sha256(unwrapped) === announced keyHash
+ *                 before adopting, both formats.
+ *   MEMBER_HELLO  roster entry on P1 (never P0), sealed with the epoch key:
+ *                 { account, spk, ts } — published on first adoption of each
+ *                 CURRENT epoch's key; readers require the envelope signer to
+ *                 equal `account` (no planting hellos for someone else)
  */
 export const KEYS_MSG_TYPE = Object.freeze({
     KEY_ANNOUNCE: 'key_announce',
     KEY_REQUEST: 'key_request',
-    KEY_WRAP: 'key_wrap'
+    KEY_WRAP: 'key_wrap',
+    MEMBER_HELLO: 'member_hello'
 });
 
 /**
