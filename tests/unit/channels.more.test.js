@@ -125,7 +125,7 @@ vi.mock('../../src/js/graph.js', () => ({
         getStreamMetadata: vi.fn(),
         getStreamMembers: vi.fn().mockResolvedValue({ ok: true, data: [] }),
         getStream: vi.fn().mockResolvedValue(null),
-        detectStreamType: vi.fn().mockResolvedValue('native'),
+        detectStreamType: vi.fn().mockResolvedValue('public'),
         clearCache: vi.fn()
     }
 }));
@@ -236,7 +236,7 @@ describe('ChannelManager - Additional Coverage', () => {
             streamrController.checkPermissions.mockResolvedValue({
                 canSubscribe: true, canPublish: true, isOwner: false
             });
-            graphAPI.detectStreamType.mockResolvedValue('native');
+            graphAPI.detectStreamType.mockResolvedValue('public');
             graphAPI.getStreamMembers.mockResolvedValue({
                 ok: true,
                 data: [
@@ -250,10 +250,8 @@ describe('ChannelManager - Additional Coverage', () => {
             const channel = await channelManager.joinChannel(streamId);
 
             expect(channel.messageStreamId).toBe(streamId);
-            expect(channel.type).toBe('native');
+            expect(channel.type).toBe('public');
             expect(channel.createdBy).toBe('0xowner');
-            expect(channel.members).toContain('0xowner');
-            expect(channel.members).toContain('0xmyaddress');
             expect(channelManager.channels.has(streamId)).toBe(true);
         });
 
@@ -270,7 +268,7 @@ describe('ChannelManager - Additional Coverage', () => {
             expect(secureStorage.addToChannelOrder).toHaveBeenCalledWith(streamId);
         });
 
-        it('handles Graph API failure gracefully', async () => {
+        it('rejects when Graph fails and no password identifies the type', async () => {
             streamrController.checkPermissions.mockResolvedValue({
                 canSubscribe: true, canPublish: true, isOwner: false
             });
@@ -278,11 +276,8 @@ describe('ChannelManager - Additional Coverage', () => {
             vi.spyOn(channelManager, 'saveChannels').mockResolvedValue(undefined);
             vi.spyOn(channelManager, 'subscribeToChannel').mockResolvedValue(undefined);
 
-            const channel = await channelManager.joinChannel(streamId);
-
-            // Falls back to 'native'
-            expect(channel.type).toBe('native');
-            expect(Logger.warn).toHaveBeenCalledWith(expect.stringContaining('Graph API failed'), expect.any(String));
+            await expect(channelManager.joinChannel(streamId))
+                .rejects.toThrow('Could not determine the channel type');
         });
 
         it('infers password type when Graph fails and password provided', async () => {
@@ -299,7 +294,7 @@ describe('ChannelManager - Additional Coverage', () => {
             expect(channel.password).toBe('mypassword');
         });
 
-        it('defaults unknown type to native without password', async () => {
+        it('rejects unknown type without password', async () => {
             streamrController.checkPermissions.mockResolvedValue({
                 canSubscribe: true, canPublish: true, isOwner: false
             });
@@ -307,9 +302,8 @@ describe('ChannelManager - Additional Coverage', () => {
             vi.spyOn(channelManager, 'saveChannels').mockResolvedValue(undefined);
             vi.spyOn(channelManager, 'subscribeToChannel').mockResolvedValue(undefined);
 
-            const channel = await channelManager.joinChannel(streamId);
-
-            expect(channel.type).toBe('native');
+            await expect(channelManager.joinChannel(streamId))
+                .rejects.toThrow('Could not determine the channel type');
         });
 
         it('defaults unknown type to password when password provided', async () => {
@@ -368,22 +362,21 @@ describe('ChannelManager - Additional Coverage', () => {
             }));
         });
 
-        it('auto-enables relay notifications for native channel', async () => {
+        it('auto-enables per-channel relay notifications for gated channel', async () => {
             relayManager.enabled = true;
             streamrController.checkPermissions.mockResolvedValue({
                 canSubscribe: true, canPublish: true, isOwner: false
             });
-            graphAPI.detectStreamType.mockResolvedValue('native');
             vi.spyOn(channelManager, 'saveChannels').mockResolvedValue(undefined);
             vi.spyOn(channelManager, 'subscribeToChannel').mockResolvedValue(undefined);
 
-            await channelManager.joinChannel(streamId);
+            await channelManager.joinChannel(streamId, null, { type: 'gated' });
 
             expect(relayManager.subscribeToNativeChannel).toHaveBeenCalledWith(streamId);
             relayManager.enabled = false;
         });
 
-        it('auto-enables relay notifications for non-native channel', async () => {
+        it('auto-enables relay notifications for public channel', async () => {
             relayManager.enabled = true;
             streamrController.checkPermissions.mockResolvedValue({
                 canSubscribe: true, canPublish: true, isOwner: false
@@ -435,7 +428,7 @@ describe('ChannelManager - Additional Coverage', () => {
             streamrController.checkPermissions.mockResolvedValue({
                 canSubscribe: true, canPublish: true, isOwner: false
             });
-            graphAPI.detectStreamType.mockResolvedValue('native');
+            graphAPI.detectStreamType.mockResolvedValue('public');
             vi.spyOn(channelManager, 'saveChannels').mockResolvedValue(undefined);
             vi.spyOn(channelManager, 'subscribeToChannel').mockResolvedValue(undefined);
 
@@ -450,7 +443,7 @@ describe('ChannelManager - Additional Coverage', () => {
             streamrController.checkPermissions.mockResolvedValue({
                 canSubscribe: true, canPublish: true, isOwner: false
             });
-            graphAPI.detectStreamType.mockResolvedValue('native');
+            graphAPI.detectStreamType.mockResolvedValue('public');
             vi.spyOn(channelManager, 'saveChannels').mockResolvedValue(undefined);
             vi.spyOn(channelManager, 'subscribeToChannel').mockResolvedValue(undefined);
 
@@ -465,7 +458,7 @@ describe('ChannelManager - Additional Coverage', () => {
             streamrController.checkPermissions.mockResolvedValue({
                 canSubscribe: true, canPublish: true, isOwner: false
             });
-            graphAPI.detectStreamType.mockResolvedValue('native');
+            graphAPI.detectStreamType.mockResolvedValue('public');
             vi.spyOn(channelManager, 'saveChannels').mockResolvedValue(undefined);
             vi.spyOn(channelManager, 'subscribeToChannel').mockResolvedValue(undefined);
 
@@ -480,7 +473,7 @@ describe('ChannelManager - Additional Coverage', () => {
             streamrController.checkPermissions.mockResolvedValue({
                 canSubscribe: true, canPublish: false, isOwner: false
             });
-            graphAPI.detectStreamType.mockResolvedValue('native');
+            graphAPI.detectStreamType.mockResolvedValue('public');
             vi.spyOn(channelManager, 'saveChannels').mockResolvedValue(undefined);
             vi.spyOn(channelManager, 'subscribeToChannel').mockResolvedValue(undefined);
 

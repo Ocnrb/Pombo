@@ -117,9 +117,9 @@ export const GasEstimator = {
             + 2 * this.GAS_UNITS.addStorageNode
             + 2 * this.GAS_UNITS.setStorageDayCount
         );
-        // Native adds the keys stream (-4, with storage):
+        // Gated adds the keys stream (-4, with storage):
         // 4× createStream + 4× setPermissionsBatch + 3× addStorageNode + 3× setStorageDayCount
-        const nativeCost = gasPrice * (
+        const gatedCost = gasPrice * (
             4 * this.GAS_UNITS.createStream
             + 4 * this.GAS_UNITS.setPermissionsBatch
             + 3 * this.GAS_UNITS.addStorageNode
@@ -136,13 +136,13 @@ export const GasEstimator = {
         return {
             public: publicCost,
             password: publicCost,
-            native: nativeCost,
+            gated: gatedCost,
             dmInbox: dmInboxCost,
             gasPrice: gasPrice,
             formatted: {
                 public: this.formatPOL(publicCost),
                 password: this.formatPOL(publicCost),
-                native: this.formatPOL(nativeCost),
+                gated: this.formatPOL(gatedCost),
                 dmInbox: this.formatPOL(dmInboxCost),
                 gasPrice: this.formatGwei(gasPrice)
             }

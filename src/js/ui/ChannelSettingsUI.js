@@ -20,7 +20,7 @@ class ChannelSettingsUI {
         this.elements = null;
         this.showDangerTab = false;
         this.showModerationTab = false;
-        this.showMembersTab = true; // Only for native channels
+        this.showMembersTab = true; // Only for gated channels
         this._mobileSubPanelOpen = null; // Track which sub-panel is open on mobile
         this._adminHandlerWired = false;
         this._currentModerationStreamId = null;
@@ -94,7 +94,7 @@ class ChannelSettingsUI {
         // Determine channel type. Gated channels (N-C) share the whole
         // Closed surface — member list, add/remove, notifications — the
         // difference is only where membership lives (gate contract vs grants).
-        const isNative = currentChannel.type === 'native' || !!currentChannel.gate?.address;
+        const isGated = !!currentChannel.gate?.address;
         
         // In preview mode: no admin permissions
         let canDelete = false;
@@ -114,7 +114,7 @@ class ChannelSettingsUI {
             });
             
             // Check if user can add members (owner OR has GRANT permission)
-            canAddMembers = isNative ? await channelManager.canAddMembers(currentChannel.streamId) : false;
+            canAddMembers = isGated ? await channelManager.canAddMembers(currentChannel.streamId) : false;
         }
 
         // Edit name permission:
@@ -127,7 +127,7 @@ class ChannelSettingsUI {
 
         // Show name section if there is a name to display, or if the user can edit it
         if (this.elements.channelNameSection) {
-            const showNameSection = channelName.trim() || currentChannel.type === 'dm' || isNative || canEditName;
+            const showNameSection = channelName.trim() || currentChannel.type === 'dm' || isGated || canEditName;
             this.elements.channelNameSection.classList.toggle('hidden', !showNameSection);
         }
 
@@ -154,17 +154,17 @@ class ChannelSettingsUI {
         
         // Show/hide description section in Info panel (only if description exists)
         const hasDescription = description.trim().length > 0;
-        this.elements.nonNativeMessage.classList.toggle('hidden', !hasDescription);
+        this.elements.descriptionSection.classList.toggle('hidden', !hasDescription);
         
         // Populate description display
         if (this.elements.channelDescriptionDisplay) {
             this.elements.channelDescriptionDisplay.textContent = description;
         }
 
-        // Show/hide members tab button for native channels only (and not in preview mode)
-        this.showMembersTab = isNative && !isPreviewMode;
+        // Show/hide members tab button for gated channels only (and not in preview mode)
+        this.showMembersTab = isGated && !isPreviewMode;
         const membersTabBtn = document.querySelector('[data-channel-tab="members"]');
-        membersTabBtn?.classList.toggle('hidden', !isNative || isPreviewMode);
+        membersTabBtn?.classList.toggle('hidden', !isGated || isPreviewMode);
         
         // Show/hide notifications tab in preview mode
         const notificationsTabBtn = document.querySelector('[data-channel-tab="notifications"]');
@@ -191,10 +191,10 @@ class ChannelSettingsUI {
                 } catch { /* unreadable gate — leave visible, the tx error is decoded anyway */ }
             }).catch(() => {});
         }
-        this.elements.permissionsSection?.classList.toggle('hidden', !canDelete || !isNative);
+        this.elements.permissionsSection?.classList.toggle('hidden', !canDelete || !isGated);
 
-        // Clear members list for non-native channels (prevents stale data)
-        if (!isNative && this.elements.membersList) {
+        // Clear members list for non-gated channels (prevents stale data)
+        if (!isGated && this.elements.membersList) {
             this.elements.membersList.innerHTML = '';
         }
 
@@ -239,8 +239,8 @@ class ChannelSettingsUI {
             this.initChannelNotificationsToggle(currentChannel.streamId);
         }
 
-        // Load members and permissions if native channel (not in preview mode)
-        if (isNative && !isPreviewMode) {
+        // Load members and permissions if gated channel (not in preview mode)
+        if (isGated && !isPreviewMode) {
             await this.loadMembers();
             if (canDelete) {
                 this.loadPermissions();
@@ -677,10 +677,10 @@ class ChannelSettingsUI {
 
         const { channelManager } = this.deps;
         const channel = channelManager.channels.get(streamId);
-        const isNative = channel?.type === 'native' || !!channel?.gate?.address;
+        const isGated = !!channel?.gate?.address;
         const pushEnabled = relayManager.enabled;
 
-        const isSubscribed = isNative
+        const isSubscribed = isGated
             ? relayManager.isNativeChannelSubscribed(streamId)
             : relayManager.isChannelSubscribed(streamId);
 
@@ -699,12 +699,12 @@ class ChannelSettingsUI {
                 this.deps.showNotification('Enable Push Notifications in Settings first', 'warning');
                 return;
             }
-            const nowSubscribed = isNative
+            const nowSubscribed = isGated
                 ? relayManager.isNativeChannelSubscribed(streamId)
                 : relayManager.isChannelSubscribed(streamId);
             const enable = !nowSubscribed;
             try {
-                if (isNative) {
+                if (isGated) {
                     if (enable) await relayManager.subscribeToNativeChannel(streamId);
                     else await relayManager.unsubscribeFromNativeChannel(streamId);
                 } else {
@@ -841,13 +841,13 @@ class ChannelSettingsUI {
         // Get channel type
         const { channelManager } = this.deps;
         const channel = channelManager.channels.get(streamId);
-        const isNative = channel?.type === 'native' || !!channel?.gate?.address;
+        const isGated = !!channel?.gate?.address;
 
         // Check if push notifications are enabled globally
         const pushEnabled = relayManager.enabled;
 
         // Check if this channel has notifications enabled (use appropriate method based on type)
-        const isSubscribed = isNative
+        const isSubscribed = isGated
             ? relayManager.isNativeChannelSubscribed(streamId)
             : relayManager.isChannelSubscribed(streamId);
         
@@ -928,12 +928,12 @@ class ChannelSettingsUI {
         
         // Get channel type
         const channel = channelManager.channels.get(streamId);
-        const isNative = channel?.type === 'native' || !!channel?.gate?.address;
+        const isGated = !!channel?.gate?.address;
 
         if (enable) {
             try {
                 // Use appropriate method based on channel type
-                const success = isNative
+                const success = isGated
                     ? await relayManager.subscribeToNativeChannel(streamId)
                     : await relayManager.subscribeToChannel(streamId);
                     
@@ -953,7 +953,7 @@ class ChannelSettingsUI {
             }
         } else {
             // Use appropriate method based on channel type
-            if (isNative) {
+            if (isGated) {
                 relayManager.unsubscribeFromNativeChannel(streamId);
             } else {
                 relayManager.unsubscribeFromChannel(streamId);
@@ -1139,7 +1139,7 @@ class ChannelSettingsUI {
      */
     async loadMembers() {
         const currentChannel = this.deps.channelManager.getCurrentChannel();
-        if (!currentChannel || (currentChannel.type !== 'native' && !currentChannel.gate?.address)) {
+        if (!currentChannel?.gate?.address) {
             return;
         }
 
@@ -1535,7 +1535,7 @@ class ChannelSettingsUI {
         const { channelManager } = this.deps;
         
         const currentChannel = channelManager.getCurrentChannel();
-        if (!currentChannel || (currentChannel.type !== 'native' && !currentChannel.gate?.address)) {
+        if (!currentChannel?.gate?.address) {
             return;
         }
 
@@ -1838,7 +1838,7 @@ class ChannelSettingsUI {
             const currentDescription = this.elements.channelDescriptionDisplay?.textContent || '';
             this.elements.channelSettingsDescriptionInput.value = currentDescription;
             // Section may be hidden when the channel has no description yet — unhide while editing
-            this.elements.nonNativeMessage?.classList.remove('hidden');
+            this.elements.descriptionSection?.classList.remove('hidden');
             this.elements.channelSettingsDescriptionInput.classList.remove('hidden');
             this.elements.channelDescriptionDisplay?.classList.add('hidden');
         }
@@ -1880,9 +1880,9 @@ class ChannelSettingsUI {
         this.elements.channelDescriptionDisplay?.classList.remove('hidden');
         // Re-hide the description section if there is still no description
         // (it was unhidden for editing on channels without one)
-        if (this._editingDescription && this.elements.nonNativeMessage) {
+        if (this._editingDescription && this.elements.descriptionSection) {
             const hasDescription = (this.elements.channelDescriptionDisplay?.textContent || '').trim().length > 0;
-            this.elements.nonNativeMessage.classList.toggle('hidden', !hasDescription);
+            this.elements.descriptionSection.classList.toggle('hidden', !hasDescription);
         }
         // Hide actions
         if (this.elements.channelEditActions) {

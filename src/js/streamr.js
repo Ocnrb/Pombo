@@ -338,12 +338,11 @@ class StreamrController {
      * 
      * @param {string} channelName - Name of the channel
      * @param {string} creatorAddress - Creator's Ethereum address
-     * @param {string} type - Channel type: 'public', 'password', 'native'
-     * @param {string[]} members - Array of member addresses (for native channels)
+     * @param {string} type - Channel type: 'public', 'password', 'gated'
      * @param {Object} options - Additional options { exposure: 'visible'|'hidden' }
      * @returns {Promise<Object>} - Stream info with messageStreamId, ephemeralStreamId, adminStreamId
      */
-    async createStream(channelName, creatorAddress, type = 'public', members = [], options = {}) {
+    async createStream(channelName, creatorAddress, type = 'public', options = {}) {
         if (!this.client) {
             throw new Error('Streamr client not initialized');
         }
@@ -355,14 +354,14 @@ class StreamrController {
         const randomHash = cryptoManager.generateRandomHex(8);
         const baseStreamPath = `${ownerAddress}/${randomHash}`;
         
-        // Stream IDs (triple-stream; native channels add a 4th for epoch keys)
+        // Stream IDs (triple-stream; gated channels add a 4th for epoch keys)
         const messageStreamId = `${baseStreamPath}-1`;
         const ephemeralStreamId = `${baseStreamPath}-2`;
         const adminStreamId = `${baseStreamPath}-3`;
         const keysStreamId = `${baseStreamPath}-4`;
 
         // Build metadata for The Graph indexing (abbreviated keys per MIGRATION_PLAN)
-        // Native channels are always hidden; others default to hidden unless specified
+        // Channels default to hidden unless specified
         // NOTE: declared outside the try block because the recovery path in the
         // catch handler also needs readOnly/ephemeralMetadata (scoping bug fix)
         const exposure = options.exposure || 'hidden';
@@ -371,7 +370,7 @@ class StreamrController {
             a: 'pombo',           // app
             v: '1',               // version
             n: exposure === 'hidden' ? null : channelName,  // name
-            t: type,              // type: public|password|native|gated
+            t: type,              // type: public|password|gated
             e: exposure,          // exposure: visible|hidden
             r: readOnly,          // readOnly
             // Gated channels (N-C): the PomboGate clone address. Joiners and
@@ -446,7 +445,7 @@ class StreamrController {
             
             // Optional progress callback — invoked once after each successful on-chain step
             // (public/password: 3 createStream + 3 setPermissions = 6 invocations;
-            //  native adds the keys stream: 4 createStream + 4 setPermissions = 8).
+            //  gated adds the keys stream: 4 createStream + 4 setPermissions = 8).
             const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
 
             // Step 1: Create MESSAGE STREAM first (sequential to avoid nonce conflicts)
@@ -466,11 +465,11 @@ class StreamrController {
             const adminStream = await createStreamWithRetry(adminStreamId, adminMetadata, 'admin', STREAM_CONFIG.ADMIN_STREAM.PARTITIONS);
             try { onProgress(); } catch (_) { /* see above */ }
 
-            // Step 3b: Create KEYS STREAM (native channels only — epoch-key distribution).
+            // Step 3b: Create KEYS STREAM (gated channels only — epoch-key distribution).
             // Lives outside -3 on purpose: any member must be able to publish
             // KEY_REQUEST/KEY_WRAP here, while -3 stays owner-only publish.
             let keysStream = null;
-            if (type === 'native' || type === 'gated') {
+            if (type === 'gated') {
                 Logger.info('Creating keys stream...');
                 keysStream = await createStreamWithRetry(keysStreamId, keysMetadata, 'keys', STREAM_CONFIG.KEYS_STREAM.PARTITIONS);
                 try { onProgress(); } catch (_) { /* see above */ }
@@ -529,55 +528,6 @@ class StreamrController {
                 const permTime = ((Date.now() - permStartTime) / 1000).toFixed(1);
                 Logger.info(`Permissions configured in ${permTime}s`);
                 
-            } else if (type === 'native') {
-                // Sequential to avoid nonce conflicts
-                try {
-                    await this.setStreamPermissions(messageStream.id, { public: false, members });
-                    Logger.info('✓ Message stream: permissions set');
-                } catch (e) {
-                    Logger.error('✗ Message stream permissions failed:', e.message);
-                } finally {
-                    try { onProgress(); } catch (_) { /* ignore */ }
-                }
-                
-                try {
-                    await this.setStreamPermissions(ephemeralStream.id, { public: false, members });
-                    Logger.info('✓ Ephemeral stream: permissions set');
-                } catch (e) {
-                    Logger.error('✗ Ephemeral stream permissions failed:', e.message);
-                } finally {
-                    try { onProgress(); } catch (_) { /* ignore */ }
-                }
-
-                // Admin stream: members get SUBSCRIBE only (no publish); owner publishes by ownership
-                try {
-                    await this.setStreamPermissions(adminStream.id, {
-                        public: false,
-                        members,
-                        memberPermissions: ['subscribe']
-                    });
-                    Logger.info('✓ Admin stream: members subscribe-only permissions set');
-                } catch (e) {
-                    Logger.error('✗ Admin stream permissions failed:', e.message);
-                } finally {
-                    try { onProgress(); } catch (_) { /* ignore */ }
-                }
-
-                // Keys stream: members publish AND subscribe — any member may
-                // answer a KEY_REQUEST with a KEY_WRAP (k-of-n distribution)
-                if (keysStream) {
-                    try {
-                        await this.setStreamPermissions(keysStream.id, { public: false, members });
-                        Logger.info('✓ Keys stream: permissions set');
-                    } catch (e) {
-                        Logger.error('✗ Keys stream permissions failed:', e.message);
-                    } finally {
-                        try { onProgress(); } catch (_) { /* ignore */ }
-                    }
-                }
-
-                const permTime = ((Date.now() - permStartTime) / 1000).toFixed(1);
-                Logger.info(`Permissions configured in ${permTime}s`);
             } else if (type === 'gated') {
                 // ONE grantee for every stream: the gate clone (N-C, Q7). No
                 // per-member grants ever — members prove access through the
@@ -588,9 +538,8 @@ class StreamrController {
                 // Members read moderation through it (erc1271 subscribe), but
                 // PUBLISH stays the owner's — the creator keeps their registry
                 // permissions — so the transport enforces owner-only admin
-                // writes exactly like native channels. The owner publishes -3
-                // as the ACCOUNT; their address is the streamId prefix, so
-                // this leaks nothing new.
+                // writes. The owner publishes -3 as the ACCOUNT; their address
+                // is the streamId prefix, so this leaks nothing new.
                 const gateMembers = [options.gateAddress];
                 for (const [stream, label] of [
                     [messageStream, 'Message'],
@@ -677,11 +626,6 @@ class StreamrController {
                         if (existingEphemeralStream) {
                             await ephemeralGrantFn(existingEphemeralStream).catch(e => Logger.warn('Ephemeral perm error:', e.message));
                         }
-                    } else if (type === 'native') {
-                        await this.setStreamPermissions(messageStreamId, { public: false, members }).catch(e => Logger.warn('Perm error:', e.message));
-                        if (existingEphemeralStream) {
-                            await this.setStreamPermissions(ephemeralStreamId, { public: false, members }).catch(e => Logger.warn('Perm error:', e.message));
-                        }
                     }
                     
                     // If both streams exist, return success
@@ -706,8 +650,6 @@ class StreamrController {
                         
                         if (type === 'public' || type === 'password') {
                             await ephemeralGrantFn(newEphemeralStream).catch(e => Logger.warn('Ephemeral perm error:', e.message));
-                        } else if (type === 'native') {
-                            await this.setStreamPermissions(ephemeralStreamId, { public: false, members }).catch(e => Logger.warn('Perm error:', e.message));
                         }
                         
                         Logger.info('✓ Ephemeral stream created successfully on retry');
@@ -1353,117 +1295,6 @@ class StreamrController {
     }
 
     /**
-     * Grant permissions to specific addresses (for native private channels)
-     * Uses client.setPermissions for batch operation (single transaction)
-     * @param {string} streamId - Stream ID
-     * @param {string[]} addresses - Array of Ethereum addresses
-     * @param {number} retries - Number of retry attempts
-     */
-    async grantPermissionsToAddresses(streamId, addresses, retries = 7) {
-        if (!this.client) {
-            throw new Error('Streamr client not initialized');
-        }
-
-        if (!addresses || addresses.length === 0) {
-            Logger.debug('No addresses to grant permissions to');
-            return;
-        }
-
-        // Build assignments array for batch update
-        const assignments = [];
-        for (const address of addresses) {
-            // Normalize to lowercase (Streamr uses lowercase internally)
-            const normalizedAddress = address.toLowerCase();
-            assignments.push({
-                userId: normalizedAddress,
-                permissions: ['subscribe', 'publish']
-            });
-        }
-
-        await executeWithRetry('grantPermissionsToAddresses', async () => {
-            await this.client.setPermissions({
-                streamId: streamId,
-                assignments: assignments
-            });
-            Logger.info('All permissions granted to addresses:', addresses);
-        }, { maxRetries: retries });
-    }
-
-    /**
-     * Revoke permissions from specific addresses for a stream
-     * Uses client.setPermissions with empty permissions array
-     * @param {string} streamId - Stream ID
-     * @param {string[]} addresses - Array of Ethereum addresses
-     * @param {number} retries - Number of retry attempts
-     */
-    async revokePermissionsFromAddresses(streamId, addresses, retries = 7) {
-        if (!this.client) {
-            throw new Error('Streamr client not initialized');
-        }
-
-        if (!addresses || addresses.length === 0) {
-            Logger.debug('No addresses to revoke permissions from');
-            return;
-        }
-
-        // Build assignments array with empty permissions (revoke all)
-        const assignments = [];
-        for (const address of addresses) {
-            // Normalize to lowercase
-            const normalizedAddress = address.toLowerCase();
-            assignments.push({
-                userId: normalizedAddress,
-                permissions: [] // Empty array revokes all permissions
-            });
-        }
-
-        await executeWithRetry('revokePermissionsFromAddresses', async () => {
-            await this.client.setPermissions({
-                streamId: streamId,
-                assignments: assignments
-            });
-            Logger.debug('Permissions revoked from addresses:', addresses);
-        }, { maxRetries: retries });
-    }
-
-    /**
-     * Update specific permissions for an address
-     * @param {string} streamId - Stream ID
-     * @param {string} address - User address
-     * @param {Object} permissions - { canGrant: boolean }
-     * @param {number} retries - Number of retry attempts
-     */
-    async updatePermissions(streamId, address, permissionsToSet, retries = 7) {
-        if (!this.client) {
-            throw new Error('Streamr client not initialized');
-        }
-
-        // Validate address
-        if (!address || typeof address !== 'string' || !address.match(/^0x[a-fA-F0-9]{40}$/)) {
-            throw new Error('Invalid Ethereum address: ' + address);
-        }
-
-        // Normalize to lowercase (Streamr uses lowercase internally)
-        const normalizedAddress = address.toLowerCase();
-        Logger.debug('Updating permissions for:', normalizedAddress, 'canGrant:', permissionsToSet.canGrant);
-
-        const newPermissions = permissionsToSet.canGrant 
-            ? ['subscribe', 'publish', 'grant']
-            : ['subscribe', 'publish'];
-
-        await executeWithRetry('updatePermissions', async () => {
-            await this.client.setPermissions({
-                streamId: streamId,
-                assignments: [{
-                    userId: normalizedAddress,
-                    permissions: newPermissions
-                }]
-            });
-            Logger.debug(`Permissions updated for ${normalizedAddress}`);
-        }, { maxRetries: retries });
-    }
-
-    /**
      * Get list of addresses with permissions on a stream
      * @param {string} streamId - Stream ID
      * @returns {Promise<Array>} - Array of permission objects
@@ -1909,8 +1740,8 @@ class StreamrController {
             }
 
             if (keysStreamId) {
-                // Keys stream exists only on native/gated channels; the
-                // idempotent "already gone" path absorbs every other type.
+                // Keys stream exists only on gated channels; the idempotent
+                // "already gone" path absorbs every other type.
                 await deleteWithRetry(keysStreamId, 'keys stream');
             }
 
@@ -2154,12 +1985,12 @@ class StreamrController {
                 'an ephemeral key holds no on-chain permission. See D3.');
         }
 
-        // Native and read-only channels keep the PRIMARY identity on the base
-        // path (D3): their publish grant is on-chain — per member address for
-        // native, owner-only for read-only — and a throwaway key holds none,
+        // Gated and read-only channels keep the PRIMARY identity on the base
+        // path (D3): their publish grant is on-chain — the gate clone for
+        // gated, owner-only for read-only — and a throwaway key holds none,
         // so an ephemeral publish is rejected network-wide.
         //
-        // NATIVE channels encrypt with the channel's EPOCH KEY (N-A) and go
+        // GATED channels encrypt with the channel's EPOCH KEY (N-A) and go
         // out via publishAs with encryptionType NONE — the SDK's group-key
         // layer is exactly the per-publisher, publisher-must-be-online
         // dependency the epoch protocol replaces. Fail-closed: no epoch key
@@ -2180,14 +2011,14 @@ class StreamrController {
         if (channelManager?.usesAccountPublish?.(streamId)) {
             const base = String(streamId).replace(/-[1234]$/, '');
             const channel = channelManager.channels?.get(base + '-1');
-            if (channel?.type === 'native' || channel?.type === 'gated' || channel?.gate?.address) {
+            if (channel?.type === 'gated' || channel?.gate?.address) {
                 // Errors here MUST propagate: falling through to the ephemeral
                 // path would put an unencrypted payload under a key that holds
                 // no grant. Loud failure over silent leak.
                 //
-                // Gated channels take this same path: epoch encryption plus,
-                // inside publishEpochEncrypted, the ERC-1271 transport (the
-                // account signs, the gate clone is the on-wire publisher).
+                // Epoch encryption plus, inside publishEpochEncrypted, the
+                // ERC-1271 transport (the account signs, the gate clone is
+                // the on-wire publisher).
                 return this.publishEpochEncrypted(channel, streamId, partition, data);
             }
             return this.publish(streamId, partition, data, password);
@@ -2348,16 +2179,16 @@ class StreamrController {
     }
 
     /**
-     * Publish a native-channel payload encrypted with the current epoch key.
+     * Publish a gated-channel payload encrypted with the current epoch key.
      *
      * Wire envelope: { e: 'epoch-aes-gcm', k: <kid>, ct, iv } — `k` in the
      * clear is what lets receivers pick the key (and history readers filter
      * what they cannot open) without trial decryption.
      *
-     * Fail-closed: without a current epoch key this THROWS. A native channel
-     * has no legitimate plaintext path and no SDK-keyed path anymore.
+     * Fail-closed: without a current epoch key this THROWS. A gated channel
+     * has no legitimate plaintext path and no SDK-keyed path.
      *
-     * @param {Object} channel - Channel object (native)
+     * @param {Object} channel - Channel object (gated)
      * @param {string} streamId - Target stream (-1 or -2 of this channel)
      * @param {number} partition
      * @param {Object} data - Plaintext payload
@@ -2379,7 +2210,7 @@ class StreamrController {
         }
         if (!key) {
             throw new Error(
-                `No epoch key for ${channel.messageStreamId} — cannot publish on a native channel without one (waiting for KEY_WRAP)`);
+                `No epoch key for ${channel.messageStreamId} — cannot publish on a gated channel without one (waiting for KEY_WRAP)`);
         }
 
         const payload = stripLocalFields(data);
@@ -2396,12 +2227,12 @@ class StreamrController {
      * Publish a binary MEDIA_DATA frame sealed with the current epoch key.
      *
      * The binary sibling of publishEpochEncrypted, with the same identity
-     * rules: the account is the on-wire publisher on native (its grant is
-     * per-member), the gate clone on gated (ERC-1271) — a channel-ephemeral
-     * key holds no grant on either, so the channel pseudonym cannot carry
-     * epoch pieces. Same fail-closed stance: no epoch key means NO publish.
+     * rules: the gate clone is the on-wire publisher (ERC-1271) — a
+     * channel-ephemeral key holds no grant, so the channel pseudonym cannot
+     * carry epoch pieces. Same fail-closed stance: no epoch key means NO
+     * publish.
      *
-     * @param {Object} channel - Channel object (native/gated)
+     * @param {Object} channel - Channel object (gated)
      * @param {string} ephemeralStreamId - The channel's -2 stream
      * @param {Uint8Array} data - Plaintext binary frame
      * @returns {Promise<Object>} The published StreamMessage
@@ -2477,7 +2308,6 @@ class StreamrController {
      * Gated channels publish as the GATE CLONE with an ERC-1271 signature —
      * the account key signs the envelope, the clone is the on-wire publisher,
      * and receivers recover authorship from that signature (resolveAuthor).
-     * Native channels return {} and keep the account as publisher (D3).
      *
      * The admin stream (-3) is the exception even in gated channels: its only
      * legitimate writer is the owner, whose address is already the streamId
@@ -2779,19 +2609,18 @@ class StreamrController {
             // Date.now() and drift the window.
             return { timestamp: msg.messageId.timestamp, message: msg };
         }
-        // Epoch channels (native/gated): client.publish on a members-only
-        // stream would wrap the chunk in the SDK's group-key AES — the HTTP
-        // hex reader then returns ciphertext, and the group-key exchange is
-        // the very publisher-online dependency the epoch protocol replaces.
-        // publishAs sends encryptionType NONE (the chunk is already epoch-
-        // sealed); native rides the account (per-member grant), gated the
-        // clone — so verify must expect the GATE address for gated rows.
+        // Gated channels: client.publish on a members-only stream would wrap
+        // the chunk in the SDK's group-key AES — the HTTP hex reader then
+        // returns ciphertext, and the group-key exchange is the very
+        // publisher-online dependency the epoch protocol replaces. publishAs
+        // sends encryptionType NONE (the chunk is already epoch-sealed) under
+        // the clone — so verify must expect the GATE address for gated rows.
         let channelManager = null;
         try { ({ channelManager } = await import('./channels.js')); } catch { /* early boot */ }
         if (channelManager?.usesAccountPublish?.(messageStreamId)) {
             const base = String(messageStreamId).replace(/-[1234]$/, '');
             const channel = channelManager.channels?.get(base + '-1');
-            if (channel?.type === 'native' || channel?.type === 'gated' || channel?.gate?.address) {
+            if (channel?.type === 'gated' || channel?.gate?.address) {
                 const msg = await this.publishAs(
                     this._accountIdentity, messageStreamId, partition, data,
                     this._gateTransportOptions(channel));
@@ -2919,17 +2748,14 @@ class StreamrController {
      */
     async publishAdminState(adminStreamId, state, password = null) {
         Logger.debug('publishAdminState called - sending to adminStream partition 0:', { adminStreamId, rev: state?.rev });
-        // NATIVE channels: epoch envelope + account + NONE. The SDK's group-key
-        // layer on -3 was the LAST publisher-online dependency native channels
-        // had — measured on Android as 20s+ key-exchange timeouts per row and
-        // moderation that never landed. Members hold the epoch key; the -3
-        // owner-only publish permission is still enforced on-chain (the
-        // account signs).
+        // GATED channels: epoch envelope + account + NONE. Members hold the
+        // epoch key; the -3 owner-only publish permission is still enforced
+        // on-chain (the account signs).
         try {
             const { channelManager } = await import('./channels.js');
             const base = String(adminStreamId).replace(/-[1234]$/, '');
             const channel = channelManager.channels?.get(base + '-1');
-            if (channel?.type === 'native' || channel?.type === 'gated' || channel?.gate?.address) {
+            if (channel?.type === 'gated' || channel?.gate?.address) {
                 // -3 publishes as the ACCOUNT on gated too (_gateTransportOptions):
                 // owner-only writes are the transport's job again. resolveAuthor
                 // keeps validating clone-published -3 for pre-switch history.
@@ -3006,7 +2832,7 @@ class StreamrController {
                             continue;
                         }
                     }
-                    // Native: ADMIN_STATE arrives as an epoch envelope (N-A)
+                    // Gated: ADMIN_STATE arrives as an epoch envelope (N-A)
                     if (this.isEpochEnvelope(content)) {
                         const opened = await this.openEpochEnvelope(adminStreamId, content);
                         if (opened === null) continue;
@@ -3070,7 +2896,7 @@ class StreamrController {
             rev: payload?.rev,
             encrypted: !!password
         });
-        // Native: epoch envelope, same reason as publishAdminState — without
+        // Gated: epoch envelope, same reason as publishAdminState — without
         // it the SDK forces AES on the members-only -3 and the image never
         // opens for anyone who cannot reach the owner's group key.
         try {
@@ -3092,7 +2918,7 @@ class StreamrController {
                 }
                 return await this.publish(adminStreamId, STREAM_CONFIG.ADMIN_STREAM.CHANNEL_IMAGE, clear);
             }
-            if (channel?.type === 'native' || channel?.type === 'gated' || channel?.gate?.address) {
+            if (channel?.type === 'gated' || channel?.gate?.address) {
                 return await this.publishEpochEncrypted(
                     channel, adminStreamId, STREAM_CONFIG.ADMIN_STREAM.CHANNEL_IMAGE, payload);
             }
@@ -3159,7 +2985,7 @@ class StreamrController {
                             continue;
                         }
                     }
-                    // Native: CHANNEL_IMAGE arrives as an epoch envelope (N-A)
+                    // Gated: CHANNEL_IMAGE arrives as an epoch envelope (N-A)
                     if (this.isEpochEnvelope(content)) {
                         const opened = await this.openEpochEnvelope(adminStreamId, content);
                         if (opened === null) continue;
@@ -3542,7 +3368,7 @@ class StreamrController {
                 if (password && typeof content === 'string') {
                     data = await cryptoManager.decryptJSON(content, password);
                 }
-                // Native channels: epoch-encrypted envelope (N-A). Unknown kid
+                // Gated channels: epoch-encrypted envelope (N-A). Unknown kid
                 // is NOT an error — skip; storage-backed messages come back via
                 // the refresh fired when the key is adopted.
                 if (this.isEpochEnvelope(data)) {
@@ -4232,7 +4058,7 @@ class StreamrController {
                         ? message.getTimestamp()
                         : message.timestamp;
 
-                    // Epoch envelope (native): unknown kid → skip, not error (§7.9)
+                    // Epoch envelope (gated): unknown kid → skip, not error (§7.9)
                     if (this.isEpochEnvelope(content)) {
                         const opened = await this.openEpochEnvelope(messageStreamId, content,
                             { live: false, timestamp: historyTimestamp });
@@ -4496,7 +4322,7 @@ class StreamrController {
                     data = await cryptoManager.decryptJSON(content, password);
                 }
 
-                // Epoch envelope (native): unknown kid → skip, not error (§7.9)
+                // Epoch envelope (gated): unknown kid → skip, not error (§7.9)
                 if (this.isEpochEnvelope(data)) {
                     const opened = await this.openEpochEnvelope(streamId, data, {
                         live: true,
@@ -4697,7 +4523,7 @@ class StreamrController {
                         ? message.getTimestamp()
                         : message.timestamp;
 
-                    // Epoch envelope (native): unknown kid → skip, not error (§7.9)
+                    // Epoch envelope (gated): unknown kid → skip, not error (§7.9)
                     if (this.isEpochEnvelope(content)) {
                         const opened = await this.openEpochEnvelope(streamId, content,
                             { live: false, timestamp: historyTimestamp });

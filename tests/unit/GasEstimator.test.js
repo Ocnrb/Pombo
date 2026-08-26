@@ -178,16 +178,16 @@ describe('GasEstimator', () => {
             expect(costs.public).toBe(expectedCost);
         });
 
-        it('should calculate native channel cost', async () => {
+        it('should calculate gated channel cost', async () => {
             const costs = await GasEstimator.estimateCosts();
             
-            // Native adds the keys stream (-4, with storage):
+            // Gated adds the keys stream (-4, with storage):
             // 4× createStream + 4× setPermissionsBatch
             // + 3× addStorageNode + 3× setStorageDayCount
             const expectedGas = 4 * 420000 + 4 * 210000 + 3 * 165000 + 3 * 50000;
             const expectedCost = 30 * 1e9 * expectedGas;
             
-            expect(costs.native).toBe(expectedCost);
+            expect(costs.gated).toBe(expectedCost);
         });
 
         it('should have password cost equal to public cost', async () => {
@@ -211,7 +211,7 @@ describe('GasEstimator', () => {
             
             expect(costs.formatted.public).toContain('POL');
             expect(costs.formatted.password).toContain('POL');
-            expect(costs.formatted.native).toContain('POL');
+            expect(costs.formatted.gated).toContain('POL');
             expect(costs.formatted.dmInbox).toContain('POL');
             expect(costs.formatted.gasPrice).toContain('gwei');
         });

@@ -160,8 +160,8 @@ class ChannelModalsUI {
         const costPublic = document.getElementById('cost-public');
         const costPassword = document.getElementById('cost-password');
         // Every gate-backed tab (Closed/Gated/Paid) deploys the same clone
-        // and stream set — they share the 'native' cost bucket.
-        const costGated = ['cost-native', 'cost-gated', 'cost-paid']
+        // and stream set — they share the gated cost bucket.
+        const costGated = ['cost-closed', 'cost-gated', 'cost-paid']
             .map((id) => document.getElementById(id)).filter(Boolean);
 
         try {
@@ -177,7 +177,7 @@ class ChannelModalsUI {
                 costPassword.dataset.tooltip = tooltipText;
             }
             for (const el of costGated) {
-                el.textContent = estimates.formatted.native;
+                el.textContent = estimates.formatted.gated;
                 el.dataset.tooltip = tooltipText;
             }
         } catch (error) {
@@ -217,15 +217,15 @@ class ChannelModalsUI {
         
         // Show/hide type-specific fields
         const passwordSection = document.getElementById('password-field-section');
-        const nativeSection = document.getElementById('native-fields-section');
+        const closedSection = document.getElementById('closed-fields-section');
         const gatedSection = document.getElementById('gated-fields-section');
         const paidSection = document.getElementById('paid-fields-section');
 
         if (passwordSection) {
             passwordSection.classList.toggle('hidden', tabType !== 'password');
         }
-        if (nativeSection) {
-            nativeSection.classList.toggle('hidden', tabType !== 'native');
+        if (closedSection) {
+            closedSection.classList.toggle('hidden', tabType !== 'closed');
         }
         if (gatedSection) {
             gatedSection.classList.toggle('hidden', tabType !== 'gated');
@@ -241,8 +241,8 @@ class ChannelModalsUI {
         const activeCost = document.getElementById(`cost-${tabType}`);
         if (activeCost) activeCost.classList.remove('hidden');
 
-        // Native (Closed) channels: hide exposure section entirely
-        if (tabType === 'native') {
+        // Closed channels: hide exposure section entirely
+        if (tabType === 'closed') {
             this.setVisibility(false);
             this.elements.exposureSection?.classList.add('hidden');
         } else {
@@ -572,7 +572,7 @@ class ChannelModalsUI {
         // Update modal title based on channel type
         const modalTitle = document.querySelector('#join-closed-channel-modal h3');
         if (modalTitle) {
-            if (channelInfo?.type === 'native' || channelInfo?.type === 'gated') {
+            if (channelInfo?.type === 'gated') {
                 modalTitle.textContent = 'Join Closed Channel';
             } else if (channelInfo) {
                 modalTitle.textContent = 'Name This Channel';
@@ -903,11 +903,10 @@ class ChannelModalsUI {
         // Every non-public tab is gate-backed (N-C, Q7): membership lives in a
         // per-channel PomboGate clone and the tab only picks the mode — Closed
         // is NONE (owner allowlist), Gated is TOKEN/NFT holding, Paid is a
-        // subscription (N-D). Legacy 'native' channels keep working but can no
-        // longer be created.
+        // subscription (N-D).
         const { gateManager, GATE_MODE } = await import('../gate.js');
         let gateMode = null;
-        if (type === 'native') {
+        if (type === 'closed') {
             type = 'gated';
             gateMode = GATE_MODE.NONE;
         } else if (type === 'gated') {
@@ -1061,7 +1060,7 @@ class ChannelModalsUI {
                     GasEstimator.estimateCosts()
                 ]);
                 const estimateWei = isGated ? estimates.native : estimates.public;
-                const formattedEstimate = isGated ? estimates.formatted.native : estimates.formatted.public;
+                const formattedEstimate = isGated ? estimates.formatted.gated : estimates.formatted.public;
                 const formattedBalance = GasEstimator.formatBalancePOL(balanceWei);
 
                 if (balanceWei === null) {

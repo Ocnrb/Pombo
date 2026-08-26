@@ -651,84 +651,6 @@ describe('StreamrController Core', () => {
     });
 
     // ==================== grantPermissionsToAddresses() ====================
-    describe('grantPermissionsToAddresses()', () => {
-        it('should throw if client is null', async () => {
-            streamrController.client = null;
-            await expect(streamrController.grantPermissionsToAddresses('s', ['0x1']))
-                .rejects.toThrow('Streamr client not initialized');
-        });
-
-        it('should do nothing for empty addresses array', async () => {
-            await streamrController.grantPermissionsToAddresses('s', []);
-            expect(mockClient.setPermissions).not.toHaveBeenCalled();
-        });
-
-        it('should grant subscribe+publish to each address', async () => {
-            await streamrController.grantPermissionsToAddresses('s', ['0xABC', '0xDEF']);
-            const call = mockClient.setPermissions.mock.calls[0][0];
-            expect(call.assignments).toHaveLength(2);
-            expect(call.assignments[0]).toEqual({
-                userId: '0xabc',
-                permissions: ['subscribe', 'publish']
-            });
-        });
-    });
-
-    // ==================== revokePermissionsFromAddresses() ====================
-    describe('revokePermissionsFromAddresses()', () => {
-        it('should throw if client is null', async () => {
-            streamrController.client = null;
-            await expect(streamrController.revokePermissionsFromAddresses('s', ['0x1']))
-                .rejects.toThrow('Streamr client not initialized');
-        });
-
-        it('should do nothing for empty addresses', async () => {
-            await streamrController.revokePermissionsFromAddresses('s', []);
-            expect(mockClient.setPermissions).not.toHaveBeenCalled();
-        });
-
-        it('should revoke with empty permissions array', async () => {
-            await streamrController.revokePermissionsFromAddresses('s', ['0xABC']);
-            const call = mockClient.setPermissions.mock.calls[0][0];
-            expect(call.assignments[0]).toEqual({
-                userId: '0xabc',
-                permissions: []
-            });
-        });
-    });
-
-    // ==================== updatePermissions() ====================
-    describe('updatePermissions()', () => {
-        it('should throw if client is null', async () => {
-            streamrController.client = null;
-            await expect(streamrController.updatePermissions('s', '0x1234567890123456789012345678901234567890', { canGrant: true }))
-                .rejects.toThrow('Streamr client not initialized');
-        });
-
-        it('should throw for invalid address', async () => {
-            await expect(streamrController.updatePermissions('s', 'invalid', { canGrant: true }))
-                .rejects.toThrow('Invalid Ethereum address');
-        });
-
-        it('should grant subscribe+publish+grant when canGrant=true', async () => {
-            await streamrController.updatePermissions('s', '0x1234567890123456789012345678901234567890', { canGrant: true });
-            const call = mockClient.setPermissions.mock.calls[0][0];
-            expect(call.assignments[0].permissions).toEqual(['subscribe', 'publish', 'grant']);
-        });
-
-        it('should grant only subscribe+publish when canGrant=false', async () => {
-            await streamrController.updatePermissions('s', '0x1234567890123456789012345678901234567890', { canGrant: false });
-            const call = mockClient.setPermissions.mock.calls[0][0];
-            expect(call.assignments[0].permissions).toEqual(['subscribe', 'publish']);
-        });
-
-        it('should normalize address to lowercase', async () => {
-            await streamrController.updatePermissions('s', '0xABCDEF1234567890123456789012345678901234', { canGrant: false });
-            const call = mockClient.setPermissions.mock.calls[0][0];
-            expect(call.assignments[0].userId).toBe('0xabcdef1234567890123456789012345678901234');
-        });
-    });
-
     // ==================== getStreamPermissions() ====================
     describe('getStreamPermissions()', () => {
         it('should throw if client is null', async () => {
@@ -1560,7 +1482,7 @@ describe('StreamrController Core', () => {
         });
 
         it('should delete all four streams (message -1, ephemeral -2, admin -3, keys -4)', async () => {
-            // -4 exists only on native/gated channels, but deletion is
+            // -4 exists only on gated channels, but deletion is
             // unconditional: the idempotent "already gone" path absorbs the
             // other types, and skipping it is what used to orphan -4 streams.
             await streamrController.deleteStream('owner/stream-1');
@@ -1634,21 +1556,6 @@ describe('StreamrController Core', () => {
             expect(mockClient.setPermissions).toHaveBeenCalled();
         });
 
-        it('should use setStreamPermissions for native channels', async () => {
-            const mockMsg = { id: '0xmyaddress/abcd1234-1' };
-            const mockEph = { id: '0xmyaddress/abcd1234-2' };
-            let callCount = 0;
-            executeWithRetryAndVerify.mockImplementation(async (name, fn) => {
-                callCount++;
-                if (callCount === 1) return mockMsg;
-                return mockEph;
-            });
-
-            await streamrController.createStream('Private', '0xowner', 'native', ['0xmember1']);
-            // setPermissions called via setStreamPermissions
-            expect(mockClient.setPermissions).toHaveBeenCalled();
-        });
-
         it('should use read-only permissions for readOnly channels', async () => {
             const mockMsg = { id: '0xmyaddress/abcd1234-1' };
             const mockEph = { id: '0xmyaddress/abcd1234-2' };
@@ -1659,7 +1566,7 @@ describe('StreamrController Core', () => {
                 return mockEph;
             });
 
-            await streamrController.createStream('ReadOnly', '0xowner', 'public', [], { readOnly: true });
+            await streamrController.createStream('ReadOnly', '0xowner', 'public', { readOnly: true });
             // First perm call is read-only (subscribe only)
             const firstPermCall = mockClient.setPermissions.mock.calls[0][0];
             expect(firstPermCall.assignments[0].permissions).toEqual(['subscribe']);

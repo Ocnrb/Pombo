@@ -5,9 +5,9 @@
  *    out every retained epoch, PAID gates ONLY the current one (a
  *    subscription buys the future, never the channel's past), and an
  *    unreadable gate config fails closed to current-only.
- *  - rotateEpoch accepts any epoch-key channel (native AND gated) — the N-C
- *    guard rejected gated channels, which silently disabled the post-ban
- *    rotation that cuts an ex-member's reads.
+ *  - rotateEpoch accepts any epoch-key channel — an earlier guard rejected
+ *    gated channels, which silently disabled the post-ban rotation that cuts
+ *    an ex-member's reads.
  *  - KEY_REQUEST authors are recorded as member candidates: join()/pay()
  *    members never pass through the owner, but every reader must request
  *    keys on -4 — the v0 enumeration source for TOKEN/NFT/PAID gates.
@@ -89,15 +89,15 @@ describe('epochKeyManager._answerRequest (D14 per-mode scope)', () => {
         expect(published.map(m => m.keyId)).toEqual(['kid-3']);
     });
 
-    it('native channel (no gate): every retained epoch, no gate reads', async () => {
-        const streamId = '0xaaa/native-answer';
+    it('channel without a gate is never answered (fail closed)', async () => {
+        const streamId = '0xaaa/gateless-answer';
         seedState(streamId);
         const infoSpy = vi.spyOn(gateManager, 'getGateInfo');
 
-        const channel = { messageStreamId: streamId, keysStreamId: streamId + '-4', type: 'native' };
+        const channel = { messageStreamId: streamId, keysStreamId: streamId + '-4', type: 'gated' };
         await epochKeyManager._answerRequest(channel, request);
 
-        expect(published.map(m => m.keyId).sort()).toEqual(['kid-1', 'kid-2', 'kid-3']);
+        expect(published).toEqual([]);
         expect(infoSpy).not.toHaveBeenCalled();
     });
 });
@@ -108,7 +108,7 @@ describe('epochKeyManager.rotateEpoch (gated channels accepted)', () => {
     it('rejects channels without the epoch-key protocol', async () => {
         await expect(epochKeyManager.rotateEpoch({ type: 'public' }))
             .rejects.toThrow(/no epoch-key protocol/);
-        await expect(epochKeyManager.rotateEpoch({ type: 'native', keysStreamId: null }))
+        await expect(epochKeyManager.rotateEpoch({ type: 'gated', keysStreamId: null }))
             .rejects.toThrow(/no epoch-key protocol/);
     });
 

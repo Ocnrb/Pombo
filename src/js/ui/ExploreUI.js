@@ -686,7 +686,7 @@ class ExploreUI {
 
         // Lazy-fetch missing thumbnails (deduped by manager).
         // Public/password channels are publicly readable on -3, so this works
-        // even before joining. Native channels will simply fall back.
+        // even before joining. Hidden channels will simply fall back.
         for (const ch of channels) {
             const adminStreamId = deriveAdminId(ch.streamId);
             if (!adminStreamId) continue;

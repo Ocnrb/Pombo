@@ -736,7 +736,7 @@ class App {
                     const channel = channelManager.getCurrentChannel();
                     // Always render on batch completion — ChatAreaUI now renders
                     // cached content even during initialLoadInProgress. This is
-                    // critical because, for some channels (notably legacy native
+                    // critical because, for some channels (notably legacy
                     // channels with partitionCount=1), the SDK resend iterator
                     // never signals `done`, so onHistoryComplete may never fire
                     // and `initialLoadInProgress` stays true indefinitely.

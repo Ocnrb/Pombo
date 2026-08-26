@@ -31,9 +31,9 @@ export async function openUnjoinedChannel(streamId, channelInfo, { enterPreviewM
         return openGatedChannel(streamId, channelInfo, { enterPreviewMode, joinPublicChannel });
     }
 
-    // Password and native both commit on entry: one needs the password typed,
-    // the other a permission check. Preview cannot stand in for either.
-    if (type === 'password' || type === 'native') {
+    // Password commits on entry (the password must be typed) — preview
+    // cannot stand in for it.
+    if (type === 'password') {
         return joinPublicChannel?.(streamId, channelInfo);
     }
 

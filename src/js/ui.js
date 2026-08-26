@@ -395,7 +395,7 @@ class UIController {
             channelSettingsDescriptionInput: document.getElementById('channel-settings-description-input'),
             channelEditActions: document.getElementById('channel-edit-actions'),
             membersSection: document.getElementById('members-section'),
-            nonNativeMessage: document.getElementById('non-native-message'),
+            descriptionSection: document.getElementById('channel-description-section'),
             channelDescriptionDisplay: document.getElementById('channel-description-display'),
             channelStorageRetentionReadonly: document.getElementById('channel-storage-retention-readonly'),
             channelStorageRetentionEditor: document.getElementById('channel-storage-retention-editor'),
@@ -2514,7 +2514,7 @@ class UIController {
                     return;
                 }
                 
-                // For native/private channels, use cache or stay disabled for safety
+                // For gated/private channels, use cache or stay disabled for safety
                 if (cacheValid) {
                     const cachedCanPublish = channel._publishPermCache.canPublish;
                     this.setReadOnlyInputState(!cachedCanPublish, cachedCanPublish && channel.readOnly);
