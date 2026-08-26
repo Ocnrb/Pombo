@@ -329,6 +329,51 @@ class EpochKeyManager {
     }
 
     /**
+     * The admin escape valve (Members-only): replace the shared publish key
+     * when ex-key-holders abuse it. Exceptional, never routine — rotation
+     * stays zero-tx. The new key announces at rev+1, which supersedes
+     * everywhere (state, persistence, sync); the old address loses its
+     * grants on-chain, and members pick up the replacement through the
+     * normal request cycle.
+     * @returns {Promise<number>} the new rev
+     */
+    async rekeyPublishKey(channel) {
+        if (!usesSharedPublish(channel)) {
+            throw new Error('rekeyPublishKey: not a Members-only channel');
+        }
+        if (!this.isOwnAdmin(channel)) {
+            throw new Error('rekeyPublishKey: only the channel admin can re-key');
+        }
+        const s = this._getState(channel.messageStreamId);
+        if (!s.loaded) {
+            this._loadPersisted(channel.messageStreamId, s);
+            s.loaded = true;
+        }
+        const oldAddress = s.pubKey?.address || s.pubAnnounce?.address || null;
+        const rev = Math.max(s.pubKey?.rev || 0, s.pubAnnounce?.rev || 0) + 1;
+        const pubKey = this.mintPublishKey(rev);
+
+        // Chain first: a published announce for a key the network rejects
+        // would strand every member on an unusable key.
+        await streamrController.rekeySharedPublishGrants(channel, pubKey.address, oldAddress);
+
+        s.pubKey = { ...pubKey };
+        const announce = {
+            t: KEYS_MSG_TYPE.PUB_ANNOUNCE,
+            keyId: pubKey.keyId,
+            keyHash: await epochKeyCrypto.computeKeyHash(pubKey.keyHex),
+            addr: pubKey.address,
+            rev
+        };
+        await streamrController.publishKeysMessage(channel.keysStreamId, announce);
+        this._applyPubAnnounce(channel, s, announce, authManager.getAddress(), Date.now());
+        s.pubAnnounceFreshness = Date.now();
+        await this._persist(channel.messageStreamId, s);
+        Logger.info(`epochKeys: publish key re-keyed to rev ${rev} on`, channel.keysStreamId.slice(-30));
+        return rev;
+    }
+
+    /**
      * Session authorship material for our own publishes in a Members-only
      * channel: pseudonym keypair + account bind proof, minted lazily once
      * per session per channel. Memory only — members resolve the ACCOUNT

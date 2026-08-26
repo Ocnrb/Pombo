@@ -239,6 +239,7 @@ class ChannelSettingsUI {
             this.initChannelNotificationsToggle(currentChannel.streamId);
             this.initKeyResponderToggle(currentChannel.streamId)
                 .catch(() => { /* stays hidden */ });
+            this.initRekeyPublishSection(currentChannel.streamId);
         }
 
         // Load members and permissions if gated channel (not in preview mode)
@@ -950,6 +951,45 @@ class ChannelSettingsUI {
         if (toggle._changeHandler) toggle.removeEventListener('change', toggle._changeHandler);
         toggle._changeHandler = () => keyResponder.setMarked(streamId, toggle.checked);
         toggle.addEventListener('change', toggle._changeHandler);
+    }
+
+    /**
+     * Members-only channels, channel admin only: the escape valve that
+     * replaces the shared publish key when ex-key-holders abuse it.
+     */
+    initRekeyPublishSection(streamId) {
+        const section = document.getElementById('rekey-publish-section');
+        const button = document.getElementById('rekey-publish-btn');
+        if (!section || !button) return;
+
+        const { channelManager, showNotification } = this.deps;
+        const channel = channelManager.channels.get(streamId);
+        const show = channel?.authorMode === 'members'
+            && channelManager.isChannelOwner(streamId);
+        section.classList.toggle('hidden', !show);
+        if (!show) return;
+
+        if (button._clickHandler) button.removeEventListener('click', button._clickHandler);
+        button._clickHandler = async () => {
+            const status = document.getElementById('rekey-publish-status');
+            button.disabled = true;
+            if (status) {
+                status.textContent = 'Re-keying — two on-chain transactions…';
+                status.classList.remove('hidden');
+            }
+            try {
+                const { epochKeyManager } = await import('../epochKeyManager.js');
+                const rev = await epochKeyManager.rekeyPublishKey(channel);
+                if (status) status.textContent = `Publish key reset (rev ${rev}). Members pick it up automatically.`;
+                showNotification?.('Publish key reset', 'success');
+            } catch (error) {
+                if (status) status.textContent = '';
+                showNotification?.('Re-key failed: ' + error.message, 'error');
+            } finally {
+                button.disabled = false;
+            }
+        };
+        button.addEventListener('click', button._clickHandler);
     }
 
     /**

@@ -2319,6 +2319,26 @@ class StreamrController {
     }
 
     /**
+     * Re-key a Members-only channel's shared publish grants: the new key's
+     * address gains publish+subscribe on -1/-2 and the old one loses
+     * everything — one setPermissions tx per stream (an assignment with an
+     * empty permission list clears that user). The admin escape valve
+     * against ex-key-holder abuse; exceptional, never routine.
+     */
+    async rekeySharedPublishGrants(channel, newAddress, oldAddress) {
+        for (const streamId of [channel.messageStreamId, channel.ephemeralStreamId]) {
+            if (!streamId) continue;
+            const assignments = [
+                { userId: newAddress.toLowerCase(), permissions: ['subscribe', 'publish'] },
+                ...(oldAddress ? [{ userId: oldAddress.toLowerCase(), permissions: [] }] : [])
+            ];
+            await executeWithRetry(`rekeySharedPublishGrants(${streamId.slice(-20)})`, async () => {
+                await this.client.setPermissions({ streamId, assignments });
+            });
+        }
+    }
+
+    /**
      * Identity for the channel's SHARED publish key, cached per keyId — a
      * re-key changes the keyId and naturally mints the replacement.
      */

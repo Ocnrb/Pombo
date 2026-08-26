@@ -1964,6 +1964,17 @@
                             <p class="text-sm text-white/30 leading-relaxed">
                                 Banned members can no longer publish messages in this channel. They can still view existing messages until removed.
                             </p>
+                            <!-- Members-only channels, admin only: the escape valve against ex-key-holder abuse -->
+                            <div id="rekey-publish-section" class="hidden p-4 bg-amber-500/5 rounded-xl border border-amber-500/10">
+                                <h4 class="text-sm font-medium text-white/90 mb-1">Reset Publish Key</h4>
+                                <p class="text-sm text-white/40 mb-3">
+                                    Replaces the channel's shared publish key (2 transactions). Former members who kept the old key lose the ability to write. Current members pick up the new key automatically.
+                                </p>
+                                <button id="rekey-publish-btn" class="w-full bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 px-4 py-2.5 rounded-xl text-sm transition">
+                                    Reset Publish Key
+                                </button>
+                                <p id="rekey-publish-status" class="hidden mt-2 text-xs text-white/40"></p>
+                            </div>
                         </div>
                     </div>
 
