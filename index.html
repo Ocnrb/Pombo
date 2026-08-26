@@ -1847,6 +1847,19 @@
                                 <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
                                 <span>Enable Push Notifications in Settings first</span>
                             </p>
+                            <!-- Owner key-responder (gated channels, owner/moderator only) -->
+                            <div id="channel-key-responder-container" class="hidden flex items-start justify-between p-4 bg-white/5 rounded-xl border border-white/5">
+                                <div class="flex-1 mr-4">
+                                    <h4 class="text-sm font-medium text-white/90 mb-1">Key Responder</h4>
+                                    <p class="text-sm text-white/40 leading-relaxed">
+                                        Keep this device answering key requests for this channel while a Pombo tab is open
+                                    </p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="channel-key-responder-enabled" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white/60 after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#F6851B]"></div>
+                                </label>
+                            </div>
                         </div>
                     </div>
 

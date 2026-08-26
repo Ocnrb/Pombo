@@ -1029,6 +1029,12 @@ class EpochKeyManager {
             fromEpoch,
             ...(spk ? { spk } : {})
         });
+        // Wake any device running the key responder for this channel.
+        // Fire-and-forget: the retained request stands on its own — the wake
+        // only shortens the wait from "next sweep" to seconds.
+        import('./relayManager.js').then(({ relayManager }) =>
+            relayManager.sendKeysWakeSignal(channel.messageStreamId)
+        ).catch(() => { /* push relay unavailable — the sweep still answers */ });
         Logger.info(`epochKeys: requested epochs ≥${fromEpoch} on`, channel.keysStreamId.slice(-30));
     }
 

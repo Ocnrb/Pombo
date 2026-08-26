@@ -213,7 +213,7 @@ export async function createChannelNotificationPayload(streamId, difficulty = 4)
 export async function createNativeChannelNotificationPayload(streamId, difficulty = 4) {
     const tag = calculateNativeChannelTag(streamId);
     const { pow, nonce, epoch } = await calculatePoW(tag, difficulty);
-    
+
     return {
         type: 'notification',
         tag: tag,
@@ -221,6 +221,32 @@ export async function createNativeChannelNotificationPayload(streamId, difficult
         nonce: nonce,
         epoch: epoch,
         channelType: 'private',
+        timestamp: Date.now()
+    };
+}
+
+/**
+ * Create the key-request wake payload (gated channels): same tag and PoW as
+ * a native wake, but channelType 'keys' — the relay forwards channelType
+ * verbatim, and receivers treat 'keys' as "sweep the keys stream, silently";
+ * it is NEVER turned into a user notification. Pre-'keys' clients verify the
+ * -1 against storage, find nothing new, and stay silent too.
+ *
+ * @param {string} streamId - Channel MESSAGE stream ID (-1)
+ * @param {number} difficulty - PoW difficulty
+ * @returns {Promise<object>} Payload to send to the push stream
+ */
+export async function createKeysNotificationPayload(streamId, difficulty = 4) {
+    const tag = calculateNativeChannelTag(streamId);
+    const { pow, nonce, epoch } = await calculatePoW(tag, difficulty);
+
+    return {
+        type: 'notification',
+        tag: tag,
+        pow: pow,
+        nonce: nonce,
+        epoch: epoch,
+        channelType: 'keys',
         timestamp: Date.now()
     };
 }

@@ -576,6 +576,12 @@ class App {
             subscriptionManager.startBackgroundPoller();
             Logger.info('Dynamic subscription management active (background poller started)');
 
+            // Owner key-responder: answer retained key requests on the
+            // channels this device is marked for (no-op when none are).
+            import('./keyResponder.js')
+                .then(({ keyResponder }) => keyResponder.start())
+                .catch(e => Logger.debug('Key responder unavailable:', e.message));
+
             try {
                 await notificationManager.init();
                 Logger.info('Notification system ready');

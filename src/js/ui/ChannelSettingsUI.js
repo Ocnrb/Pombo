@@ -237,6 +237,8 @@ class ChannelSettingsUI {
         // Initialize channel notifications toggle (only when not in preview mode)
         if (!isPreviewMode) {
             this.initChannelNotificationsToggle(currentChannel.streamId);
+            this.initKeyResponderToggle(currentChannel.streamId)
+                .catch(() => { /* stays hidden */ });
         }
 
         // Load members and permissions if gated channel (not in preview mode)
@@ -915,6 +917,38 @@ class ChannelSettingsUI {
         toggle._changeHandler = async (e) => {
             await this.handleChannelNotificationsToggle(e, streamId);
         };
+        toggle.addEventListener('change', toggle._changeHandler);
+    }
+
+    /**
+     * Owner key-responder toggle (gated channels, owner/moderator only):
+     * marks THIS device to keep answering the channel's key requests while a
+     * Pombo tab is open. Local to the device — never synced.
+     */
+    async initKeyResponderToggle(streamId) {
+        const container = document.getElementById('channel-key-responder-container');
+        const toggle = document.getElementById('channel-key-responder-enabled');
+        if (!container || !toggle) return;
+
+        const { channelManager } = this.deps;
+        const channel = channelManager.channels.get(streamId);
+        const isGated = !!channel?.gate?.address;
+        let canServe = false;
+        if (isGated) {
+            canServe = channelManager.isChannelOwner(streamId);
+            if (!canServe) {
+                try {
+                    canServe = await channelManager.canAddMembers(streamId);
+                } catch { /* chain unreachable — owner check already ran */ }
+            }
+        }
+        container.classList.toggle('hidden', !canServe);
+        if (!canServe) return;
+
+        const { keyResponder } = await import('../keyResponder.js');
+        toggle.checked = keyResponder.isMarked(streamId);
+        if (toggle._changeHandler) toggle.removeEventListener('change', toggle._changeHandler);
+        toggle._changeHandler = () => keyResponder.setMarked(streamId, toggle.checked);
         toggle.addEventListener('change', toggle._changeHandler);
     }
 
