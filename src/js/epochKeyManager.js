@@ -874,7 +874,14 @@ class EpochKeyManager {
         if (typeof data.keyId !== 'string' || typeof data.keyHash !== 'string'
             || typeof data.addr !== 'string') return false;
 
-        if ((timestamp || 0) > (s.pubAnnounceFreshness || 0)) {
+        // Freshness follows the HIGHEST rev seen, never the stream: a retained
+        // copy of a superseded announce must not mask a re-key announce that
+        // storage lost, or no session would ever republish it and members
+        // would stay unable to write until retention aged the old copy out.
+        if (rev > (s.pubAnnounce?.rev ?? 0)) {
+            s.pubAnnounceFreshness = timestamp || 0;
+        } else if (rev === (s.pubAnnounce?.rev ?? 0)
+                && (timestamp || 0) > (s.pubAnnounceFreshness || 0)) {
             s.pubAnnounceFreshness = timestamp || 0;
         }
 
