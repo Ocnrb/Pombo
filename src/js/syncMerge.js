@@ -160,7 +160,20 @@ export function mergeEpochKeys(base, incoming, keepIds = null) {
         const helloEpochs = [...new Set([
             ...(b.helloEpochs || []), ...(i.helloEpochs || [])
         ])].filter(Number.isInteger).sort((x, y) => x - y);
-        result[streamId] = { epochs, announces, currentEpoch, pendingRequests, helloEpochs };
+        // Publish key: higher rev wins (a re-key must supersede on every
+        // device); ties keep base, like the other slices.
+        const higherRev = (x, y) => {
+            if (!x) return y;
+            if (!y) return x;
+            return (y.rev || 0) > (x.rev || 0) ? y : x;
+        };
+        const pubKey = higherRev(b.pubKey, i.pubKey);
+        const pubAnnounce = higherRev(b.pubAnnounce, i.pubAnnounce);
+        result[streamId] = {
+            epochs, announces, currentEpoch, pendingRequests, helloEpochs,
+            ...(pubKey ? { pubKey } : {}),
+            ...(pubAnnounce ? { pubAnnounce } : {})
+        };
     }
 
     return result;

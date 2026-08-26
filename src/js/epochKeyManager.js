@@ -49,6 +49,7 @@ import { CONFIG } from './config.js';
 import { KEYS_MSG_TYPE, KEYS_STREAM } from './streamConstants.js';
 import { gateManager } from './gate.js';
 import { dmCrypto } from './dmCrypto.js';
+import { authorship } from './authorship.js';
 
 /**
  * Channels running the epoch-key protocol (gated, N-A/N-C): the gate clone
@@ -57,6 +58,15 @@ import { dmCrypto } from './dmCrypto.js';
  */
 export const usesEpochKeys = (channel) =>
     !!channel?.gate?.address && !!channel?.keysStreamId;
+
+/**
+ * Members-only author visibility: -1/-2 publish under the channel's SHARED
+ * publish key (the transport says nothing about authorship; identity lives
+ * inside the epoch seal). Everyone-mode channels — and every channel created
+ * before the mode existed — publish via the gate clone as always.
+ */
+export const usesSharedPublish = (channel) =>
+    usesEpochKeys(channel) && channel?.authorMode === 'members';
 
 // Re-request backoff: a pending request younger than this is not superseded.
 const REQUEST_MIN_INTERVAL_MS = 60 * 1000;
@@ -148,6 +158,23 @@ class EpochKeyManager {
                 rosterPartition: null,
                 // { at, members } — getRosterMembers result cache
                 rosterCache: null,
+                // Members-only mode: the channel's SHARED publish key.
+                // { keyId, keyHex, address, rev } — persisted + synced (it is
+                // channel key material, like the epoch keys). Never rotates
+                // by routine; a re-key bumps rev.
+                pubKey: null,
+                // Latest pub_announce accepted: { keyId, keyHash, address,
+                // rev, publisher, timestamp } — the trust anchor pub wraps
+                // are verified against. Persisted (public data, warm start).
+                pubAnnounce: null,
+                // Newest pub_announce timestamp seen in storage — drives the
+                // TTL re-announce, exactly like announceFreshness.
+                pubAnnounceFreshness: 0,
+                // Session pseudonym for our own publishes in this channel:
+                // { privateKey, publicKey, bindProof } — MEMORY ONLY. Members
+                // resolve the account from the bind proof, so a fresh
+                // pseudonym per session costs nothing.
+                pseudonym: null,
                 // Consecutive unanswered requests — drives the retry backoff
                 requestAttempts: 0,
                 // requestId → Set(keyId) of wraps OBSERVED (live or history) —
@@ -197,6 +224,14 @@ class EpochKeyManager {
         for (const epoch of persisted.helloEpochs || []) {
             if (Number.isInteger(epoch)) s.helloEpochs.add(epoch);
         }
+        // Higher rev wins — a persisted re-key must never regress to the
+        // key it replaced.
+        if (persisted.pubKey && (persisted.pubKey.rev || 0) > (s.pubKey?.rev || 0)) {
+            s.pubKey = { ...persisted.pubKey };
+        }
+        if (persisted.pubAnnounce && (persisted.pubAnnounce.rev || 0) > (s.pubAnnounce?.rev || 0)) {
+            s.pubAnnounce = { ...persisted.pubAnnounce };
+        }
     }
 
     async _persist(messageStreamId, s) {
@@ -219,7 +254,15 @@ class EpochKeyManager {
         }
         await secureStorage.setEpochKeys(messageStreamId, {
             epochs, announces, currentEpoch: s.currentEpoch,
-            pendingRequests, helloEpochs: Array.from(s.helloEpochs)
+            pendingRequests, helloEpochs: Array.from(s.helloEpochs),
+            ...(s.pubKey ? { pubKey: { ...s.pubKey } } : {}),
+            ...(s.pubAnnounce ? {
+                pubAnnounce: {
+                    keyId: s.pubAnnounce.keyId, keyHash: s.pubAnnounce.keyHash,
+                    address: s.pubAnnounce.address, rev: s.pubAnnounce.rev,
+                    publisher: s.pubAnnounce.publisher, timestamp: s.pubAnnounce.timestamp
+                }
+            } : {})
         });
     }
 
@@ -254,6 +297,54 @@ class EpochKeyManager {
         if (!s || s.currentEpoch === 0) return false;
         const announce = s.announces.get(s.currentEpoch);
         return !!(announce && s.epochs.has(announce.keyId));
+    }
+
+    // ==================== SHARED PUBLISH KEY (Members-only) ====================
+
+    /**
+     * Fresh publish keypair for a new Members-only channel. Its ADDRESS gets
+     * the PUBLISH grants in the creation batch; the private half is
+     * distributed to members via PUB_WRAPs on -4.
+     */
+    mintPublishKey(rev = 1) {
+        const keyHex = dmCrypto.generateEphemeralPrivateKey();
+        const address = ethers.computeAddress(new ethers.SigningKey(keyHex).publicKey).toLowerCase();
+        return { keyId: `p${rev}.${cryptoManager.generateRandomHex(6)}`, keyHex, address, rev };
+    }
+
+    /** Creation-time adopt of a freshly minted publish key (admin device). */
+    async adoptPublishKey(channel, pubKey) {
+        const s = this._getState(channel.messageStreamId);
+        if (!s.loaded) {
+            this._loadPersisted(channel.messageStreamId, s);
+            s.loaded = true;
+        }
+        s.pubKey = { ...pubKey };
+        await this._persist(channel.messageStreamId, s);
+    }
+
+    /** The held publish key ({keyId, keyHex, address, rev}) or null. */
+    getPublishKey(messageStreamId) {
+        return this.state.get(messageStreamId)?.pubKey || null;
+    }
+
+    /**
+     * Session authorship material for our own publishes in a Members-only
+     * channel: pseudonym keypair + account bind proof, minted lazily once
+     * per session per channel. Memory only — members resolve the ACCOUNT
+     * from the bind proof, so pseudonym churn across sessions is invisible.
+     * @returns {{privateKey, publicKey, bindProof}|null} null without a wallet
+     */
+    getAuthorship(channel) {
+        const s = this._getState(channel.messageStreamId);
+        if (s.pseudonym) return s.pseudonym;
+        const accountKey = authManager.wallet?.privateKey;
+        if (!accountKey) return null;
+        const pseudonym = authorship.generatePseudonym();
+        const bindProof = authorship.createBindProof(
+            channel.messageStreamId, pseudonym.publicKey, accountKey);
+        s.pseudonym = { ...pseudonym, bindProof };
+        return s.pseudonym;
     }
 
     /**
@@ -343,9 +434,20 @@ class EpochKeyManager {
         let changed = false;
         const storedRequests = [];
         const storedV2Wraps = [];
+        const storedV2PubWraps = [];
         for (const { data, publisherId, timestamp } of entries) {
             if (data.t === KEYS_MSG_TYPE.KEY_ANNOUNCE) {
                 if (this._applyAnnounce(channel, s, data, publisherId, timestamp)) changed = true;
+            } else if (data.t === KEYS_MSG_TYPE.PUB_ANNOUNCE) {
+                if (this._applyPubAnnounce(channel, s, data, publisherId, timestamp)) changed = true;
+            } else if (data.t === KEYS_MSG_TYPE.PUB_WRAP) {
+                if (typeof data.requestId === 'string' && typeof data.keyId === 'string') {
+                    this._recordSeenWrap(s, data.requestId, data.keyId);
+                    if (data.v === 2 && (s.pendingRequests.has(data.requestId)
+                            || s.pendingRequest?.requestId === data.requestId)) {
+                        storedV2PubWraps.push(data);
+                    }
+                }
             } else if (data.t === KEYS_MSG_TYPE.KEY_WRAP) {
                 // Coverage bookkeeping: a stored wrap means someone already
                 // answered — its epochs need no re-answering from us
@@ -370,6 +472,13 @@ class EpochKeyManager {
                 await this._handleWrapV2(channel, s, data);
             } catch (e) {
                 Logger.warn('epochKeys: stored v2 wrap adoption failed:', e.message);
+            }
+        }
+        for (const data of storedV2PubWraps) {
+            try {
+                await this._handlePubWrap(channel, s, data);
+            } catch (e) {
+                Logger.warn('epochKeys: stored pub wrap adoption failed:', e.message);
             }
         }
 
@@ -399,6 +508,7 @@ class EpochKeyManager {
             if (this.isOwnAdmin(channel)) {
                 await this._bootstrapFirstEpoch(channel, s);
                 this._armScheduledRotation(channel, s);
+                await this._maybeAnnouncePub(channel, s);
             } else {
                 Logger.info('epochKeys: no announce yet on', channel.keysStreamId.slice(-30),
                     '— waiting for the admin');
@@ -409,11 +519,45 @@ class EpochKeyManager {
         if (this.isOwnAdmin(channel)) {
             await this._maybeReannounceAging(channel, s);
             this._armScheduledRotation(channel, s);
+            await this._maybeAnnouncePub(channel, s);
         }
 
-        if (this._missingEpochs(s).length > 0) {
+        if (this._missingEpochs(s).length > 0 || this._needsPubKey(channel, s)) {
             await this._sendKeyRequest(channel, s);
         }
+    }
+
+    /** A Members-only channel is not writable until the announced publish
+     *  key (at its announced rev) is held. */
+    _needsPubKey(channel, s) {
+        return usesSharedPublish(channel) && !!s.pubAnnounce
+            && s.pubKey?.keyId !== s.pubAnnounce.keyId;
+    }
+
+    /**
+     * Admin-side self-heal for the publish-key anchor: announce the held key
+     * whenever storage has no fresh copy — idempotent by construction (same
+     * keyId/keyHash/addr/rev), exactly like the epoch re-announce.
+     */
+    async _maybeAnnouncePub(channel, s) {
+        if (!usesSharedPublish(channel) || !s.pubKey) return;
+        if (s.pubAnnounce && s.pubAnnounce.rev > s.pubKey.rev) return;   // we hold the superseded key
+        const retentionMs = (channel.storageDays || CONFIG.storage.defaultRetentionDays) * 86_400_000;
+        const freshest = s.pubAnnounceFreshness || 0;
+        if (freshest && Date.now() - freshest < retentionMs * CONFIG.storage.ttlRepublishAgeFraction) return;
+
+        const announce = {
+            t: KEYS_MSG_TYPE.PUB_ANNOUNCE,
+            keyId: s.pubKey.keyId,
+            keyHash: await epochKeyCrypto.computeKeyHash(s.pubKey.keyHex),
+            addr: s.pubKey.address,
+            rev: s.pubKey.rev
+        };
+        await streamrController.publishKeysMessage(channel.keysStreamId, announce);
+        this._applyPubAnnounce(channel, s, announce, authManager.getAddress(), Date.now());
+        s.pubAnnounceFreshness = Date.now();
+        await this._persist(channel.messageStreamId, s);
+        Logger.info('epochKeys: publish key announced on', channel.keysStreamId.slice(-30));
     }
 
     /**
@@ -652,9 +796,136 @@ class EpochKeyManager {
             case KEYS_MSG_TYPE.KEY_WRAP:
                 await this._handleWrap(channel, s, data);
                 break;
+            case KEYS_MSG_TYPE.PUB_ANNOUNCE:
+                if (this._applyPubAnnounce(channel, s, data, publisherId, timestamp)) {
+                    await this._persist(channel.messageStreamId, s);
+                    if (this._needsPubKey(channel, s)) {
+                        await this._sendKeyRequest(channel, s);
+                    }
+                }
+                break;
+            case KEYS_MSG_TYPE.PUB_WRAP:
+                await this._handlePubWrap(channel, s, data);
+                break;
             default:
                 Logger.debug('epochKeys: unknown message type', data.t);
         }
+    }
+
+    /**
+     * Validate and apply a publish-key announce (Members-only channels).
+     * Higher rev wins — a re-key is the admin's escape valve against
+     * ex-key-holder abuse and must supersede everywhere; within the same rev
+     * the epoch-announce conflict rule applies.
+     */
+    _applyPubAnnounce(channel, s, data, publisherId, timestamp) {
+        if (!this._isAdmin(channel, publisherId)) {
+            Logger.warn('epochKeys: PUB_ANNOUNCE from non-admin REJECTED:',
+                publisherId, 'on', channel.messageStreamId.slice(-30));
+            return false;
+        }
+        const rev = data.rev;
+        if (!Number.isInteger(rev) || rev < 1) return false;
+        if (typeof data.keyId !== 'string' || typeof data.keyHash !== 'string'
+            || typeof data.addr !== 'string') return false;
+
+        if ((timestamp || 0) > (s.pubAnnounceFreshness || 0)) {
+            s.pubAnnounceFreshness = timestamp || 0;
+        }
+
+        const incoming = {
+            keyId: data.keyId,
+            keyHash: data.keyHash.toLowerCase(),
+            address: data.addr.toLowerCase(),
+            rev,
+            publisher: (publisherId || '').toLowerCase(),
+            timestamp: timestamp ?? 0
+        };
+        const existing = s.pubAnnounce;
+        if (existing) {
+            if (existing.rev > rev) return false;
+            if (existing.rev === rev) {
+                const keep = existing.timestamp < incoming.timestamp
+                    || (existing.timestamp === incoming.timestamp
+                        && existing.publisher <= incoming.publisher);
+                if (keep) return false;
+            }
+        }
+        s.pubAnnounce = incoming;
+        // A held key of an older keyId is superseded — stop publishing under
+        // it and let the request cycle fetch the new one.
+        if (s.pubKey && s.pubKey.keyId !== incoming.keyId && (s.pubKey.rev || 0) < rev) {
+            s.pubKey = null;
+        }
+        return true;
+    }
+
+    /**
+     * A publish-key wrap: same addressing as a KEY_WRAP (v1 ephemeral / v2
+     * static), verified against the PUB_ANNOUNCE keyHash AND against the
+     * announced address — the unwrapped secret must BE the announced
+     * publisher key, or a malicious wrapper could hand us a key whose
+     * messages the network would reject.
+     */
+    async _handlePubWrap(channel, s, data) {
+        if (typeof data.requestId === 'string' && typeof data.keyId === 'string') {
+            this._recordSeenWrap(s, data.requestId, data.keyId);
+        }
+        const announce = s.pubAnnounce;
+        if (!announce || data.keyId !== announce.keyId) return;
+        if (s.pubKey?.keyId === data.keyId) return;                       // already held
+        if (typeof data.tag !== 'string') return;
+
+        let keyHex;
+        if (data.v === 2) {
+            const mine = s.pendingRequests.has(data.requestId)
+                || s.pendingRequest?.requestId === data.requestId;
+            if (!mine) return;
+            const expectedTag = await epochKeyCrypto.computeWrapTagV2(data.requestId, data.keyId);
+            if (data.tag.toLowerCase() !== expectedTag.toLowerCase()) return;
+            const accountKey = authManager.wallet?.privateKey;
+            if (!accountKey) return;
+            try {
+                keyHex = await epochKeyCrypto.unwrapEpochKeyStatic(
+                    { epk: data.epk, iv: data.iv, ct: data.ct }, accountKey);
+            } catch (e) {
+                Logger.warn('epochKeys: pub wrap failed to open:', e.message);
+                return;
+            }
+        } else {
+            const pending = s.pendingRequest;
+            if (!pending || data.requestId !== pending.requestId) return;
+            const expectedTag = await epochKeyCrypto.computeWrapTag(pending.publicKey, data.keyId);
+            if (data.tag.toLowerCase() !== expectedTag.toLowerCase()) return;
+            try {
+                keyHex = await epochKeyCrypto.unwrapEpochKey(
+                    { epk: data.epk, iv: data.iv, ct: data.ct }, pending.privateKey);
+            } catch (e) {
+                Logger.warn('epochKeys: pub wrap failed to open:', e.message);
+                return;
+            }
+        }
+
+        const keyHash = await epochKeyCrypto.computeKeyHash(keyHex);
+        if (keyHash.toLowerCase() !== announce.keyHash) {
+            Logger.warn('epochKeys: pub wrap REJECTED — keyHash mismatch');
+            return;
+        }
+        let derived;
+        try {
+            derived = ethers.computeAddress(new ethers.SigningKey(keyHex).publicKey).toLowerCase();
+        } catch {
+            return;
+        }
+        if (derived !== announce.address) {
+            Logger.warn('epochKeys: pub wrap REJECTED — key does not match the announced address');
+            return;
+        }
+
+        s.pubKey = { keyId: data.keyId, keyHex, address: announce.address, rev: announce.rev };
+        await this._persist(channel.messageStreamId, s);
+        this._notifyAdopted(channel.messageStreamId, data.keyId);
+        Logger.info('epochKeys: adopted the publish key on', channel.messageStreamId.slice(-30));
     }
 
     async _handleAnnounce(channel, s, data, publisherId, timestamp) {
@@ -843,6 +1114,36 @@ class EpochKeyManager {
                 Logger.warn(`epochKeys: failed to wrap ${keyId} for request ${request.requestId}:`, e.message);
             }
         }
+
+        // Members-only: the shared publish key rides along with the epochs —
+        // a joiner needs both before the channel is writable for them.
+        if (usesSharedPublish(channel) && s.pubKey
+                && s.pubAnnounce?.keyId === s.pubKey.keyId
+                && !covered.has(s.pubKey.keyId)) {
+            try {
+                const envelope = staticKey
+                    ? {
+                        t: KEYS_MSG_TYPE.PUB_WRAP,
+                        v: 2,
+                        requestId: request.requestId,
+                        keyId: s.pubKey.keyId,
+                        tag: await epochKeyCrypto.computeWrapTagV2(request.requestId, s.pubKey.keyId),
+                        ...await epochKeyCrypto.wrapEpochKeyToStatic(s.pubKey.keyHex, staticKey)
+                    }
+                    : {
+                        t: KEYS_MSG_TYPE.PUB_WRAP,
+                        requestId: request.requestId,
+                        keyId: s.pubKey.keyId,
+                        tag: await epochKeyCrypto.computeWrapTag(request.pubkey, s.pubKey.keyId),
+                        ...await epochKeyCrypto.wrapEpochKey(s.pubKey.keyHex, request.pubkey)
+                    };
+                await streamrController.publishKeysMessage(channel.keysStreamId, envelope);
+                this._recordSeenWrap(s, request.requestId, s.pubKey.keyId);
+                sent += 1;
+            } catch (e) {
+                Logger.warn(`epochKeys: failed to wrap the publish key for request ${request.requestId}:`, e.message);
+            }
+        }
         if (sent > 0) {
             Logger.debug(`epochKeys: answered request ${request.requestId} with ${sent} ${staticKey ? 'v2 ' : ''}wrap(s)`);
         }
@@ -1004,11 +1305,11 @@ class EpochKeyManager {
             return;
         }
         const missing = this._missingEpochs(s);
-        if (missing.length === 0) return;
+        if (missing.length === 0 && !this._needsPubKey(channel, s)) return;
 
         const { privateKey, publicKey } = epochKeyCrypto.generateRequestKeypair();
         const requestId = cryptoManager.generateRandomHex(16);
-        const fromEpoch = Math.min(...missing);
+        const fromEpoch = missing.length > 0 ? Math.min(...missing) : 1;
         const spk = this._myStaticPubkey();
 
         s.requestAttempts += 1;
@@ -1174,7 +1475,8 @@ class EpochKeyManager {
      */
     async retryRequestIfWaiting(channel) {
         const s = this.state.get(channel.messageStreamId);
-        if (!s || this._missingEpochs(s).length === 0) return false;
+        if (!s) return false;
+        if (this._missingEpochs(s).length === 0 && !this._needsPubKey(channel, s)) return false;
         await this._sendKeyRequest(channel, s);
         return true;
     }

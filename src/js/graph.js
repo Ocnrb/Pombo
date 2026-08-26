@@ -408,7 +408,9 @@ class GraphAPI {
                     createdBy: stream.id.split('/')[0],
                     // Gated (N-D): the PomboGate clone — routes the Explore tap
                     gateAddress: /^0x[0-9a-f]{40}$/.test(String(pomboMetadata.g || '').toLowerCase())
-                        ? String(pomboMetadata.g).toLowerCase() : null
+                        ? String(pomboMetadata.g).toLowerCase() : null,
+                    // Author visibility (`m: 1` = Members only; absent = Everyone)
+                    authorMode: pomboMetadata.m === 1 ? 'members' : 'everyone'
                 };
             } catch (error) {
                 Logger.warn('Failed to get channel info:', error);
@@ -496,7 +498,9 @@ class GraphAPI {
                                 createdBy: stream.id.split('/')[0],
                                 // Gated (N-D): routes the Explore tap by mode
                                 gateAddress: /^0x[0-9a-f]{40}$/.test(String(pomboMetadata.g || '').toLowerCase())
-                                    ? String(pomboMetadata.g).toLowerCase() : null
+                                    ? String(pomboMetadata.g).toLowerCase() : null,
+                                // Author visibility (`m: 1` = Members only)
+                                authorMode: pomboMetadata.m === 1 ? 'members' : 'everyone'
                             });
                         }
                     } catch (parseError) {

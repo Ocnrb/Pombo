@@ -6,6 +6,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { ethers } from 'ethers';
+
+// Members-only creation mints a real publish keypair (epochKeyManager is not
+// mocked here), which needs the ethers global like the browser build has.
+globalThis.ethers = ethers;
 
 // Mock all dependencies before importing
 vi.mock('../../src/js/logger.js', () => ({
@@ -95,7 +100,10 @@ vi.mock('../../src/js/secureStorage.js', () => ({
         getChannelsLeftAt: vi.fn().mockReturnValue({}),
         addBlockedPeer: vi.fn().mockResolvedValue(undefined),
         addToChannelOrder: vi.fn().mockResolvedValue(undefined),
-        addSentMessage: vi.fn().mockResolvedValue(undefined)
+        addSentMessage: vi.fn().mockResolvedValue(undefined),
+        // Members-only creation adopts the publish key into the epoch slice
+        getEpochKeys: vi.fn().mockReturnValue(null),
+        setEpochKeys: vi.fn().mockResolvedValue(undefined)
     }
 }));
 

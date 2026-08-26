@@ -1611,6 +1611,16 @@ class StorageMediaController {
                 chunkIdentity = EthereumKeyPairIdentity.fromPrivateKey(
                     dmCrypto.generateEphemeralPrivateKey());
                 chunkPublisher = await chunkIdentity.getUserId();
+            } else if (channel?.authorMode === 'members') {
+                // Members-only: chunks travel under the SHARED publish key —
+                // that address is what the verify reads must match.
+                const { epochKeyManager } = await import('./epochKeyManager.js');
+                const pubKey = epochKeyManager.getPublishKey(channel.messageStreamId);
+                if (!pubKey) {
+                    throw new Error(
+                        `No publish key for ${channel.messageStreamId} — cannot store media on a Members-only channel`);
+                }
+                chunkPublisher = pubKey.address;
             } else if (channel?.gate?.address) {
                 // Gated: publishStorageChunk rides the clone (ERC-1271), so
                 // that is the publisher the verify reads must match.

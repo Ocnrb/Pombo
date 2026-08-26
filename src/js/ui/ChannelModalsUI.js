@@ -233,6 +233,9 @@ class ChannelModalsUI {
         if (paidSection) {
             paidSection.classList.toggle('hidden', tabType !== 'paid');
         }
+        // Author visibility applies to every gated variant (Closed included)
+        document.getElementById('author-visibility-section')
+            ?.classList.toggle('hidden', !['closed', 'gated', 'paid'].includes(tabType));
 
         // Update cost display in footer
         document.querySelectorAll('.channel-cost-display').forEach(cost => {
@@ -757,6 +760,26 @@ class ChannelModalsUI {
             }
         };
 
+        // Author visibility — a privacy promise the user must see BEFORE
+        // paying or entering. Fire-and-forget: the metadata read is cached.
+        const authorsEl = document.getElementById('gate-entry-authors');
+        authorsEl?.classList.add('hidden');
+        if (entry.streamId && authorsEl) {
+            import('../channels.js')
+                .then(({ channelManager }) =>
+                    channelManager.readGateFromMetadata(entry.streamId, { withMode: true }))
+                .then((flags) => {
+                    if (!flags) return;
+                    const members = flags.authorMode === 'members';
+                    authorsEl.textContent = members
+                        ? 'Authors visible to members only'
+                        : 'Every message is publicly signed by its author';
+                    authorsEl.className = 'mt-2 text-xs text-center '
+                        + (members ? 'text-white/40' : 'text-amber-400/70');
+                })
+                .catch(() => { /* stays hidden */ });
+        }
+
         try {
             const { gateManager, GATE_MODE } = await import('../gate.js');
             const me = authManager.getAddress();
@@ -949,6 +972,13 @@ class ChannelModalsUI {
         // per-mode rules: a bad combination would only revert (InvalidParams)
         // after the wallet already paid for the gate deploy attempt.
         const gateOptions = isGated ? { gateMode } : {};
+        if (isGated) {
+            // Author visibility (IMMUTABLE post-creation): Members only
+            // unless the creator opted into Everyone.
+            gateOptions.authorMode =
+                document.getElementById('gate-author-visibility-everyone')?.checked
+                    ? 'everyone' : 'members';
+        }
         if (isGated && !isClosed) {
             const tokenInputId = gateMode === GATE_MODE.PAID ? 'paid-token-input' : 'gate-token-input';
             const token = (document.getElementById(tokenInputId)?.value || '').trim();

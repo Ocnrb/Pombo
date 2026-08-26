@@ -239,7 +239,10 @@ class JoinChannelUI {
                     name: channelInfo?.name,
                     type: channelInfo?.type || 'public',
                     readOnly: channelInfo?.readOnly || false,
-                    createdBy: channelInfo?.createdBy
+                    createdBy: channelInfo?.createdBy,
+                    // Author-visibility hint from the Explore card; the join
+                    // re-reads the -1 metadata when absent
+                    authorMode: channelInfo?.authorMode || undefined
                 });
             }
             
