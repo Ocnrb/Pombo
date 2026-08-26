@@ -2584,11 +2584,11 @@ class MediaController {
                 ephemeralStreamId, sealed, sealer.identity);
             Logger.debug('Sent piece (binary sealed)', pieceIndex, 'of', fileId);
         } else if (usesEpochKeys(channel)) {
-            // Epoch channels: the piece is sealed with the epoch key, no
+            // Gated channels: the piece is sealed with the epoch key, no
             // inline proof — authorship comes from the same place as the
-            // channel's messages (transport account on native, envelope
-            // signer on gated via resolveAuthor). The channel pseudonym
-            // cannot carry these: an ephemeral key holds no grant on either.
+            // channel's messages (envelope signer via resolveAuthor). The
+            // channel pseudonym cannot carry these: an ephemeral key holds
+            // no grant.
             const payload = encodeFilePiece(fileId, pieceIndex, arrayBuffer);
             await streamrController.publishMediaDataEpoch(channel, ephemeralStreamId, payload);
             Logger.debug('Sent piece (binary epoch)', pieceIndex, 'of', fileId);

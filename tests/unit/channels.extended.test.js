@@ -157,6 +157,33 @@ vi.mock('../../src/js/media.js', () => ({
     }
 }));
 
+vi.mock('../../src/js/gate.js', () => ({
+    GATE_MODE: Object.freeze({ NONE: 0, TOKEN_BALANCE: 1, NFT_OWNERSHIP: 2, PAID: 3 }),
+    gateManager: {
+        createGate: vi.fn().mockResolvedValue('0xgate'),
+        allow: vi.fn().mockResolvedValue(true),
+        allowBatch: vi.fn().mockResolvedValue(true),
+        ban: vi.fn().mockResolvedValue(true),
+        checkAccess: vi.fn().mockResolvedValue(true),
+        getGateMembers: vi.fn().mockResolvedValue([]),
+        setModerator: vi.fn().mockResolvedValue(true),
+        canModerate: vi.fn().mockResolvedValue(false)
+    }
+}));
+
+vi.mock('../../src/js/epochKeyManager.js', () => ({
+    usesEpochKeys: vi.fn().mockReturnValue(false),
+    epochKeyManager: {
+        rotateEpoch: vi.fn().mockResolvedValue(undefined),
+        getSeenRequesters: vi.fn().mockReturnValue([]),
+        onKeyAdopted: vi.fn(),
+        handleKeysMessage: vi.fn(),
+        forgetChannel: vi.fn().mockResolvedValue(undefined),
+        ensureChannelKeys: vi.fn().mockResolvedValue(undefined),
+        getWaitingInfo: vi.fn().mockReturnValue({ waiting: false })
+    }
+}));
+
 // Import after mocks
 import { channelManager } from '../../src/js/channels.js';
 import { authManager } from '../../src/js/auth.js';
@@ -194,32 +221,27 @@ describe('ChannelManager Extended', () => {
 
     // ==================== addMember ====================
     describe('addMember', () => {
-        const streamId = 'stream-native-1';
+        const streamId = 'stream-gated-1';
 
-        beforeEach(() => {
+        beforeEach(async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
+            gateManager.allow.mockClear();
+            gateManager.allow.mockResolvedValue(true);
             channelManager.channels.set(streamId, {
                 messageStreamId: streamId,
-                type: 'native',
+                type: 'gated',
+                gate: { address: '0xgate' },
                 members: ['0xmyaddress'],
                 ephemeralStreamId: `${streamId}-ephemeral`,
                 createdBy: '0xmyaddress'
             });
         });
 
-        it('grants permissions on all 4 streams', async () => {
+        it('allows the member on the gate in one transaction', async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
             await channelManager.addMember(streamId, '0xnewmember');
 
-            // -1, -2 and -4 use grantPermissionsToAddresses (subscribe+publish);
-            // the keys stream needs publish so the member can answer KEY_REQUESTs
-            expect(streamrController.grantPermissionsToAddresses).toHaveBeenCalledTimes(3);
-            expect(streamrController.grantPermissionsToAddresses).toHaveBeenCalledWith(streamId, ['0xnewmember']);
-            expect(streamrController.grantPermissionsToAddresses).toHaveBeenCalledWith(`${streamId}-ephemeral`, ['0xnewmember']);
-            expect(streamrController.grantPermissionsToAddresses).toHaveBeenCalledWith(`${streamId}-keys`, ['0xnewmember']);
-            // -3 admin uses setStreamPermissions with subscribe-only
-            expect(streamrController.setStreamPermissions).toHaveBeenCalledWith(
-                `${streamId}-admin`,
-                expect.objectContaining({ memberPermissions: ['subscribe'], members: ['0xnewmember'] })
-            );
+            expect(gateManager.allow).toHaveBeenCalledWith('0xgate', '0xnewmember');
         });
 
         it('updates local members list', async () => {
@@ -227,11 +249,6 @@ describe('ChannelManager Extended', () => {
 
             const channel = channelManager.channels.get(streamId);
             expect(channel.members).toContain('0xnewmember');
-        });
-
-        it('clears graph cache', async () => {
-            await channelManager.addMember(streamId, '0xnewmember');
-            expect(graphAPI.clearCache).toHaveBeenCalled();
         });
 
         it('saves channels after update', async () => {
@@ -249,55 +266,47 @@ describe('ChannelManager Extended', () => {
             await expect(channelManager.addMember('nonexistent', '0x1')).rejects.toThrow('Channel not found');
         });
 
-        it('throws if channel not native type', async () => {
+        it('throws if channel has no gate', async () => {
             channelManager.channels.set('public-ch', { type: 'public', members: [] });
-            await expect(channelManager.addMember('public-ch', '0x1')).rejects.toThrow('native or gated');
+            await expect(channelManager.addMember('public-ch', '0x1')).rejects.toThrow('gated channels');
         });
 
         it('throws if already a member', async () => {
             await expect(channelManager.addMember(streamId, '0xMyAddress')).rejects.toThrow('already a member');
         });
 
-        it('derives ephemeral ID if not stored on channel', async () => {
-            const channel = channelManager.channels.get(streamId);
-            delete channel.ephemeralStreamId;
-
-            await channelManager.addMember(streamId, '0xnewmember');
-
-            expect(streamrController.grantPermissionsToAddresses).toHaveBeenCalledWith(
-                `${streamId}-ephemeral`,
-                ['0xnewmember']
-            );
-        });
-
-        it('throws chain error on permission failure', async () => {
-            streamrController.grantPermissionsToAddresses.mockRejectedValue(new Error('out of gas'));
+        it('throws chain error on gate failure', async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
+            gateManager.allow.mockRejectedValue(new Error('out of gas'));
             await expect(channelManager.addMember(streamId, '0xnew')).rejects.toThrow();
         });
     });
 
     // ==================== removeMember ====================
     describe('removeMember', () => {
-        const streamId = 'stream-native-2';
+        const streamId = 'stream-gated-2';
 
-        beforeEach(() => {
+        beforeEach(async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
+            gateManager.ban.mockClear();
+            gateManager.ban.mockResolvedValue(true);
             channelManager.channels.set(streamId, {
                 messageStreamId: streamId,
-                type: 'native',
+                type: 'gated',
+                gate: { address: '0xgate' },
                 members: ['0xmyaddress', '0xmember1', '0xmember2'],
                 ephemeralStreamId: `${streamId}-ephemeral`,
                 createdBy: '0xmyaddress'
             });
         });
 
-        it('revokes permissions on all 4 streams', async () => {
+        it('bans the member on the gate and rotates the epoch', async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
+            const { epochKeyManager } = await import('../../src/js/epochKeyManager.js');
             await channelManager.removeMember(streamId, '0xmember1');
 
-            expect(streamrController.revokePermissionsFromAddresses).toHaveBeenCalledTimes(4);
-            expect(streamrController.revokePermissionsFromAddresses).toHaveBeenCalledWith(streamId, ['0xmember1']);
-            expect(streamrController.revokePermissionsFromAddresses).toHaveBeenCalledWith(`${streamId}-ephemeral`, ['0xmember1']);
-            expect(streamrController.revokePermissionsFromAddresses).toHaveBeenCalledWith(`${streamId}-admin`, ['0xmember1']);
-            expect(streamrController.revokePermissionsFromAddresses).toHaveBeenCalledWith(`${streamId}-keys`, ['0xmember1']);
+            expect(gateManager.ban).toHaveBeenCalledWith('0xgate', '0xmember1', false);
+            expect(epochKeyManager.rotateEpoch).toHaveBeenCalled();
         });
 
         it('removes member from local list', async () => {
@@ -308,10 +317,9 @@ describe('ChannelManager Extended', () => {
             expect(channel.members).toContain('0xmember2');
         });
 
-        it('clears graph cache and saves', async () => {
+        it('saves channels after update', async () => {
             const saveSpy = vi.spyOn(channelManager, 'saveChannels').mockResolvedValue(undefined);
             await channelManager.removeMember(streamId, '0xmember1');
-            expect(graphAPI.clearCache).toHaveBeenCalled();
             expect(saveSpy).toHaveBeenCalled();
         });
 
@@ -324,9 +332,9 @@ describe('ChannelManager Extended', () => {
             await expect(channelManager.removeMember('nonexistent', '0x1')).rejects.toThrow('Channel not found');
         });
 
-        it('throws if not native type', async () => {
+        it('throws if channel has no gate', async () => {
             channelManager.channels.set('public-ch', { type: 'public', members: ['0x1'] });
-            await expect(channelManager.removeMember('public-ch', '0x1')).rejects.toThrow('native or gated');
+            await expect(channelManager.removeMember('public-ch', '0x1')).rejects.toThrow('gated channels');
         });
 
         it('throws if address is not a member', async () => {
@@ -346,25 +354,24 @@ describe('ChannelManager Extended', () => {
 
     // ==================== updateMemberPermissions ====================
     describe('updateMemberPermissions', () => {
-        const streamId = 'stream-native-3';
+        const streamId = 'stream-gated-3';
 
-        beforeEach(() => {
+        beforeEach(async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
+            gateManager.setModerator.mockClear();
+            gateManager.setModerator.mockResolvedValue(true);
             channelManager.channels.set(streamId, {
-                type: 'native',
+                type: 'gated',
+                gate: { address: '0xgate' },
                 members: ['0xmyaddress', '0xmember1']
             });
         });
 
-        it('calls updatePermissions on streamrController', async () => {
-            const perms = { canGrant: true };
-            await channelManager.updateMemberPermissions(streamId, '0xmember1', perms);
-
-            expect(streamrController.updatePermissions).toHaveBeenCalledWith(streamId, '0xmember1', perms);
-        });
-
-        it('clears graph cache', async () => {
+        it('maps canGrant onto the gate moderator flag', async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
             await channelManager.updateMemberPermissions(streamId, '0xmember1', { canGrant: true });
-            expect(graphAPI.clearCache).toHaveBeenCalled();
+
+            expect(gateManager.setModerator).toHaveBeenCalledWith('0xgate', '0xmember1', true);
         });
 
         it('returns true on success', async () => {
@@ -376,24 +383,30 @@ describe('ChannelManager Extended', () => {
             await expect(channelManager.updateMemberPermissions('nonexistent', '0x1', {})).rejects.toThrow('Channel not found');
         });
 
-        it('throws if not native type', async () => {
+        it('throws if channel has no gate', async () => {
             channelManager.channels.set('pub', { type: 'public' });
-            await expect(channelManager.updateMemberPermissions('pub', '0x1', {})).rejects.toThrow('native');
+            await expect(channelManager.updateMemberPermissions('pub', '0x1', {})).rejects.toThrow('gated');
         });
 
         it('throws chain error on failure', async () => {
-            streamrController.updatePermissions.mockRejectedValue(new Error('transaction failed'));
+            const { gateManager } = await import('../../src/js/gate.js');
+            gateManager.setModerator.mockRejectedValue(new Error('transaction failed'));
             await expect(channelManager.updateMemberPermissions(streamId, '0x1', {})).rejects.toThrow();
         });
     });
 
     // ==================== getChannelMembers ====================
     describe('getChannelMembers', () => {
-        const streamId = 'stream-native-4';
+        const streamId = 'stream-gated-4';
 
-        beforeEach(() => {
+        beforeEach(async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
+            gateManager.getGateMembers.mockClear();
+            gateManager.getGateMembers.mockResolvedValue([]);
             channelManager.channels.set(streamId, {
-                type: 'native',
+                messageStreamId: streamId,
+                type: 'gated',
+                gate: { address: '0xgate' },
                 members: ['0xlocalmember1'],
                 createdBy: '0xowner'
             });
@@ -403,47 +416,60 @@ describe('ChannelManager Extended', () => {
             await expect(channelManager.getChannelMembers('nonexistent')).rejects.toThrow('Channel not found');
         });
 
-        it('returns empty array for non-native channels', async () => {
+        it('returns empty array for channels without a gate', async () => {
             channelManager.channels.set('pub', { type: 'public' });
             const result = await channelManager.getChannelMembers('pub');
             expect(result).toEqual([]);
         });
 
-        it('returns members from Graph API', async () => {
-            graphAPI.getStreamMembers.mockResolvedValue({
-                ok: true,
-                data: [
-                    { address: '0xOwner', canGrant: true, canEdit: true, canDelete: true, isOwner: true },
-                    { address: '0xMember1', canGrant: false, isOwner: false }
-                ]
-            });
+        it('annotates candidates through the gate contract', async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
+            gateManager.getGateMembers.mockResolvedValue([
+                { address: '0xowner', isOwner: true, moderator: false, access: true },
+                { address: '0xmember1', isOwner: false, moderator: false, access: true }
+            ]);
 
             const members = await channelManager.getChannelMembers(streamId);
 
+            expect(gateManager.getGateMembers).toHaveBeenCalledWith(
+                '0xgate', expect.arrayContaining(['0xlocalmember1']));
             expect(members.length).toBeGreaterThanOrEqual(2);
         });
 
-        it('falls back to local cache when Graph is empty', async () => {
-            graphAPI.getStreamMembers.mockResolvedValue({ ok: true, data: [] });
+        it('maps the moderator flag onto canGrant', async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
+            gateManager.getGateMembers.mockResolvedValue([
+                { address: '0xmod', isOwner: false, moderator: true, access: true }
+            ]);
 
             const members = await channelManager.getChannelMembers(streamId);
 
-            // Should include owner + local members
-            expect(members.length).toBeGreaterThanOrEqual(1);
+            const mod = members.find(m => m.address.toLowerCase() === '0xmod');
+            expect(mod.canGrant).toBe(true);
+            expect(mod.isOwner).toBe(false);
         });
 
-        it('falls back to local cache on Graph error', async () => {
-            graphAPI.getStreamMembers.mockRejectedValue(new Error('network error'));
+        it('filters banned and ex-members', async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
+            gateManager.getGateMembers.mockResolvedValue([
+                { address: '0xbanned', isOwner: false, moderator: false, access: false }
+            ]);
 
             const members = await channelManager.getChannelMembers(streamId);
 
-            // Should still return members from local cache
-            expect(members.length).toBeGreaterThanOrEqual(1);
+            expect(members.find(m => m.address.toLowerCase() === '0xbanned')).toBeUndefined();
+        });
+
+        it('falls back to local cache when the chain is unreachable', async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
+            gateManager.getGateMembers.mockRejectedValue(new Error('rpc down'));
+
+            const members = await channelManager.getChannelMembers(streamId);
+
+            expect(members.find(m => m.address.toLowerCase() === '0xlocalmember1')).toBeDefined();
         });
 
         it('always includes owner with full permissions', async () => {
-            graphAPI.getStreamMembers.mockResolvedValue({ ok: true, data: [] });
-
             const members = await channelManager.getChannelMembers(streamId);
 
             const owner = members.find(m => m.address.toLowerCase() === '0xowner');
@@ -451,28 +477,14 @@ describe('ChannelManager Extended', () => {
             expect(owner.isOwner).toBe(true);
             expect(owner.canGrant).toBe(true);
         });
-
-        it('updates local member cache', async () => {
-            graphAPI.getStreamMembers.mockResolvedValue({
-                ok: true,
-                data: [
-                    { address: '0xNewMember', canGrant: false, isOwner: false }
-                ]
-            });
-
-            await channelManager.getChannelMembers(streamId);
-
-            const channel = channelManager.channels.get(streamId);
-            expect(channel.members.length).toBeGreaterThan(0);
-            expect(secureStorage.setChannels).toHaveBeenCalled();
-        });
     });
 
     // ==================== canAddMembers ====================
     describe('canAddMembers', () => {
         it('returns true for channel owner', async () => {
             channelManager.channels.set('stream-1', {
-                type: 'native',
+                type: 'gated',
+                gate: { address: '0xgate' },
                 members: ['0xmyaddress'],
                 createdBy: '0xmyaddress'
             });
@@ -481,49 +493,43 @@ describe('ChannelManager Extended', () => {
             expect(result).toBe(true);
         });
 
-        it('returns true if member has canGrant permission', async () => {
+        it('returns true for a gate moderator', async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
+            gateManager.canModerate.mockResolvedValue(true);
             channelManager.channels.set('stream-2', {
-                type: 'native',
+                type: 'gated',
+                gate: { address: '0xgate' },
                 members: ['0xmyaddress', '0xowner'],
                 createdBy: '0xowner'
-            });
-            graphAPI.getStreamMembers.mockResolvedValue({
-                ok: true,
-                data: [
-                    { address: '0xmyaddress', canGrant: true, isOwner: false },
-                    { address: '0xowner', canGrant: true, isOwner: true }
-                ]
             });
 
             const result = await channelManager.canAddMembers('stream-2');
             expect(result).toBe(true);
         });
 
-        it('returns false if member lacks canGrant', async () => {
+        it('returns false for a non-moderator member', async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
+            gateManager.canModerate.mockResolvedValue(false);
             channelManager.channels.set('stream-3', {
-                type: 'native',
+                type: 'gated',
+                gate: { address: '0xgate' },
                 members: ['0xmyaddress', '0xowner'],
                 createdBy: '0xowner'
-            });
-            graphAPI.getStreamMembers.mockResolvedValue({
-                ok: true,
-                data: [
-                    { address: '0xmyaddress', canGrant: false, isOwner: false },
-                    { address: '0xowner', canGrant: true, isOwner: true }
-                ]
             });
 
             const result = await channelManager.canAddMembers('stream-3');
             expect(result).toBe(false);
         });
 
-        it('returns false on error', async () => {
+        it('returns false when the moderator check fails', async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
+            gateManager.canModerate.mockRejectedValue(new Error('rpc down'));
             channelManager.channels.set('stream-4', {
-                type: 'native',
+                type: 'gated',
+                gate: { address: '0xgate' },
                 members: [],
                 createdBy: '0xother'
             });
-            graphAPI.getStreamMembers.mockRejectedValue(new Error('fail'));
 
             const result = await channelManager.canAddMembers('stream-4');
             expect(result).toBe(false);
@@ -537,7 +543,7 @@ describe('ChannelManager Extended', () => {
         beforeEach(() => {
             channelManager.channels.set(streamId, {
                 messageStreamId: streamId,
-                type: 'native',
+                type: 'password',
                 createdBy: '0xmyaddress',
                 members: ['0xmyaddress']
             });
@@ -580,7 +586,7 @@ describe('ChannelManager Extended', () => {
 
         it('throws if not channel owner', async () => {
             channelManager.channels.set('other-stream', {
-                type: 'native',
+                type: 'password',
                 createdBy: '0xotherowner',
                 members: []
             });
@@ -657,7 +663,7 @@ describe('ChannelManager Extended', () => {
     describe('leaveAllChannels', () => {
         it('unsubscribes from all channels', async () => {
             channelManager.channels.set('ch1', { type: 'public' });
-            channelManager.channels.set('ch2', { type: 'native' });
+            channelManager.channels.set('ch2', { type: 'password' });
 
             await channelManager.leaveAllChannels();
 
@@ -692,7 +698,7 @@ describe('ChannelManager Extended', () => {
 
         it('swallows individual unsubscribe errors', async () => {
             channelManager.channels.set('ch1', { type: 'public' });
-            channelManager.channels.set('ch2', { type: 'native' });
+            channelManager.channels.set('ch2', { type: 'password' });
             streamrController.unsubscribe.mockRejectedValueOnce(new Error('fail'));
 
             // Should not throw
@@ -722,7 +728,7 @@ describe('ChannelManager Extended', () => {
 
         it('fetches stream data, type, and members in parallel', async () => {
             graphAPI.getStream.mockResolvedValue({ id: streamId });
-            graphAPI.detectStreamType.mockResolvedValue('native');
+            graphAPI.detectStreamType.mockResolvedValue('password');
             graphAPI.getStreamMembers.mockResolvedValue({
                 ok: true,
                 data: [{ address: '0xowner', isOwner: true }]
@@ -737,18 +743,18 @@ describe('ChannelManager Extended', () => {
 
         it('updates channel type from Graph', async () => {
             graphAPI.getStream.mockResolvedValue({ id: streamId });
-            graphAPI.detectStreamType.mockResolvedValue('native');
+            graphAPI.detectStreamType.mockResolvedValue('password');
             graphAPI.getStreamMembers.mockResolvedValue({ ok: true, data: [] });
 
             await channelManager.syncChannelFromGraph(streamId);
 
             const channel = channelManager.channels.get(streamId);
-            expect(channel.type).toBe('native');
+            expect(channel.type).toBe('password');
         });
 
         it('updates members and owner from Graph', async () => {
             graphAPI.getStream.mockResolvedValue({ id: streamId });
-            graphAPI.detectStreamType.mockResolvedValue('native');
+            graphAPI.detectStreamType.mockResolvedValue('password');
             graphAPI.getStreamMembers.mockResolvedValue({
                 ok: true,
                 data: [
@@ -790,11 +796,11 @@ describe('ChannelManager Extended', () => {
             graphAPI.getStreamMembers.mockResolvedValue({ ok: true, data: [] });
 
             const channelBefore = channelManager.channels.get(streamId);
-            channelBefore.type = 'native';
+            channelBefore.type = 'password';
 
             await channelManager.syncChannelFromGraph(streamId);
 
-            expect(channelManager.channels.get(streamId).type).toBe('native');
+            expect(channelManager.channels.get(streamId).type).toBe('password');
         });
     });
 
@@ -823,7 +829,7 @@ describe('ChannelManager Extended', () => {
 
         it('publishes with password for encrypted channels', async () => {
             channelManager.channels.set('stream-enc', {
-                type: 'native',
+                type: 'password',
                 ephemeralStreamId: 'stream-enc-eph',
                 password: 'secret123'
             });
@@ -1146,7 +1152,7 @@ describe('ChannelManager Extended', () => {
 
         it('passes password for encrypted channels', async () => {
             channelManager.channels.set('enc-stream', {
-                type: 'native',
+                type: 'password',
                 password: 'secret',
                 messages: [],
                 ephemeralStreamId: 'enc-stream-eph'

@@ -5,7 +5,7 @@
  * Subgraph: https://thegraph.com/explorer/subgraphs/EGWFdhhiWypDuz22Uy7b3F69E9MEkyfU9iAQMttkH5Rj
  * 
  * Features:
- * - Get stream permissions (detect public vs native)
+ * - Get stream permissions (detect public vs members-only)
  * - Get stream members
  * - Check user access to stream
  * - Get stream metadata
@@ -194,7 +194,7 @@ class GraphAPI {
     /**
      * Detect stream/channel type from metadata (primary) or permissions (fallback)
      * @param {string} streamId - Stream ID
-     * @returns {Promise<string>} - 'public' | 'password' | 'native' | 'unknown'
+     * @returns {Promise<string>} - 'public' | 'password' | 'gated' | 'unknown'
      */
     async detectStreamType(streamId) {
         try {
@@ -216,10 +216,10 @@ class GraphAPI {
                 Logger.debug('Could not get type from metadata:', metaError.message);
             }
             
-            // Fallback: check permissions (can only detect public vs native)
+            // Fallback: check permissions (can only detect public vs not)
             const permissions = await this.getStreamPermissions(streamId);
             Logger.debug('Permissions for type detection:', permissions);
-            
+
             if (permissions.length === 0) {
                 Logger.debug('No permissions found, returning unknown');
                 return 'unknown';
@@ -228,14 +228,17 @@ class GraphAPI {
             // Check for public permissions (userAddress is null or 0x0...)
             const hasPublicPermission = permissions.some(p => {
                 const addr = p.userAddress;
-                const isPublic = addr === null || 
+                const isPublic = addr === null ||
                     addr === '0x0000000000000000000000000000000000000000';
                 return isPublic;
             });
 
             // If public permissions, could be 'public' or 'password' - default to 'public'
-            // (metadata check above would have caught 'password' if available)
-            const result = hasPublicPermission ? 'public' : 'native';
+            // (metadata check above would have caught 'password' if available).
+            // A members-only stream without Pombo metadata is not a channel
+            // this client can classify — gated channels are recognised by
+            // their gate metadata before type detection matters.
+            const result = hasPublicPermission ? 'public' : 'unknown';
             Logger.debug('Detected type from permissions:', result);
             return result;
         } catch (error) {

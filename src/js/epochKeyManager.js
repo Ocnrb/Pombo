@@ -1,9 +1,9 @@
 /**
  * Epoch Key Manager — protocol state machine for the keys stream (-4).
  *
- * Owns, per native channel: the adopted epoch keys (kid → key), the announces
+ * Owns, per gated channel: the adopted epoch keys (kid → key), the announces
  * seen so far, and the in-flight KEY_REQUEST. The crypto lives in
- * epochKeyCrypto; the transport (publish as account, resend) in streamr.js.
+ * epochKeyCrypto; the transport (publish, resend) in streamr.js.
  *
  * Protocol (UNIFIED_IMPLEMENTATION_PLAN.md §5.4, §7.9, D12–D14):
  *
@@ -50,13 +50,12 @@ import { KEYS_MSG_TYPE } from './streamConstants.js';
 import { gateManager, GATE_MODE } from './gate.js';
 
 /**
- * Channels running the epoch-key protocol: native (N-A) and gated (N-C).
- * Gated channels differ only in transport (the gate clone publishes for
- * everyone, ERC-1271) and in the KEY_REQUEST gate check — the state machine
- * is identical.
+ * Channels running the epoch-key protocol (gated, N-A/N-C): the gate clone
+ * publishes for everyone (ERC-1271) and KEY_REQUESTs are answered only after
+ * a gate check.
  */
 export const usesEpochKeys = (channel) =>
-    (channel?.type === 'native' || !!channel?.gate?.address) && !!channel?.keysStreamId;
+    !!channel?.gate?.address && !!channel?.keysStreamId;
 
 // Re-request backoff: a pending request younger than this is not superseded.
 const REQUEST_MIN_INTERVAL_MS = 60 * 1000;
@@ -68,10 +67,10 @@ const REQUEST_MIN_INTERVAL_MS = 60 * 1000;
 const REQUEST_RETRY_FAST_MS = 10 * 1000;
 const REQUEST_FAST_ATTEMPTS = 4;
 
-// How much -4 history to scan for announces on channel open. Native rotations
-// are event-driven (ban/leave); gated channels add the weekly cadence (N-D) —
-// ~52 announces/year plus wraps, still inside this window for the storage
-// retention that actually bounds what a resend returns.
+// How much -4 history to scan for announces on channel open. Rotations are
+// event-driven (ban) plus the weekly cadence (N-D) — ~52 announces/year plus
+// wraps, still inside this window for the storage retention that actually
+// bounds what a resend returns.
 const KEYS_HISTORY_COUNT = 1000;
 
 // N-B anti-stampede (§7.10): rank × this = how long an answerer waits before
@@ -92,8 +91,7 @@ const SEEN_WRAPS_MAX = 100;
 
 // N-D (§7.12): gated channels rotate on a cadence — selling the asset or a
 // lapsed subscription only cuts reads at the NEXT rotation, so without a
-// schedule the cut never lands. Weekly for every gate mode; native channels
-// stay event-driven only.
+// schedule the cut never lands. Weekly for every gate mode.
 const ROTATION_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 // Failed or not-yet-due scheduled rotations re-check on this fallback.
 const ROTATION_RETRY_MS = 60 * 60 * 1000;
@@ -279,7 +277,7 @@ class EpochKeyManager {
     // ==================== LIFECYCLE ====================
 
     /**
-     * Bring a native channel's key state up to date. Called on channel
+     * Bring a gated channel's key state up to date. Called on channel
      * open/subscribe. Pulls announces from -4 storage, bootstraps epoch 1 if
      * we are the admin of a virgin channel, or requests missing keys.
      * @param {Object} channel - Channel object (messageStreamId, keysStreamId, type)
@@ -287,7 +285,6 @@ class EpochKeyManager {
     async ensureChannelKeys(channel) {
         if (!usesEpochKeys(channel)) return;
         const s = this._getState(channel.messageStreamId);
-        s.gated = !!channel.gate?.address;   // arms the kid-freshness rule
 
         if (!s.loaded) {
             this._loadPersisted(channel.messageStreamId, s);
@@ -378,16 +375,58 @@ class EpochKeyManager {
         // CONSISTENT BY CONSTRUCTION across the admin's devices: this only
         // ever republishes the PERSISTED keyId/keyHash — two devices doing it
         // concurrently emit identical content. Minting happens nowhere here.
-        await streamrController.publishKeysMessage(channel.keysStreamId, {
+        const reannounce = {
             t: KEYS_MSG_TYPE.KEY_ANNOUNCE,
             epoch: s.currentEpoch,
             keyId: announce.keyId,
             keyHash: entry.keyHash,
             validFrom: Date.now()
-        });
+        };
+        await streamrController.publishKeysMessage(channel.keysStreamId, reannounce);
         s.announceFreshness.set(s.currentEpoch, Date.now());
         Logger.info(`epochKeys: re-announced epoch ${s.currentEpoch} (announce ${freshest ? 'nearing storage TTL' : 'missing from storage'}) on`,
             channel.keysStreamId.slice(-30));
+        this._ensureAnnounceRetained(channel, reannounce).catch(() => {});
+    }
+
+    /**
+     * Fire-and-forget retention loop for a just-published KEY_ANNOUNCE (same
+     * pattern as the password challenge). A create-time publish can race the
+     * storage node learning its -4 assignment, or leave a cold node before
+     * any neighbour is connected (R2 publishes into an empty room) — either
+     * way the announce is lost, a joiner never gets an anchor, and the
+     * publishing session masks the missing-from-storage re-announce because
+     * its own freshness entry looks recent. Verify by resend that the -4
+     * actually returns the keyId; republish until it does.
+     */
+    async _ensureAnnounceRetained(channel, announce, { maxAttempts = 12, delayMs = 5000 } = {}) {
+        const keysStreamId = channel.keysStreamId;
+        if (!keysStreamId || !announce?.keyId) return;
+        const tracked = (this._announceRetention ??= new Set());
+        if (tracked.has(announce.keyId)) return;
+        tracked.add(announce.keyId);
+        try {
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                await new Promise(r => setTimeout(r, delayMs));
+                if (!this.state.has(channel.messageStreamId)) return;    // left/deleted
+                try {
+                    const entries = await streamrController.resendKeysMessages(keysStreamId, { last: 100 });
+                    const found = entries.some(({ data }) =>
+                        data?.t === KEYS_MSG_TYPE.KEY_ANNOUNCE && data.keyId === announce.keyId);
+                    if (found) {
+                        Logger.info(`epochKeys: announce ${announce.keyId} retained on -4 (after ${attempt} cycle${attempt > 1 ? 's' : ''})`);
+                        return;
+                    }
+                    await streamrController.publishKeysMessage(keysStreamId, announce);
+                    Logger.debug(`epochKeys: announce ${announce.keyId} republished (retention attempt ${attempt}/${maxAttempts})`);
+                } catch (e) {
+                    Logger.debug(`epochKeys: announce retention cycle #${attempt} errored:`, e?.message);
+                }
+            }
+            Logger.warn(`epochKeys: announce ${announce.keyId} STILL not retained after ${maxAttempts} attempts — the next channel open re-announces`);
+        } finally {
+            tracked.delete(announce.keyId);
+        }
     }
 
     /**
@@ -455,6 +494,7 @@ class EpochKeyManager {
             this._applyAnnounce(channel, s, announce, authManager.getAddress(), announce.validFrom);
             Logger.info(`epochKeys: re-announced epoch ${entry.epoch} (announce was missing from storage) on`,
                 channel.keysStreamId.slice(-30));
+            this._ensureAnnounceRetained(channel, announce).catch(() => {});
             return;
         }
 
@@ -488,6 +528,7 @@ class EpochKeyManager {
         this._applyAnnounce(channel, s, announce, authManager.getAddress(), announce.validFrom);
         await this._adopt(channel, s, { keyId, keyHex, keyHash, epoch: 1 });
         Logger.info('epochKeys: bootstrapped epoch 1 on', channel.keysStreamId.slice(-30));
+        this._ensureAnnounceRetained(channel, announce).catch(() => {});
     }
 
     /**
@@ -519,6 +560,7 @@ class EpochKeyManager {
         this._applyAnnounce(channel, s, announce, authManager.getAddress(), announce.validFrom);
         await this._adopt(channel, s, { keyId, keyHex, keyHash, epoch });
         Logger.info(`epochKeys: rotated to epoch ${epoch} on`, channel.keysStreamId.slice(-30));
+        this._ensureAnnounceRetained(channel, announce).catch(() => {});
         return epoch;
     }
 
@@ -528,16 +570,14 @@ class EpochKeyManager {
      * Ingest for -4 messages (live subscription).
      * @param {Object} channel
      * @param {Object} data - Parsed protocol message
-     * @param {string} publisherId - Authenticated author: the transport
-     *   publisher on native (-4 publishes as account by design), the recovered
-     *   envelope signer on gated (the clone publishes for everyone; streamr.js
+     * @param {string} publisherId - Authenticated author: the recovered
+     *   envelope signer (the clone publishes for everyone; streamr.js
      *   resolveAuthor swaps it in before this handler runs)
      * @param {number} timestamp - Transport timestamp
      */
     async handleKeysMessage(channel, data, publisherId, timestamp) {
         if (!data || typeof data.t !== 'string') return;
         const s = this._getState(channel.messageStreamId);
-        s.gated = !!channel.gate?.address;   // arms the kid-freshness rule
 
         switch (data.t) {
             case KEYS_MSG_TYPE.KEY_ANNOUNCE:
@@ -610,10 +650,8 @@ class EpochKeyManager {
 
     /**
      * A live KEY_REQUEST: schedule an answer behind the anti-stampede rank
-     * (§7.10). Native: only the SDK-validated permission got this message to
-     * us — anyone we hear on -4 passed the channel's access control. Gated:
-     * the clone's permission is everyone's, so the CURRENT gate is checked
-     * against the requester (envelope signer) just before wrapping.
+     * (§7.10). The clone's permission is everyone's, so the CURRENT gate is
+     * checked against the requester (envelope signer) just before wrapping.
      */
     async _handleRequest(channel, s, data, publisherId) {
         this._recordRequester(s, publisherId);
@@ -662,20 +700,21 @@ class EpochKeyManager {
     async _answerRequest(channel, request) {
         const s = this.state.get(channel.messageStreamId);
         if (!s || s.epochs.size === 0) return;
+        // No gate (repair pending) means no access check is possible — never
+        // hand out keys on an unverifiable request.
+        if (!channel.gate?.address) return;
 
-        // Gated (N-C): the write-cut for ex-members lives HERE. The requester
+        // The write-cut for ex-members lives HERE (N-C). The requester
         // authenticated as an author (sticky isValidSignature), but the epoch
         // key only goes to whoever passes the CURRENT gate — one cached
         // eth_call. Fail-closed inside checkAccess: RPC trouble means no wrap
         // from us; the requester's retry finds a healthier responder.
-        if (channel.gate?.address) {
-            if (!request.requester) return;
-            const ok = await gateManager.checkAccess(channel.gate.address, request.requester);
-            if (!ok) {
-                Logger.info('epochKeys: KEY_REQUEST from', request.requester,
-                    'refused by gate', channel.gate.address.slice(0, 10));
-                return;
-            }
+        if (!request.requester) return;
+        const ok = await gateManager.checkAccess(channel.gate.address, request.requester);
+        if (!ok) {
+            Logger.info('epochKeys: KEY_REQUEST from', request.requester,
+                'refused by gate', channel.gate.address.slice(0, 10));
+            return;
         }
 
         // D14: a PAID gate hands out ONLY the current epoch — the history
@@ -683,14 +722,12 @@ class EpochKeyManager {
         // gate config: missing old epochs get re-requested and answered once
         // the RPC heals, leaked ones cannot be taken back.
         let currentEpochOnly = false;
-        if (channel.gate?.address) {
-            try {
-                const info = await gateManager.getGateInfo(channel.gate.address);
-                currentEpochOnly = info.mode === GATE_MODE.PAID;
-            } catch (e) {
-                Logger.warn('epochKeys: gate mode unreadable, answering current epoch only:', e.message);
-                currentEpochOnly = true;
-            }
+        try {
+            const info = await gateManager.getGateInfo(channel.gate.address);
+            currentEpochOnly = info.mode === GATE_MODE.PAID;
+        } catch (e) {
+            Logger.warn('epochKeys: gate mode unreadable, answering current epoch only:', e.message);
+            currentEpochOnly = true;
         }
 
         const covered = s.seenWraps.get(request.requestId) || new Set();
@@ -920,26 +957,24 @@ class EpochKeyManager {
      * key is held and would open the message, but its use is out of policy —
      * the caller drops the message without requesting anything.
      *
-     * Kid freshness (N-C, gated channels only): sticky signatures mean an
-     * ex-member still authors valid envelopes; what stops readable spam is
-     * that old epoch keys stop being acceptable. Live traffic must use the
-     * CURRENT epoch (previous epoch tolerated briefly around a rotation);
-     * history must use the epoch that was in force at the message timestamp
-     * (the announces' validFrom map). Native channels are exempt: removal
-     * revokes the on-chain publish grant, which cuts harder than any kid rule.
+     * Kid freshness (N-C): sticky signatures mean an ex-member still authors
+     * valid envelopes; what stops readable spam is that old epoch keys stop
+     * being acceptable. Live traffic must use the CURRENT epoch (previous
+     * epoch tolerated briefly around a rotation); history must use the epoch
+     * that was in force at the message timestamp (the announces' validFrom
+     * map).
      *
      * @param {string} messageStreamId
      * @param {string} kid
      * @param {Object} [context]
      * @param {boolean} [context.live] - true when the message arrived on a live subscription
      * @param {number} [context.timestamp] - transport timestamp of the message
-     * @param {boolean} [context.gated] - set by the state (see ensureChannelKeys)
      */
     async getKeyForKid(messageStreamId, kid, context = {}) {
         const s = this.state.get(messageStreamId);
         const entry = s?.epochs.get(kid);
         if (!entry) return null;
-        if (s.gated && !this._kidIsFresh(s, kid, entry, context)) return false;
+        if (!this._kidIsFresh(s, kid, entry, context)) return false;
         return this._cryptoKey(entry);
     }
 

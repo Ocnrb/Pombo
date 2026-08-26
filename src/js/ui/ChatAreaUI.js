@@ -538,10 +538,10 @@ class ChatAreaUI {
 
         // While initial history reconciliation is in progress, render cached
         // messages if any exist (avoids hiding persisted state behind a spinner
-        // while the storage-node resend iterator completes — particularly slow
-        // for native channels). Only gate to empty when there is nothing cached
-        // to show. A second render fires on `initial_history_complete` to
-        // reconcile with any newly fetched content/overrides.
+        // while the storage-node resend iterator completes). Only gate to
+        // empty when there is nothing cached to show. A second render fires on
+        // `initial_history_complete` to reconcile with any newly fetched
+        // content/overrides.
         const sourceMessages = Array.isArray(messages) ? messages : [];
         const adminState = effectiveChannel?.adminState;
         const hiddenIds = adminState && Array.isArray(adminState.hiddenMessageIds)
@@ -582,7 +582,7 @@ class ChatAreaUI {
                 // "cannot decrypt yet", not "nothing was said" — the refresh
                 // fired on key adoption re-renders and clears this state.
                 const waitingForKeys =
-                    (effectiveChannel?.type === 'native' || effectiveChannel?.type === 'gated') &&
+                    effectiveChannel?.type === 'gated' &&
                     this.deps.epochKeyManager?.getWaitingInfo?.(effectiveChannel.messageStreamId)?.waiting;
                 // On a paid gate an expired subscription is indistinguishable
                 // from "admin offline" at the key layer (refusals are silent),

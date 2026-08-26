@@ -56,13 +56,6 @@ describe('openUnjoinedChannel', () => {
         expect(deps.enterPreviewMode).not.toHaveBeenCalled();
     });
 
-    it('sends a native channel to the join flow', async () => {
-        const deps = makeDeps();
-        await openUnjoinedChannel('s1', { type: 'native' }, deps);
-
-        expect(deps.joinPublicChannel).toHaveBeenCalled();
-    });
-
     it('previews a token gate the user holds', async () => {
         const deps = makeDeps();
         gateManager.getGateInfo.mockResolvedValue({ mode: 1 });

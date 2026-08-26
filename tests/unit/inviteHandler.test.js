@@ -88,8 +88,8 @@ describe('inviteHandler.getChannelTypeLabel', () => {
         expect(inviteHandler.getChannelTypeLabel('password')).toBe('Password Protected');
     });
 
-    it('should return "Native Encryption" for native type', () => {
-        expect(inviteHandler.getChannelTypeLabel('native')).toBe('Native Encryption');
+    it('should return "Gated Channel (on-chain)" for gated type', () => {
+        expect(inviteHandler.getChannelTypeLabel('gated')).toBe('Gated Channel (on-chain)');
     });
 
     it('should escape unknown types to prevent XSS', () => {

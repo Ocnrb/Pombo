@@ -1,7 +1,7 @@
 /**
  * Epoch Key Crypto — primitives for the keys stream (-4) protocol.
  *
- * Gated/native channel content on -1 is encrypted with a channel-wide EPOCH KEY,
+ * Gated channel content on -1 is encrypted with a channel-wide EPOCH KEY,
  * versioned by `kid`. This module holds the pure crypto; the protocol state
  * machine (who announces, who wraps, when to rotate) lives in epochKeyManager.
  *

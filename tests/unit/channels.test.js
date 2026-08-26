@@ -133,6 +133,20 @@ vi.mock('../../src/js/media.js', () => ({
     }
 }));
 
+vi.mock('../../src/js/gate.js', () => ({
+    GATE_MODE: Object.freeze({ NONE: 0, TOKEN_BALANCE: 1, NFT_OWNERSHIP: 2, PAID: 3 }),
+    gateManager: {
+        createGate: vi.fn().mockResolvedValue('0xgate'),
+        allowBatch: vi.fn().mockResolvedValue(true),
+        allow: vi.fn().mockResolvedValue(true),
+        ban: vi.fn().mockResolvedValue(true),
+        checkAccess: vi.fn().mockResolvedValue(true),
+        getGateMembers: vi.fn().mockResolvedValue([]),
+        setModerator: vi.fn().mockResolvedValue(true),
+        canModerate: vi.fn().mockResolvedValue(false)
+    }
+}));
+
 // Now import the module
 import { channelManager } from '../../src/js/channels.js';
 import { authManager } from '../../src/js/auth.js';
@@ -284,7 +298,7 @@ describe('ChannelManager', () => {
 
             secureStorage.getChannels.mockReturnValue([
                 { messageStreamId: 'stream1', name: 'Fresh Name', type: 'public' },
-                { messageStreamId: 'stream2', name: 'Brand New', type: 'native' }
+                { messageStreamId: 'stream2', name: 'Brand New', type: 'password' }
             ]);
 
             const result = channelManager.reloadChannelsFromSync();
@@ -1133,7 +1147,7 @@ describe('ChannelManager', () => {
                 messageStreamId: 'stream1',
                 ephemeralStreamId: 'stream1-eph',
                 name: 'My Channel',
-                type: 'native',
+                type: 'password',
                 createdAt: 12345,
                 createdBy: '0xowner',
                 password: 'secret',
@@ -1149,7 +1163,7 @@ describe('ChannelManager', () => {
             
             const savedData = secureStorage.setChannels.mock.calls[0][0][0];
             expect(savedData.name).toBe('My Channel');
-            expect(savedData.type).toBe('native');
+            expect(savedData.type).toBe('password');
             expect(savedData.password).toBe('secret');
             expect(savedData.members).toEqual(['0x1', '0x2']);
             expect(savedData.exposure).toBe('visible');
@@ -1727,7 +1741,6 @@ describe('ChannelManager', () => {
                 'Test',
                 '0xmyaddress',
                 'public',
-                [],
                 expect.any(Object)
             );
             expect(channel.messageStreamId).toBe('0xmyaddress/test-1');
@@ -1736,26 +1749,21 @@ describe('ChannelManager', () => {
             expect(channel.type).toBe('public');
         });
 
-        it('should pass members for native channels', async () => {
-            await channelManager.createChannel('Group', 'native', null, ['0xbob', '0xalice']);
+        it('should allow initial members in one gate transaction for gated channels', async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
+            await channelManager.createChannel('Group', 'gated', null, ['0xbob', '0xalice']);
 
-            expect(streamrController.createStream).toHaveBeenCalledWith(
-                'Group',
-                '0xmyaddress',
-                'native',
-                ['0xbob', '0xalice'],
-                expect.any(Object)
-            );
+            expect(gateManager.allowBatch).toHaveBeenCalledWith('0xgate', ['0xbob', '0xalice']);
         });
 
-        it('should include owner in members for native channels', async () => {
-            const channel = await channelManager.createChannel('Group', 'native', null, ['0xbob']);
+        it('should include owner in members for gated channels', async () => {
+            const channel = await channelManager.createChannel('Group', 'gated', null, ['0xbob']);
             expect(channel.members).toContain('0xmyaddress');
             expect(channel.members).toContain('0xbob');
         });
 
-        it('should not duplicate owner in native channel members', async () => {
-            const channel = await channelManager.createChannel('Group', 'native', null, ['0xmyaddress', '0xbob']);
+        it('should not duplicate owner in gated channel members', async () => {
+            const channel = await channelManager.createChannel('Group', 'gated', null, ['0xmyaddress', '0xbob']);
             const ownerCount = channel.members.filter(m => m.toLowerCase() === '0xmyaddress').length;
             expect(ownerCount).toBe(1);
         });

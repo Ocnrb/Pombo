@@ -2286,7 +2286,7 @@ describe('media.js core', () => {
 
         it('sends image with password encryption', async () => {
             vi.spyOn(mediaController, 'resizeImage').mockResolvedValue('data:base64');
-            channelManager.getChannel.mockReturnValue({ type: 'native', messages: [], password: 'pwd' });
+            channelManager.getChannel.mockReturnValue({ type: 'password', messages: [], password: 'pwd' });
 
             const file = new File(['img'], 'photo.png', { type: 'image/png' });
             await mediaController.sendImage('stream-1', file, 'pwd');

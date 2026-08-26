@@ -422,7 +422,7 @@ describe('GraphAPI', () => {
             expect(result).toBe('public');
         });
 
-        it('should detect native type when no public permissions', async () => {
+        it('should return unknown when only member permissions exist', async () => {
             let callCount = 0;
             globalThis.fetch = vi.fn().mockImplementation(() => {
                 callCount++;
@@ -447,7 +447,7 @@ describe('GraphAPI', () => {
             graphAPI.clearCache();
             const result = await graphAPI.detectStreamType('test-stream');
 
-            expect(result).toBe('native');
+            expect(result).toBe('unknown');
         });
 
         it('should return unknown when no permissions found', async () => {

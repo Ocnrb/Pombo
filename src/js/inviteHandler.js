@@ -87,7 +87,6 @@ class InviteHandler {
         const labels = {
             'public': 'Public Channel',
             'password': 'Password Protected',
-            'native': 'Native Encryption',
             'gated': 'Gated Channel (on-chain)'
         };
         // Security: escape unknown types to prevent XSS

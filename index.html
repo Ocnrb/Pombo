@@ -674,7 +674,7 @@
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>
                             <span>Protected</span>
                         </button>
-                        <button type="button" data-tab="native" class="channel-tab w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm text-left transition-all text-white/60 hover:text-white/90 hover:bg-white/5">
+                        <button type="button" data-tab="closed" class="channel-tab w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm text-left transition-all text-white/60 hover:text-white/90 hover:bg-white/5">
                             <svg class="w-4 h-4" viewBox="0 0 320 512" fill="currentColor"><path d="M311.9 260.8L160 353.6 8 260.8 160 0l151.9 260.8zM160 383.4L8 290.6 160 512l152-221.4-152 92.8z"/></svg>
                             <span>Closed</span>
                         </button>
@@ -717,14 +717,14 @@
                             <input type="hidden" name="channel-type" value="password" class="channel-type-input">
                         </div>
 
-                        <!-- Tab Content: Native (Closed) (description only) -->
-                        <div id="tab-native" class="channel-tab-content hidden space-y-4">
+                        <!-- Tab Content: Closed (description only) -->
+                        <div id="tab-closed" class="channel-tab-content hidden space-y-4">
                             <div class="p-4 bg-white/5 rounded-xl border border-white/5">
                                 <p class="text-sm text-white/50 leading-relaxed">
                                     Private channel with on-chain verified membership. Each member is authorized by account address.
                                 </p>
                             </div>
-                            <input type="hidden" name="channel-type" value="native" class="channel-type-input">
+                            <input type="hidden" name="channel-type" value="closed" class="channel-type-input">
                         </div>
 
                         <!-- Tab Content: Gated (token/NFT holding) -->
@@ -813,8 +813,8 @@
                             </div>
                         </div>
 
-                        <!-- Native fields (shown only for Closed tab) -->
-                        <div id="native-fields-section" class="hidden space-y-5">
+                        <!-- Closed-tab fields -->
+                        <div id="closed-fields-section" class="hidden space-y-5">
                             <div>
                                 <label class="block text-xs font-medium text-white/80 uppercase tracking-wider mb-2">Member Addresses</label>
                                 <textarea
@@ -1086,7 +1086,7 @@
                     <span class="text-white/40">Est. cost:</span>
                     <span id="cost-public" class="text-white/80 font-medium channel-cost-display tooltip" data-tooltip="Gas: loading...">calculating...</span>
                     <span id="cost-password" class="text-white/80 font-medium channel-cost-display tooltip hidden" data-tooltip="Gas: loading...">calculating...</span>
-                    <span id="cost-native" class="text-white/80 font-medium channel-cost-display tooltip hidden" data-tooltip="Gas: loading...">calculating...</span>
+                    <span id="cost-closed" class="text-white/80 font-medium channel-cost-display tooltip hidden" data-tooltip="Gas: loading...">calculating...</span>
                     <span id="cost-gated" class="text-white/80 font-medium channel-cost-display tooltip hidden" data-tooltip="Gas: loading...">calculating...</span>
                     <span id="cost-paid" class="text-white/80 font-medium channel-cost-display tooltip hidden" data-tooltip="Gas: loading...">calculating...</span>
                 </div>
@@ -1719,7 +1719,7 @@
                                 </div>
                             </div>
                             <!-- Channel Description -->
-                            <div id="non-native-message" class="hidden">
+                            <div id="channel-description-section" class="hidden">
                                 <label class="block text-xs font-medium text-white/80 uppercase tracking-wider mb-1.5">Description</label>
                                 <div id="channel-description-display" class="text-sm text-white/70 bg-white/5 px-3 py-2.5 rounded-lg leading-relaxed"></div>
                                 <textarea id="channel-settings-description-input" rows="3" class="hidden w-full bg-white/5 border border-white/10 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-white/30 transition resize-none" placeholder="Enter description"></textarea>

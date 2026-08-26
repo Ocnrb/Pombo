@@ -34,7 +34,7 @@
  *     P1: CHANNEL_IMAGE                                                    — RESERVED
  *     P2: PASSWORD_CHALLENGE                                               — RESERVED
  *   Permissions: only owner publishes; readers vary by channel type
- *   (public/password: public subscribe; native: members-only subscribe).
+ *   (public/password: public subscribe; gated: clone subscribe).
  *
  * KEYS STREAM (-4) — gated channels only:
  *   Single partition carrying the epoch-key protocol (KEY_ANNOUNCE / KEY_REQUEST /

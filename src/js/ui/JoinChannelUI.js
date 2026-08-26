@@ -101,7 +101,7 @@ class JoinChannelUI {
         // Closed-style channels without an on-chain name need a local name +
         // classification. A gated channel WITH an on-chain name (visible
         // token/paid) joins like a public channel — the owner named it.
-        if ((channelInfo?.type === 'native' || channelInfo?.type === 'gated') && !channelInfo?.name) {
+        if (channelInfo?.type === 'gated' && !channelInfo?.name) {
             channelModalsUI.showJoinClosedModal(streamId, channelInfo);
             return;
         }
@@ -205,7 +205,7 @@ class JoinChannelUI {
             // Closed-style channels without an on-chain name need a local name +
             // classification. A gated channel WITH an on-chain name (visible
             // token/paid) joins like a public channel — the owner named it.
-            if ((channelInfo?.type === 'native' || channelInfo?.type === 'gated') && !channelInfo?.name) {
+            if (channelInfo?.type === 'gated' && !channelInfo?.name) {
                 channelModalsUI.showJoinClosedModal(streamId, channelInfo);
                 return;
             }

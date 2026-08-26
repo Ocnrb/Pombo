@@ -1596,7 +1596,7 @@ class StorageMediaController {
             //   gated         → the clone (ERC-1271, inside publishStorageChunk)
             //                   — chunkIdentity stays null, verify expects the
             //                   gate address;
-            //   native/ro     → the account (D3) — chunkIdentity stays null,
+            //   read-only     → the account (D3) — chunkIdentity stays null,
             //                   and verify falls back to our wallet address.
             // chunkPublisher (whatever address the chunks carry) is what
             // verify must match; a wrong value makes every chunk read back as

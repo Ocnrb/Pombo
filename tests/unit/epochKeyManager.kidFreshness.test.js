@@ -5,8 +5,6 @@
  *
  * Live: only the current epoch (previous tolerated briefly after rotation).
  * History: the kid must be the one in force at the message timestamp.
- * Native channels are exempt (s.gated false) — revocation cuts the publish
- * grant on-chain, which is stronger than any kid rule.
  */
 
 import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
@@ -23,7 +21,6 @@ const TOL = CONFIG.gate.kidFreshnessToleranceMs;
 /** Channel state with 3 epochs: e1@t=1000h, e2@t=2000h, e3(current)@rotatedAt */
 function makeState({ rotatedAt = NOW - 1000 } = {}) {
     return {
-        gated: true,
         currentEpoch: 3,
         announces: new Map([
             [1, { keyId: 'kid-1', validFrom: NOW - 3_600_000 * 3, timestamp: NOW - 3_600_000 * 3 }],
@@ -106,15 +103,4 @@ describe('epochKeyManager.getKeyForKid (freshness wiring)', () => {
         epochKeyManager.state.delete(streamId);
     });
 
-    it('ungated (native) channels skip the freshness rule entirely', async () => {
-        const streamId = '0xaaa/native-test-1';
-        const s = makeState({ rotatedAt: NOW - TOL - 1 });
-        s.gated = false;
-        epochKeyManager.state.set(streamId, s);
-        // Old kid on a live message: would be rejected if gated — native imports the key
-        const result = await epochKeyManager.getKeyForKid(streamId, 'kid-1', { live: true });
-        expect(result).not.toBe(false);
-        expect(result).not.toBe(null);
-        epochKeyManager.state.delete(streamId);
-    });
 });
