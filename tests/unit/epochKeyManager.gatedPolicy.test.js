@@ -7,9 +7,10 @@
  *  - rotateEpoch accepts any epoch-key channel — an earlier guard rejected
  *    gated channels, which silently disabled the post-ban rotation that cuts
  *    an ex-member's reads.
- *  - KEY_REQUEST authors are recorded as member candidates: join()/pay()
- *    members never pass through the owner, but every reader must request
- *    keys on -4 — the v0 enumeration source for TOKEN/NFT/PAID gates.
+ *  - KEY_REQUEST authors are recorded as member candidates: holders and
+ *    pay() members never pass through the owner, but every reader must
+ *    request keys on -4 — the v0 enumeration source for TOKEN/NFT/PAID
+ *    gates.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';

@@ -662,9 +662,9 @@ class ChannelModalsUI {
     }
 
     /**
-     * Entry screen for a gated channel the user cannot enter yet (N-D, §7.14):
+     * Entry screen for a gated channel the user cannot enter yet:
      * reads the gate mode on-chain and shows the requirement, the user's
-     * standing, and the pay()/join() actions. `retry` re-runs the join that
+     * standing, and the pay() action. `retry` re-runs the entry that
      * was denied with GATE_ACCESS_DENIED.
      *
      * `renewal: true` reuses the screen for a member renewing from inside a
@@ -706,7 +706,6 @@ class ChannelModalsUI {
         const noteEl = document.getElementById('gate-entry-note');
         const actionBtn = document.getElementById('gate-entry-action-btn');
         const recheckBtn = document.getElementById('gate-entry-recheck-btn');
-        const joinBtn = document.getElementById('gate-entry-join-btn');
 
         // Access stack (Explore card anatomy) for real gates; the prose line
         // stays for NONE mode and while loading.
@@ -742,7 +741,6 @@ class ChannelModalsUI {
         noteEl?.classList.add('hidden');
         actionBtn?.classList.add('hidden');
         recheckBtn?.classList.add('hidden');
-        joinBtn?.classList.add('hidden');
 
         const fmt = (value, decimals) => {
             const s = ethers.formatUnits(value, decimals ?? 0);
@@ -864,26 +862,6 @@ class ChannelModalsUI {
                 actionBtn.classList.remove('hidden');
                 actionBtn.textContent = 'Enter Channel';
                 actionBtn.onclick = () => finishJoin(gateManager);
-            }
-            if (holds && joinBtn && noteEl) {
-                noteEl.classList.remove('hidden');
-                noteEl.textContent =
-                    'Optional: registering membership keeps your messages valid even after you sell the asset.';
-                joinBtn.classList.remove('hidden');
-                joinBtn.onclick = async () => {
-                    joinBtn.disabled = true;
-                    try {
-                        this.notificationUI?.showLoadingToast('Registering membership...', 'Waiting for the transaction');
-                        await gateManager.join(entry.gateAddress);
-                        this.notificationUI?.hideLoadingToast();
-                        this.showNotification('Membership registered on-chain', 'success');
-                        joinBtn.classList.add('hidden');
-                    } catch (error) {
-                        this.notificationUI?.hideLoadingToast();
-                        this.showNotification('Registration failed: ' + error.message, 'error');
-                        joinBtn.disabled = false;
-                    }
-                };
             }
         } catch (error) {
             if (conditionEl) conditionEl.textContent = 'Could not read the gate contract: ' + error.message;

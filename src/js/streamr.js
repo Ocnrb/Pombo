@@ -2800,9 +2800,13 @@ class StreamrController {
         let latest = null;
 
         try {
+            // Gated: raw resend — the SDK validator re-checks stored envelopes
+            // against the present gate state; authorship is established
+            // client-side by resolveAuthor (admin-only on -3) instead.
+            const gatedChannel = await this._gatedChannelFor(adminStreamId);
             const resend = await this.client.resend(
                 { streamId: adminStreamId, partition },
-                { last }
+                { last, ...(gatedChannel ? { raw: true } : {}) }
             );
 
             const iterator = resend[Symbol.asyncIterator]();
@@ -2832,9 +2836,15 @@ class StreamrController {
                             continue;
                         }
                     }
-                    // Gated: ADMIN_STATE arrives as an epoch envelope (N-A)
+                    // Gated: ADMIN_STATE arrives as an epoch envelope. History
+                    // context so entries sealed under an older epoch open in
+                    // that epoch's validity window instead of being dropped.
                     if (this.isEpochEnvelope(content)) {
-                        const opened = await this.openEpochEnvelope(adminStreamId, content);
+                        const historyTimestamp = typeof message.getTimestamp === 'function'
+                            ? message.getTimestamp()
+                            : message.timestamp;
+                        const opened = await this.openEpochEnvelope(adminStreamId, content,
+                            { live: false, timestamp: historyTimestamp });
                         if (opened === null) continue;
                         content = opened;
                     }
@@ -2951,9 +2961,13 @@ class StreamrController {
         let latest = null;
 
         try {
+            // Gated: raw resend — the SDK validator re-checks stored envelopes
+            // against the present gate state; the owner check below (envelope
+            // signer must be the namespace owner) is the real authority here.
+            const gatedChannel = await this._gatedChannelFor(adminStreamId);
             const resend = await this.client.resend(
                 { streamId: adminStreamId, partition },
-                { last: 1 }
+                { last: 1, ...(gatedChannel ? { raw: true } : {}) }
             );
 
             const iterator = resend[Symbol.asyncIterator]();
@@ -2985,9 +2999,15 @@ class StreamrController {
                             continue;
                         }
                     }
-                    // Gated: CHANNEL_IMAGE arrives as an epoch envelope (N-A)
+                    // Gated: CHANNEL_IMAGE arrives as an epoch envelope. History
+                    // context so an image sealed under an older epoch opens in
+                    // that epoch's validity window instead of being dropped.
                     if (this.isEpochEnvelope(content)) {
-                        const opened = await this.openEpochEnvelope(adminStreamId, content);
+                        const historyTimestamp = typeof message.getTimestamp === 'function'
+                            ? message.getTimestamp()
+                            : message.timestamp;
+                        const opened = await this.openEpochEnvelope(adminStreamId, content,
+                            { live: false, timestamp: historyTimestamp });
                         if (opened === null) continue;
                         content = opened;
                     }
@@ -3997,6 +4017,12 @@ class StreamrController {
         // falsely latches `hasMore: false` and kills scroll-up pagination
         // for the rest of the session.
         const collectRange = async () => {
+            // Gated: raw resend — same reason as fetchHistoryAsync (the SDK
+            // validator re-checks stored envelopes against the present gate
+            // state and erases ex-members' history; authorship comes from the
+            // envelope signature client-side).
+            const gatedChannel = await this._gatedChannelFor(messageStreamId);
+
             // Streamr SDK resend with range: from epoch to beforeTimestamp (inclusive).
             // We use an INCLUSIVE upper bound and rely on caller-side dedup by msg.id to drop
             // the boundary message we already loaded. Using `beforeTimestamp - 1` here would
@@ -4007,7 +4033,8 @@ class StreamrController {
                 { streamId: messageStreamId, partition: partition },
                 {
                     from: { timestamp: 0 },
-                    to: { timestamp: beforeTimestamp }
+                    to: { timestamp: beforeTimestamp },
+                    ...(gatedChannel ? { raw: true } : {})
                 }
             );
             
@@ -4412,11 +4439,20 @@ class StreamrController {
         let rawCount = 0;
         try {
             Logger.debug(`Fetching ${count} historical messages for partition ${partition}${password ? ' (encrypted)' : ''}...`);
-            
+
+            // Gated history reads the raw envelopes: the SDK's validator
+            // re-checks every stored message against the PRESENT gate state
+            // (isValidSignature), which erases ex-members' history. Retention
+            // is the proof of past membership — the storage node validated at
+            // ingest — so the client only recovers authorship from the
+            // envelope signature (resolveAuthor) and lets kid freshness cut
+            // stale-key spam. Live subscriptions stay strictly validated.
+            const gatedChannel = await this._gatedChannelFor(streamId);
+
             // Streamr SDK resend: must await before iterating
             const resend = await this.client.resend(
                 { streamId, partition },
-                { last: count }
+                { last: count, ...(gatedChannel ? { raw: true } : {}) }
             );
             
             Logger.debug(`Resend object received for partition ${partition}:`, typeof resend);
