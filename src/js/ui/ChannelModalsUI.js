@@ -95,6 +95,9 @@ class ChannelModalsUI {
         this.paidTokenPreset = 'usdc';
         this.switchGateAssetTab('token');   // reapplies the gate token preset
         this.switchTokenPresetTab('paid', 'usdc');
+        // Reset author visibility to the Members only default
+        const authorMembers = document.getElementById('gate-author-visibility-members');
+        if (authorMembers) authorMembers.checked = true;
         // Reset read-only toggle
         this.setReadOnly(false);
         // Reset storage provider to Streamr (default)
@@ -533,28 +536,6 @@ class ChannelModalsUI {
         return days;
     }
 
-    /**
-     * Show join channel modal
-     */
-    showJoinModal() {
-        this.deps.modalManager?.showJoinChannelModal(
-            this.elements.joinChannelModal,
-            this.elements.joinStreamIdInput,
-            this.elements.joinPasswordInput,
-            this.elements.joinPasswordField
-        );
-    }
-
-    /**
-     * Hide join channel modal
-     */
-    hideJoinModal() {
-        this.deps.modalManager?.hide('join-channel-modal');
-    }
-
-    /**
-     * Show join closed channel modal (with name + classification)
-     */
     /**
      * Show join channel modal for channels requiring local name
      * Used for: native channels, hidden channels, unknown channels
