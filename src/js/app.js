@@ -771,7 +771,14 @@ class App {
                 }
             }
         });
-        
+
+        // Entry flows into channels without an on-chain name (hidden gated,
+        // invites, direct links) offer the local name + classification panel
+        // right after the join, over the key-request wait.
+        channelManager.onNeedsLocalIdentity = (channel) => {
+            channelModalsUI.showLocalIdentityModal(channel);
+        };
+
         channelManager.onOnlineUsersChange((streamId, users) => {
             uiController.updateOnlineUsers(streamId, users);
         });

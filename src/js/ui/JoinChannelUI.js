@@ -202,20 +202,12 @@ class JoinChannelUI {
      */
     async joinPublicChannel(streamId, channelInfo, showNotification, renderChannelList, selectChannel) {
         try {
-            // Closed-style channels without an on-chain name need a local name +
-            // classification. A gated channel WITH an on-chain name (visible
-            // token/paid) joins like a public channel — the owner named it.
-            if (channelInfo?.type === 'gated' && !channelInfo?.name) {
-                channelModalsUI.showJoinClosedModal(streamId, channelInfo);
-                return;
-            }
-            
-            // For hidden channels without a name, ask user for a local name
-            if (channelInfo && !channelInfo.name) {
-                channelModalsUI.showJoinHiddenModal(streamId, channelInfo);
-                return;
-            }
-            
+            // Channels without an on-chain name (hidden gated included) join
+            // directly: the post-join local identity panel asks for the name
+            // and classification AFTER the entry — for a gated channel that
+            // means after the gate entry screen and the payment, over the
+            // key-request wait, never before the user has seen the price.
+
             // If password-protected, ask for password
             if (channelInfo?.type === 'password') {
                 const displayName = channelInfo.name || channelInfo.displayName || 'this channel';

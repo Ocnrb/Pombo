@@ -119,8 +119,20 @@ class ChannelSettingsUI {
 
         // Edit name permission:
         // - DM channels: any user can rename locally (propagated via sync)
-        // - Non-DM channels: only the admin (DELETE permission) can rename — on-chain metadata update
-        const canEditName = (currentChannel.type === 'dm' || canDelete) && !isPreviewMode;
+        // - Channels without an on-chain name: any member can rename — the
+        //   name is local to the device and propagated via sync. The Graph
+        //   check is fail-closed: unreachable = treat as named, no pencil
+        //   (a wrong yes would invite a rename that the next metadata
+        //   refresh silently reverts).
+        // - Visible channels: only the admin (DELETE permission) can rename — on-chain metadata update
+        let memberLocalRename = false;
+        if (currentChannel.type !== 'dm' && !isPreviewMode && !canDelete && !this._hasPublicMetadata(currentChannel)) {
+            try {
+                const info = await graphAPI.getChannelInfo(currentChannel.streamId);
+                memberLocalRename = !info?.name;
+            } catch { /* fail-closed */ }
+        }
+        const canEditName = (currentChannel.type === 'dm' || canDelete || memberLocalRename) && !isPreviewMode;
         if (this.elements.editChannelNameBtn) {
             this.elements.editChannelNameBtn.classList.toggle('hidden', !canEditName);
         }

@@ -262,6 +262,29 @@ class ChannelManager {
     }
 
     /**
+     * Channels without an on-chain name (hidden gated, unknown streams) land
+     * with an ID-derived or invite-suggested name. When the entry flow did not
+     * already ask (`named`), offer the local name + classification panel via
+     * the UI hook. Fire-and-forget: the join itself never waits on this.
+     * @param {Object} channel - The just-added channel record
+     * @param {boolean} named - Entry flow already collected a user-typed name
+     */
+    _maybeRequestLocalIdentity(channel, named = false) {
+        if (named || !this.onNeedsLocalIdentity || channel.type === 'dm') return;
+        (async () => {
+            try {
+                const info = await graphAPI.getChannelInfo(channel.messageStreamId);
+                if (info?.name) return;
+            } catch {
+                // Graph unreachable: cannot prove the name is null — skip the ask
+                return;
+            }
+            if (!this.channels.has(channel.messageStreamId)) return;
+            this.onNeedsLocalIdentity?.(channel);
+        })();
+    }
+
+    /**
      * Reload channels authoritatively from the latest synced storage snapshot.
      * Preserves runtime state only for channels that still exist in the snapshot.
      * @returns {{currentChannelRemoved: boolean, totalChannels: number}}
@@ -988,7 +1011,9 @@ class ChannelManager {
             }
 
             Logger.info('Joined dual-stream channel:', messageStreamId);
-            
+
+            this._maybeRequestLocalIdentity(channel, options.named);
+
             // Auto-enable notifications for this channel if global notifications are enabled
             if (relayManager.enabled) {
                 try {
@@ -1127,6 +1152,8 @@ class ChannelManager {
             });
 
             Logger.info('Channel persisted from preview:', messageStreamId);
+
+            this._maybeRequestLocalIdentity(channel, previewInfo.named);
             
             // Auto-enable notifications for this channel if global notifications are enabled
             if (relayManager.enabled) {
