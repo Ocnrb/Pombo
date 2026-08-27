@@ -594,6 +594,22 @@ class ChannelSettingsUI {
         if (this._adminHandlerWired) return;
         const { channelManager } = this.deps;
         if (!channelManager?.onMessage) return;
+        // Candidates for the gate read arrive with the -4 history, which the
+        // channel open reconciles in the background — after this panel has
+        // already rendered. Re-render when the pool grows, debounced so a
+        // history burst costs one pass.
+        import('../epochKeyManager.js').then(({ epochKeyManager }) => {
+            epochKeyManager.onRequestersChanged = (messageStreamId) => {
+                if (messageStreamId !== this._currentModerationStreamId) return;
+                const modal = document.getElementById('channel-settings-modal');
+                if (!modal || modal.classList.contains('hidden')) return;
+                clearTimeout(this._requesterRefreshTimer);
+                this._requesterRefreshTimer = setTimeout(() => {
+                    const channel = channelManager.channels?.get?.(this._currentModerationStreamId);
+                    if (channel) this.loadBannedMembers(channel);
+                }, 1500);
+            };
+        }).catch(() => {});
         channelManager.onMessage((event, data) => {
             if (event !== 'admin_state_updated') return;
             if (!this._currentModerationStreamId) return;
