@@ -1969,14 +1969,6 @@ class ChannelManager {
     }
 
     /** @returns {Promise<{rev:number, state:Object}>} */
-    async unhideMessage(messageStreamId, targetId) {
-        const channel = this.channels.get(messageStreamId);
-        if (!channel) throw new Error('Channel not found');
-        const next = (channel.adminState?.hiddenMessageIds || []).filter(id => id !== targetId);
-        return this.publishAdminState(messageStreamId, { patch: { hiddenMessageIds: next } });
-    }
-
-    /** @returns {Promise<{rev:number, state:Object}>} */
     async pinMessage(messageStreamId, targetId, snapshot = null) {
         const channel = this.channels.get(messageStreamId);
         if (!channel) throw new Error('Channel not found');
@@ -2077,20 +2069,6 @@ class ChannelManager {
         });
 
         return { rev: newRev, hash: input.hash };
-    }
-
-    /** Read helpers used by UI/render layers. */
-    isMessageHidden(channel, messageId) {
-        if (!channel || !messageId) return false;
-        const list = channel.adminState?.hiddenMessageIds;
-        return Array.isArray(list) && list.includes(messageId);
-    }
-
-    isMemberBanned(channel, address) {
-        if (!channel || !address) return false;
-        const list = channel.adminState?.bannedMembers;
-        if (!Array.isArray(list)) return false;
-        return list.includes(String(address).toLowerCase());
     }
 
     // ===== END ADMIN STREAM =========================================================
