@@ -1533,6 +1533,39 @@
         </div>
     </div>
 
+    <!-- Modal: Ban member (the two enforcement levels, either or both) -->
+    <div id="ban-member-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[60]">
+        <div class="bg-[#111113] rounded-2xl p-5 w-[380px] max-w-full mx-4 border border-white/[0.06]">
+            <h3 class="text-base font-medium mb-4 text-white">Ban <span id="ban-member-label" class="font-mono text-sm text-white/70"></span></h3>
+
+            <div class="space-y-2.5">
+                <label id="ban-level-client-row" class="flex gap-3 p-3 bg-white/[0.04] rounded-xl cursor-pointer">
+                    <input type="checkbox" id="ban-level-client" class="mt-0.5 accent-white" checked />
+                    <span class="min-w-0">
+                        <span class="block text-sm text-white/85">Client enforcement</span>
+                        <span id="ban-level-client-detail" class="block text-xs text-white/40 mt-0.5">Hides their messages for everyone. Free and reversible.</span>
+                    </span>
+                </label>
+                <label id="ban-level-protocol-row" class="flex gap-3 p-3 bg-white/[0.04] rounded-xl cursor-pointer">
+                    <input type="checkbox" id="ban-level-protocol" class="mt-0.5 accent-white" checked />
+                    <span class="min-w-0">
+                        <span class="block text-sm text-white/85">Protocol enforcement</span>
+                        <span id="ban-level-protocol-detail" class="block text-xs text-white/40 mt-0.5">Cuts their access on the gate and rotates the channel key. One transaction.</span>
+                    </span>
+                </label>
+            </div>
+
+            <div class="flex gap-2 mt-5">
+                <button id="cancel-ban-member-btn" class="flex-1 bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] text-white/50 text-sm font-medium px-3 py-2.5 rounded-xl transition">
+                    Cancel
+                </button>
+                <button id="confirm-ban-member-btn" class="flex-1 bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-400 text-sm font-medium px-3 py-2.5 rounded-xl transition">
+                    Ban
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal: Gate Entry (Gated/Paid channels — requirement, standing, pay/enter) -->
     <div id="gate-entry-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50">
         <div class="bg-[#111113] rounded-2xl p-5 w-[380px] max-w-full mx-4 border border-white/[0.06]">
@@ -1821,27 +1854,15 @@
                                         </div>
                                     </details>
 
-                                    <p class="text-sm text-amber-400/60 mt-3 flex items-center gap-1.5">
-                                        <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
-                                        <span>Adding members requires on-chain transactions (gas fees)</span>
-                                    </p>
+                                    <div class="p-3 bg-amber-500/5 rounded-xl border border-amber-500/10 mt-3">
+                                        <p class="text-xs text-amber-400/80 flex items-start gap-2">
+                                            <svg class="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+                                            <span>Adding members requires on-chain transactions and gas fees.</span>
+                                        </p>
+                                    </div>
                                 </div>
                             </div>
 
-                            <!-- Permissions Section (Owner only) -->
-                            <div id="permissions-section" class="hidden">
-                                <div class="border-t border-white/5 pt-5">
-                                    <div class="flex items-center justify-between mb-3">
-                                        <label class="text-sm font-medium text-white/40 uppercase tracking-wider">Stream Permissions</label>
-                                        <button id="refresh-permissions-btn" class="text-sm text-white/60 hover:text-white transition">
-                                            ↻ Refresh
-                                        </button>
-                                    </div>
-                                    <div id="permissions-list" class="text-sm space-y-1 max-h-[120px] overflow-y-auto pr-1">
-                                        <div class="text-white/30">Loading...</div>
-                                    </div>
-                                </div>
-                            </div>
                         </div>
                     </div>
 
@@ -1964,8 +1985,25 @@
                                 </div>
                             </div>
                             <p class="text-sm text-white/30 leading-relaxed">
-                                Banned members can no longer publish messages in this channel. They can still view existing messages until removed.
+                                Client bans hide the author's messages for everyone and cost nothing. Protocol bans cut access on the gate, so the member stops receiving keys, and take a transaction to apply and to lift.
                             </p>
+
+                            <!-- Stream grantees: the technical view (owner only) -->
+                            <div id="permissions-section" class="hidden">
+                                <div class="border-t border-white/5 pt-5">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <label class="text-sm font-medium text-white/40 uppercase tracking-wider">Stream Grantees</label>
+                                        <button id="refresh-permissions-btn" class="text-sm text-white/60 hover:text-white transition">
+                                            ↻ Refresh
+                                        </button>
+                                    </div>
+                                    <!-- A gated channel's grantees are the clone, the storage node and
+                                         the owner: three rows and the legend must fit without scrolling. -->
+                                    <div id="permissions-list" class="text-sm space-y-1 max-h-[220px] overflow-y-auto pr-1">
+                                        <div class="text-white/30">Loading...</div>
+                                    </div>
+                                </div>
+                            </div>
                             <!-- Members-only channels, admin only: the escape valve against ex-key-holder abuse -->
                             <div id="rekey-publish-section" class="hidden p-4 bg-amber-500/5 rounded-xl border border-amber-500/10">
                                 <h4 class="text-sm font-medium text-white/90 mb-1">Reset Publish Key</h4>
@@ -2015,6 +2053,13 @@
                                 <span class="flex items-center gap-3">
                                     <svg class="w-[18px] h-[18px] text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z"/></svg>
                                     <span>Moderation</span>
+                                </span>
+                                <svg class="w-4 h-4 text-white/20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
+                            </button>
+                            <button data-mobile-nav="storage" class="channel-mobile-nav-item w-full flex items-center justify-between px-4 py-4 text-sm text-white/70 bg-white/[0.03] hover:bg-white/[0.06] transition rounded-xl border border-white/5">
+                                <span class="flex items-center gap-3">
+                                    <svg class="w-4 h-4 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75"/></svg>
+                                    <span>Storage</span>
                                 </span>
                                 <svg class="w-4 h-4 text-white/20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
                             </button>

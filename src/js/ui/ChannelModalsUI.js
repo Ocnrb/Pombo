@@ -733,6 +733,78 @@ class ChannelModalsUI {
     }
 
     /**
+     * Ban with its two enforcement levels, either or both.
+     *
+     * CLIENT is the ADMIN_STATE ban: every client hides the author's messages,
+     * free, reversible, and publishable only by the channel creator, since
+     * receivers reject an ADMIN_STATE from anyone else. PROTOCOL bans on the
+     * gate: no responder hands them keys again and the rotation that follows
+     * cuts their reads. That one costs gas, and only gated channels have it.
+     *
+     * @param {string} address - Who to ban
+     * @param {Object} channel - The open channel
+     */
+    showBanMemberModal(address, channel) {
+        const gated = !!channel?.gate?.address;
+        const me = authManager.getAddress()?.toLowerCase();
+        const canClientBan = !!me && me === channel?.createdBy?.toLowerCase();
+
+        const label = document.getElementById('ban-member-label');
+        if (label) label.textContent = `${address.slice(0, 6)}…${address.slice(-4)}`;
+
+        const client = document.getElementById('ban-level-client');
+        const protocol = document.getElementById('ban-level-protocol');
+        const clientDetail = document.getElementById('ban-level-client-detail');
+        const protocolDetail = document.getElementById('ban-level-protocol-detail');
+
+        if (client) {
+            client.checked = canClientBan;
+            client.disabled = !canClientBan;
+        }
+        if (protocol) {
+            protocol.checked = gated;
+            protocol.disabled = !gated;
+        }
+        if (clientDetail && !canClientBan) {
+            clientDetail.textContent = 'Only the channel creator can publish this.';
+        } else if (clientDetail) {
+            clientDetail.textContent = 'Hides their messages for everyone. Free and reversible.';
+        }
+        if (protocolDetail && !gated) {
+            protocolDetail.textContent = 'Only gated channels have a gate to ban on.';
+        } else if (protocolDetail) {
+            protocolDetail.textContent = 'Cuts their access on the gate and rotates the channel key. One transaction.';
+        }
+        document.getElementById('ban-level-client-row')?.classList.toggle('opacity-40', !canClientBan);
+        document.getElementById('ban-level-protocol-row')?.classList.toggle('opacity-40', !gated);
+
+        const confirmBtn = document.getElementById('confirm-ban-member-btn');
+        if (confirmBtn) {
+            confirmBtn.onclick = async () => {
+                const levels = {
+                    client: !!client?.checked && canClientBan,
+                    protocol: !!protocol?.checked && gated
+                };
+                if (!levels.client && !levels.protocol) return;
+                this.deps.modalManager?.hide('ban-member-modal');
+                try {
+                    this.notificationUI?.showLoadingToast('Banning…', 'This may take a moment');
+                    await this.channelManager.banMemberLevels(channel.streamId, address, levels);
+                    this.showNotification('Member banned', 'success');
+                } catch (error) {
+                    this.showNotification('Failed to ban: ' + error.message, 'error');
+                } finally {
+                    this.notificationUI?.hideLoadingToast();
+                }
+            };
+        }
+        const cancelBtn = document.getElementById('cancel-ban-member-btn');
+        if (cancelBtn) cancelBtn.onclick = () => this.deps.modalManager?.hide('ban-member-modal');
+
+        this.deps.modalManager?.show('ban-member-modal');
+    }
+
+    /**
      * Entry screen for a gated channel the user cannot enter yet:
      * reads the gate mode on-chain and shows the requirement, the user's
      * standing, and the pay() action. `retry` re-runs the entry that

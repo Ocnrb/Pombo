@@ -224,6 +224,13 @@ class EpochKeyManager {
         for (const epoch of persisted.helloEpochs || []) {
             if (Number.isInteger(epoch)) s.helloEpochs.add(epoch);
         }
+        // Requesters persist for the same reason the announces do: they are
+        // the members panel's candidate pool, and a banned member stops
+        // requesting, so a session that forgets them can never ask the gate
+        // about them again.
+        for (const addr of persisted.seenRequesters || []) {
+            if (/^0x[0-9a-f]{40}$/.test(addr)) s.seenRequesters.add(addr);
+        }
         // Higher rev wins — a persisted re-key must never regress to the
         // key it replaced.
         if (persisted.pubKey && (persisted.pubKey.rev || 0) > (s.pubKey?.rev || 0)) {
@@ -255,6 +262,7 @@ class EpochKeyManager {
         await secureStorage.setEpochKeys(messageStreamId, {
             epochs, announces, currentEpoch: s.currentEpoch,
             pendingRequests, helloEpochs: Array.from(s.helloEpochs),
+            seenRequesters: Array.from(s.seenRequesters),
             ...(s.pubKey ? { pubKey: { ...s.pubKey } } : {}),
             ...(s.pubAnnounce ? {
                 pubAnnounce: {
@@ -529,7 +537,7 @@ class EpochKeyManager {
                 }
             } else if (data.t === KEYS_MSG_TYPE.KEY_REQUEST) {
                 storedRequests.push({ data, publisherId, timestamp });
-                this._recordRequester(s, publisherId);
+                this._recordRequester(s, publisherId, channel.messageStreamId);
             }
         }
         if (changed) await this._persist(channel.messageStreamId, s);
@@ -1062,7 +1070,7 @@ class EpochKeyManager {
      * checked against the requester (envelope signer) just before wrapping.
      */
     async _handleRequest(channel, s, data, publisherId) {
-        this._recordRequester(s, publisherId);
+        this._recordRequester(s, publisherId, channel.messageStreamId);
         const myAddress = (authManager.getAddress() || '').toLowerCase();
         if ((publisherId || '').toLowerCase() === myAddress) return;      // our own request
         if (typeof data.pubkey !== 'string' || typeof data.requestId !== 'string') return;
@@ -1223,11 +1231,15 @@ class EpochKeyManager {
         }
     }
 
-    _recordRequester(s, publisherId) {
+    _recordRequester(s, publisherId, messageStreamId = null) {
         const addr = (publisherId || '').toLowerCase();
         if (!/^0x[0-9a-f]{40}$/.test(addr)) return;
-        if (s.seenRequesters.size >= 500 && !s.seenRequesters.has(addr)) return;
+        if (s.seenRequesters.has(addr)) return;
+        if (s.seenRequesters.size >= 500) return;
         s.seenRequesters.add(addr);
+        // The members and banned panels read this pool; a candidate that
+        // arrives with the -4 history lands after they rendered.
+        if (messageStreamId) this.onRequestersChanged?.(messageStreamId);
     }
 
     /**

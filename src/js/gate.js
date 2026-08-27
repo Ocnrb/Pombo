@@ -408,9 +408,18 @@ class GateManager {
     }
 
     /**
-     * Cut future access, keep history. In Closed channels removing a member IS
-     * the ban; `eraseHistory` is the explicit owner option that additionally
-     * invalidates everything they published (NONE mode only, on-chain rule).
+     * Closed (NONE) channels: take a member off the allowlist without the ban
+     * mark, so a later allow() readmits them. everMember stays: allow() was a
+     * public, owner-signed statement that this address was a member.
+     */
+    revokeAllow(gateAddress, userAddress) {
+        return this._ownerCall(gateAddress, 'revokeAllow', [userAddress], userAddress);
+    }
+
+    /**
+     * Cut future access, keep history. `eraseHistory` is the explicit owner
+     * option that additionally invalidates everything they published (NONE
+     * mode only, on-chain rule).
      */
     ban(gateAddress, userAddress, eraseHistory = false) {
         return this._ownerCall(gateAddress, 'ban', [userAddress, eraseHistory], userAddress);
