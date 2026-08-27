@@ -692,14 +692,18 @@ class ExploreUI {
                 </div>
                 <div class="relative">
                     ${accessMobile}
-                    <div class="flex justify-end mt-2.5${accessAttr ? ' absolute bottom-0 right-0 md:static' : ''}">
-                        <div class="flex flex-col items-center gap-1">
-                            ${ch.type === 'gated' ? authorVisibilityHtml(ch.authorMode || 'everyone') : ''}
-                            <div class="flex items-center gap-1.5">
-                                ${categoryBadge}
-                                ${languageBadge}
-                            </div>
-                        </div>
+                    <div class="flex items-end justify-end gap-1.5 mt-2.5${accessAttr ? ' absolute bottom-0 right-0 md:static' : ''}">
+                        ${(() => {
+                            // The audience icon centers over the LAST tag
+                            // (language when present), not over the group.
+                            const icon = ch.type === 'gated'
+                                ? authorVisibilityHtml(ch.authorMode || 'everyone') : '';
+                            const badges = [categoryBadge, languageBadge].filter(Boolean);
+                            if (!icon) return badges.join('');
+                            if (!badges.length) return icon;
+                            const last = badges.pop();
+                            return `${badges.join('')}<div class="flex flex-col items-center gap-1">${icon}${last}</div>`;
+                        })()}
                     </div>
                 </div>
             </div>
