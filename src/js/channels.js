@@ -370,6 +370,9 @@ class ChannelManager {
                 // Bans this device has already rotated the epoch for; without
                 // it every admin open would rotate again for the same ban.
                 rotatedForBanned: ch.rotatedForBanned || [],
+                // Addresses banned from here, kept as gate-read candidates so
+                // Moderation can still list them after a reload.
+                knownBanned: ch.knownBanned || [],
                 storageEnabled: ch.storageEnabled,
                 // Exposure and metadata
                 exposure: ch.exposure || 'hidden',
@@ -1382,6 +1385,9 @@ class ChannelManager {
             }
             const idx = channel.members.findIndex(m => m.toLowerCase() === address.toLowerCase());
             if (idx !== -1) channel.members.splice(idx, 1);
+            channel.knownBanned = [
+                ...new Set([...(channel.knownBanned || []), address.toLowerCase()])
+            ];
             await this.saveChannels();
             try {
                 await epochKeyManager.rotateEpoch(channel);
@@ -2215,14 +2221,36 @@ class ChannelManager {
             const roster = await epochKeyManager.getRosterMembers(channel).catch(() => []);
             const candidates = [
                 ...(channel.members || []),
+                // Banning drops them from the members cache and the roster
+                // stops carrying them, so without this a banned address falls
+                // out of the candidate set and the Moderation list loses the
+                // one entry it exists to show.
+                ...(channel.knownBanned || []),
                 ...epochKeyManager.getSeenRequesters(channel.messageStreamId),
                 ...roster.map(m => m.account)
             ];
-            return await gateManager.getGateMembers(channel.gate.address, candidates);
+            const flags = await gateManager.getGateMembers(channel.gate.address, candidates);
+            this._rememberBanned(channel, flags);
+            return flags;
         } catch (error) {
             Logger.warn('Gate member read failed:', error.message);
             return [];
         }
+    }
+
+    /**
+     * Remember every banned address the gate reports, so it stays a candidate
+     * once the roster and the members cache have let go of it. Self-healing:
+     * bans made before this record existed stick the first time they are seen.
+     */
+    _rememberBanned(channel, flags) {
+        const known = new Set((channel.knownBanned || []).map(a => a.toLowerCase()));
+        const fresh = flags.filter(m => m.banned)
+            .map(m => m.address.toLowerCase())
+            .filter(a => !known.has(a));
+        if (fresh.length === 0) return;
+        channel.knownBanned = [...known, ...fresh];
+        this.saveChannels().catch(() => {});
     }
 
     /** Addresses the GATE has banned (Moderation panel's protocol-level list). */
