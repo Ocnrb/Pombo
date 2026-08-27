@@ -1997,12 +1997,11 @@
                                             ↻ Refresh
                                         </button>
                                     </div>
-                                    <div id="permissions-list" class="text-sm space-y-1 max-h-[120px] overflow-y-auto pr-1">
+                                    <!-- A gated channel's grantees are the clone, the storage node and
+                                         the owner: three rows and the legend must fit without scrolling. -->
+                                    <div id="permissions-list" class="text-sm space-y-1 max-h-[220px] overflow-y-auto pr-1">
                                         <div class="text-white/30">Loading...</div>
                                     </div>
-                                    <p class="text-white/20 text-[10px] mt-2">
-                                        Who holds a grant on the streams themselves. On a gated channel that is the gate clone and the storage node, never the members.
-                                    </p>
                                 </div>
                             </div>
                             <!-- Members-only channels, admin only: the escape valve against ex-key-holder abuse -->
