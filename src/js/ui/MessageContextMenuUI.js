@@ -404,15 +404,10 @@ class MessageContextMenuUI {
             }
 
             case 'ban-user': {
-                if (!confirm('Ban this user from the channel?')) break;
                 const ch = channelManager?.getCurrentChannel?.();
                 if (!ch) break;
-                try {
-                    await channelManager.banMember(ch.streamId, address);
-                    showNotification('User banned', 'success');
-                } catch (err) {
-                    showNotification(err?.message || 'Failed to ban user', 'error');
-                }
+                const { channelModalsUI } = await import('./ChannelModalsUI.js');
+                channelModalsUI.showBanMemberModal(address, ch);
                 break;
             }
 

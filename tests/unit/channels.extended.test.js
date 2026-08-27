@@ -163,7 +163,9 @@ vi.mock('../../src/js/gate.js', () => ({
         createGate: vi.fn().mockResolvedValue('0xgate'),
         allow: vi.fn().mockResolvedValue(true),
         allowBatch: vi.fn().mockResolvedValue(true),
+        revokeAllow: vi.fn().mockResolvedValue(true),
         ban: vi.fn().mockResolvedValue(true),
+        unban: vi.fn().mockResolvedValue(true),
         checkAccess: vi.fn().mockResolvedValue(true),
         getGateMembers: vi.fn().mockResolvedValue([]),
         setModerator: vi.fn().mockResolvedValue(true),
@@ -289,8 +291,8 @@ describe('ChannelManager Extended', () => {
 
         beforeEach(async () => {
             const { gateManager } = await import('../../src/js/gate.js');
-            gateManager.ban.mockClear();
-            gateManager.ban.mockResolvedValue(true);
+            gateManager.revokeAllow.mockClear();
+            gateManager.revokeAllow.mockResolvedValue(true);
             channelManager.channels.set(streamId, {
                 messageStreamId: streamId,
                 type: 'gated',
@@ -301,12 +303,14 @@ describe('ChannelManager Extended', () => {
             });
         });
 
-        it('bans the member on the gate and rotates the epoch', async () => {
+        it('takes the member off the allowlist and rotates the epoch', async () => {
             const { gateManager } = await import('../../src/js/gate.js');
             const { epochKeyManager } = await import('../../src/js/epochKeyManager.js');
             await channelManager.removeMember(streamId, '0xmember1');
 
-            expect(gateManager.ban).toHaveBeenCalledWith('0xgate', '0xmember1', false);
+            // Removing carries no ban mark: a later allow() readmits them.
+            expect(gateManager.revokeAllow).toHaveBeenCalledWith('0xgate', '0xmember1');
+            expect(gateManager.ban).not.toHaveBeenCalled();
             expect(epochKeyManager.rotateEpoch).toHaveBeenCalled();
         });
 
@@ -338,8 +342,13 @@ describe('ChannelManager Extended', () => {
             await expect(channelManager.removeMember('public-ch', '0x1')).rejects.toThrow('gated channels');
         });
 
-        it('throws if address is not a member', async () => {
-            await expect(channelManager.removeMember(streamId, '0xnonmember')).rejects.toThrow('not a member');
+        it('removes an address the local cache never knew', async () => {
+            // Membership is the contract's: the roster and the seen requesters
+            // surface members this device never minted, and they must be
+            // removable like any other.
+            const { gateManager } = await import('../../src/js/gate.js');
+            await expect(channelManager.removeMember(streamId, '0xnonmember')).resolves.toBe(true);
+            expect(gateManager.revokeAllow).toHaveBeenCalledWith('0xgate', '0xnonmember');
         });
 
         it('throws if trying to remove the creator', async () => {
@@ -350,6 +359,72 @@ describe('ChannelManager Extended', () => {
             await channelManager.removeMember(streamId, '0xMember1'); // uppercase
             const channel = channelManager.channels.get(streamId);
             expect(channel.members).not.toContain('0xmember1');
+        });
+    });
+
+    // ==================== ban levels ====================
+    describe('ban enforcement levels', () => {
+        const streamId = 'stream-gated-ban';
+
+        beforeEach(async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
+            gateManager.ban.mockClear();
+            gateManager.unban.mockClear();
+            gateManager.getGateMembers.mockResolvedValue([]);
+            channelManager.channels.set(streamId, {
+                messageStreamId: streamId,
+                streamId,
+                type: 'gated',
+                gate: { address: '0xgate' },
+                members: ['0xmyaddress', '0xmember1'],
+                ephemeralStreamId: `${streamId}-ephemeral`,
+                adminStreamId: `${streamId}-admin`,
+                createdBy: '0xmyaddress',
+                adminState: { bannedMembers: [], hiddenMessageIds: [], pins: [] }
+            });
+            vi.spyOn(channelManager, 'saveChannels').mockResolvedValue(undefined);
+        });
+
+        it('protocol level bans on the gate and rotates; client level does not', async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
+            const { epochKeyManager } = await import('../../src/js/epochKeyManager.js');
+            epochKeyManager.rotateEpoch.mockClear();
+
+            await channelManager.banMemberLevels(streamId, '0xmember1', { protocol: true });
+            expect(gateManager.ban).toHaveBeenCalledWith('0xgate', '0xmember1', false);
+            expect(epochKeyManager.rotateEpoch).toHaveBeenCalled();
+
+            gateManager.ban.mockClear();
+            epochKeyManager.rotateEpoch.mockClear();
+            const banSpy = vi.spyOn(channelManager, 'banMember').mockResolvedValue(true);
+            await channelManager.banMemberLevels(streamId, '0xmember1', { client: true });
+            expect(gateManager.ban).not.toHaveBeenCalled();
+            expect(epochKeyManager.rotateEpoch).not.toHaveBeenCalled();
+            expect(banSpy).toHaveBeenCalledWith(streamId, '0xmember1');
+        });
+
+        it('records the rotation so the deferred pass does not repeat it', async () => {
+            await channelManager.banMemberLevels(streamId, '0xmember1', { protocol: true });
+            expect(channelManager.channels.get(streamId).rotatedForBanned).toContain('0xmember1');
+        });
+
+        it('refuses to ban the channel creator', async () => {
+            await expect(channelManager.banMemberLevels(streamId, '0xmyaddress', { protocol: true }))
+                .rejects.toThrow('creator');
+        });
+
+        it('unban only pays for a transaction when the gate really has them banned', async () => {
+            const { gateManager } = await import('../../src/js/gate.js');
+            await channelManager.unbanMemberLevels(streamId, '0xmember1');
+            expect(gateManager.unban).not.toHaveBeenCalled();
+
+            gateManager.getGateMembers.mockResolvedValue([{ address: '0xmember1', banned: true }]);
+            const unbanSpy = vi.spyOn(channelManager, 'unbanMember').mockResolvedValue(true);
+            channelManager.channels.get(streamId).adminState.bannedMembers = ['0xmember1'];
+            await channelManager.unbanMemberLevels(streamId, '0xmember1');
+            expect(gateManager.unban).toHaveBeenCalledWith('0xgate', '0xmember1');
+            // The free client ban is always cleared alongside.
+            expect(unbanSpy).toHaveBeenCalledWith(streamId, '0xmember1');
         });
     });
 

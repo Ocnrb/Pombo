@@ -367,6 +367,9 @@ class ChannelManager {
                 joinedAt: ch.joinedAt || ch.createdAt || null,
                 password: ch.password,
                 members: ch.members || [],
+                // Bans this device has already rotated the epoch for; without
+                // it every admin open would rotate again for the same ban.
+                rotatedForBanned: ch.rotatedForBanned || [],
                 storageEnabled: ch.storageEnabled,
                 // Exposure and metadata
                 exposure: ch.exposure || 'hidden',
@@ -1276,6 +1279,34 @@ class ChannelManager {
     }
 
     /**
+     * Admit several members in ONE transaction (allowBatch), the same call
+     * channel creation uses for its initial members.
+     * @param {string} messageStreamId - Message Stream ID (channel key)
+     * @param {string[]} addresses - Ethereum addresses to admit
+     */
+    async addMembers(messageStreamId, addresses) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) throw new Error('Channel not found');
+        if (!channel.gate?.address) throw new Error('Can only add members to gated channels');
+
+        const known = new Set(channel.members.map(m => m.toLowerCase()));
+        const fresh = [...new Set(addresses.map(a => a.toLowerCase()))].filter(a => !known.has(a));
+        if (fresh.length === 0) throw new Error('Every address is already a member');
+
+        try {
+            const { gateManager } = await import('./gate.js');
+            await gateManager.allowBatch(channel.gate.address, fresh);
+            channel.members.push(...fresh);
+            await this.saveChannels();
+            Logger.info(`Gate: ${fresh.length} member(s) allowed in one tx`);
+            return true;
+        } catch (error) {
+            Logger.error('Failed to allow members on gate:', error);
+            throw new Error(parseChainError(error).message);
+        }
+    }
+
+    /**
      * Remove a member from a gated channel
      * @param {string} messageStreamId - Message Stream ID (channel key)
      * @param {string} address - Ethereum address to remove
@@ -1293,40 +1324,105 @@ class ChannelManager {
 
         // Normalize address
         const normalizedAddress = address.toLowerCase();
-        
-        // Check if is a member
-        const memberIndex = channel.members.findIndex(m => m.toLowerCase() === normalizedAddress);
-        if (memberIndex === -1) {
-            throw new Error('Address is not a member');
-        }
 
         // Cannot remove the channel creator
         if (channel.createdBy && channel.createdBy.toLowerCase() === normalizedAddress) {
             throw new Error('Cannot remove the channel creator');
         }
 
-        // Removing IS the ban — one gate transaction cuts checkAccess (no new
-        // epoch keys for them), the epoch rotation cuts reads from here on,
-        // and the sticky isValidSignature keeps their history readable for
-        // everyone else (Q10). `erased` is NOT set here: that is a separate,
-        // explicit owner choice in the moderation UI.
+        // Membership is the CONTRACT's, so no local-cache membership check
+        // here: the roster and the seen requesters surface members this device
+        // never minted, and they must be removable like any other.
+        //
+        // Removing takes them off the allowlist WITHOUT the ban mark, so a
+        // later allow() readmits them; the epoch rotation cuts their reads from
+        // here on, and the sticky isValidSignature keeps their history readable
+        // for everyone else (Q10). Only Closed gates have an allowlist.
         try {
             const { gateManager } = await import('./gate.js');
-            await gateManager.ban(channel.gate.address, address, false);
-            channel.members.splice(memberIndex, 1);
+            await gateManager.revokeAllow(channel.gate.address, address);
+            const memberIndex = channel.members.findIndex(m => m.toLowerCase() === normalizedAddress);
+            if (memberIndex !== -1) channel.members.splice(memberIndex, 1);
             await this.saveChannels();
             try {
                 await epochKeyManager.rotateEpoch(channel);
             } catch (rotateError) {
-                Logger.warn('Epoch rotation after gate ban FAILED — banned member can still read new messages until the next rotation:', rotateError.message);
+                Logger.warn('Epoch rotation after removal FAILED — the removed member can still read new messages until the next rotation:', rotateError.message);
             }
-            Logger.info('Member banned on gate:', address);
+            Logger.info('Member removed from the gate allowlist:', address);
             return true;
         } catch (error) {
-            Logger.error('Failed to ban member on gate:', error);
+            Logger.error('Failed to remove member on gate:', error);
             const chainError = parseChainError(error);
             throw new Error(chainError.message);
         }
+    }
+
+    /**
+     * Ban with its two enforcement levels (see the Android twin).
+     * CLIENT is the ADMIN_STATE ban: every client hides the author's messages,
+     * free, reversible, creator-only. PROTOCOL is the gate ban: checkAccess
+     * goes false so no responder hands out keys, and the rotation that follows
+     * cuts reads. Costs gas.
+     */
+    async banMemberLevels(messageStreamId, address, { client = false, protocol = false } = {}) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) throw new Error('Channel not found');
+        if (channel.createdBy && channel.createdBy.toLowerCase() === address.toLowerCase()) {
+            throw new Error('Cannot ban the channel creator');
+        }
+
+        if (protocol) {
+            if (!channel.gate?.address) throw new Error('Only gated channels have a protocol-level ban');
+            const { gateManager } = await import('./gate.js');
+            try {
+                await gateManager.ban(channel.gate.address, address, false);
+            } catch (error) {
+                throw new Error(parseChainError(error).message);
+            }
+            const idx = channel.members.findIndex(m => m.toLowerCase() === address.toLowerCase());
+            if (idx !== -1) channel.members.splice(idx, 1);
+            await this.saveChannels();
+            try {
+                await epochKeyManager.rotateEpoch(channel);
+                // Covered: the deferred pass must not rotate again for this one.
+                channel.rotatedForBanned = [
+                    ...new Set([...(channel.rotatedForBanned || []), address.toLowerCase()])
+                ];
+                await this.saveChannels();
+            } catch (rotateError) {
+                Logger.warn('Epoch rotation after gate ban FAILED — banned member can still read new messages until the next rotation:', rotateError.message);
+            }
+        }
+        if (client) await this.banMember(messageStreamId, address);
+        return true;
+    }
+
+    /**
+     * Lift whichever bans the address carries. The gate ban costs a
+     * transaction, so it is only sent when the contract really has them
+     * banned; the free ADMIN_STATE entry is cleared alongside.
+     */
+    async unbanMemberLevels(messageStreamId, address) {
+        const channel = this.channels.get(messageStreamId);
+        if (!channel) throw new Error('Channel not found');
+        const lower = address.toLowerCase();
+
+        if (channel.gate?.address) {
+            const banned = await this.getGateBannedMembers(messageStreamId);
+            if (banned.some(a => a.toLowerCase() === lower)) {
+                const { gateManager } = await import('./gate.js');
+                try {
+                    await gateManager.unban(channel.gate.address, address);
+                } catch (error) {
+                    throw new Error(parseChainError(error).message);
+                }
+            }
+        }
+        if ((channel.adminState?.bannedMembers || []).some(a => a.toLowerCase() === lower)) {
+            await this.unbanMember(messageStreamId, address);
+        }
+        return true;
     }
 
     // ===== STORAGE MANAGEMENT (POST-CREATION) ========================================
@@ -2105,6 +2201,36 @@ class ChannelManager {
      * @param {string} streamId - Stream ID
      * @returns {Promise<Array>} - Array of { address, canGrant, canEdit, canDelete, isOwner }
      */
+    /**
+     * Candidate membership answered by the gate: the local cache, the
+     * KEY_REQUEST authors seen on -4 and the -4/P1 roster, with every contract
+     * flag intact. Empty on failure — each caller picks its own fallback.
+     * @returns {Promise<Array>} - [{ address, isOwner, moderator, access, banned, everMember, erased, paidUntil }]
+     */
+    async getGateMemberFlags(streamId) {
+        const channel = this.channels.get(streamId);
+        if (!channel?.gate?.address) return [];
+        try {
+            const { gateManager } = await import('./gate.js');
+            const roster = await epochKeyManager.getRosterMembers(channel).catch(() => []);
+            const candidates = [
+                ...(channel.members || []),
+                ...epochKeyManager.getSeenRequesters(channel.messageStreamId),
+                ...roster.map(m => m.account)
+            ];
+            return await gateManager.getGateMembers(channel.gate.address, candidates);
+        } catch (error) {
+            Logger.warn('Gate member read failed:', error.message);
+            return [];
+        }
+    }
+
+    /** Addresses the GATE has banned (Moderation panel's protocol-level list). */
+    async getGateBannedMembers(streamId) {
+        const flags = await this.getGateMemberFlags(streamId);
+        return flags.filter(m => m.banned).map(m => m.address);
+    }
+
     async getChannelMembers(streamId) {
         const channel = this.channels.get(streamId);
         if (!channel) {
@@ -2471,6 +2597,7 @@ class ChannelManager {
                 Logger.warn('Epoch key setup failed (messages will wait for key):', e.message);
                 this._scheduleEpochSetupRetry(channel);
             }
+            this._rotateForPendingBans(channel).catch(() => {});
         }
 
         // Fire-and-forget: pull latest-message preview (-1/P0). Sidebar
@@ -2657,6 +2784,38 @@ class ChannelManager {
                 if (!still || laps > 6) { clearInterval(timer); return; }
                 try { await epochKeyManager.retryRequestIfWaiting(channel); } catch { /* next lap */ }
             }, 10_000);
+        }
+    }
+
+    /**
+     * Rotate the epoch for bans this device never rotated for.
+     *
+     * Only the channel admin can announce an epoch, so a moderator's ban cuts
+     * key distribution immediately but leaves the banned member holding the
+     * current key until an admin shows up. Comparing the gate's banned set
+     * with the one we last rotated for closes that window on the admin's next
+     * open, whoever did the banning and whenever. No event scan: free RPCs cap
+     * eth_getLogs at 10k blocks, and the flags read is one we already make.
+     */
+    async _rotateForPendingBans(channel) {
+        if (!channel?.gate?.address) return;
+        if (!epochKeyManager.isOwnAdmin(channel)) return;
+
+        const banned = (await this.getGateBannedMembers(channel.messageStreamId))
+            .map(a => a.toLowerCase());
+        if (banned.length === 0) return;
+
+        const covered = new Set((channel.rotatedForBanned || []).map(a => a.toLowerCase()));
+        if (banned.every(a => covered.has(a))) return;
+
+        try {
+            await epochKeyManager.rotateEpoch(channel);
+            channel.rotatedForBanned = banned;
+            await this.saveChannels();
+            Logger.info('Rotated the epoch for bans made while the admin was away:',
+                channel.messageStreamId.slice(-20));
+        } catch (e) {
+            Logger.warn('Deferred rotation for pending bans failed (will retry next open):', e.message);
         }
     }
 
