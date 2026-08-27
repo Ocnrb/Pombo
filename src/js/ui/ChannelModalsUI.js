@@ -570,8 +570,12 @@ class ChannelModalsUI {
     showJoinClosedModal(streamId = '', channelInfo = null) {
         // Store channelInfo for use when joining
         this._pendingJoinChannelInfo = channelInfo;
-        
+        this._localIdentityTarget = null;
+
         this.deps.modalManager?.showJoinClosedChannelModal(streamId);
+        document.getElementById('join-closed-stream-id-input')?.parentElement?.classList.remove('hidden');
+        const joinBtn = document.getElementById('join-closed-btn');
+        if (joinBtn) joinBtn.textContent = 'Join';
         this.switchJoinClassificationTab('personal');
         
         // Always show classification section - helps organize any channel locally
@@ -605,13 +609,70 @@ class ChannelModalsUI {
      * Hide join closed channel modal
      */
     hideJoinClosedModal() {
+        this._localIdentityTarget = null;
         this.deps.modalManager?.hide('join-closed-channel-modal');
+    }
+
+    /**
+     * Post-join local identity panel for channels without an on-chain name:
+     * reuses the join-closed modal (stream ID hidden, name prefilled) to let
+     * the member set the local name + classification. Closing skips — the
+     * ID-derived name stays and can be edited later in Channel Details.
+     * @param {Object} channel - The just-joined channel record
+     */
+    showLocalIdentityModal(channel) {
+        if (!channel) return;
+        this._pendingJoinChannelInfo = null;
+
+        this.deps.modalManager?.showJoinClosedChannelModal(channel.messageStreamId);
+        this._localIdentityTarget = channel;
+        document.getElementById('join-closed-stream-id-input')?.parentElement?.classList.add('hidden');
+        document.getElementById('join-classification-section')?.classList.remove('hidden');
+        this.switchJoinClassificationTab(channel.classification || 'personal');
+
+        const nameInput = document.getElementById('join-closed-name-input');
+        if (nameInput) {
+            nameInput.value = channel.name || '';
+            nameInput.focus();
+            nameInput.select();
+        }
+
+        const modalTitle = document.querySelector('#join-closed-channel-modal h3');
+        if (modalTitle) modalTitle.textContent = 'Name This Channel';
+        const joinBtn = document.getElementById('join-closed-btn');
+        if (joinBtn) joinBtn.textContent = 'Save';
+    }
+
+    /**
+     * Save the local identity panel: local rename + classification only,
+     * never a join (the channel is already in the list).
+     */
+    async _handleSaveLocalIdentity(channel) {
+        const localName = document.getElementById('join-closed-name-input')?.value.trim();
+        const classification = this.joinClassification || 'personal';
+        this.hideJoinClosedModal();
+
+        if (localName) channel.name = localName;
+        channel.classification = classification;
+        await this.channelManager.saveChannels();
+        this.deps.renderChannelList?.();
+
+        const current = this.channelManager.getCurrentChannel?.();
+        if (current?.messageStreamId === channel.messageStreamId) {
+            const headerName = document.getElementById('current-channel-name');
+            if (headerName) headerName.textContent = channel.name;
+        }
     }
 
     /**
      * Handle joining a channel (with local name + classification)
      */
     async handleJoinClosedChannel() {
+        if (this._localIdentityTarget) {
+            await this._handleSaveLocalIdentity(this._localIdentityTarget);
+            return;
+        }
+
         const streamId = document.getElementById('join-closed-stream-id-input')?.value.trim();
         const localName = document.getElementById('join-closed-name-input')?.value.trim();
         const classification = this.joinClassification || 'personal';
@@ -642,6 +703,7 @@ class ChannelModalsUI {
                 this.notificationUI?.showLoadingToast('Joining channel...', 'This may take a moment');
                 await this.channelManager.joinChannel(streamId, null, {
                     name: localName,
+                    named: true,
                     type: channelType,
                     classification: classification,  // Always save classification for local organization
                     readOnly: channelInfo?.readOnly || false,
