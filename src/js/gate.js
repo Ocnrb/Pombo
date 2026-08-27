@@ -42,7 +42,6 @@ const GATE_ABI = [
     'function allow(address user)',
     'function allowBatch(address[] users)',
     'function revokeAllow(address user)',
-    'function join()',
     'function pay()',
     'function payWithPermit(uint256 permitValue, uint256 deadline, uint8 v, bytes32 r, bytes32 s)',
     'function ban(address user, bool eraseHistory)',
@@ -452,16 +451,6 @@ class GateManager {
         await tx.wait();
         this.invalidateAccess(gateAddress, signer.address);
         return signer.address.toLowerCase();
-    }
-
-    /**
-     * TOKEN/NFT gates: opt in to sticky membership (everMember). Optional by
-     * design — without it, selling the asset before ever joining forfeits the
-     * published history (§7.11).
-     * @returns {Promise<string>} The joining address (lowercase)
-     */
-    join(gateAddress) {
-        return this._memberCall(gateAddress, 'join');
     }
 
     /**

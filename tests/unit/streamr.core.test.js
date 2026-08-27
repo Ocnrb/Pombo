@@ -1232,8 +1232,10 @@ describe('StreamrController Core', () => {
             mockClient.resend.mockResolvedValue(createMockAsyncIterator([]));
             const handler = vi.fn();
             await streamrController.subscribeWithHistory('stream-1', 0, handler, 10);
-            // fetchHistoryAsync is called which uses resend
-            expect(mockClient.resend).toHaveBeenCalled();
+            // fetchHistoryAsync is fire-and-forget and resolves the gated
+            // lookup before the resend — wait for the call instead of
+            // asserting synchronously
+            await vi.waitFor(() => expect(mockClient.resend).toHaveBeenCalled());
         });
 
         it('should not fetch history when historyCount is 0', async () => {

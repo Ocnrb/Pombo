@@ -748,8 +748,8 @@ class ChannelManager {
                 const me = authManager.getAddress();
                 const hasAccess = me && await gateManager.checkAccess(options.gateAddress, me);
                 if (!hasAccess) {
-                    // Typed for the UI: the gate entry screen (N-D) reads the
-                    // mode on-chain and offers pay()/join() instead of a toast.
+                    // Typed for the UI: the gate entry screen reads the
+                    // mode on-chain and offers pay() instead of a toast.
                     const err = new Error('You do not have access to this gated channel.');
                     err.code = 'GATE_ACCESS_DENIED';
                     err.gateAddress = options.gateAddress.toLowerCase();
@@ -2072,7 +2072,7 @@ class ChannelManager {
         // stream grantee is the clone itself, so the Graph's list is owner +
         // clone and nothing else. Candidates: the local cache (kept in
         // lockstep with allow/ban transactions) plus the KEY_REQUEST authors
-        // seen on -4 (N-D — join()/pay() members never pass through the
+        // seen on -4 (holders and pay() members never pass through the
         // owner, but every reader must request keys). Their CURRENT state —
         // including the moderator flag, which maps onto `canGrant` so the
         // whole members UI works unchanged — is read from the contract;
