@@ -542,7 +542,11 @@ class ChannelSettingsUI {
 
         list.innerHTML = all.map(lower => {
             const short = `${lower.slice(0, 6)}…${lower.slice(-4)}`;
-            const label = identityManager.getCachedENS?.(lower) || short;
+            const ensName = identityManager.getCachedENS?.(lower) || null;
+            // Same identity idiom as the members list: generated avatar unless
+            // ENS has a picture, and the ENS name in place of the address.
+            const avatarHtml = getAvatarHtml(
+                lower, 32, 0.5, identityManager.getCachedENSAvatar?.(lower) || null);
             const onChain = chainBanned.includes(lower);
             const onClient = clientBanned.includes(lower);
             const tags = [
@@ -551,9 +555,14 @@ class ChannelSettingsUI {
             ].join(' ');
             return `
                 <div class="flex items-center justify-between gap-3 px-3 py-2.5 bg-white/[0.03] border border-white/5 rounded-xl">
-                    <div class="min-w-0 flex-1">
-                        <div class="text-sm text-white/80 truncate">${escapeHtml(sanitizeText(label))}</div>
-                        <div class="flex items-center gap-1 mt-1">${tags}</div>
+                    <div class="flex items-center gap-2 min-w-0 flex-1">
+                        <div class="flex-shrink-0" style="width:32px;height:32px;border-radius:9999px;overflow:hidden;">
+                            ${avatarHtml}
+                        </div>
+                        <div class="min-w-0">
+                            <div class="text-sm text-white/80 truncate">${escapeHtml(sanitizeText(ensName || short))}</div>
+                            <div class="flex items-center gap-1 mt-1">${tags}</div>
+                        </div>
                     </div>
                     <button data-unban-address="${escapeAttr(lower)}" data-on-chain="${onChain}" class="banned-unban-btn shrink-0 bg-white/10 hover:bg-white/20 text-white/80 border border-white/10 px-3 py-1.5 rounded-lg text-xs transition">
                         Unban
@@ -561,6 +570,11 @@ class ChannelSettingsUI {
                 </div>
             `;
         }).join('');
+
+        this._resolveMemberIdentities(all, () => {
+            const current = this.deps.channelManager.channels?.get?.(this._currentModerationStreamId);
+            if (current?.streamId === channel.streamId) this.loadBannedMembers(channel);
+        });
 
         list.querySelectorAll('.banned-unban-btn').forEach(btn => {
             btn.addEventListener('click', async () => {
@@ -1275,11 +1289,11 @@ class ChannelSettingsUI {
     }
 
     /**
-     * Resolve ENS names and avatars for member rows that have neither cached,
-     * then re-render once. Each address is attempted once per panel session so
-     * a miss does not re-query on every render.
+     * Resolve ENS names and avatars for rows that have neither cached, then
+     * re-render once through `onResolved`. Each address is attempted once per
+     * panel session so a miss does not re-query on every render.
      */
-    _resolveMemberIdentities(addresses) {
+    _resolveMemberIdentities(addresses, onResolved = null) {
         this._memberIdentityTried ??= new Set();
         const pending = addresses
             .map(a => a.toLowerCase())
@@ -1294,6 +1308,7 @@ class ChannelSettingsUI {
             identityManager.resolveENSAvatar?.(a).catch(() => null)
         ]))).then(results => {
             if (!results.some(([name, avatar]) => name || avatar)) return;
+            if (onResolved) return onResolved();
             const channel = this.deps.channelManager.getCurrentChannel();
             // The panel may have moved on to another channel while resolving.
             if (!this._lastMembers || channel?.streamId !== this._lastMembersChannel?.streamId) return;
