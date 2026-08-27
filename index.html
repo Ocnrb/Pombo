@@ -824,19 +824,6 @@
                                     class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition resize-none font-mono placeholder:text-white/20"
                                 ></textarea>
                             </div>
-                            <!-- Classification for Closed channels -->
-                            <div>
-                                <label class="block text-xs font-medium text-white/80 uppercase tracking-wider mb-2">Classification</label>
-                                <div class="flex gap-2">
-                                    <button type="button" data-classification="personal" class="classification-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/10 text-white border border-white/10">
-                                        Personal
-                                    </button>
-                                    <button type="button" data-classification="community" class="classification-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 hover:bg-white/10 hover:text-white/70">
-                                        Community
-                                    </button>
-                                </div>
-                                <p class="text-xs text-white/30 mt-2">For organizing your channels locally.</p>
-                            </div>
                         </div>
 
                         <!-- Gated fields (shown only for Gated tab) -->
@@ -956,11 +943,11 @@
                                     <input type="radio" name="author-visibility" id="gate-author-visibility-everyone" class="peer sr-only">
                                     <span class="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 peer-checked:bg-white/10 peer-checked:text-amber-400/90 peer-checked:border-white/10">
                                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m-18.716-2.253A8.959 8.959 0 003 12c0 .778.099 1.533.284 2.253"/></svg>
-                                        Everyone
+                                        On the wire
                                     </span>
                                 </label>
                             </div>
-                            <p class="text-xs text-white/30 mt-2">Who can see who wrote each message. Cannot be changed later.</p>
+                            <p id="author-visibility-caption" class="text-xs text-white/30 mt-2">Full author privacy. Removed members can pollute storage until you reset the key with a paid on-chain action.</p>
                         </div>
 
                         <!-- Divider -->
@@ -1096,6 +1083,21 @@
                                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                                 <span>Learn more about storage</span>
                             </button>
+                        </div>
+
+                        <!-- Classification: local-only organization, so it closes the page -->
+                        <div id="classification-section" class="hidden">
+                            <div class="border-t border-white/5 mb-5"></div>
+                            <label class="block text-xs font-medium text-white/80 uppercase tracking-wider mb-2">Classification</label>
+                            <div class="flex gap-2">
+                                <button type="button" data-classification="personal" class="classification-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/10 text-white border border-white/10">
+                                    Personal
+                                </button>
+                                <button type="button" data-classification="community" class="classification-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 hover:bg-white/10 hover:text-white/70">
+                                    Community
+                                </button>
+                            </div>
+                            <p class="text-xs text-white/30 mt-2">For organizing your channels locally.</p>
                         </div>
 
                     </div>

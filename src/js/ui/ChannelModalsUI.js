@@ -98,6 +98,8 @@ class ChannelModalsUI {
         // Reset author visibility to the Members only default
         const authorMembers = document.getElementById('gate-author-visibility-members');
         if (authorMembers) authorMembers.checked = true;
+        this._wireAuthorVisibilityCaption();
+        this._updateAuthorVisibilityCaption();
         // Reset read-only toggle
         this.setReadOnly(false);
         // Reset storage provider to Streamr (default)
@@ -237,8 +239,12 @@ class ChannelModalsUI {
             paidSection.classList.toggle('hidden', tabType !== 'paid');
         }
         // Author visibility applies to every gated variant (Closed included)
+        const gatedFamily = ['closed', 'gated', 'paid'].includes(tabType);
         document.getElementById('author-visibility-section')
-            ?.classList.toggle('hidden', !['closed', 'gated', 'paid'].includes(tabType));
+            ?.classList.toggle('hidden', !gatedFamily);
+        // Classification is local-only organization: same variants, end of page
+        document.getElementById('classification-section')
+            ?.classList.toggle('hidden', !gatedFamily);
 
         // Update cost display in footer
         document.querySelectorAll('.channel-cost-display').forEach(cost => {
@@ -374,6 +380,25 @@ class ChannelModalsUI {
         }
         
         this.currentExposure = visible ? 'visible' : 'hidden';
+    }
+
+    /** The caption states each mode's gain and cost, so it follows the pick. */
+    _updateAuthorVisibilityCaption() {
+        const caption = document.getElementById('author-visibility-caption');
+        if (!caption) return;
+        const onTheWire = document.getElementById('gate-author-visibility-everyone')?.checked;
+        caption.textContent = onTheWire
+            ? "Storage is protected from pollution. Every message exposes its author's account."
+            : 'Full author privacy. Removed members can pollute storage until you reset the key with a paid on-chain action.';
+    }
+
+    _wireAuthorVisibilityCaption() {
+        if (this._authorCaptionWired) return;
+        this._authorCaptionWired = true;
+        for (const id of ['gate-author-visibility-members', 'gate-author-visibility-everyone']) {
+            document.getElementById(id)?.addEventListener('change', () =>
+                this._updateAuthorVisibilityCaption());
+        }
     }
 
     /**
@@ -754,7 +779,7 @@ class ChannelModalsUI {
                     const members = flags.authorMode === 'members';
                     authorsEl.textContent = members
                         ? 'Authors visible to members only'
-                        : 'Every message is publicly signed by its author';
+                        : 'Every message is signed by its author on the wire';
                     authorsEl.className = 'mt-2 text-xs text-center '
                         + (members ? 'text-white/40' : 'text-amber-400/70');
                 })
