@@ -46,8 +46,9 @@ import { streamrController } from './streamr.js';
 import { cryptoManager } from './crypto.js';
 import { authManager } from './auth.js';
 import { CONFIG } from './config.js';
-import { KEYS_MSG_TYPE } from './streamConstants.js';
+import { KEYS_MSG_TYPE, KEYS_STREAM } from './streamConstants.js';
 import { gateManager } from './gate.js';
+import { dmCrypto } from './dmCrypto.js';
 
 /**
  * Channels running the epoch-key protocol (gated, N-A/N-C): the gate clone
@@ -80,14 +81,26 @@ const RANK_STEP_MS = 2000;
 // without adding meaningful redundancy.
 const RANK_MAX = 8;
 
-// N-B stored-request answering: only requests this recent are answered from
-// storage — the requester holds the ephemeral pair in memory, so a wrap for a
-// long-gone request is dead bytes. Generous enough to cover "opened the
-// channel, waited, admin arrived minutes later".
+// Stored-request answering, requests WITHOUT a static pubkey only: the
+// requester holds the ephemeral pair in memory, so a wrap for a long-gone
+// request is dead bytes. Requests that carry `spk` have no window — the v2
+// wrap opens with the account key in any later session, so any retained
+// uncovered request is worth answering.
 const REQUEST_ANSWER_WINDOW_MS = 10 * 60 * 1000;
 
 // Observed-wrap suppression memory (requestId → Set(keyId)), bounded.
 const SEEN_WRAPS_MAX = 100;
+
+// Persisted pending-request ids (wrap v2). Bounded: a wrap for a request this
+// old answers a question nobody is asking any more, and the ids sync across
+// devices, so the set must stay small.
+const PENDING_REQUEST_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const PENDING_REQUESTS_MAX = 8;
+
+// Roster (-4/P1) read cache: the members panel refreshes freely; the resend
+// behind it should not.
+const ROSTER_CACHE_TTL_MS = 60 * 1000;
+const ROSTER_HISTORY_COUNT = 500;
 
 // N-D (§7.12): gated channels rotate on a cadence — selling the asset or a
 // lapsed subscription only cuts reads at the NEXT rotation, so without a
@@ -122,6 +135,19 @@ class EpochKeyManager {
                 currentEpoch: 0,
                 // { requestId, privateKey, publicKey, fromEpoch, sentAt } — memory only (D12)
                 pendingRequest: null,
+                // requestId → { fromEpoch, sentAt } — PERSISTED. Holds no key
+                // material (D12 intact by construction): a v2 wrap for any of
+                // these ids opens with the account's static key, in any
+                // session of any device.
+                pendingRequests: new Map(),
+                // Epochs we already published a MEMBER_HELLO for — persisted,
+                // so reopening the channel does not re-hello.
+                helloEpochs: new Set(),
+                // -4 partition probe: null = unknown, 0 = no roster partition,
+                // 1 = the stream was created with P1
+                rosterPartition: null,
+                // { at, members } — getRosterMembers result cache
+                rosterCache: null,
                 // Consecutive unanswered requests — drives the retry backoff
                 requestAttempts: 0,
                 // requestId → Set(keyId) of wraps OBSERVED (live or history) —
@@ -161,6 +187,16 @@ class EpochKeyManager {
         }
         const maxAnnounced = Math.max(0, ...s.announces.keys());
         if (maxAnnounced > s.currentEpoch) s.currentEpoch = maxAnnounced;
+        const cutoff = Date.now() - PENDING_REQUEST_MAX_AGE_MS;
+        for (const [requestId, entry] of Object.entries(persisted.pendingRequests || {})) {
+            if ((entry?.sentAt || 0) < cutoff) continue;
+            if (!s.pendingRequests.has(requestId)) {
+                s.pendingRequests.set(requestId, { fromEpoch: entry.fromEpoch, sentAt: entry.sentAt });
+            }
+        }
+        for (const epoch of persisted.helloEpochs || []) {
+            if (Number.isInteger(epoch)) s.helloEpochs.add(epoch);
+        }
     }
 
     async _persist(messageStreamId, s) {
@@ -175,7 +211,16 @@ class EpochKeyManager {
                 publisher: ann.publisher, timestamp: ann.timestamp, validFrom: ann.validFrom
             };
         }
-        await secureStorage.setEpochKeys(messageStreamId, { epochs, announces, currentEpoch: s.currentEpoch });
+        const cutoff = Date.now() - PENDING_REQUEST_MAX_AGE_MS;
+        const pendingRequests = {};
+        for (const [requestId, entry] of s.pendingRequests) {
+            if ((entry?.sentAt || 0) < cutoff) { s.pendingRequests.delete(requestId); continue; }
+            pendingRequests[requestId] = { fromEpoch: entry.fromEpoch, sentAt: entry.sentAt };
+        }
+        await secureStorage.setEpochKeys(messageStreamId, {
+            epochs, announces, currentEpoch: s.currentEpoch,
+            pendingRequests, helloEpochs: Array.from(s.helloEpochs)
+        });
     }
 
     /**
@@ -297,6 +342,7 @@ class EpochKeyManager {
             channel.keysStreamId, { last: KEYS_HISTORY_COUNT });
         let changed = false;
         const storedRequests = [];
+        const storedV2Wraps = [];
         for (const { data, publisherId, timestamp } of entries) {
             if (data.t === KEYS_MSG_TYPE.KEY_ANNOUNCE) {
                 if (this._applyAnnounce(channel, s, data, publisherId, timestamp)) changed = true;
@@ -305,6 +351,13 @@ class EpochKeyManager {
                 // answered — its epochs need no re-answering from us
                 if (typeof data.requestId === 'string' && typeof data.keyId === 'string') {
                     this._recordSeenWrap(s, data.requestId, data.keyId);
+                    // A retained v2 wrap for one of OUR requests opens with the
+                    // account key even though the requesting session is gone —
+                    // collected here, adopted after every announce is applied.
+                    if (data.v === 2 && (s.pendingRequests.has(data.requestId)
+                            || s.pendingRequest?.requestId === data.requestId)) {
+                        storedV2Wraps.push(data);
+                    }
                 }
             } else if (data.t === KEYS_MSG_TYPE.KEY_REQUEST) {
                 storedRequests.push({ data, publisherId, timestamp });
@@ -312,22 +365,32 @@ class EpochKeyManager {
             }
         }
         if (changed) await this._persist(channel.messageStreamId, s);
+        for (const data of storedV2Wraps) {
+            try {
+                await this._handleWrapV2(channel, s, data);
+            } catch (e) {
+                Logger.warn('epochKeys: stored v2 wrap adoption failed:', e.message);
+            }
+        }
 
-        // N-B: answer RECENT stored requests that no wrap covers yet — a
-        // member arriving later serves whoever is still waiting, so requester
-        // and key-holder no longer have to coincide in time. Older requests
-        // are dead: the requester's ephemeral pair lives in memory only.
+        // N-B: answer stored requests that no wrap covers yet — a member
+        // arriving later serves whoever is still waiting, so requester and
+        // key-holder no longer have to coincide in time. Requests carrying a
+        // static pubkey have no age limit (the v2 wrap opens in any later
+        // session); without one, only recent requests — the ephemeral pair
+        // lives in memory only, so a wrap for an old request is dead bytes.
         if (s.epochs.size > 0) {
             const me = (authManager.getAddress() || '').toLowerCase();
             const now = Date.now();
             for (const { data, publisherId, timestamp } of storedRequests) {
                 if ((publisherId || '').toLowerCase() === me) continue;
-                if (now - (timestamp || 0) > REQUEST_ANSWER_WINDOW_MS) continue;
+                const hasStatic = typeof data.spk === 'string';
+                if (!hasStatic && now - (timestamp || 0) > REQUEST_ANSWER_WINDOW_MS) continue;
                 if (typeof data.pubkey !== 'string' || typeof data.requestId !== 'string') continue;
                 const rank = await this._rankFor(data.requestId, (channel.members || []).length);
                 this._scheduleAnswer(channel, {
                     requestId: data.requestId, pubkey: data.pubkey, fromEpoch: data.fromEpoch,
-                    requester: publisherId
+                    spk: data.spk, requester: publisherId
                 }, rank * RANK_STEP_MS);
             }
         }
@@ -663,7 +726,7 @@ class EpochKeyManager {
         const rank = await this._rankFor(data.requestId, (channel.members || []).length);
         this._scheduleAnswer(channel, {
             requestId: data.requestId, pubkey: data.pubkey, fromEpoch: data.fromEpoch,
-            requester: publisherId
+            spk: data.spk, requester: publisherId
         }, rank * RANK_STEP_MS);
     }
 
@@ -730,6 +793,23 @@ class EpochKeyManager {
             currentEpochOnly = true;
         }
 
+        // Static pubkey (wrap v2): usable only when it provably belongs to
+        // the requester — the request's envelope signature anchors the
+        // account, and computeAddress(spk) must land on that same account.
+        // Anything else is a forgery (wraps would open for whoever planted
+        // the key) and downgrades the answer to v1.
+        let staticKey = null;
+        if (typeof request.spk === 'string') {
+            try {
+                if (ethers.computeAddress(request.spk).toLowerCase()
+                        === (request.requester || '').toLowerCase()) {
+                    staticKey = request.spk;
+                } else {
+                    Logger.warn('epochKeys: KEY_REQUEST spk does not match the requester — answering v1');
+                }
+            } catch { /* malformed pubkey — answer v1 */ }
+        }
+
         const covered = s.seenWraps.get(request.requestId) || new Set();
         const fromEpoch = Number.isInteger(request.fromEpoch) ? request.fromEpoch : 1;
 
@@ -738,16 +818,25 @@ class EpochKeyManager {
             if (entry.epoch < fromEpoch || covered.has(keyId)) continue;
             if (currentEpochOnly && entry.epoch !== s.currentEpoch) continue;
             try {
-                const tag = await epochKeyCrypto.computeWrapTag(request.pubkey, keyId);
-                const wrapped = await epochKeyCrypto.wrapEpochKey(entry.keyHex, request.pubkey);
-                await streamrController.publishKeysMessage(channel.keysStreamId, {
-                    t: KEYS_MSG_TYPE.KEY_WRAP,
-                    requestId: request.requestId,
-                    keyId,
-                    epoch: entry.epoch,
-                    tag,
-                    ...wrapped
-                });
+                const envelope = staticKey
+                    ? {
+                        t: KEYS_MSG_TYPE.KEY_WRAP,
+                        v: 2,
+                        requestId: request.requestId,
+                        keyId,
+                        epoch: entry.epoch,
+                        tag: await epochKeyCrypto.computeWrapTagV2(request.requestId, keyId),
+                        ...await epochKeyCrypto.wrapEpochKeyToStatic(entry.keyHex, staticKey)
+                    }
+                    : {
+                        t: KEYS_MSG_TYPE.KEY_WRAP,
+                        requestId: request.requestId,
+                        keyId,
+                        epoch: entry.epoch,
+                        tag: await epochKeyCrypto.computeWrapTag(request.pubkey, keyId),
+                        ...await epochKeyCrypto.wrapEpochKey(entry.keyHex, request.pubkey)
+                    };
+                await streamrController.publishKeysMessage(channel.keysStreamId, envelope);
                 this._recordSeenWrap(s, request.requestId, keyId);
                 sent += 1;
             } catch (e) {
@@ -755,7 +844,7 @@ class EpochKeyManager {
             }
         }
         if (sent > 0) {
-            Logger.debug(`epochKeys: answered request ${request.requestId} with ${sent} wrap(s)`);
+            Logger.debug(`epochKeys: answered request ${request.requestId} with ${sent} ${staticKey ? 'v2 ' : ''}wrap(s)`);
         }
     }
 
@@ -800,6 +889,10 @@ class EpochKeyManager {
         if (typeof data.requestId === 'string' && typeof data.keyId === 'string') {
             this._recordSeenWrap(s, data.requestId, data.keyId);
         }
+        if (data.v === 2) {
+            await this._handleWrapV2(channel, s, data);
+            return;
+        }
         const pending = s.pendingRequest;
         if (!pending) return;
         if (data.requestId !== pending.requestId) return;
@@ -839,8 +932,70 @@ class EpochKeyManager {
     }
 
     /**
-     * Publish a KEY_REQUEST with a fresh request keypair (D12). The keypair
-     * lives on the pending request, in memory, until superseded.
+     * A v2 wrap: addressed by requestId (any of OUR retained request ids —
+     * this session's or a persisted one from an earlier session or another
+     * device), sealed to the account's static key. Same trust chain as v1:
+     * announce lookup, then keyHash verify — a malicious wrapper still cannot
+     * poison a key.
+     */
+    async _handleWrapV2(channel, s, data) {
+        if (typeof data.requestId !== 'string' || typeof data.keyId !== 'string'
+            || typeof data.tag !== 'string') return;
+        if (s.epochs.has(data.keyId)) return;                             // already adopted
+        const mine = s.pendingRequests.has(data.requestId)
+            || s.pendingRequest?.requestId === data.requestId;
+        if (!mine) return;
+
+        const expectedTag = await epochKeyCrypto.computeWrapTagV2(data.requestId, data.keyId);
+        if (data.tag.toLowerCase() !== expectedTag.toLowerCase()) return;
+
+        const announce = s.announces.get(data.epoch);
+        if (!announce || announce.keyId !== data.keyId) {
+            Logger.warn('epochKeys: v2 wrap for unannounced key ignored:', data.keyId);
+            return;
+        }
+
+        const accountKey = authManager.wallet?.privateKey;
+        if (!accountKey) return;
+
+        let keyHex;
+        try {
+            keyHex = await epochKeyCrypto.unwrapEpochKeyStatic(
+                { epk: data.epk, iv: data.iv, ct: data.ct }, accountKey);
+        } catch (e) {
+            Logger.warn('epochKeys: v2 wrap failed to open:', e.message);
+            return;
+        }
+
+        const keyHash = await epochKeyCrypto.computeKeyHash(keyHex);
+        if (keyHash.toLowerCase() !== announce.keyHash) {
+            Logger.warn('epochKeys: v2 wrap REJECTED — keyHash mismatch for', data.keyId,
+                '(malicious or corrupted wrap)');
+            return;
+        }
+
+        await this._adopt(channel, s, {
+            keyId: data.keyId, keyHex, keyHash: announce.keyHash, epoch: data.epoch
+        });
+        Logger.info(`epochKeys: adopted epoch ${data.epoch} (${data.keyId}) via v2 wrap on`,
+            channel.messageStreamId.slice(-30));
+    }
+
+    /** The account's static compressed pubkey (the DM key), or null. */
+    _myStaticPubkey() {
+        try {
+            const privateKey = authManager.wallet?.privateKey;
+            return privateKey ? dmCrypto.getMyPublicKey(privateKey) : null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Publish a KEY_REQUEST with a fresh request keypair (D12 — the keypair
+     * lives on the pending request, in memory, until superseded) plus the
+     * account's static pubkey, so a v2 wrap answered days later still opens.
+     * Only the request id persists — no key material.
      */
     async _sendKeyRequest(channel, s) {
         const interval = s.requestAttempts < REQUEST_FAST_ATTEMPTS
@@ -854,15 +1009,25 @@ class EpochKeyManager {
         const { privateKey, publicKey } = epochKeyCrypto.generateRequestKeypair();
         const requestId = cryptoManager.generateRandomHex(16);
         const fromEpoch = Math.min(...missing);
+        const spk = this._myStaticPubkey();
 
         s.requestAttempts += 1;
         s.pendingRequest = { requestId, privateKey, publicKey, fromEpoch, sentAt: Date.now() };
+        if (spk) {
+            s.pendingRequests.set(requestId, { fromEpoch, sentAt: Date.now() });
+            while (s.pendingRequests.size > PENDING_REQUESTS_MAX) {
+                const oldest = s.pendingRequests.keys().next().value;
+                s.pendingRequests.delete(oldest);
+            }
+            await this._persist(channel.messageStreamId, s);
+        }
 
         await streamrController.publishKeysMessage(channel.keysStreamId, {
             t: KEYS_MSG_TYPE.KEY_REQUEST,
             requestId,
             pubkey: publicKey,
-            fromEpoch
+            fromEpoch,
+            ...(spk ? { spk } : {})
         });
         Logger.info(`epochKeys: requested epochs ≥${fromEpoch} on`, channel.keysStreamId.slice(-30));
     }
@@ -874,8 +1039,126 @@ class EpochKeyManager {
         }
         s.missingKids?.delete(keyId);
         s.requestAttempts = 0;   // future rotations start on the fast retry again
+        // Retained request ids exist to catch late v2 wraps; once nothing is
+        // missing they only invite redundant answers.
+        if (s.pendingRequests.size > 0 && this._missingEpochs(s).length === 0) {
+            s.pendingRequests.clear();
+        }
         await this._persist(channel.messageStreamId, s);
         this._notifyAdopted(channel.messageStreamId, keyId);
+        this._maybePublishHello(channel, s, keyId, epoch).catch(e =>
+            Logger.debug('epochKeys: member hello failed:', e.message));
+    }
+
+    // ==================== ROSTER (-4/P1) ====================
+
+    /**
+     * Does this channel's -4 carry the roster partition? Resolved once per
+     * session from the stream's on-chain partition count — channels created
+     * before P1 existed answer no, and every roster path degrades to the
+     * seenRequesters fallback.
+     */
+    async _rosterCapable(channel, s) {
+        if (s.rosterPartition === null) {
+            try {
+                const count = await streamrController.getStreamPartitionCount(channel.keysStreamId);
+                s.rosterPartition = count >= 2 ? 1 : 0;
+            } catch {
+                return false;    // unknown stays null — probe again next time
+            }
+        }
+        return s.rosterPartition === 1;
+    }
+
+    /**
+     * One MEMBER_HELLO per epoch, sealed with that epoch's key and published
+     * on first adoption — never for past epochs (a backfilled hello would
+     * fake presence in a window the member did not live). The seal is what
+     * keeps the roster private: the -4 resend is publicly readable over HTTP.
+     */
+    async _maybePublishHello(channel, s, keyId, epoch) {
+        if (epoch !== s.currentEpoch) return;
+        if (s.helloEpochs.has(epoch)) return;
+        if (!(await this._rosterCapable(channel, s))) return;
+        const account = (authManager.getAddress() || '').toLowerCase();
+        const entry = s.epochs.get(keyId);
+        if (!account || !entry) return;
+
+        const spk = this._myStaticPubkey();
+        const hello = {
+            t: KEYS_MSG_TYPE.MEMBER_HELLO,
+            account,
+            ...(spk ? { spk } : {}),
+            ts: Date.now()
+        };
+        const sealed = await epochKeyCrypto.encryptWithEpochKey(
+            hello, await this._cryptoKey(entry));
+        await streamrController.publishKeysMessage(
+            channel.keysStreamId,
+            { e: 'epoch-aes-gcm', k: keyId, ct: sealed.ct, iv: sealed.iv },
+            KEYS_STREAM.ROSTER);
+        s.helloEpochs.add(epoch);
+        await this._persist(channel.messageStreamId, s);
+        Logger.debug(`epochKeys: member hello published for epoch ${epoch} on`,
+            channel.keysStreamId.slice(-30));
+    }
+
+    /**
+     * The channel roster: MEMBER_HELLO authors from -4/P1, deduped by account,
+     * newest hello wins. Persistent and device-independent, unlike
+     * seenRequesters — the candidate source the members panel unions in.
+     * Every entry is authenticated: the hello opens with an epoch key valid at
+     * its timestamp AND its envelope signer equals the declared account, so a
+     * member cannot plant a hello for someone else.
+     * @param {Object} channel
+     * @returns {Promise<Array<{account: string, spk: string|null, ts: number}>>}
+     */
+    async getRosterMembers(channel) {
+        if (!usesEpochKeys(channel)) return [];
+        const s = this._getState(channel.messageStreamId);
+        if (s.rosterCache && Date.now() - s.rosterCache.at < ROSTER_CACHE_TTL_MS) {
+            return s.rosterCache.members;
+        }
+        if (!(await this._rosterCapable(channel, s))) {
+            s.rosterCache = { at: Date.now(), members: [] };
+            return [];
+        }
+        const members = new Map();
+        try {
+            const entries = await streamrController.resendKeysMessages(
+                channel.keysStreamId,
+                { last: ROSTER_HISTORY_COUNT, partition: KEYS_STREAM.ROSTER });
+            for (const { data, publisherId, timestamp } of entries) {
+                if (!data || data.e !== 'epoch-aes-gcm' || typeof data.k !== 'string') continue;
+                const key = await this.getKeyForKid(
+                    channel.messageStreamId, data.k, { timestamp });
+                if (!key) continue;    // missing key, or stale-kid violation
+                let hello;
+                try {
+                    hello = await epochKeyCrypto.decryptWithEpochKey(data, key);
+                } catch {
+                    continue;
+                }
+                if (hello?.t !== KEYS_MSG_TYPE.MEMBER_HELLO) continue;
+                const account = (hello.account || '').toLowerCase();
+                if (!/^0x[0-9a-f]{40}$/.test(account)) continue;
+                if (account !== (publisherId || '').toLowerCase()) continue;
+                const prev = members.get(account);
+                if (!prev || (hello.ts || 0) > prev.ts) {
+                    members.set(account, {
+                        account,
+                        spk: typeof hello.spk === 'string' ? hello.spk : null,
+                        ts: hello.ts || timestamp || 0
+                    });
+                }
+            }
+        } catch (e) {
+            Logger.warn('epochKeys: roster read failed:', e.message);
+            return s.rosterCache?.members || [];
+        }
+        const list = Array.from(members.values());
+        s.rosterCache = { at: Date.now(), members: list };
+        return list;
     }
 
     /**

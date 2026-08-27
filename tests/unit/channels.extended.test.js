@@ -176,6 +176,7 @@ vi.mock('../../src/js/epochKeyManager.js', () => ({
     epochKeyManager: {
         rotateEpoch: vi.fn().mockResolvedValue(undefined),
         getSeenRequesters: vi.fn().mockReturnValue([]),
+        getRosterMembers: vi.fn().mockResolvedValue([]),
         onKeyAdopted: vi.fn(),
         handleKeysMessage: vi.fn(),
         forgetChannel: vi.fn().mockResolvedValue(undefined),

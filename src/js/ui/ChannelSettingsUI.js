@@ -1548,8 +1548,15 @@ class ChannelSettingsUI {
             this.elements.permissionsList.innerHTML = '<div class="text-white/30">Loading...</div>';
             try {
                 const { gateManager } = await import('../gate.js');
+                const { epochKeyManager } = await import('../epochKeyManager.js');
+                const roster = await epochKeyManager.getRosterMembers(currentChannel)
+                    .catch(() => []);
                 const gateMembers = await gateManager.getGateMembers(
-                    currentChannel.gate.address, currentChannel.members || []);
+                    currentChannel.gate.address, [
+                        ...(currentChannel.members || []),
+                        ...epochKeyManager.getSeenRequesters(currentChannel.messageStreamId),
+                        ...roster.map(m => m.account)
+                    ]);
                 let html = '';
                 for (const m of gateMembers) {
                     const short = `${m.address.slice(0, 8)}...${m.address.slice(-4)}`;

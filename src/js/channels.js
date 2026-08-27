@@ -2081,9 +2081,15 @@ class ChannelManager {
         const gateAddr = channel.gate.address.toLowerCase();
         try {
             const { gateManager } = await import('./gate.js');
+            // Roster (-4/P1) is the persistent, device-independent candidate
+            // source; seenRequesters stays as the fallback for channels
+            // created before the roster partition existed.
+            const roster = await epochKeyManager.getRosterMembers(channel)
+                .catch(() => []);
             const candidates = [
                 ...(channel.members || []),
-                ...epochKeyManager.getSeenRequesters(channel.messageStreamId)
+                ...epochKeyManager.getSeenRequesters(channel.messageStreamId),
+                ...roster.map(m => m.account)
             ];
             const gateMembers = await gateManager.getGateMembers(
                 channel.gate.address, candidates);

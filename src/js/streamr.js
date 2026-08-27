@@ -2156,7 +2156,7 @@ class StreamrController {
      * @param {Object} data - Protocol message ({ t: KEYS_MSG_TYPE.*, ... })
      * @returns {Promise<Object>} The published StreamMessage
      */
-    async publishKeysMessage(keysStreamId, data) {
+    async publishKeysMessage(keysStreamId, data, partition = STREAM_CONFIG.KEYS_STREAM.KEY_EXCHANGE) {
         if (!isKeysStream(keysStreamId)) {
             throw new Error(`publishKeysMessage expects a keys stream (-4), got: ${keysStreamId}`);
         }
@@ -2172,7 +2172,7 @@ class StreamrController {
         return this.publishAs(
             this._accountIdentity,
             keysStreamId,
-            STREAM_CONFIG.KEYS_STREAM.KEY_EXCHANGE,
+            partition,
             data,
             this._gateTransportOptions(channel)
         );
@@ -2399,7 +2399,7 @@ class StreamrController {
      * @param {number} [options.last=1000] - How many entries to fetch
      * @returns {Promise<Array<{data: Object, publisherId: string, timestamp: number}>>}
      */
-    async resendKeysMessages(keysStreamId, { last = 1000 } = {}) {
+    async resendKeysMessages(keysStreamId, { last = 1000, partition = STREAM_CONFIG.KEYS_STREAM.KEY_EXCHANGE } = {}) {
         if (!this.client) {
             throw new Error('Streamr client not initialized');
         }
@@ -2410,14 +2410,17 @@ class StreamrController {
         const entries = [];
         try {
             const resend = await this.client.resend(
-                { streamId: keysStreamId, partition: STREAM_CONFIG.KEYS_STREAM.KEY_EXCHANGE },
+                { streamId: keysStreamId, partition },
                 { last }
             );
 
             for await (const message of resend) {
                 try {
                     const content = message.content || message;
-                    if (!content || typeof content !== 'object' || typeof content.t !== 'string') continue;
+                    // P0 carries typed protocol messages; the roster partition
+                    // carries epoch envelopes (no `t` until decrypted)
+                    if (!content || typeof content !== 'object') continue;
+                    if (typeof content.t !== 'string' && content.e !== 'epoch-aes-gcm') continue;
                     const transportPublisher = typeof message.getPublisherId === 'function'
                         ? message.getPublisherId()
                         : (message.publisherId ?? null);
