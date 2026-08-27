@@ -561,7 +561,7 @@ class GateManager {
     }
 
     /** Whether an address moderates this gate (v1 gates lack the getter → false). */
-    async isModerator(gateAddress, userAddress) {
+    async _isModerator(gateAddress, userAddress) {
         try {
             return await this._withProvider(() =>
                 this._readContract(gateAddress).moderators(userAddress));
@@ -577,7 +577,7 @@ class GateManager {
             const info = await this.getGateInfo(gateAddress);
             if (info.owner === userAddress.toLowerCase()) return true;
         } catch { /* fall through to the moderator read */ }
-        return this.isModerator(gateAddress, userAddress);
+        return this._isModerator(gateAddress, userAddress);
     }
 }
 
