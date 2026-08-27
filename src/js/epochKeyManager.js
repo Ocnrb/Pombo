@@ -1656,10 +1656,6 @@ class EpochKeyManager {
         return entry.epoch === epochInForce;
     }
 
-    hasKey(messageStreamId, kid) {
-        return !!this.state.get(messageStreamId)?.epochs.has(kid);
-    }
-
     _cryptoKey(entry) {
         if (!entry.cryptoKey) {
             entry.cryptoKey = epochKeyCrypto.importEpochKey(entry.keyHex);
