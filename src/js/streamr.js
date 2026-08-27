@@ -2565,9 +2565,15 @@ class StreamrController {
 
         const entries = [];
         try {
+            // Raw: skips the SDK's validation/ordering pipeline. Gap-filling
+            // rides the mesh, so on a half-connected node an ordered resend
+            // silently stalls or returns empty while plain HTTP works — the
+            // same lesson that moved gated history to raw. -4 authority never
+            // came from the validator anyway: resolveAuthor recovers the
+            // envelope signer below and the key layer verifies key hashes.
             const resend = await this.client.resend(
                 { streamId: keysStreamId, partition },
-                { last }
+                { last, raw: true }
             );
 
             for await (const message of resend) {
