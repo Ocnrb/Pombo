@@ -2289,7 +2289,7 @@ class StreamrController {
         // clone (which would put the account on the wire).
         const { usesSharedPublish } = await import('./epochKeyManager.js');
         if (usesSharedPublish(channel)) {
-            const pubKey = epochKeyManager.getPublishKey(channel.messageStreamId);
+            const pubKey = await epochKeyManager.ensurePublishKey(channel);
             if (!pubKey) {
                 throw new Error(
                     `No publish key for ${channel.messageStreamId} — cannot publish on a Members-only channel without one (waiting for PUB_WRAP)`);
@@ -2394,7 +2394,7 @@ class StreamrController {
         // stamp the sender's account onto every piece.
         const { usesSharedPublish } = await import('./epochKeyManager.js');
         if (usesSharedPublish(channel)) {
-            const pubKey = epochKeyManager.getPublishKey(channel.messageStreamId);
+            const pubKey = await epochKeyManager.ensurePublishKey(channel);
             if (!pubKey) {
                 throw new Error(
                     `No publish key for ${channel.messageStreamId} — cannot send media on a Members-only channel without one`);
@@ -2777,7 +2777,7 @@ class StreamrController {
                 // clone path would stamp the uploader's account onto them.
                 const { epochKeyManager, usesSharedPublish } = await import('./epochKeyManager.js');
                 if (usesSharedPublish(channel)) {
-                    const pubKey = epochKeyManager.getPublishKey(channel.messageStreamId);
+                    const pubKey = await epochKeyManager.ensurePublishKey(channel);
                     if (!pubKey) {
                         throw new Error(
                             `No publish key for ${channel.messageStreamId} — cannot upload on a Members-only channel without one`);

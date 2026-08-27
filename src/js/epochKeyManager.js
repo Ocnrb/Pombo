@@ -329,6 +329,24 @@ class EpochKeyManager {
     }
 
     /**
+     * getPublishKey with ONE recovery attempt, mirroring the epoch-key
+     * recovery in the publish funnels. A member can hold the epoch key
+     * (reads decrypt fine) while the PUB_WRAP never arrived — a state the
+     * epoch-gated recovery never enters, so without this nothing would ever
+     * request the missing publish key and the channel would stay unwritable.
+     * The wrap arrives asynchronously: the caller may still come up empty
+     * this time, but the request is now in flight for the next attempt.
+     */
+    async ensurePublishKey(channel) {
+        let pubKey = this.getPublishKey(channel.messageStreamId);
+        if (!pubKey) {
+            await this.ensureChannelKeys(channel);
+            pubKey = this.getPublishKey(channel.messageStreamId);
+        }
+        return pubKey;
+    }
+
+    /**
      * The admin escape valve (Members-only): replace the shared publish key
      * when ex-key-holders abuse it. Exceptional, never routine — rotation
      * stays zero-tx. The new key announces at rev+1, which supersedes

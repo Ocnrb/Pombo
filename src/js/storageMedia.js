@@ -1615,7 +1615,7 @@ class StorageMediaController {
                 // Members-only: chunks travel under the SHARED publish key —
                 // that address is what the verify reads must match.
                 const { epochKeyManager } = await import('./epochKeyManager.js');
-                const pubKey = epochKeyManager.getPublishKey(channel.messageStreamId);
+                const pubKey = await epochKeyManager.ensurePublishKey(channel);
                 if (!pubKey) {
                     throw new Error(
                         `No publish key for ${channel.messageStreamId} — cannot store media on a Members-only channel`);
