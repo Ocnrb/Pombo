@@ -2625,8 +2625,15 @@ class ChannelManager {
         epochKeyManager.loadPersistedState(channel.messageStreamId);
         if (epochKeyManager.hasCurrentKey(channel.messageStreamId)) {
             setTimeout(() => {
-                epochKeyManager.ensureChannelKeys(channel).catch(e =>
-                    Logger.debug('Background epoch reconcile failed:', e.message));
+                epochKeyManager.ensureChannelKeys(channel).catch(e => {
+                    // Reading still works, but this pass is what answers
+                    // retained requests, re-announces and picks up new
+                    // epochs/revs — a silent give-up leaves all of that
+                    // undone until the next open. Same capped retry as the
+                    // cold path.
+                    Logger.warn('Background epoch reconcile failed (will retry):', e.message);
+                    this._scheduleEpochSetupRetry(channel);
+                });
             }, 8_000);
             return;
         }

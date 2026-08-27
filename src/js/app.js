@@ -342,6 +342,10 @@ class App {
             await subscriptionManager.cleanup();
             await channelManager.leaveAllChannels();
             await dmManager.destroy();
+            // Epoch-key runtime state (keys in memory, rotation timers)
+            // belongs to the disconnecting account — the next account must
+            // start from its own persisted slice, never inherit this one's.
+            epochKeyManager.clear();
             await streamrController.disconnect();
             mediaController.reset();
             secureStorage.lock();
