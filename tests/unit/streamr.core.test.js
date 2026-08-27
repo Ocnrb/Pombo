@@ -698,9 +698,21 @@ describe('StreamrController Core', () => {
 
     // ==================== hasDeletePermission() ====================
     describe('hasDeletePermission()', () => {
-        it('should return false if client is null', async () => {
+        it('should return null (unknown, never cacheable) if client is null', async () => {
             streamrController.client = null;
-            expect(await streamrController.hasDeletePermission('s')).toBe(false);
+            expect(await streamrController.hasDeletePermission('s')).toBe(null);
+        });
+
+        it('should return true for the namespace owner without any RPC', async () => {
+            const { authManager } = await import('../../src/js/auth.js');
+            const orig = authManager.getAddress;
+            authManager.getAddress = () => '0xOwnerAddr';
+            try {
+                streamrController.client = null;   // no client needed at all
+                expect(await streamrController.hasDeletePermission('0xowneraddr/stream-1')).toBe(true);
+            } finally {
+                authManager.getAddress = orig;
+            }
         });
 
         it('should return true when has DELETE permission', async () => {
@@ -719,9 +731,9 @@ describe('StreamrController Core', () => {
             expect(await streamrController.hasDeletePermission('0xowner/stream-1')).toBe(true);
         });
 
-        it('should return false on error', async () => {
+        it('should return null (unknown, never cacheable) on error', async () => {
             mockClient.getStream.mockRejectedValue(new Error('fail'));
-            expect(await streamrController.hasDeletePermission('s')).toBe(false);
+            expect(await streamrController.hasDeletePermission('s')).toBe(null);
         });
     });
 

@@ -161,6 +161,14 @@ class ChannelManager {
         target.initialLoadInProgress = preserved.initialLoadInProgress;
         target._publishPermCache = preserved._publishPermCache;
 
+        // Author visibility: a gated channel persisted without the field is
+        // from before the mode existed — Everyone by definition. Channels
+        // created with the mode always persist it, and the gate repair below
+        // re-reads it from the on-chain metadata whenever it runs.
+        if (target.type === 'gated' && !target.authorMode) {
+            target.authorMode = 'everyone';
+        }
+
         // Gated channel without its gate address — persisted by an old build
         // or restored from a sync snapshot that lost it. Repair from the
         // stream's on-chain metadata, HERE in the hydrator so every restore
@@ -222,25 +230,32 @@ class ChannelManager {
     }
 
     async _doRepairGateAddress(channel) {
-        const gateAddress = await this.readGateFromMetadata(channel.messageStreamId);
-        if (!gateAddress) throw new Error('no gate address in stream metadata');
-        channel.gate = { address: gateAddress };
+        const flags = await this.readGateFromMetadata(channel.messageStreamId, { withMode: true });
+        if (!flags?.gateAddress) throw new Error('no gate address in stream metadata');
+        channel.gate = { address: flags.gateAddress };
+        channel.authorMode = flags.authorMode;
         await this.saveChannels();
-        Logger.info('Gate address repaired from metadata:', channel.messageStreamId?.slice(-20), '→', gateAddress);
+        Logger.info('Gate address repaired from metadata:', channel.messageStreamId?.slice(-20), '→', flags.gateAddress);
     }
 
     /**
      * The gate clone address from a stream's on-chain metadata (`g`, written
-     * at creation), or null when the stream is not a gated channel.
+     * at creation), or null when the stream is not a gated channel. With
+     * `withMode`, returns { gateAddress, authorMode } — the `m` flag lives in
+     * the same metadata JSON and is immutable, like the gate.
      */
-    async readGateFromMetadata(messageStreamId) {
+    async readGateFromMetadata(messageStreamId, { withMode = false } = {}) {
         const stream = await graphAPI.getStream(messageStreamId);
         if (!stream?.metadata) return null;
         try {
             const outer = JSON.parse(stream.metadata || '{}');
             const pombo = JSON.parse(outer.description || '{}');
             const gateAddress = typeof pombo.g === 'string' ? pombo.g.toLowerCase() : null;
-            return /^0x[0-9a-f]{40}$/.test(gateAddress || '') ? gateAddress : null;
+            const valid = /^0x[0-9a-f]{40}$/.test(gateAddress || '') ? gateAddress : null;
+            if (!withMode) return valid;
+            return valid
+                ? { gateAddress: valid, authorMode: pombo.m === 1 ? 'members' : 'everyone' }
+                : null;
         } catch {
             return null;
         }
@@ -319,6 +334,9 @@ class ChannelManager {
                 // silently degrades after a reload — the publish falls back to
                 // an ephemeral key the network rejects (MISSING_PERMISSION).
                 gate: ch.gate || null,
+                // Author visibility — losing it would flip a Members-only
+                // channel back to clone publishes (account on the wire).
+                authorMode: ch.authorMode || null,
                 createdAt: ch.createdAt,
                 createdBy: ch.createdBy,
                 // Local membership timestamp — drives per-channel latest-wins
@@ -478,13 +496,26 @@ class ChannelManager {
                 try { onProgress?.(); } catch (_) { /* ignore */ }
             }
 
+            // Members-only author visibility (the default for new gated
+            // channels): mint the SHARED publish key now so its address rides
+            // the creation permission batch. The private half is adopted
+            // below and distributed to members via -4 wraps.
+            let publishKey = null;
+            const authorMode = type === 'gated' ? (options.authorMode || 'members') : null;
+            if (authorMode === 'members') {
+                publishKey = epochKeyManager.mintPublishKey();
+            }
+
             // Create dual-stream channel - streamrController handles on-chain operations
             // Returns: { messageStreamId, ephemeralStreamId, type, name }
             const streamInfo = await streamrController.createStream(
                 name,
                 realAddress,
                 type,
-                { ...options, onProgress, gateAddress }
+                {
+                    ...options, onProgress, gateAddress,
+                    authorMode, publishKeyAddress: publishKey?.address
+                }
             );
             Logger.debug('Triple-stream created:', { 
                 messageStreamId: streamInfo.messageStreamId, 
@@ -598,6 +629,10 @@ class ChannelManager {
                 // is what flips every gated code path (transport, epoch keys,
                 // authorship) — keep it null elsewhere.
                 gate: type === 'gated' ? { address: gateAddress } : null,
+                // Author visibility ('members' | 'everyone'), IMMUTABLE:
+                // 'members' publishes -1/-2 under the shared key with
+                // authorship sealed inside the epoch envelope.
+                authorMode: authorMode,
                 createdAt: Date.now(),
                 joinedAt: Date.now(),
                 createdBy: realAddress,
@@ -631,6 +666,10 @@ class ChannelManager {
             this.channels.set(channel.messageStreamId, channel);
             await secureStorage.clearChannelLeftAt(channel.messageStreamId);
             await this.saveChannels();
+
+            if (publishKey) {
+                await epochKeyManager.adoptPublishKey(channel, publishKey);
+            }
             
             // Add to channel order (new channels go to top)
             await secureStorage.addToChannelOrder(channel.messageStreamId);
@@ -846,6 +885,22 @@ class ChannelManager {
             // Classification for local organization (any channel type)
             const classification = options.classification || null;
 
+            // Author visibility from the -1 metadata (`m`, immutable). It has
+            // to be right BEFORE the first publish — a Members-only channel
+            // joined as Everyone would put the account on the wire.
+            let authorMode = null;
+            if (channelType === 'gated') {
+                authorMode = options.authorMode || null;
+                if (!authorMode) {
+                    try {
+                        const flags = await this.readGateFromMetadata(messageStreamId, { withMode: true });
+                        authorMode = flags?.authorMode || 'everyone';
+                    } catch {
+                        authorMode = 'everyone';
+                    }
+                }
+            }
+
             const channel = {
                 messageStreamId: messageStreamId,
                 ephemeralStreamId: ephemeralStreamId,
@@ -860,6 +915,7 @@ class ChannelManager {
                 gate: channelType === 'gated' && options.gateAddress
                     ? { address: options.gateAddress.toLowerCase() }
                     : null,
+                authorMode: authorMode,
                 createdAt: Date.now(),
                 joinedAt: Date.now(),
                 createdBy: createdBy,
@@ -1913,14 +1969,6 @@ class ChannelManager {
     }
 
     /** @returns {Promise<{rev:number, state:Object}>} */
-    async unhideMessage(messageStreamId, targetId) {
-        const channel = this.channels.get(messageStreamId);
-        if (!channel) throw new Error('Channel not found');
-        const next = (channel.adminState?.hiddenMessageIds || []).filter(id => id !== targetId);
-        return this.publishAdminState(messageStreamId, { patch: { hiddenMessageIds: next } });
-    }
-
-    /** @returns {Promise<{rev:number, state:Object}>} */
     async pinMessage(messageStreamId, targetId, snapshot = null) {
         const channel = this.channels.get(messageStreamId);
         if (!channel) throw new Error('Channel not found');
@@ -2021,20 +2069,6 @@ class ChannelManager {
         });
 
         return { rev: newRev, hash: input.hash };
-    }
-
-    /** Read helpers used by UI/render layers. */
-    isMessageHidden(channel, messageId) {
-        if (!channel || !messageId) return false;
-        const list = channel.adminState?.hiddenMessageIds;
-        return Array.isArray(list) && list.includes(messageId);
-    }
-
-    isMemberBanned(channel, address) {
-        if (!channel || !address) return false;
-        const list = channel.adminState?.bannedMembers;
-        if (!Array.isArray(list)) return false;
-        return list.includes(String(address).toLowerCase());
     }
 
     // ===== END ADMIN STREAM =========================================================
@@ -2228,13 +2262,17 @@ class ChannelManager {
         // Fire-and-forget permission check
         streamrController.hasDeletePermission(streamId)
             .then(canDelete => {
+                // null = UNKNOWN (client not ready / read failed): caching it
+                // would hide the admin surface for the whole session on one
+                // transient miss — leave the cache empty and retry next time.
+                if (canDelete === null) return;
                 // Double-check channel still exists and wallet hasn't changed
                 const ch = this.channels.get(streamId);
                 const addr = authManager.getAddress();
                 if (ch && addr) {
-                    ch._deletePermCache = { 
-                        canDelete, 
-                        address: addr.toLowerCase() 
+                    ch._deletePermCache = {
+                        canDelete,
+                        address: addr.toLowerCase()
                     };
                     Logger.debug('Cached DELETE permission:', { streamId: streamId.slice(-20), canDelete });
                 }
@@ -2565,8 +2603,15 @@ class ChannelManager {
         epochKeyManager.loadPersistedState(channel.messageStreamId);
         if (epochKeyManager.hasCurrentKey(channel.messageStreamId)) {
             setTimeout(() => {
-                epochKeyManager.ensureChannelKeys(channel).catch(e =>
-                    Logger.debug('Background epoch reconcile failed:', e.message));
+                epochKeyManager.ensureChannelKeys(channel).catch(e => {
+                    // Reading still works, but this pass is what answers
+                    // retained requests, re-announces and picks up new
+                    // epochs/revs — a silent give-up leaves all of that
+                    // undone until the next open. Same capped retry as the
+                    // cold path.
+                    Logger.warn('Background epoch reconcile failed (will retry):', e.message);
+                    this._scheduleEpochSetupRetry(channel);
+                });
             }, 8_000);
             return;
         }

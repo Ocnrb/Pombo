@@ -339,10 +339,17 @@ async function handlePushWithVerification(pushData) {
         }
         
         const { tag } = pushData;
-        
+
         // If no tag, can't verify - ignore (K-anonymity noise)
         if (!tag) {
             console.log('[SW] Push without tag - ignoring (K-anonymity noise)');
+            return;
+        }
+
+        // Key-request wake: silent by contract. The key responder runs in an
+        // open tab (its own sweep loop) — the SW neither sweeps nor notifies.
+        if (pushData.channelType === 'keys') {
+            console.log('[SW] Keys wake - silent (key responder handles it in-tab)');
             return;
         }
         

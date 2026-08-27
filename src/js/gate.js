@@ -38,7 +38,6 @@ const GATE_ABI = [
     'function allowlist(address) view returns (bool)',
     'function paidUntil(address) view returns (uint64)',
     'function checkAccess(address user) view returns (bool)',
-    'function accessUntil(address user) view returns (uint64)',
     'function allow(address user)',
     'function allowBatch(address[] users)',
     'function revokeAllow(address user)',
@@ -46,13 +45,11 @@ const GATE_ABI = [
     'function payWithPermit(uint256 permitValue, uint256 deadline, uint8 v, bytes32 r, bytes32 s)',
     'function ban(address user, bool eraseHistory)',
     'function unban(address user)',
-    'function unerase(address user)',
     'function moderators(address) view returns (bool)',
     'function setModerator(address user, bool enabled)',
     'event ModeratorSet(address indexed user, bool enabled)',
     'event Allowed(address indexed user)',
     'event AllowRevoked(address indexed user)',
-    'event MemberJoined(address indexed user)',
     'event Paid(address indexed user, uint64 paidUntil)',
     'event Banned(address indexed user, bool erasedHistory)',
     'event Unbanned(address indexed user)',
@@ -236,12 +233,6 @@ class GateManager {
             this._accessCache.delete(oldest);
         }
         return value;
-    }
-
-    /** @returns {Promise<bigint>} 0 = no access, 2^64-1 = boolean gate open */
-    accessUntil(gateAddress, userAddress) {
-        return this._withProvider(() =>
-            this._readContract(gateAddress).accessUntil(userAddress));
     }
 
     /** @returns {Promise<bigint>} Unix seconds the subscription runs to; 0 = never paid */
@@ -429,10 +420,6 @@ class GateManager {
         return this._ownerCall(gateAddress, 'unban', [userAddress], userAddress);
     }
 
-    unerase(gateAddress, userAddress) {
-        return this._ownerCall(gateAddress, 'unerase', [userAddress], userAddress);
-    }
-
     /**
      * Appoint or dismiss a moderator (owner-only on-chain; v2 gates).
      * Appointing also makes them a member — mirror the contract's semantics.
@@ -574,7 +561,7 @@ class GateManager {
     }
 
     /** Whether an address moderates this gate (v1 gates lack the getter → false). */
-    async isModerator(gateAddress, userAddress) {
+    async _isModerator(gateAddress, userAddress) {
         try {
             return await this._withProvider(() =>
                 this._readContract(gateAddress).moderators(userAddress));
@@ -590,7 +577,7 @@ class GateManager {
             const info = await this.getGateInfo(gateAddress);
             if (info.owner === userAddress.toLowerCase()) return true;
         } catch { /* fall through to the moderator read */ }
-        return this.isModerator(gateAddress, userAddress);
+        return this._isModerator(gateAddress, userAddress);
     }
 }
 

@@ -365,6 +365,12 @@ export const CONFIG = {
         pushRegistrationNativeChannels: (addr) =>
             addr ? `pombo_push_registration_native_channels_${addr.toLowerCase()}`
                  : 'pombo_push_registration_native_channels',
+        // Gated channels this DEVICE answers key requests for (the owner
+        // key-responder). Local-only on purpose: a synced duty would
+        // surprise-drain every device of the account.
+        keyResponderChannels: (addr) =>
+            addr ? `pombo_key_responder_channels_${addr.toLowerCase()}`
+                 : 'pombo_key_responder_channels',
 
         // Per-address keys (address is normalized to lowercase)
         secure: (addr) => `pombo_secure_${addr.toLowerCase()}`,

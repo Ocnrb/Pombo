@@ -9,13 +9,14 @@ import { CONFIG as APP_CONFIG } from './config.js';
 import { streamrController } from './streamr.js';
 import { channelManager } from './channels.js';
 import { withCircuitBreaker, getCircuitState } from './utils/retry.js';
-import { 
+import {
     calculateChannelTag,
     calculateNativeChannelTag,
     createRegistrationPayload,
     createChannelNotificationPayload,
     createNativeChannelNotificationPayload,
-    DEFAULT_CONFIG 
+    createKeysNotificationPayload,
+    DEFAULT_CONFIG
 } from './pushProtocol.js';
 
 // ================================================
@@ -683,7 +684,36 @@ class RelayManager {
             return false;
         }
     }
-    
+
+    /**
+     * Send a key-request wake for a gated channel (channelType 'keys'):
+     * wakes any device running the key responder for this channel so the
+     * KEY_REQUEST just published is answered in seconds. Silent by contract
+     * on every receiver — never a user notification.
+     *
+     * @param {string} streamId - Channel MESSAGE stream ID (-1)
+     * @returns {Promise<boolean>}
+     */
+    async sendKeysWakeSignal(streamId) {
+        if (!this.initialized) {
+            Logger.debug('RelayManager not initialized - ignoring keys wake signal');
+            return false;
+        }
+
+        try {
+            const payload = await createKeysNotificationPayload(
+                streamId,
+                CONFIG.powDifficulty
+            );
+            await streamrController.publishToPushStream(payload);
+            Logger.debug('Keys wake signal sent, tag:', payload.tag);
+            return true;
+        } catch (error) {
+            Logger.error('Error sending keys wake signal:', error);
+            return false;
+        }
+    }
+
     // ================================================
     // HELPERS
     // ================================================

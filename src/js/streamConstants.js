@@ -154,12 +154,24 @@ export const KEYS_STREAM = Object.freeze({
  *                 { account, spk, ts } — published on first adoption of each
  *                 CURRENT epoch's key; readers require the envelope signer to
  *                 equal `account` (no planting hellos for someone else)
+ *   PUB_ANNOUNCE  admin only (Members-only channels): the SHARED publish key
+ *                 anchor { keyId, keyHash, addr, rev }. Static — never
+ *                 rotates by routine; a re-key (admin escape valve against
+ *                 ex-key-holder abuse) bumps `rev`. Conflict rule: higher
+ *                 rev wins; same rev falls back to the announce rule (older
+ *                 timestamp, then lower publisher).
+ *   PUB_WRAP      the publish PRIVATE key sealed to a requester — exactly a
+ *                 KEY_WRAP (v1 ephemeral / v2 static addressing, same tags)
+ *                 verified against the PUB_ANNOUNCE keyHash AND against the
+ *                 announced address (computeAddress of the unwrapped key)
  */
 export const KEYS_MSG_TYPE = Object.freeze({
     KEY_ANNOUNCE: 'key_announce',
     KEY_REQUEST: 'key_request',
     KEY_WRAP: 'key_wrap',
-    MEMBER_HELLO: 'member_hello'
+    MEMBER_HELLO: 'member_hello',
+    PUB_ANNOUNCE: 'pub_announce',
+    PUB_WRAP: 'pub_wrap'
 });
 
 /**

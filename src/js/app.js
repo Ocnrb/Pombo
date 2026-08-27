@@ -342,6 +342,10 @@ class App {
             await subscriptionManager.cleanup();
             await channelManager.leaveAllChannels();
             await dmManager.destroy();
+            // Epoch-key runtime state (keys in memory, rotation timers)
+            // belongs to the disconnecting account — the next account must
+            // start from its own persisted slice, never inherit this one's.
+            epochKeyManager.clear();
             await streamrController.disconnect();
             mediaController.reset();
             secureStorage.lock();
@@ -575,6 +579,12 @@ class App {
 
             subscriptionManager.startBackgroundPoller();
             Logger.info('Dynamic subscription management active (background poller started)');
+
+            // Owner key-responder: answer retained key requests on the
+            // channels this device is marked for (no-op when none are).
+            import('./keyResponder.js')
+                .then(({ keyResponder }) => keyResponder.start())
+                .catch(e => Logger.debug('Key responder unavailable:', e.message));
 
             try {
                 await notificationManager.init();

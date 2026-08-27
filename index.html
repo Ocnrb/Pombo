@@ -10,7 +10,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Pombo - Own Your Communications</title>
     <link rel="canonical" href="https://app.pombo.cc/">
-    <meta name="description" content="Pombo is a home for encrypted group chats, communities, and private messages — no sign-ups, no phone number, no central servers. Free, open source, and yours.">
+    <meta name="description" content="Pombo is a peer-to-peer (p2p) messaging and social media app, built on open infrastructure instead of a company's servers. Your people. Your rules. Your money.">
 
     <!-- Favicons -->
     <link rel="icon" type="image/svg+xml" href="/favicon/favicon.svg">
@@ -22,7 +22,7 @@
     <!-- Open Graph -->
     <meta property="og:type" content="website">
     <meta property="og:title" content="Pombo — Own Your Communications">
-    <meta property="og:description" content="Pombo is your gateway to decentralized communications. Own your channels, messages, and identity with zero central servers and no compromise.">
+    <meta property="og:description" content="Your people. Your rules. Your money. Communities, direct messages and paid channels that belong to you.">
     <meta property="og:image" content="https://app.pombo.cc/favicon/og-banner.png">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
@@ -30,7 +30,7 @@
     <meta property="og:url" content="https://app.pombo.cc">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Pombo — Own Your Communications">
-    <meta name="twitter:description" content="Pombo is your gateway to decentralized communications. Own your channels, messages, and identity with zero central servers and no compromise.">
+    <meta name="twitter:description" content="Your people. Your rules. Your money. Communities, direct messages and paid channels that belong to you.">
     <meta name="twitter:image" content="https://app.pombo.cc/favicon/og-banner.png">
 
     <!-- Framing defense for hosts without header support (GitHub Pages).
@@ -731,7 +731,7 @@
                         <div id="tab-gated" class="channel-tab-content hidden space-y-4">
                             <div class="p-4 bg-white/5 rounded-xl border border-white/5">
                                 <p class="text-sm text-white/50 leading-relaxed">
-                                    Access follows an on-chain asset: anyone holding the token or NFT can join, read and write. Selling the asset cuts new access; messages already published stay.
+                                    Access follows an on-chain asset: anyone holding the token or NFT can join, read and write. Selling the asset cuts new access.
                                 </p>
                             </div>
                             <input type="hidden" name="channel-type" value="gated" class="channel-type-input">
@@ -741,7 +741,7 @@
                         <div id="tab-paid" class="channel-tab-content hidden space-y-4">
                             <div class="p-4 bg-white/5 rounded-xl border border-white/5">
                                 <p class="text-sm text-white/50 leading-relaxed">
-                                    Subscription channel: members pay a fixed price in an ERC-20 token for a period of access. Payments go directly to your wallet; renewing extends from the current end.
+                                    Subscription channel: members pay a fixed price in an ERC-20 token for a period of access. Payments go in full, directly to your wallet.
                                 </p>
                             </div>
                             <input type="hidden" name="channel-type" value="paid" class="channel-type-input">
@@ -823,19 +823,6 @@
                                     rows="3"
                                     class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition resize-none font-mono placeholder:text-white/20"
                                 ></textarea>
-                            </div>
-                            <!-- Classification for Closed channels -->
-                            <div>
-                                <label class="block text-xs font-medium text-white/80 uppercase tracking-wider mb-2">Classification</label>
-                                <div class="flex gap-2">
-                                    <button type="button" data-classification="personal" class="classification-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/10 text-white border border-white/10">
-                                        Personal
-                                    </button>
-                                    <button type="button" data-classification="community" class="classification-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 hover:bg-white/10 hover:text-white/70">
-                                        Community
-                                    </button>
-                                </div>
-                                <p class="text-xs text-white/30 mt-2">For organizing your channels locally.</p>
                             </div>
                         </div>
 
@@ -939,6 +926,28 @@
                                     />
                                 </div>
                             </div>
+                        </div>
+
+                        <!-- Author visibility (all gated variants; immutable after creation) -->
+                        <div id="author-visibility-section" class="hidden">
+                            <label class="block text-xs font-medium text-white/80 uppercase tracking-wider mb-2">Identity on the wire</label>
+                            <div class="flex gap-2">
+                                <label class="flex-1 cursor-pointer">
+                                    <input type="radio" name="author-visibility" id="gate-author-visibility-members" class="peer sr-only" checked>
+                                    <span class="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 peer-checked:bg-white/10 peer-checked:text-white peer-checked:border-white/10">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
+                                        Sealed
+                                    </span>
+                                </label>
+                                <label class="flex-1 cursor-pointer">
+                                    <input type="radio" name="author-visibility" id="gate-author-visibility-everyone" class="peer sr-only">
+                                    <span class="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 peer-checked:bg-white/10 peer-checked:text-amber-400/90 peer-checked:border-white/10">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m-18.716-2.253A8.959 8.959 0 003 12c0 .778.099 1.533.284 2.253"/></svg>
+                                        Visible
+                                    </span>
+                                </label>
+                            </div>
+                            <p id="author-visibility-caption" class="text-xs text-white/30 mt-2">Full author privacy. Removed members can pollute storage until you reset the key with a paid on-chain action.</p>
                         </div>
 
                         <!-- Divider -->
@@ -1074,6 +1083,21 @@
                                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                                 <span>Learn more about storage</span>
                             </button>
+                        </div>
+
+                        <!-- Classification: local-only organization, so it closes the page -->
+                        <div id="classification-section" class="hidden">
+                            <div class="border-t border-white/5 mb-5"></div>
+                            <label class="block text-xs font-medium text-white/80 uppercase tracking-wider mb-2">Classification</label>
+                            <div class="flex gap-2">
+                                <button type="button" data-classification="personal" class="classification-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/10 text-white border border-white/10">
+                                    Personal
+                                </button>
+                                <button type="button" data-classification="community" class="classification-tab flex-1 px-3 py-2 rounded-lg text-xs font-medium transition bg-white/5 text-white/50 border border-white/5 hover:bg-white/10 hover:text-white/70">
+                                    Community
+                                </button>
+                            </div>
+                            <p class="text-xs text-white/30 mt-2">For organizing your channels locally.</p>
                         </div>
 
                     </div>
@@ -1509,7 +1533,7 @@
         </div>
     </div>
 
-    <!-- Modal: Gate Entry (Gated/Paid channels — requirement, standing, pay/join) -->
+    <!-- Modal: Gate Entry (Gated/Paid channels — requirement, standing, pay/enter) -->
     <div id="gate-entry-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50">
         <div class="bg-[#111113] rounded-2xl p-5 w-[380px] max-w-full mx-4 border border-white/[0.06]">
             <h3 id="gate-entry-title" class="text-base font-medium text-center text-white">Join Gated Channel</h3>
@@ -1522,6 +1546,7 @@
             </div>
             <p id="gate-entry-condition" class="mt-5 text-sm text-white/70 text-center leading-relaxed">Loading…</p>
 
+            <p id="gate-entry-authors" class="hidden mt-2 text-xs text-center"></p>
             <p id="gate-entry-status" class="hidden mt-4 text-sm text-center"></p>
             <p id="gate-entry-note" class="hidden mt-3 text-xs text-white/30 text-center"></p>
 
@@ -1847,6 +1872,19 @@
                                 <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
                                 <span>Enable Push Notifications in Settings first</span>
                             </p>
+                            <!-- Owner key-responder (gated channels, owner/moderator only) -->
+                            <div id="channel-key-responder-container" class="hidden flex items-start justify-between p-4 bg-white/5 rounded-xl border border-white/5">
+                                <div class="flex-1 mr-4">
+                                    <h4 class="text-sm font-medium text-white/90 mb-1">Key Responder</h4>
+                                    <p class="text-sm text-white/40 leading-relaxed">
+                                        Keep this device answering key requests for this channel while a Pombo tab is open
+                                    </p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="channel-key-responder-enabled" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white/60 after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#F6851B]"></div>
+                                </label>
+                            </div>
                         </div>
                     </div>
 
@@ -1928,6 +1966,17 @@
                             <p class="text-sm text-white/30 leading-relaxed">
                                 Banned members can no longer publish messages in this channel. They can still view existing messages until removed.
                             </p>
+                            <!-- Members-only channels, admin only: the escape valve against ex-key-holder abuse -->
+                            <div id="rekey-publish-section" class="hidden p-4 bg-amber-500/5 rounded-xl border border-amber-500/10">
+                                <h4 class="text-sm font-medium text-white/90 mb-1">Reset Publish Key</h4>
+                                <p class="text-sm text-white/40 mb-3">
+                                    Replaces the channel's shared publish key (2 transactions). Former members who kept the old key lose the ability to write. Current members pick up the new key automatically.
+                                </p>
+                                <button id="rekey-publish-btn" class="w-full bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 px-4 py-2.5 rounded-xl text-sm transition">
+                                    Reset Publish Key
+                                </button>
+                                <p id="rekey-publish-status" class="hidden mt-2 text-xs text-white/40"></p>
+                            </div>
                         </div>
                     </div>
 

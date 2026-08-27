@@ -377,6 +377,12 @@ class StreamrController {
             // The Graph read the gate from here; everything else about the
             // gate (mode, token, price) is read from the chain.
             g: type === 'gated' ? options.gateAddress : undefined,
+            // Author visibility: 1 = Members only (messages publish under the
+            // channel's shared key; authorship sealed inside the epoch
+            // envelope). Absent = Everyone — which is what every channel
+            // created before the flag existed is. IMMUTABLE post-creation:
+            // flipping it would break validation of the mixed history.
+            m: type === 'gated' && options.authorMode === 'members' ? 1 : undefined,
             // Only include metadata if visible
             d: exposure === 'visible' ? (options.description || '') : undefined,  // description
             l: exposure === 'visible' ? (options.language || 'en') : undefined,   // language
@@ -541,6 +547,14 @@ class StreamrController {
                 // writes. The owner publishes -3 as the ACCOUNT; their address
                 // is the streamId prefix, so this leaks nothing new.
                 const gateMembers = [options.gateAddress];
+                // Members-only author visibility: -1/-2 additionally grant
+                // the SHARED publish key's address — every member publishes
+                // under it, so the transport carries no authorship. -4 keeps
+                // clone-only (KEY_REQUESTs must name the requester so the
+                // gate check works) and -3 stays owner-published.
+                const contentMembers = options.publishKeyAddress
+                    ? [options.gateAddress, options.publishKeyAddress]
+                    : gateMembers;
                 for (const [stream, label] of [
                     [messageStream, 'Message'],
                     [ephemeralStream, 'Ephemeral'],
@@ -561,7 +575,11 @@ class StreamrController {
                                     members: gateMembers, memberPermissions: ['subscribe']
                                 }
                                 : { public: false, members: gateMembers, memberPermissions: ['subscribe'] })
-                            : { public: false, members: gateMembers };
+                            : {
+                                public: false,
+                                members: (stream === messageStream || stream === ephemeralStream)
+                                    ? contentMembers : gateMembers
+                            };
                         await this.setStreamPermissions(stream.id, perms);
                         Logger.info(`✓ ${label} stream: gate clone permissions set`);
                     } catch (e) {
@@ -1351,29 +1369,36 @@ class StreamrController {
      * @param {string} streamId - Stream ID
      * @returns {Promise<boolean>}
      */
+    /**
+     * DELETE permission of the current wallet on a stream.
+     * @returns {Promise<boolean|null>} true/false = a real answer; null =
+     *   UNKNOWN (no client yet, or the read failed). Callers must never
+     *   cache null as "no" — a transient failure cached as false hid the
+     *   admin surface for the whole session.
+     */
     async hasDeletePermission(streamId) {
+        // Namespace owner: nobody else can create streams under that
+        // address, so their DELETE is true by construction — no RPC, no
+        // race with client startup, nothing to go stale.
+        const wallet = authManager.getAddress?.();
+        if (wallet && streamId.split('/')[0]?.toLowerCase() === wallet.toLowerCase()) {
+            return true;
+        }
+
         if (!this.client) {
-            return false;
+            return null;
         }
 
         try {
             const stream = await this.client.getStream(streamId);
             const StreamPermission = window.StreamPermission;
-            
-            if (!StreamPermission) {
-                Logger.warn('StreamPermission not available, falling back to streamId check');
-                // Fallback: check if streamId starts with current address
-                const currentAddress = await this.client.getAddress();
-                if (currentAddress) {
-                    const streamOwner = streamId.split('/')[0]?.toLowerCase();
-                    return streamOwner === currentAddress.toLowerCase();
-                }
-                return false;
-            }
-
             const currentAddress = await this.client.getAddress();
             if (!currentAddress) {
-                return false;
+                return null;
+            }
+            if (!StreamPermission) {
+                Logger.warn('StreamPermission not available, falling back to streamId check');
+                return streamId.split('/')[0]?.toLowerCase() === currentAddress.toLowerCase();
             }
 
             const hasDelete = await stream.hasPermission({
@@ -1381,12 +1406,12 @@ class StreamrController {
                 userId: currentAddress,
                 allowPublic: false
             });
-            
+
             Logger.debug('hasDeletePermission check:', { streamId, currentAddress: currentAddress.slice(0,10), hasDelete });
             return hasDelete;
         } catch (error) {
             Logger.error('Failed to check DELETE permission:', error);
-            return false;
+            return null;
         }
     }
 
@@ -1918,6 +1943,17 @@ class StreamrController {
         const channel = await this._gatedChannelFor(streamId);
         if (!channel) return publisherId ?? null;
 
+        // Members-only author visibility (-1/-2 only; -3 stays the owner's
+        // account and -4 must name the requester): the transport asserts
+        // NOTHING about authorship — it is the shared publish key for
+        // everyone. The author comes from the wrapper inside the epoch seal
+        // (_openAuthorship, after decrypt); this stage neither confirms nor
+        // drops.
+        if (channel.authorMode === 'members'
+                && !isAdminStream(streamId) && !isKeysStream(streamId)) {
+            return publisherId ?? null;
+        }
+
         const gateAddress = channel.gate.address.toLowerCase();
         if ((publisherId || '').toLowerCase() !== gateAddress) {
             // -3 as the ACCOUNT: the owner publishes the admin stream under
@@ -1953,6 +1989,43 @@ class StreamrController {
             }
         }
         return signer;
+    }
+
+    /**
+     * Members-only ingest, the half that runs AFTER the epoch seal opens:
+     * verify the authorship wrapper (pseudonym signature per message + bind
+     * proof to the account) and hand back the payload with its author. Null
+     * means drop — a sealed message without a valid wrapper has no author.
+     *
+     * `live: true` additionally drops authors whose CURRENT gate access has
+     * lapsed — the shared key accepts an expired member's publishes until a
+     * re-key, so honest clients cut them here, exactly like the Everyone
+     * mode cuts them in resolveAuthor. Fail-OPEN on an unreachable chain,
+     * same stance. History is exempt — retention is the proof (G6 applies to
+     * both modes).
+     *
+     * @param {Object} channel - The gated Members-only channel
+     * @param {Object} sealed - The decrypted epoch plaintext (the wrapper)
+     * @param {Object} [options]
+     * @param {boolean} [options.live=false]
+     * @returns {Promise<{author: string, payload: Object}|null>}
+     */
+    async _openAuthorship(channel, sealed, { live = false } = {}) {
+        const { authorship } = await import('./authorship.js');
+        const opened = authorship.open(channel.messageStreamId, sealed);
+        if (!opened) {
+            Logger.warn('authorship: unverifiable wrapper on', channel.messageStreamId.slice(-20), '— dropping');
+            return null;
+        }
+        if (live) {
+            const { gateManager } = await import('./gate.js');
+            const access = await gateManager.checkAccessOrNull(channel.gate.address, opened.author);
+            if (access === false) {
+                Logger.info(`authorship: lapsed gate access for ${opened.author} — dropping live message`);
+                return null;
+            }
+        }
+        return opened;
     }
 
     /**
@@ -2214,6 +2287,35 @@ class StreamrController {
         }
 
         const payload = stripLocalFields(data);
+
+        // Members-only author visibility: the plaintext becomes an authorship
+        // wrapper (pseudonym signature per message + account bind proof) and
+        // the transport publisher becomes the channel's SHARED key — the wire
+        // says nothing about who wrote this. Fail-closed on both halves: no
+        // publish key or no wallet means NO publish, never a fallback to the
+        // clone (which would put the account on the wire).
+        const { usesSharedPublish } = await import('./epochKeyManager.js');
+        if (usesSharedPublish(channel)) {
+            const pubKey = await epochKeyManager.ensurePublishKey(channel);
+            if (!pubKey) {
+                throw new Error(
+                    `No publish key for ${channel.messageStreamId} — cannot publish on a Members-only channel without one (waiting for PUB_WRAP)`);
+            }
+            const auth = epochKeyManager.getAuthorship(channel);
+            if (!auth) {
+                throw new Error('No wallet available to bind the channel pseudonym');
+            }
+            const { authorship } = await import('./authorship.js');
+            const wrapper = authorship.seal(
+                channel.messageStreamId, payload,
+                { privateKey: auth.privateKey, publicKey: auth.publicKey },
+                auth.bindProof);
+            const sealedWrapper = await epochKeyCrypto.encryptWithEpochKey(wrapper, key.cryptoKey);
+            const envelope = { e: 'epoch-aes-gcm', k: key.kid, ct: sealedWrapper.ct, iv: sealedWrapper.iv };
+            return this.publishAs(
+                this._sharedPublishIdentity(pubKey), streamId, partition, envelope);
+        }
+
         const sealed = await epochKeyCrypto.encryptWithEpochKey(payload, key.cryptoKey);
         const envelope = { e: 'epoch-aes-gcm', k: key.kid, ct: sealed.ct, iv: sealed.iv };
 
@@ -2221,6 +2323,43 @@ class StreamrController {
             this._accountIdentity, streamId, partition, envelope,
             this._gateTransportOptions(channel, streamId)
         );
+    }
+
+    /**
+     * Re-key a Members-only channel's shared publish grants: the new key's
+     * address gains publish+subscribe on -1/-2 and the old one loses
+     * everything — one setPermissions tx per stream (an assignment with an
+     * empty permission list clears that user). The admin escape valve
+     * against ex-key-holder abuse; exceptional, never routine.
+     */
+    async rekeySharedPublishGrants(channel, newAddress, oldAddress) {
+        for (const streamId of [channel.messageStreamId, channel.ephemeralStreamId]) {
+            if (!streamId) continue;
+            const assignments = [
+                { userId: newAddress.toLowerCase(), permissions: ['subscribe', 'publish'] },
+                ...(oldAddress ? [{ userId: oldAddress.toLowerCase(), permissions: [] }] : [])
+            ];
+            await executeWithRetry(`rekeySharedPublishGrants(${streamId.slice(-20)})`, async () => {
+                await this.client.setPermissions({ streamId, assignments });
+            });
+        }
+    }
+
+    /**
+     * Identity for the channel's SHARED publish key, cached per keyId — a
+     * re-key changes the keyId and naturally mints the replacement.
+     */
+    _sharedPublishIdentity(pubKey) {
+        if (!window.EthereumKeyPairIdentity) {
+            throw new Error('EthereumKeyPairIdentity not exposed — check streamr-bundle.js');
+        }
+        this._pubIdentities ??= new Map();
+        let identity = this._pubIdentities.get(pubKey.keyId);
+        if (!identity) {
+            identity = window.EthereumKeyPairIdentity.fromPrivateKey(pubKey.keyHex);
+            this._pubIdentities.set(pubKey.keyId, identity);
+        }
+        return identity;
     }
 
     /**
@@ -2255,6 +2394,23 @@ class StreamrController {
         }
 
         const sealed = await epochKeyCrypto.sealBinaryWithEpochKey(data, key.cryptoKey, key.kid);
+
+        // Members-only: binary frames carry no authorship wrapper (their
+        // trust anchor is the content hash from an AUTHORED announce), but
+        // the transport must still be the shared key — the clone path would
+        // stamp the sender's account onto every piece.
+        const { usesSharedPublish } = await import('./epochKeyManager.js');
+        if (usesSharedPublish(channel)) {
+            const pubKey = await epochKeyManager.ensurePublishKey(channel);
+            if (!pubKey) {
+                throw new Error(
+                    `No publish key for ${channel.messageStreamId} — cannot send media on a Members-only channel without one`);
+            }
+            return this.publishAs(
+                this._sharedPublishIdentity(pubKey), ephemeralStreamId,
+                STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_DATA, sealed);
+        }
+
         return this.publishAs(
             this._accountIdentity, ephemeralStreamId,
             STREAM_CONFIG.EPHEMERAL_STREAM.MEDIA_DATA, sealed,
@@ -2409,9 +2565,15 @@ class StreamrController {
 
         const entries = [];
         try {
+            // Raw: skips the SDK's validation/ordering pipeline. Gap-filling
+            // rides the mesh, so on a half-connected node an ordered resend
+            // silently stalls or returns empty while plain HTTP works — the
+            // same lesson that moved gated history to raw. -4 authority never
+            // came from the validator anyway: resolveAuthor recovers the
+            // envelope signer below and the key layer verifies key hashes.
             const resend = await this.client.resend(
                 { streamId: keysStreamId, partition },
-                { last }
+                { last, raw: true }
             );
 
             for await (const message of resend) {
@@ -2624,6 +2786,19 @@ class StreamrController {
             const base = String(messageStreamId).replace(/-[1234]$/, '');
             const channel = channelManager.channels?.get(base + '-1');
             if (channel?.type === 'gated' || channel?.gate?.address) {
+                // Members-only: chunks travel under the shared key too — the
+                // clone path would stamp the uploader's account onto them.
+                const { epochKeyManager, usesSharedPublish } = await import('./epochKeyManager.js');
+                if (usesSharedPublish(channel)) {
+                    const pubKey = await epochKeyManager.ensurePublishKey(channel);
+                    if (!pubKey) {
+                        throw new Error(
+                            `No publish key for ${channel.messageStreamId} — cannot upload on a Members-only channel without one`);
+                    }
+                    const msg = await this.publishAs(
+                        this._sharedPublishIdentity(pubKey), messageStreamId, partition, data);
+                    return { timestamp: msg.messageId.timestamp, message: msg };
+                }
                 const msg = await this.publishAs(
                     this._accountIdentity, messageStreamId, partition, data,
                     this._gateTransportOptions(channel));
@@ -3402,6 +3577,18 @@ class StreamrController {
                     });
                     if (opened === null) return;
                     data = opened;
+
+                    // Members-only: the seal held an authorship wrapper —
+                    // verify it, swap the author in, and cut lapsed members.
+                    const modeChannel = await this._gatedChannelFor(streamId);
+                    if (modeChannel?.authorMode === 'members') {
+                        const authored = await this._openAuthorship(modeChannel, data, { live: true });
+                        if (!authored) return;
+                        data = authored.payload;
+                        this.attachAccount(data, authored.author);
+                        await handler(data);
+                        return;
+                    }
                 }
                 // Authorship: envelope signer on gated streams, transport
                 // publisher otherwise (resolveAuthor; D10c)
@@ -4089,6 +4276,7 @@ class StreamrController {
                         : message.timestamp;
 
                     // Epoch envelope (gated): unknown kid → skip, not error (§7.9)
+                    let innerAuthor = null;
                     if (this.isEpochEnvelope(content)) {
                         const opened = await this.openEpochEnvelope(messageStreamId, content,
                             { live: false, timestamp: historyTimestamp });
@@ -4097,6 +4285,19 @@ class StreamrController {
                             continue;
                         }
                         content = opened;
+
+                        // Members-only: the author comes from the wrapper
+                        // inside the seal, never from the transport. History
+                        // is exempt from the access cut (retention is the
+                        // proof of past membership), but never from
+                        // verification.
+                        const modeChannel = await this._gatedChannelFor(messageStreamId);
+                        if (modeChannel?.authorMode === 'members') {
+                            const authored = await this._openAuthorship(modeChannel, content);
+                            if (!authored) continue;
+                            content = authored.payload;
+                            innerAuthor = authored.author;
+                        }
                     }
 
                     // Inject account from StreamMessage metadata (gated: the
@@ -4105,7 +4306,7 @@ class StreamrController {
                         const transportPublisher = typeof message.getPublisherId === 'function'
                             ? message.getPublisherId()
                             : message.publisherId;
-                        const publisherId = await this.resolveAuthor(
+                        const publisherId = innerAuthor ?? await this.resolveAuthor(
                             messageStreamId, message, transportPublisher);
                         if (!publisherId) continue;
                         const messageTimestamp = historyTimestamp;
@@ -4361,6 +4562,18 @@ class StreamrController {
                     });
                     if (opened === null) return;
                     data = opened;
+
+                    // Members-only: the seal held an authorship wrapper —
+                    // verify it, swap the author in, and cut lapsed members.
+                    const gatedChannel = await this._gatedChannelFor(streamId);
+                    if (gatedChannel?.authorMode === 'members') {
+                        const authored = await this._openAuthorship(gatedChannel, data, { live: true });
+                        if (!authored) return;
+                        data = authored.payload;
+                        this.attachAccount(data, authored.author);
+                        await handler(data);
+                        return;
+                    }
                 }
 
                 // Authorship: envelope signer on gated streams, transport
@@ -4563,6 +4776,7 @@ class StreamrController {
                         : message.timestamp;
 
                     // Epoch envelope (gated): unknown kid → skip, not error (§7.9)
+                    let innerAuthor = null;
                     if (this.isEpochEnvelope(content)) {
                         const opened = await this.openEpochEnvelope(streamId, content,
                             { live: false, timestamp: historyTimestamp });
@@ -4571,6 +4785,19 @@ class StreamrController {
                             continue;
                         }
                         content = opened;
+
+                        // Members-only: the author comes from the wrapper
+                        // inside the seal, never from the transport.
+                        const modeChannel = await this._gatedChannelFor(streamId);
+                        if (modeChannel?.authorMode === 'members') {
+                            const authored = await this._openAuthorship(modeChannel, content);
+                            if (!authored) {
+                                skippedCount++;
+                                continue;
+                            }
+                            content = authored.payload;
+                            innerAuthor = authored.author;
+                        }
                     }
 
                     // Inject account from StreamMessage (same as realtime handler;
@@ -4581,7 +4808,7 @@ class StreamrController {
                         const transportPublisher = typeof message.getPublisherId === 'function'
                             ? message.getPublisherId()
                             : message.publisherId;
-                        const publisherId = await this.resolveAuthor(
+                        const publisherId = innerAuthor ?? await this.resolveAuthor(
                             streamId, message, transportPublisher);
                         if (!publisherId) {
                             skippedCount++;

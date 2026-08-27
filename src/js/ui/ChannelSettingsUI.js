@@ -237,6 +237,9 @@ class ChannelSettingsUI {
         // Initialize channel notifications toggle (only when not in preview mode)
         if (!isPreviewMode) {
             this.initChannelNotificationsToggle(currentChannel.streamId);
+            this.initKeyResponderToggle(currentChannel.streamId)
+                .catch(() => { /* stays hidden */ });
+            this.initRekeyPublishSection(currentChannel.streamId);
         }
 
         // Load members and permissions if gated channel (not in preview mode)
@@ -916,6 +919,77 @@ class ChannelSettingsUI {
             await this.handleChannelNotificationsToggle(e, streamId);
         };
         toggle.addEventListener('change', toggle._changeHandler);
+    }
+
+    /**
+     * Owner key-responder toggle (gated channels, owner/moderator only):
+     * marks THIS device to keep answering the channel's key requests while a
+     * Pombo tab is open. Local to the device — never synced.
+     */
+    async initKeyResponderToggle(streamId) {
+        const container = document.getElementById('channel-key-responder-container');
+        const toggle = document.getElementById('channel-key-responder-enabled');
+        if (!container || !toggle) return;
+
+        const { channelManager } = this.deps;
+        const channel = channelManager.channels.get(streamId);
+        const isGated = !!channel?.gate?.address;
+        let canServe = false;
+        if (isGated) {
+            canServe = channelManager.isChannelOwner(streamId);
+            if (!canServe) {
+                try {
+                    canServe = await channelManager.canAddMembers(streamId);
+                } catch { /* chain unreachable — owner check already ran */ }
+            }
+        }
+        container.classList.toggle('hidden', !canServe);
+        if (!canServe) return;
+
+        const { keyResponder } = await import('../keyResponder.js');
+        toggle.checked = keyResponder.isMarked(streamId);
+        if (toggle._changeHandler) toggle.removeEventListener('change', toggle._changeHandler);
+        toggle._changeHandler = () => keyResponder.setMarked(streamId, toggle.checked);
+        toggle.addEventListener('change', toggle._changeHandler);
+    }
+
+    /**
+     * Members-only channels, channel admin only: the escape valve that
+     * replaces the shared publish key when ex-key-holders abuse it.
+     */
+    initRekeyPublishSection(streamId) {
+        const section = document.getElementById('rekey-publish-section');
+        const button = document.getElementById('rekey-publish-btn');
+        if (!section || !button) return;
+
+        const { channelManager, showNotification } = this.deps;
+        const channel = channelManager.channels.get(streamId);
+        const show = channel?.authorMode === 'members'
+            && channelManager.isChannelOwner(streamId);
+        section.classList.toggle('hidden', !show);
+        if (!show) return;
+
+        if (button._clickHandler) button.removeEventListener('click', button._clickHandler);
+        button._clickHandler = async () => {
+            const status = document.getElementById('rekey-publish-status');
+            button.disabled = true;
+            if (status) {
+                status.textContent = 'Re-keying — two on-chain transactions…';
+                status.classList.remove('hidden');
+            }
+            try {
+                const { epochKeyManager } = await import('../epochKeyManager.js');
+                const rev = await epochKeyManager.rekeyPublishKey(channel);
+                if (status) status.textContent = `Publish key reset (rev ${rev}). Members pick it up automatically.`;
+                showNotification?.('Publish key reset', 'success');
+            } catch (error) {
+                if (status) status.textContent = '';
+                showNotification?.('Re-key failed: ' + error.message, 'error');
+            } finally {
+                button.disabled = false;
+            }
+        };
+        button.addEventListener('click', button._clickHandler);
     }
 
     /**
