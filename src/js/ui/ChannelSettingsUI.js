@@ -559,7 +559,7 @@ class ChannelSettingsUI {
                             ${avatarHtml}
                         </div>
                         <div class="min-w-0">
-                            <div class="${isAddress ? 'font-mono text-[10px] leading-[1.4] tracking-tight text-white/45 break-all' : 'text-sm text-white/80 truncate'}">${escapeHtml(sanitizeText(label))}</div>
+                            <div class="${isAddress ? 'font-mono text-[13px] text-white/55 break-all' : 'text-sm text-white/80 truncate'}">${escapeHtml(sanitizeText(label))}</div>
                             <div class="flex items-center gap-1 mt-1">${tags}</div>
                         </div>
                     </div>
@@ -1419,10 +1419,8 @@ class ChannelSettingsUI {
             const avatarHtml = getAvatarHtml(
                 address, 32, 0.5, identityManager.getCachedENSAvatar?.(normalizedAddr) || null);
             const { label, isAddress } = this._memberLabel(address, channel);
-            // The full address is long enough that it sets the row's weight:
-            // smaller and dimmer than a name, with room to wrap.
             const nameHtml = isAddress
-                ? `<span class="font-mono text-[10px] leading-[1.4] tracking-tight text-white/45 break-all">${escapeHtml(label)}</span>`
+                ? `<span class="font-mono text-[13px] text-white/55 break-all">${escapeHtml(label)}</span>`
                 : `<span class="text-xs text-white/85 truncate">${escapeHtml(sanitizeText(label))}</span>`;
 
             return `
