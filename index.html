@@ -1533,6 +1533,39 @@
         </div>
     </div>
 
+    <!-- Modal: Ban member (the two enforcement levels, either or both) -->
+    <div id="ban-member-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[60]">
+        <div class="bg-[#111113] rounded-2xl p-5 w-[380px] max-w-full mx-4 border border-white/[0.06]">
+            <h3 class="text-base font-medium mb-4 text-white">Ban <span id="ban-member-label" class="font-mono text-sm text-white/70"></span></h3>
+
+            <div class="space-y-2.5">
+                <label id="ban-level-client-row" class="flex gap-3 p-3 bg-white/[0.04] rounded-xl cursor-pointer">
+                    <input type="checkbox" id="ban-level-client" class="mt-0.5 accent-white" checked />
+                    <span class="min-w-0">
+                        <span class="block text-sm text-white/85">Client enforcement</span>
+                        <span id="ban-level-client-detail" class="block text-xs text-white/40 mt-0.5">Hides their messages for everyone. Free and reversible.</span>
+                    </span>
+                </label>
+                <label id="ban-level-protocol-row" class="flex gap-3 p-3 bg-white/[0.04] rounded-xl cursor-pointer">
+                    <input type="checkbox" id="ban-level-protocol" class="mt-0.5 accent-white" checked />
+                    <span class="min-w-0">
+                        <span class="block text-sm text-white/85">Protocol enforcement</span>
+                        <span id="ban-level-protocol-detail" class="block text-xs text-white/40 mt-0.5">Cuts their access on the gate and rotates the channel key. One transaction.</span>
+                    </span>
+                </label>
+            </div>
+
+            <div class="flex gap-2 mt-5">
+                <button id="cancel-ban-member-btn" class="flex-1 bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] text-white/50 text-sm font-medium px-3 py-2.5 rounded-xl transition">
+                    Cancel
+                </button>
+                <button id="confirm-ban-member-btn" class="flex-1 bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-400 text-sm font-medium px-3 py-2.5 rounded-xl transition">
+                    Ban
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal: Gate Entry (Gated/Paid channels — requirement, standing, pay/enter) -->
     <div id="gate-entry-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50">
         <div class="bg-[#111113] rounded-2xl p-5 w-[380px] max-w-full mx-4 border border-white/[0.06]">
@@ -1828,20 +1861,6 @@
                                 </div>
                             </div>
 
-                            <!-- Permissions Section (Owner only) -->
-                            <div id="permissions-section" class="hidden">
-                                <div class="border-t border-white/5 pt-5">
-                                    <div class="flex items-center justify-between mb-3">
-                                        <label class="text-sm font-medium text-white/40 uppercase tracking-wider">Stream Permissions</label>
-                                        <button id="refresh-permissions-btn" class="text-sm text-white/60 hover:text-white transition">
-                                            ↻ Refresh
-                                        </button>
-                                    </div>
-                                    <div id="permissions-list" class="text-sm space-y-1 max-h-[120px] overflow-y-auto pr-1">
-                                        <div class="text-white/30">Loading...</div>
-                                    </div>
-                                </div>
-                            </div>
                         </div>
                     </div>
 
@@ -1964,8 +1983,26 @@
                                 </div>
                             </div>
                             <p class="text-sm text-white/30 leading-relaxed">
-                                Banned members can no longer publish messages in this channel. They can still view existing messages until removed.
+                                Client bans hide the author's messages for everyone and cost nothing. Protocol bans cut access on the gate, so the member stops receiving keys, and take a transaction to apply and to lift.
                             </p>
+
+                            <!-- Stream grantees: the technical view (owner only) -->
+                            <div id="permissions-section" class="hidden">
+                                <div class="border-t border-white/5 pt-5">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <label class="text-sm font-medium text-white/40 uppercase tracking-wider">Stream Grantees</label>
+                                        <button id="refresh-permissions-btn" class="text-sm text-white/60 hover:text-white transition">
+                                            ↻ Refresh
+                                        </button>
+                                    </div>
+                                    <div id="permissions-list" class="text-sm space-y-1 max-h-[120px] overflow-y-auto pr-1">
+                                        <div class="text-white/30">Loading...</div>
+                                    </div>
+                                    <p class="text-white/20 text-[10px] mt-2">
+                                        Who holds a grant on the streams themselves. On a gated channel that is the gate clone and the storage node, never the members.
+                                    </p>
+                                </div>
+                            </div>
                             <!-- Members-only channels, admin only: the escape valve against ex-key-holder abuse -->
                             <div id="rekey-publish-section" class="hidden p-4 bg-amber-500/5 rounded-xl border border-amber-500/10">
                                 <h4 class="text-sm font-medium text-white/90 mb-1">Reset Publish Key</h4>

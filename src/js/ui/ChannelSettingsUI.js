@@ -9,6 +9,7 @@ import { escapeHtml, escapeAttr } from './utils.js';
 import { sanitizeText } from './sanitizer.js';
 import { relayManager } from '../relayManager.js';
 import { graphAPI } from '../graph.js';
+import { identityManager } from '../identity.js';
 import { mediaController } from '../media.js';
 import { channelImageManager } from '../channelImageManager.js';
 import { deriveAdminId } from '../streamConstants.js';
@@ -192,13 +193,16 @@ class ChannelSettingsUI {
         // Show/hide members-related elements based on permission to add members
         this.elements.addMemberForm?.classList.toggle('hidden', !canAddMembers);
         // TOKEN/NFT/PAID gates have no owner-minted members — allow() is
-        // NONE-only on-chain, so manual add is a guaranteed revert there.
-        if (currentChannel.gate?.address && this.elements.addMemberForm && canAddMembers) {
+        // NONE-only on-chain, so manual add is a guaranteed revert there, and
+        // there is no allowlist for the kebab's Remove either.
+        this._gateModeIsNone = false;
+        if (currentChannel.gate?.address) {
             import('../gate.js').then(async ({ gateManager, GATE_MODE }) => {
                 try {
                     const info = await gateManager.getGateInfo(currentChannel.gate.address);
-                    if (info.mode !== GATE_MODE.NONE) {
-                        this.elements.addMemberForm.classList.add('hidden');
+                    this._gateModeIsNone = info.mode === GATE_MODE.NONE;
+                    if (info.mode !== GATE_MODE.NONE && canAddMembers) {
+                        this.elements.addMemberForm?.classList.add('hidden');
                     }
                 } catch { /* unreadable gate — leave visible, the tx error is decoded anyway */ }
             }).catch(() => {});
@@ -512,35 +516,46 @@ class ChannelSettingsUI {
      * Each row shows the address (and ENS/contact nickname if available) plus an Unban button.
      * @param {Object} channel - Channel object
      */
-    loadBannedMembers(channel) {
+    async loadBannedMembers(channel) {
         const list = document.getElementById('banned-members-list');
         const counter = document.getElementById('banned-members-count');
         if (!list) return;
 
-        const { channelManager, identityManager, showNotification } = this.deps;
-        const banned = Array.isArray(channel?.adminState?.bannedMembers)
-            ? channel.adminState.bannedMembers.slice()
+        const { channelManager, showNotification } = this.deps;
+        const clientBanned = Array.isArray(channel?.adminState?.bannedMembers)
+            ? channel.adminState.bannedMembers.map(a => String(a).toLowerCase())
+            : [];
+        // The gate's own banned set — a different mechanism from the client
+        // ban, so an address can carry either or both.
+        const chainBanned = channel?.gate?.address
+            ? (await channelManager.getGateBannedMembers(channel.streamId).catch(() => []))
+                .map(a => String(a).toLowerCase())
             : [];
 
-        if (counter) counter.textContent = String(banned.length);
+        const all = [...new Set([...clientBanned, ...chainBanned])].sort();
+        if (counter) counter.textContent = String(all.length);
 
-        if (banned.length === 0) {
+        if (all.length === 0) {
             list.innerHTML = '<div class="text-center text-white/30 py-6 text-sm">No banned members</div>';
             return;
         }
 
-        list.innerHTML = banned.map(addr => {
-            const lower = String(addr).toLowerCase();
-            const nickname = identityManager?.getTrustedContact?.(lower)?.nickname || '';
+        list.innerHTML = all.map(lower => {
             const short = `${lower.slice(0, 6)}…${lower.slice(-4)}`;
-            const label = nickname ? sanitizeText(nickname) : short;
+            const label = identityManager.getCachedENS?.(lower) || short;
+            const onChain = chainBanned.includes(lower);
+            const onClient = clientBanned.includes(lower);
+            const tags = [
+                onChain ? '<span class="text-[10px] bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full">Protocol</span>' : '',
+                onClient ? '<span class="text-[10px] bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded-full">Client</span>' : ''
+            ].join(' ');
             return `
                 <div class="flex items-center justify-between gap-3 px-3 py-2.5 bg-white/[0.03] border border-white/5 rounded-xl">
                     <div class="min-w-0 flex-1">
-                        <div class="text-sm text-white/80 truncate">${escapeHtml(label)}</div>
-                        <code class="text-xs text-white/40 font-mono truncate block">${escapeHtml(lower)}</code>
+                        <div class="text-sm text-white/80 truncate">${escapeHtml(sanitizeText(label))}</div>
+                        <div class="flex items-center gap-1 mt-1">${tags}</div>
                     </div>
-                    <button data-unban-address="${escapeAttr(lower)}" class="banned-unban-btn shrink-0 bg-white/10 hover:bg-white/20 text-white/80 border border-white/10 px-3 py-1.5 rounded-lg text-xs transition">
+                    <button data-unban-address="${escapeAttr(lower)}" data-on-chain="${onChain}" class="banned-unban-btn shrink-0 bg-white/10 hover:bg-white/20 text-white/80 border border-white/10 px-3 py-1.5 rounded-lg text-xs transition">
                         Unban
                     </button>
                 </div>
@@ -551,13 +566,17 @@ class ChannelSettingsUI {
             btn.addEventListener('click', async () => {
                 const addr = btn.dataset.unbanAddress;
                 if (!addr) return;
-                if (!confirm('Unban this user?')) return;
+                const onChain = btn.dataset.onChain === 'true';
+                const question = onChain
+                    ? 'Lift this ban? Restoring their access on the gate is one transaction.'
+                    : 'Lift this ban? No transaction needed.';
+                if (!confirm(question)) return;
                 btn.disabled = true;
                 btn.textContent = '...';
                 try {
-                    await channelManager.unbanMember(channel.streamId, addr);
+                    await channelManager.unbanMemberLevels(channel.streamId, addr);
                     showNotification?.('User unbanned', 'success');
-                    // List will be refreshed by admin_state_updated handler
+                    await this.loadBannedMembers(channel);
                 } catch (err) {
                     btn.disabled = false;
                     btn.textContent = 'Unban';
@@ -1240,11 +1259,41 @@ class ChannelSettingsUI {
     }
 
     /**
+     * Resolve ENS names and avatars for member rows that have neither cached,
+     * then re-render once. Each address is attempted once per panel session so
+     * a miss does not re-query on every render.
+     */
+    _resolveMemberIdentities(addresses) {
+        this._memberIdentityTried ??= new Set();
+        const pending = addresses
+            .map(a => a.toLowerCase())
+            .filter(a => !this._memberIdentityTried.has(a)
+                && !identityManager.getCachedENS?.(a)
+                && !identityManager.getCachedENSAvatar?.(a));
+        if (!pending.length) return;
+        pending.forEach(a => this._memberIdentityTried.add(a));
+
+        Promise.all(pending.map(a => Promise.all([
+            identityManager.resolveENS?.(a).catch(() => null),
+            identityManager.resolveENSAvatar?.(a).catch(() => null)
+        ]))).then(results => {
+            if (!results.some(([name, avatar]) => name || avatar)) return;
+            const channel = this.deps.channelManager.getCurrentChannel();
+            // The panel may have moved on to another channel while resolving.
+            if (!this._lastMembers || channel?.streamId !== this._lastMembersChannel?.streamId) return;
+            this.renderMembersList(this._lastMembers, this._lastMembersChannel);
+        }).catch(() => {});
+    }
+
+    /**
      * Render members list with permissions
      */
     renderMembersList(members, channel) {
         const { authManager, channelManager, showLoading, hideLoading, showNotification } = this.deps;
-        
+
+        this._lastMembers = members;
+        this._lastMembersChannel = channel;
+
         if (!members || members.length === 0) {
             this.elements.membersList.innerHTML = '<div class="text-center text-white/30 py-4 text-sm">No members found</div>';
             return;
@@ -1299,14 +1348,24 @@ class ChannelSettingsUI {
                    </button>`
                 : '';
 
+            // Same identity idiom as the online-users list: the generated
+            // avatar unless ENS has one, and the ENS name in place of the
+            // address when it resolves.
+            const ensName = identityManager.getCachedENS?.(normalizedAddr) || null;
+            const avatarHtml = getAvatarHtml(
+                address, 32, 0.5, identityManager.getCachedENSAvatar?.(normalizedAddr) || null);
+            const nameHtml = ensName
+                ? `<span class="text-xs text-white/85 truncate">${escapeHtml(sanitizeText(ensName))}</span>`
+                : `<span class="font-mono text-xs text-white/70 truncate">${escapeHtml(shortAddr)}</span>`;
+
             return `
                 <div class="flex items-center justify-between p-2.5 bg-white/5 rounded-xl border border-white/5 hover:border-white/10 transition group">
                     <div class="flex items-center gap-2 min-w-0 flex-1">
-                        <div class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-xs text-white/60 font-mono">
-                            ${escapeHtml(address.slice(2, 4))}
+                        <div class="flex-shrink-0" style="width:32px;height:32px;border-radius:9999px;overflow:hidden;">
+                            ${avatarHtml}
                         </div>
                         <div class="flex flex-col min-w-0">
-                            <span class="font-mono text-xs text-white/70 truncate">${escapeHtml(shortAddr)}</span>
+                            ${nameHtml}
                             <div class="flex items-center gap-1 mt-0.5">${badgeHtml}</div>
                         </div>
                     </div>
@@ -1323,6 +1382,9 @@ class ChannelSettingsUI {
                 this.showMemberDropdown(btn, btn.dataset.address, btn.dataset.canGrant === 'true', currentUserIsOwner);
             });
         });
+
+        this._resolveMemberIdentities(
+            members.map(m => (typeof m === 'string' ? m : m.address)).filter(Boolean));
     }
 
     /**
@@ -1345,7 +1407,18 @@ class ChannelSettingsUI {
             </button>
             <div class="my-1 border-t border-white/5"></div>
         ` : '';
-        
+
+        // Remove takes them off the allowlist without the ban mark, so adding
+        // them back later is a plain allow(). Only Closed gates have one:
+        // elsewhere membership is the asset or the subscription, and Ban is
+        // the only cut.
+        const removeBtn = this._gateModeIsNone ? `
+            <button class="member-action w-full text-left px-4 py-2.5 hover:bg-white/5 text-sm text-white/50 transition flex items-center gap-2" data-action="remove">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M22 10.5h-6m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM4 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 0110.374 21c-2.331 0-4.512-.645-6.374-1.766z"/></svg>
+                <span>Remove from channel</span>
+            </button>
+        ` : '';
+
         const dropdown = document.createElement('div');
         dropdown.id = 'member-dropdown-menu';
         dropdown.className = 'fixed bg-[#111113] border border-white/10 rounded-xl shadow-2xl py-1 z-[9999] min-w-[200px] overflow-hidden';
@@ -1355,9 +1428,10 @@ class ChannelSettingsUI {
                 <div class="text-sm text-white/80 font-mono">${escapeHtml(shortAddr)}</div>
             </div>
             ${toggleGrantBtn}
-            <button class="member-action w-full text-left px-4 py-2.5 hover:bg-red-500/10 text-sm text-white/50 hover:text-red-400 transition flex items-center gap-2" data-action="remove">
+            ${removeBtn}
+            <button class="member-action w-full text-left px-4 py-2.5 hover:bg-red-500/10 text-sm text-red-400 transition flex items-center gap-2" data-action="ban">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
-                <span>Remove from channel</span>
+                <span>Ban</span>
             </button>
         `;
 
@@ -1432,6 +1506,12 @@ class ChannelSettingsUI {
             case 'remove':
                 this.showRemoveMemberModal(address);
                 break;
+
+            case 'ban': {
+                const { channelModalsUI } = await import('./ChannelModalsUI.js');
+                channelModalsUI.showBanMemberModal(address, currentChannel);
+                break;
+            }
         }
     }
 
@@ -1503,29 +1583,13 @@ class ChannelSettingsUI {
         if (!currentChannel) return;
 
         try {
-            showLoading(`Adding ${validAddresses.length} members (on-chain transactions)...`);
-            
-            let added = 0;
-            let failed = 0;
-            
-            for (const address of validAddresses) {
-                try {
-                    await channelManager.addMember(currentChannel.streamId, address);
-                    added++;
-                } catch (e) {
-                    Logger.error('Failed to add:', address, e);
-                    failed++;
-                }
-            }
-            
+            // allowBatch admits the whole list in ONE transaction — the same
+            // call channel creation uses for its initial members.
+            showLoading(`Adding ${validAddresses.length} members (one transaction)...`);
+            await channelManager.addMembers(currentChannel.streamId, validAddresses);
+
             this.elements.batchMembersInput.value = '';
-            
-            if (failed > 0) {
-                showNotification(`Added ${added} members, ${failed} failed`, 'warning');
-            } else {
-                showNotification(`${added} members added successfully!`, 'success');
-            }
-            
+            showNotification(`${validAddresses.length} members added successfully!`, 'success');
             await this.loadMembers();
         } catch (error) {
             showNotification('Failed to add members: ' + error.message, 'error');
@@ -1557,7 +1621,7 @@ class ChannelSettingsUI {
                         Remove <span class="text-white/80 font-mono">${escapeHtml(shortAddr)}</span> from this channel?
                     </p>
                     <p class="text-xs text-white/30 bg-white/5 rounded-lg px-3 py-2">
-                        This will revoke their access via an on-chain transaction.
+                        They come off the allowlist and stop receiving channel keys. No ban mark, so you can add them back later. One transaction.
                     </p>
                 </div>
                 <div class="flex border-t border-white/5">
@@ -1627,55 +1691,10 @@ class ChannelSettingsUI {
 
         if (!this.elements.permissionsList) return;
 
-        // Gated (N-C): the permissions ARE the gate contract's state — list
-        // every address the clone has seen with its current flags, in the
-        // same visual shape as the stream-grant list.
-        if (currentChannel.gate?.address) {
-            this.elements.permissionsList.innerHTML = '<div class="text-white/30">Loading...</div>';
-            try {
-                const { gateManager } = await import('../gate.js');
-                const { epochKeyManager } = await import('../epochKeyManager.js');
-                const roster = await epochKeyManager.getRosterMembers(currentChannel)
-                    .catch(() => []);
-                const gateMembers = await gateManager.getGateMembers(
-                    currentChannel.gate.address, [
-                        ...(currentChannel.members || []),
-                        ...epochKeyManager.getSeenRequesters(currentChannel.messageStreamId),
-                        ...roster.map(m => m.account)
-                    ]);
-                let html = '';
-                for (const m of gateMembers) {
-                    const short = `${m.address.slice(0, 8)}...${m.address.slice(-4)}`;
-                    let tag;
-                    if (m.isOwner) tag = '<span class="text-xs text-yellow-400/80">Owner</span>';
-                    else if (m.erased) tag = '<span class="text-xs text-red-400/80">Erased</span>';
-                    else if (m.banned) tag = '<span class="text-xs text-red-400/60">Banned</span>';
-                    else if (m.moderator) tag = '<span class="text-xs text-sky-400/80">Mod</span>';
-                    else if (m.allowed) tag = '<span class="text-xs text-white/40">Member</span>';
-                    else if (m.everMember) tag = '<span class="text-xs text-white/25">Ex-member</span>';
-                    else tag = '<span class="text-xs text-white/25">—</span>';
-                    // Paid gates: the subscription clock explains the tag —
-                    // "Ex-member · expired 3 Sep" is a lapsed subscriber
-                    let paidTag = '';
-                    if (m.paidUntil > 0 && !m.isOwner) {
-                        const expired = m.paidUntil * 1000 <= Date.now();
-                        paidTag = `<span class="text-xs ${expired ? 'text-red-400/60' : 'text-white/40'}">${expired ? 'expired' : 'until'} ${new Date(m.paidUntil * 1000).toLocaleDateString()}</span>`;
-                    }
-                    html += `<div class="flex justify-between items-center gap-2 py-1.5 px-2.5 bg-white/5 rounded-lg">
-                        <span class="font-mono text-white/60">${escapeHtml(short)}</span>
-                        <span class="flex items-center gap-2">${paidTag}${tag}</span>
-                    </div>`;
-                }
-                this.elements.permissionsList.innerHTML = html
-                    || '<div class="text-white/30">Owner only (private)</div>';
-            } catch (e) {
-                Logger.warn('Failed to load gate members:', e.message);
-                this.elements.permissionsList.innerHTML =
-                    '<div class="text-white/30">Could not load gate state — try again</div>';
-            }
-            return;
-        }
-
+        // The technical view: who actually holds a grant on the streams. On a
+        // gated channel that is the clone and the storage node, never the
+        // members — their access is proven per-message against the contract,
+        // and the Members panel is where the contract's own roles are shown.
         this.elements.permissionsList.innerHTML = '<div class="text-white/30">Loading...</div>';
 
         try {
