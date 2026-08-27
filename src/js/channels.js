@@ -2284,13 +2284,17 @@ class ChannelManager {
         // Fire-and-forget permission check
         streamrController.hasDeletePermission(streamId)
             .then(canDelete => {
+                // null = UNKNOWN (client not ready / read failed): caching it
+                // would hide the admin surface for the whole session on one
+                // transient miss — leave the cache empty and retry next time.
+                if (canDelete === null) return;
                 // Double-check channel still exists and wallet hasn't changed
                 const ch = this.channels.get(streamId);
                 const addr = authManager.getAddress();
                 if (ch && addr) {
-                    ch._deletePermCache = { 
-                        canDelete, 
-                        address: addr.toLowerCase() 
+                    ch._deletePermCache = {
+                        canDelete,
+                        address: addr.toLowerCase()
                     };
                     Logger.debug('Cached DELETE permission:', { streamId: streamId.slice(-20), canDelete });
                 }

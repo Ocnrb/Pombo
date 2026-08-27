@@ -1369,29 +1369,36 @@ class StreamrController {
      * @param {string} streamId - Stream ID
      * @returns {Promise<boolean>}
      */
+    /**
+     * DELETE permission of the current wallet on a stream.
+     * @returns {Promise<boolean|null>} true/false = a real answer; null =
+     *   UNKNOWN (no client yet, or the read failed). Callers must never
+     *   cache null as "no" — a transient failure cached as false hid the
+     *   admin surface for the whole session.
+     */
     async hasDeletePermission(streamId) {
+        // Namespace owner: nobody else can create streams under that
+        // address, so their DELETE is true by construction — no RPC, no
+        // race with client startup, nothing to go stale.
+        const wallet = authManager.getAddress?.();
+        if (wallet && streamId.split('/')[0]?.toLowerCase() === wallet.toLowerCase()) {
+            return true;
+        }
+
         if (!this.client) {
-            return false;
+            return null;
         }
 
         try {
             const stream = await this.client.getStream(streamId);
             const StreamPermission = window.StreamPermission;
-            
-            if (!StreamPermission) {
-                Logger.warn('StreamPermission not available, falling back to streamId check');
-                // Fallback: check if streamId starts with current address
-                const currentAddress = await this.client.getAddress();
-                if (currentAddress) {
-                    const streamOwner = streamId.split('/')[0]?.toLowerCase();
-                    return streamOwner === currentAddress.toLowerCase();
-                }
-                return false;
-            }
-
             const currentAddress = await this.client.getAddress();
             if (!currentAddress) {
-                return false;
+                return null;
+            }
+            if (!StreamPermission) {
+                Logger.warn('StreamPermission not available, falling back to streamId check');
+                return streamId.split('/')[0]?.toLowerCase() === currentAddress.toLowerCase();
             }
 
             const hasDelete = await stream.hasPermission({
@@ -1399,12 +1406,12 @@ class StreamrController {
                 userId: currentAddress,
                 allowPublic: false
             });
-            
+
             Logger.debug('hasDeletePermission check:', { streamId, currentAddress: currentAddress.slice(0,10), hasDelete });
             return hasDelete;
         } catch (error) {
             Logger.error('Failed to check DELETE permission:', error);
-            return false;
+            return null;
         }
     }
 
