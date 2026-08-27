@@ -696,11 +696,11 @@ class ChannelSettingsUI {
         // Hide all tab panels
         document.querySelectorAll('.channel-settings-panel').forEach(p => p.classList.add('hidden'));
 
-        // Show info panel + storage panel inline (stacked vertically)
+        // Info stays inline; Storage is a page of its own, like Members and
+        // Moderation — it carries its own on-chain actions and reads as a
+        // section, not as a tail of the info panel.
         const infoPanel = document.getElementById('channel-panel-info');
-        const storagePanel = document.getElementById('channel-panel-storage');
         if (infoPanel) infoPanel.classList.remove('hidden');
-        if (storagePanel) storagePanel.classList.remove('hidden');
 
         // Show unified nav
         unified.classList.remove('hidden');
@@ -820,14 +820,15 @@ class ChannelSettingsUI {
         const titles = {
             'members': 'Members',
             'moderation': 'Moderation',
+            'storage': 'Storage',
             'danger': 'Delete Channel'
         };
         if (header) header.textContent = titles[panelName] || 'Channel Details';
 
-        // Hide unified view + info + storage
+        // Hide unified view + info (storage is a sub-panel of its own now)
         if (unified) unified.classList.add('hidden');
         if (infoPanel) infoPanel.classList.add('hidden');
-        if (storagePanel) storagePanel.classList.add('hidden');
+        if (storagePanel && panelName !== 'storage') storagePanel.classList.add('hidden');
 
         // Show the target panel with slide animation
         panel.classList.remove('hidden');
@@ -869,10 +870,10 @@ class ChannelSettingsUI {
             }, 200);
         }
 
-        // Show unified view + info + storage
+        // Show unified view + info (storage has its own page now)
         if (unified) unified.classList.remove('hidden');
         if (infoPanel) infoPanel.classList.remove('hidden');
-        if (storagePanel) storagePanel.classList.remove('hidden');
+        if (storagePanel) storagePanel.classList.add('hidden');
 
         this._mobileSubPanelOpen = null;
         return true;
@@ -1386,7 +1387,7 @@ class ChannelSettingsUI {
             if (isCreator || memberIsOwner) {
                 badgeHtml += '<span class="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded-full">Owner</span>';
             } else if (canGrant) {
-                badgeHtml += '<span class="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded-full">Admin</span>';
+                badgeHtml += '<span class="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded-full">Moderator</span>';
             }
             // Paid gates: each subscriber's own clock (N-F). Rows here passed
             // the access filter, so the date is normally in the future.
@@ -1462,12 +1463,12 @@ class ChannelSettingsUI {
         
         // Only owner can toggle admin permissions
         const toggleGrantBtn = currentUserIsOwner ? `
-            <button class="member-action w-full text-left px-4 py-2.5 hover:bg-white/5 text-sm transition flex items-center justify-between" data-action="toggle-grant">
-                <span class="flex items-center gap-2 ${canGrant ? 'text-purple-400' : 'text-white/70'}">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
-                    <span>Can add members</span>
+            <button class="member-action w-full text-left px-4 py-2.5 hover:bg-white/5 text-sm transition flex items-center justify-between gap-3" data-action="toggle-grant">
+                <span class="flex items-center gap-2 min-w-0 ${canGrant ? 'text-purple-400' : 'text-white/70'}">
+                    <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
+                    <span class="truncate">Moderator</span>
                 </span>
-                <span class="text-xs ${canGrant ? 'text-purple-400' : 'text-white/30'}">${canGrant ? 'ON' : 'OFF'}</span>
+                <span class="text-xs flex-shrink-0 ${canGrant ? 'text-purple-400' : 'text-white/30'}">${canGrant ? 'ON' : 'OFF'}</span>
             </button>
             <div class="my-1 border-t border-white/5"></div>
         ` : '';
@@ -1552,10 +1553,10 @@ class ChannelSettingsUI {
             case 'toggle-grant':
                 const newCanGrant = !currentCanGrant;
                 try {
-                    showLoading(newCanGrant ? 'Granting admin permission...' : 'Revoking admin permission...');
+                    showLoading(newCanGrant ? 'Appointing moderator...' : 'Dismissing moderator...');
                     await channelManager.updateMemberPermissions(currentChannel.streamId, address, { canGrant: newCanGrant });
                     showNotification(
-                        newCanGrant ? 'Member can now add others!' : 'Admin permission removed',
+                        newCanGrant ? 'Member is now a moderator' : 'Moderator dismissed',
                         'success'
                     );
                     // Refresh members list
