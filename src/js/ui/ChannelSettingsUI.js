@@ -541,12 +541,11 @@ class ChannelSettingsUI {
         }
 
         list.innerHTML = all.map(lower => {
-            const short = `${lower.slice(0, 6)}…${lower.slice(-4)}`;
-            const ensName = identityManager.getCachedENS?.(lower) || null;
             // Same identity idiom as the members list: generated avatar unless
-            // ENS has a picture, and the ENS name in place of the address.
+            // ENS has a picture, and the best name we have for the address.
             const avatarHtml = getAvatarHtml(
                 lower, 32, 0.5, identityManager.getCachedENSAvatar?.(lower) || null);
+            const { label, isAddress } = this._memberLabel(lower, channel);
             const onChain = chainBanned.includes(lower);
             const onClient = clientBanned.includes(lower);
             const tags = [
@@ -560,7 +559,7 @@ class ChannelSettingsUI {
                             ${avatarHtml}
                         </div>
                         <div class="min-w-0">
-                            <div class="text-sm text-white/80 truncate">${escapeHtml(sanitizeText(ensName || short))}</div>
+                            <div class="${isAddress ? 'font-mono text-[11px] text-white/70 break-all' : 'text-sm text-white/80 truncate'}">${escapeHtml(sanitizeText(label))}</div>
                             <div class="flex items-center gap-1 mt-1">${tags}</div>
                         </div>
                     </div>
@@ -1289,6 +1288,41 @@ class ChannelSettingsUI {
     }
 
     /**
+     * How a person is named in the members and banned lists, in the app's own
+     * order: ENS name, then the local contact nickname, then the display name
+     * they publish with their messages, then the address in full. The address
+     * is not shortened here — in a list of members it is the identity, not a
+     * decoration, and a truncated one cannot be checked against anything.
+     * @param {string} address
+     * @param {Object} channel - Open channel, for names seen on its messages
+     */
+    _memberLabel(address, channel) {
+        const lower = address.toLowerCase();
+        const ens = identityManager.getCachedENS?.(lower);
+        if (ens) return { label: ens, isAddress: false };
+        const nickname = identityManager.getTrustedContact?.(lower)?.nickname;
+        if (nickname) return { label: nickname, isAddress: false };
+        const declared = this._declaredNames(channel).get(lower);
+        if (declared) return { label: declared, isAddress: false };
+        return { label: address, isAddress: true };
+    }
+
+    /**
+     * Display names seen on this channel's loaded messages, newest wins. The
+     * roster carries no name, so a member who never posted has none.
+     */
+    _declaredNames(channel) {
+        const names = new Map();
+        for (const msg of channel?.messages || []) {
+            const sender = (msg?.sender || '').toLowerCase();
+            const name = (msg?.senderName || '').trim();
+            if (!sender || !name) continue;
+            names.set(sender, name);
+        }
+        return names;
+    }
+
+    /**
      * Resolve ENS names and avatars for rows that have neither cached, then
      * re-render once through `onResolved`. Each address is attempted once per
      * panel session so a miss does not re-query on every render.
@@ -1347,8 +1381,7 @@ class ChannelSettingsUI {
             const normalizedAddr = address.toLowerCase();
             const isCreator = normalizedAddr === creatorAddress;
             const isMe = normalizedAddr === currentAddress;
-            const shortAddr = `${address.slice(0, 8)}...${address.slice(-6)}`;
-            
+
             let badgeHtml = '';
             if (isCreator || memberIsOwner) {
                 badgeHtml += '<span class="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded-full">Owner</span>';
@@ -1380,14 +1413,14 @@ class ChannelSettingsUI {
                 : '';
 
             // Same identity idiom as the online-users list: the generated
-            // avatar unless ENS has one, and the ENS name in place of the
-            // address when it resolves.
-            const ensName = identityManager.getCachedENS?.(normalizedAddr) || null;
+            // avatar unless ENS has one, and a name in place of the address
+            // when there is one to show.
             const avatarHtml = getAvatarHtml(
                 address, 32, 0.5, identityManager.getCachedENSAvatar?.(normalizedAddr) || null);
-            const nameHtml = ensName
-                ? `<span class="text-xs text-white/85 truncate">${escapeHtml(sanitizeText(ensName))}</span>`
-                : `<span class="font-mono text-xs text-white/70 truncate">${escapeHtml(shortAddr)}</span>`;
+            const { label, isAddress } = this._memberLabel(address, channel);
+            const nameHtml = isAddress
+                ? `<span class="font-mono text-[11px] text-white/70 break-all">${escapeHtml(label)}</span>`
+                : `<span class="text-xs text-white/85 truncate">${escapeHtml(sanitizeText(label))}</span>`;
 
             return `
                 <div class="flex items-center justify-between p-2.5 bg-white/5 rounded-xl border border-white/5 hover:border-white/10 transition group">
