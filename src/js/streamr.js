@@ -552,8 +552,12 @@ class StreamrController {
                 // under it, so the transport carries no authorship. -4 keeps
                 // clone-only (KEY_REQUESTs must name the requester so the
                 // gate check works) and -3 stays owner-published.
+                //
+                // The shared key only ever writes: reading is the clone's job
+                // (members subscribe through ERC-1271), so it gets PUBLISH
+                // alone. Same grant shape on re-key.
                 const contentMembers = options.publishKeyAddress
-                    ? [options.gateAddress, options.publishKeyAddress]
+                    ? [options.gateAddress, { userId: options.publishKeyAddress, permissions: ['publish'] }]
                     : gateMembers;
                 for (const [stream, label] of [
                     [messageStream, 'Message'],
@@ -729,22 +733,25 @@ class StreamrController {
             });
         }
 
-        // Add member permissions
+        // Add member permissions. An entry may be a bare address (gets
+        // memberPermissions) or { userId, permissions } when one grantee needs
+        // a narrower set than the rest of the same batch.
         if (options.members && options.members.length > 0) {
             Logger.debug('Granting permissions to', options.members.length, 'members:', memberPermissions);
-            
+
             for (const member of options.members) {
+                const entry = typeof member === 'string' ? { userId: member } : member;
                 // Normalize to lowercase (Streamr uses lowercase internally)
-                const normalizedMember = member.toLowerCase();
-                
+                const normalizedMember = entry.userId.toLowerCase();
+
                 Logger.debug('Granting permissions to member:', normalizedMember);
-                
+
                 assignments.push({
                     userId: normalizedMember,
-                    permissions: memberPermissions
+                    permissions: entry.permissions || memberPermissions
                 });
             }
-            
+
             Logger.debug('All member permissions granted');
         }
 
@@ -2336,7 +2343,8 @@ class StreamrController {
         for (const streamId of [channel.messageStreamId, channel.ephemeralStreamId]) {
             if (!streamId) continue;
             const assignments = [
-                { userId: newAddress.toLowerCase(), permissions: ['subscribe', 'publish'] },
+                // PUBLISH alone: the shared key writes, the clone reads.
+                { userId: newAddress.toLowerCase(), permissions: ['publish'] },
                 ...(oldAddress ? [{ userId: oldAddress.toLowerCase(), permissions: [] }] : [])
             ];
             await executeWithRetry(`rekeySharedPublishGrants(${streamId.slice(-20)})`, async () => {
