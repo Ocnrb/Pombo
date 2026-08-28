@@ -102,6 +102,21 @@ describe('MessageRenderer', () => {
         it('should handle empty string', () => {
             expect(messageRenderer.wrapInlineEmojis('')).toBe('');
         });
+
+        it('should not wrap emojis inside a tag', () => {
+            const result = messageRenderer.wrapInlineEmojis('<a href="https://example.com/a😀b">https://example.com/a😀b</a>');
+            expect(result).toContain('href="https://example.com/a😀b"');
+            expect(result).toContain('>https://example.com/a<span class="inline-emoji">😀</span>b</a>');
+        });
+
+        it('should keep a link with an emoji in the URL intact', () => {
+            const html = messageRenderer.renderMessageContent({ type: 'text', text: 'https://example.com/a😀b' });
+            const host = document.createElement('div');
+            host.innerHTML = html;
+            const anchor = host.querySelector('a');
+            expect(anchor.getAttribute('href')).toBe('https://example.com/a😀b');
+            expect(anchor.textContent).toBe('https://example.com/a😀b');
+        });
     });
 
     describe('formatFileSize()', () => {
