@@ -2465,38 +2465,27 @@
                             <div class="mt-6 pt-6 border-t border-white/5">
                                 <label class="block text-xs font-medium text-white/80 uppercase tracking-wider mb-2">Polygon RPC Endpoint</label>
                                 
-                                <!-- Preset selection -->
-                                <select id="rpc-preset-select" class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition mb-3 appearance-none cursor-pointer">
-                                    <option value="drpc">dRPC (Recommended)</option>
-                                    <option value="auto">Auto (try all endpoints)</option>
-                                    <option value="publicnode">PublicNode</option>
-                                    <option value="meowrpc">Meow RPC</option>
-                                    <option value="tenderly">Tenderly</option>
-                                    <option value="llamarpc">Llama RPC</option>
-                                    <option value="1rpc">1RPC (Privacy)</option>
-                                    <option value="custom">Custom URL...</option>
-                                </select>
-                                
-                                <!-- Custom RPC input (hidden by default) -->
-                                <div id="custom-rpc-container" class="hidden mb-3">
-                                    <input
-                                        type="url"
-                                        id="custom-rpc-url"
-                                        placeholder="https://your-rpc-endpoint.com"
-                                        class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20"
-                                    />
-                                    <p class="text-xs text-white/30 mt-1">Enter a valid Polygon RPC endpoint URL</p>
-                                </div>
-                                
-                                <!-- RPC Status -->
-                                <div class="flex items-center justify-between">
+                                <p class="text-xs text-white/30 mb-3">
+                                    Checked endpoints are the ones used, in this order. The first is preferred.
+                                </p>
+
+                                <!-- One row per endpoint, rendered from the saved selection -->
+                                <div id="rpc-endpoint-list" class="space-y-1.5"></div>
+
+                                <!-- RPC status -->
+                                <div class="flex items-center justify-between gap-3 mt-3">
                                     <div id="rpc-status" class="text-xs text-white/40">
                                         <span class="inline-block w-2 h-2 rounded-full bg-white/20 mr-1.5 align-middle"></span>
                                         <span class="align-middle">Not tested</span>
                                     </div>
-                                    <button id="test-rpc-btn" class="text-xs text-white/60 hover:text-white transition px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10">
-                                        Test Connection
-                                    </button>
+                                    <div class="flex items-center gap-2 shrink-0">
+                                        <button id="apply-rpc-btn" class="hidden text-xs text-black bg-white/90 hover:bg-white transition px-3 py-1.5 rounded-lg font-medium">
+                                            Apply
+                                        </button>
+                                        <button id="test-rpc-btn" class="text-xs text-white/60 hover:text-white transition px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10">
+                                            Test all
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>

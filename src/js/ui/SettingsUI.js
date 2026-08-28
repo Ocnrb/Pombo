@@ -1,7 +1,15 @@
 import { escapeHtml as _escapeHtml, escapeAttr as _escapeAttr } from './utils.js';
 import { getAvatarHtml, downgradeEnsAvatars } from './AvatarGenerator.js';
 import { GasEstimator } from './GasEstimator.js';
-import { CONFIG, getNetworkParams } from '../config.js';
+import {
+    CONFIG,
+    getNetworkParams,
+    loadRpcSelection,
+    saveRpcSelection,
+    rpcSelectionUrls,
+    RPC_ENDPOINTS,
+    RPC_CUSTOM_KEY
+} from '../config.js';
 import { MESSAGE_STREAM } from '../streamConstants.js';
 import { importBackupData } from '../backupImport.js';
 import { positionPillDropdown } from './pillDropdown.js';
@@ -1248,6 +1256,12 @@ class SettingsUI {
             this.runDiagnosis();
         }
 
+        // Probe the RPC endpoints when the API tab is shown, so an endpoint
+        // that stopped answering is visible without anyone asking.
+        if (tabName === 'api') {
+            this.testRpcEndpoints();
+        }
+
         // Start animation lock
         if (direction !== 0) {
             this.isAnimating = true;
@@ -1854,74 +1868,165 @@ class SettingsUI {
     // ========================================
 
     /**
-     * Initialize RPC settings UI
+     * Wire up the endpoint list. The rows themselves are rendered every time
+     * the panel is shown, so the handlers are delegated to the container.
      */
     initRpcSettings() {
-        const presetSelect = document.getElementById('rpc-preset-select');
-        const customContainer = document.getElementById('custom-rpc-container');
-        const customInput = document.getElementById('custom-rpc-url');
-        const testBtn = document.getElementById('test-rpc-btn');
-        
-        if (!presetSelect) return;
-        
-        // Set default to dRPC if no preference saved
-        presetSelect.value = 'drpc';
-        
-        // Load saved preference
-        const saved = localStorage.getItem(CONFIG.storageKeys.rpcPreference);
-        if (saved) {
-            try {
-                const pref = JSON.parse(saved);
-                presetSelect.value = pref.preset || 'drpc';
-                if (pref.preset === 'custom' && pref.customUrl) {
-                    customInput.value = pref.customUrl;
-                    customContainer?.classList.remove('hidden');
-                }
-            } catch (e) {
-                // Use defaults
-            }
-        }
-        
-        // Show/hide custom input based on selection
-        presetSelect.addEventListener('change', (e) => {
-            const isCustom = e.target.value === 'custom';
-            customContainer?.classList.toggle('hidden', !isCustom);
-            if (!isCustom) {
-                this.saveRpcPreference();
-            }
+        const list = document.getElementById('rpc-endpoint-list');
+        if (!list) return;
+
+        this.rpcDraft = loadRpcSelection();
+        this.rpcSaved = JSON.stringify(this.rpcDraft);
+        this.rpcProbes = new Map();
+
+        // Ticking a box repaints only its own row. Redrawing the list here
+        // would drop the click that follows and take the focus out of the
+        // custom URL field mid-word.
+        list.addEventListener('change', (e) => {
+            const row = e.target.closest('[data-rpc-key]');
+            if (!row || !e.target.classList.contains('rpc-row-check')) return;
+            const entry = this.rpcDraft.rows.find(r => r.key === row.dataset.rpcKey);
+            if (entry) entry.on = e.target.checked;
+            this.paintRpcRow(row, !!entry?.on);
+            this.updateRpcApplyState();
         });
-        
-        // Save custom URL on change
-        customInput?.addEventListener('change', () => {
-            if (customInput.value.trim()) {
-                this.saveRpcPreference();
-            }
+
+        list.addEventListener('input', (e) => {
+            if (!e.target.classList.contains('rpc-row-url')) return;
+            this.rpcDraft.customUrl = e.target.value.trim();
+            this.updateRpcApplyState();
         });
-        
-        // Test connection button
-        testBtn?.addEventListener('click', () => this.testRpcConnection());
+
+        list.addEventListener('click', (e) => {
+            const btn = e.target.closest('.rpc-row-move');
+            if (!btn) return;
+            const key = btn.closest('[data-rpc-key]')?.dataset.rpcKey;
+            const from = this.rpcDraft.rows.findIndex(r => r.key === key);
+            const to = from + (btn.dataset.dir === 'up' ? -1 : 1);
+            if (from < 0 || to < 0 || to >= this.rpcDraft.rows.length) return;
+            const [moved] = this.rpcDraft.rows.splice(from, 1);
+            this.rpcDraft.rows.splice(to, 0, moved);
+            this.renderRpcEndpoints();
+        });
+
+        document.getElementById('test-rpc-btn')
+            ?.addEventListener('click', () => this.testRpcEndpoints());
+        document.getElementById('apply-rpc-btn')
+            ?.addEventListener('click', () => this.applyRpcSelection());
+
+        this.renderRpcEndpoints();
     }
 
     /**
-     * Save RPC preference to localStorage and reconnect client
+     * Draw one row per endpoint: the checkbox that puts it in the list, its
+     * position in that list, and what the last probe found. A dead endpoint
+     * has to be readable without pressing anything, which is why the probe
+     * result lives on the row and not in a count at the bottom.
      */
-    async saveRpcPreference() {
-        const presetSelect = document.getElementById('rpc-preset-select');
-        const customInput = document.getElementById('custom-rpc-url');
-        
-        if (!presetSelect) return;
-        
-        const preset = presetSelect.value;
-        const pref = { preset };
-        
-        if (preset === 'custom' && customInput?.value.trim()) {
-            pref.customUrl = customInput.value.trim();
+    renderRpcEndpoints() {
+        const list = document.getElementById('rpc-endpoint-list');
+        if (!list || !this.rpcDraft) return;
+
+        const byKey = new Map(RPC_ENDPOINTS.map(e => [e.key, e]));
+        const last = this.rpcDraft.rows.length - 1;
+
+        list.innerHTML = this.rpcDraft.rows.map((row, i) => {
+            const isCustom = row.key === RPC_CUSTOM_KEY;
+            const endpoint = byKey.get(row.key);
+            const name = isCustom ? 'Custom URL' : (endpoint?.name || row.key);
+            const url = isCustom ? this.rpcDraft.customUrl : endpoint?.url;
+            const probe = this.rpcProbes?.get(url || row.key);
+
+            const detail = isCustom
+                ? `<input type="url" class="rpc-row-url w-full bg-transparent border-0 p-0 mt-0.5 text-[11px] text-white/50 focus:outline-none focus:text-white/80 placeholder:text-white/20"
+                        placeholder="https://your-rpc-endpoint.com" value="${_escapeAttr(this.rpcDraft.customUrl || '')}" />`
+                : `<div class="text-[11px] text-white/30 truncate">${_escapeHtml((url || '').replace(/^https:\/\//, ''))}</div>`;
+
+            return `
+                <div data-rpc-key="${row.key}" class="flex items-center gap-3 px-3 py-2 rounded-xl bg-white/5 border ${row.on ? 'border-white/20' : 'border-white/5'} transition">
+                    <input type="checkbox" class="rpc-row-check w-3.5 h-3.5 accent-white rounded shrink-0" ${row.on ? 'checked' : ''} />
+                    <div class="min-w-0 flex-1">
+                        <div class="rpc-row-name text-sm ${row.on ? 'text-white' : 'text-white/50'}">${_escapeHtml(name)}</div>
+                        ${detail}
+                    </div>
+                    <div class="text-[11px] shrink-0 whitespace-nowrap">${this.renderRpcProbe(probe)}</div>
+                    <div class="flex flex-col shrink-0 -my-1">
+                        <button class="rpc-row-move text-white/25 hover:text-white/70 transition leading-none px-1 disabled:opacity-20 disabled:hover:text-white/25"
+                                data-dir="up" ${i === 0 ? 'disabled' : ''} aria-label="Move up">&#9650;</button>
+                        <button class="rpc-row-move text-white/25 hover:text-white/70 transition leading-none px-1 disabled:opacity-20 disabled:hover:text-white/25"
+                                data-dir="down" ${i === last ? 'disabled' : ''} aria-label="Move down">&#9660;</button>
+                    </div>
+                </div>`;
+        }).join('');
+
+        this.updateRpcApplyState();
+    }
+
+    /** Reflect one row's checked state without touching the rest of the list. */
+    paintRpcRow(row, on) {
+        row.classList.toggle('border-white/20', on);
+        row.classList.toggle('border-white/5', !on);
+        const label = row.querySelector('.rpc-row-name');
+        label?.classList.toggle('text-white', on);
+        label?.classList.toggle('text-white/50', !on);
+    }
+
+    /** The per-row verdict of the last probe. */
+    renderRpcProbe(probe) {
+        if (!probe) return '<span class="text-white/25">not tested</span>';
+        if (probe.state === 'testing') {
+            return '<span class="text-yellow-400/80 animate-pulse">testing</span>';
         }
-        
-        localStorage.setItem(CONFIG.storageKeys.rpcPreference, JSON.stringify(pref));
-        this.Logger?.info('RPC preference saved:', pref);
-        
-        // Reconnect Streamr client with new RPC endpoints
+        if (probe.state === 'ok') {
+            return `<span class="text-green-400">${probe.ms} ms</span>`;
+        }
+        if (probe.state === 'wrongchain') {
+            return '<span class="text-yellow-400">not Polygon</span>';
+        }
+        return '<span class="text-red-400">no answer</span>';
+    }
+
+    /** What is wrong with the draft, or null when it is usable. */
+    rpcDraftProblem() {
+        if (!this.rpcDraft) return null;
+        return rpcSelectionUrls(this.rpcDraft).length === 0
+            ? 'Pick at least one endpoint'
+            : null;
+    }
+
+    /** Apply only offers itself when the draft differs and can actually be used. */
+    updateRpcApplyState() {
+        const applyBtn = document.getElementById('apply-rpc-btn');
+        if (!applyBtn || !this.rpcDraft) return;
+        const dirty = JSON.stringify(this.rpcDraft) !== this.rpcSaved;
+        const problem = this.rpcDraftProblem();
+        applyBtn.classList.toggle('hidden', !dirty);
+        applyBtn.disabled = !!problem;
+        applyBtn.classList.toggle('opacity-40', !!problem);
+        applyBtn.classList.toggle('cursor-not-allowed', !!problem);
+
+        if (dirty) {
+            const statusEl = document.getElementById('rpc-status');
+            if (statusEl) {
+                statusEl.innerHTML = problem
+                    ? `<span class="inline-block w-2 h-2 rounded-full bg-red-500 mr-1.5 align-middle"></span><span class="align-middle text-red-400">${problem}</span>`
+                    : '<span class="inline-block w-2 h-2 rounded-full bg-yellow-400 mr-1.5 align-middle"></span><span class="align-middle text-yellow-400">Not applied yet</span>';
+            }
+        }
+    }
+
+    /**
+     * Persist the draft and reconnect the Streamr client on the new endpoints.
+     */
+    async applyRpcSelection() {
+        if (!this.rpcDraft || this.rpcDraftProblem()) return;
+
+        saveRpcSelection(this.rpcDraft);
+        this.rpcDraft = loadRpcSelection();
+        this.rpcSaved = JSON.stringify(this.rpcDraft);
+        this.renderRpcEndpoints();
+        this.Logger?.info('RPC selection saved:', rpcSelectionUrls(this.rpcDraft));
+
         if (this.streamrController?.client) {
             this.showNotification('Reconnecting with new RPC...', 'info');
             const success = await this.streamrController.reconnect();
@@ -1932,107 +2037,96 @@ class SettingsUI {
                 this.showNotification('RPC saved. Reload page to apply.', 'warning');
             }
         } else {
-            this.showNotification('RPC preference saved', 'info');
+            this.showNotification('RPC selection saved', 'info');
         }
     }
 
     /**
-     * Test RPC connection
+     * Probe every row at once, checked or not: an endpoint that died is worth
+     * seeing before it is picked, and one that is picked is worth seeing die.
+     * Serially this would be one timeout after another.
      */
-    async testRpcConnection() {
-        const statusEl = document.getElementById('rpc-status');
+    async testRpcEndpoints() {
         const testBtn = document.getElementById('test-rpc-btn');
-        const presetSelect = document.getElementById('rpc-preset-select');
-        const customInput = document.getElementById('custom-rpc-url');
-        
-        if (!statusEl || !testBtn) return;
-        
-        // Disable button during test
-        testBtn.disabled = true;
-        testBtn.textContent = 'Testing...';
-        statusEl.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-yellow-400 mr-1.5 align-middle animate-pulse"></span><span class="align-middle">Testing...</span>';
-        
-        // Get URLs to test based on current selection
-        let urlsToTest = [];
-        const preset = presetSelect?.value || 'auto';
-        
-        if (preset === 'custom' && customInput?.value.trim()) {
-            urlsToTest = [customInput.value.trim()];
-        } else {
-            // Import dynamically to avoid circular dependencies
-            const { RPC_PRESETS } = await import('../config.js');
-            urlsToTest = RPC_PRESETS[preset]?.urls || RPC_PRESETS['auto'].urls;
+        const statusEl = document.getElementById('rpc-status');
+        if (!this.rpcDraft) return;
+
+        const byKey = new Map(RPC_ENDPOINTS.map(e => [e.key, e.url]));
+        const urls = [];
+        for (const row of this.rpcDraft.rows) {
+            const url = row.key === RPC_CUSTOM_KEY ? this.rpcDraft.customUrl : byKey.get(row.key);
+            if (url && !urls.includes(url)) urls.push(url);
         }
-        
-        // Test first 3 endpoints
-        const testUrls = urlsToTest.slice(0, 3);
-        let workingCount = 0;
-        
-        for (const url of testUrls) {
-            try {
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        jsonrpc: '2.0',
-                        method: 'eth_blockNumber',
-                        params: [],
-                        id: 1
-                    }),
-                    signal: AbortSignal.timeout(5000)
-                });
-                
-                const data = await response.json();
-                if (data.result && !data.error) {
-                    workingCount++;
-                }
-            } catch (e) {
-                // Failed to connect
-                this.Logger?.debug('RPC test failed for', url, e.message);
-            }
+        if (urls.length === 0) return;
+
+        if (testBtn) {
+            testBtn.disabled = true;
+            testBtn.textContent = 'Testing...';
         }
-        
-        // Update status
-        testBtn.disabled = false;
-        testBtn.textContent = 'Test Connection';
-        
-        if (workingCount === 0) {
-            statusEl.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-red-500 mr-1.5 align-middle"></span><span class="align-middle text-red-400">All endpoints failed</span>';
-        } else if (workingCount < testUrls.length) {
-            statusEl.innerHTML = `<span class="inline-block w-2 h-2 rounded-full bg-yellow-400 mr-1.5 align-middle"></span><span class="align-middle text-yellow-400">${workingCount}/${testUrls.length} working</span>`;
-        } else {
+        this.rpcProbes = new Map(urls.map(u => [u, { state: 'testing' }]));
+        this.renderRpcEndpoints();
+        if (statusEl) {
+            statusEl.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-yellow-400 mr-1.5 align-middle"></span><span class="align-middle">Testing...</span>';
+        }
+
+        const results = await Promise.all(urls.map(url => this.probeRpcEndpoint(url)));
+        urls.forEach((url, i) => this.rpcProbes.set(url, results[i]));
+        this.renderRpcEndpoints();
+
+        if (testBtn) {
+            testBtn.disabled = false;
+            testBtn.textContent = 'Test all';
+        }
+        if (!statusEl) return;
+
+        const selected = rpcSelectionUrls(this.rpcDraft);
+        const dead = selected.filter(u => this.rpcProbes.get(u)?.state !== 'ok');
+        if (JSON.stringify(this.rpcDraft) !== this.rpcSaved) {
+            this.updateRpcApplyState();
+        } else if (dead.length === 0) {
             statusEl.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-green-500 mr-1.5 align-middle"></span><span class="align-middle text-green-400">Connected</span>';
+        } else if (dead.length < selected.length) {
+            statusEl.innerHTML = `<span class="inline-block w-2 h-2 rounded-full bg-yellow-400 mr-1.5 align-middle"></span><span class="align-middle text-yellow-400">${dead.length} of ${selected.length} not answering</span>`;
+        } else {
+            statusEl.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-red-500 mr-1.5 align-middle"></span><span class="align-middle text-red-400">No selected endpoint answered</span>';
         }
     }
 
     /**
-     * Update RPC status display when opening settings
+     * One eth_chainId call. The chain is checked rather than assumed, so a
+     * custom URL pointing at the wrong network says so instead of looking fine
+     * until a transaction fails.
+     */
+    async probeRpcEndpoint(url) {
+        const started = performance.now();
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_chainId', params: [], id: 1 }),
+                signal: AbortSignal.timeout(CONFIG.network.rpcTimeoutMs)
+            });
+            const data = await response.json();
+            if (!data.result || data.error) return { state: 'dead' };
+            if (parseInt(data.result, 16) !== CONFIG.network.chainId) return { state: 'wrongchain' };
+            return { state: 'ok', ms: Math.round(performance.now() - started) };
+        } catch (e) {
+            this.Logger?.debug('RPC probe failed for', url, e.message);
+            return { state: 'dead' };
+        }
+    }
+
+    /**
+     * Reload the saved selection when Settings opens, dropping an unapplied
+     * draft: the panel should never show a choice the app is not using.
      */
     updateRpcStatusDisplay() {
-        const presetSelect = document.getElementById('rpc-preset-select');
-        const customContainer = document.getElementById('custom-rpc-container');
-        const customInput = document.getElementById('custom-rpc-url');
+        if (!document.getElementById('rpc-endpoint-list')) return;
+        this.rpcDraft = loadRpcSelection();
+        this.rpcSaved = JSON.stringify(this.rpcDraft);
+        this.rpcProbes = new Map();
+        this.renderRpcEndpoints();
         const statusEl = document.getElementById('rpc-status');
-        
-        // Load saved preference
-        const saved = localStorage.getItem(CONFIG.storageKeys.rpcPreference);
-        if (saved && presetSelect) {
-            try {
-                const pref = JSON.parse(saved);
-                presetSelect.value = pref.preset || 'auto';
-                if (pref.preset === 'custom' && pref.customUrl && customInput) {
-                    customInput.value = pref.customUrl;
-                    customContainer?.classList.remove('hidden');
-                } else {
-                    customContainer?.classList.add('hidden');
-                }
-            } catch (e) {
-                presetSelect.value = 'auto';
-                customContainer?.classList.add('hidden');
-            }
-        }
-        
-        // Reset status to "Not tested"
         if (statusEl) {
             statusEl.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-white/20 mr-1.5 align-middle"></span><span class="align-middle">Not tested</span>';
         }
