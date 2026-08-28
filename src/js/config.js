@@ -3,48 +3,27 @@
  * Centralized configuration for network, retry logic, and app settings
  */
 
-// RPC Presets for user selection
-// Order matters for 'auto' - most reliable CORS-friendly endpoints first
-export const RPC_PRESETS = {
-    'auto': {
-        name: 'Auto (try all)',
-        urls: [
-            'https://polygon.drpc.org',           // Very reliable, good CORS
-            'https://polygon-bor-rpc.publicnode.com', // Reliable, good CORS
-            'https://polygon.meowrpc.com',        // Good alternative
-            'https://polygon.gateway.tenderly.co', // Good alternative
-            'https://polygon.llamarpc.com',       // Sometimes has DNS issues
-            'https://1rpc.io/matic'               // Rate limits quickly from localhost
-        ]
-    },
-    'drpc': {
-        name: 'dRPC (Recommended)',
-        urls: ['https://polygon.drpc.org']
-    },
-    'publicnode': {
-        name: 'PublicNode',
-        urls: ['https://polygon-bor-rpc.publicnode.com']
-    },
-    'meowrpc': {
-        name: 'Meow RPC',
-        urls: ['https://polygon.meowrpc.com']
-    },
-    'tenderly': {
-        name: 'Tenderly',
-        urls: ['https://polygon.gateway.tenderly.co']
-    },
-    'llamarpc': {
-        name: 'Llama RPC',
-        urls: ['https://polygon.llamarpc.com']
-    },
-    '1rpc': {
-        name: '1RPC (Privacy)',
-        urls: ['https://1rpc.io/matic']
-    }
-};
+// Polygon RPC endpoints, in the default order of preference. The user's
+// selection in Settings is an ordered subset of these plus an optional custom
+// URL: what is enabled is exactly what gets used, and the first one is the
+// preferred one.
+//
+// `webviewSafe` records whether the endpoint answers CORS from the Android
+// bridge's https://pombo.local origin. That property is independent from being
+// alive: an endpoint can serve everyone and still be down, or be up and refuse
+// the origin. Only the Android client is constrained by it.
+export const RPC_ENDPOINTS = [
+    { key: 'drpc', name: 'dRPC', url: 'https://polygon.drpc.org', webviewSafe: true },
+    { key: 'publicnode', name: 'PublicNode', url: 'https://polygon-bor-rpc.publicnode.com', webviewSafe: true },
+    { key: 'tenderly', name: 'Tenderly', url: 'https://polygon.gateway.tenderly.co', webviewSafe: true },
+    { key: '1rpc', name: '1RPC (Privacy)', url: 'https://1rpc.io/matic', webviewSafe: true }
+];
 
-// Default RPC endpoints (used when no user preference)
-export const DEFAULT_RPC_ENDPOINTS = RPC_PRESETS['auto'].urls;
+/** The custom URL is a row of its own, orderable and toggleable like the rest. */
+export const RPC_CUSTOM_KEY = 'custom';
+
+/** Enabled out of the box: two providers, so one going down is not an outage. */
+export const RPC_DEFAULT_ENABLED = ['drpc', 'publicnode'];
 
 export const CONFIG = {
     // Polygon Network Configuration
@@ -56,14 +35,9 @@ export const CONFIG = {
             symbol: 'POL',
             decimals: 18
         },
-        rpcEndpoints: [
-            'https://polygon.drpc.org',
-            'https://polygon-bor-rpc.publicnode.com',
-            'https://polygon.meowrpc.com',
-            'https://polygon.gateway.tenderly.co',
-            'https://polygon.llamarpc.com',
-            'https://1rpc.io/matic'
-        ],
+        // Advertised to the wallet in wallet_addEthereumChain, so it stays the
+        // plain list of every endpoint rather than the user's selection.
+        rpcEndpoints: RPC_ENDPOINTS.map(e => e.url),
         blockExplorer: 'https://polygonscan.com',
         // Ethereum mainnet providers for ENS resolution 
         ensProviderUrls: [
@@ -390,30 +364,101 @@ export const CONFIG = {
 };
 
 /**
- * Get RPC endpoints for Streamr SDK configuration
- * Checks user preference first, falls back to defaults
- * @returns {Array<{url: string}>} - Array of RPC endpoint objects
+ * The saved RPC selection: every known row in the user's order, each flagged
+ * on or off, plus the custom URL.
+ *
+ * Rows are seeded from RPC_ENDPOINTS, so a key dropped from the code
+ * disappears from a saved selection on the next read, and an endpoint added to
+ * the code arrives at the end and disabled. Enabling one has to stay a
+ * deliberate act: it decides who the user talks to.
+ *
+ * @returns {{rows: Array<{key: string, on: boolean}>, customUrl: string}}
+ */
+export function loadRpcSelection() {
+    let saved = null;
+    try {
+        saved = JSON.parse(localStorage.getItem(CONFIG.storageKeys.rpcPreference) || 'null');
+    } catch (e) {
+        saved = null;
+    }
+    return normalizeRpcSelection(saved && saved.v === 2 ? saved : migrateRpcPreference(saved));
+}
+
+/**
+ * Turn the pre-selection setting (one preset key plus a custom URL) into a set.
+ * 'auto' stood for every endpoint, a provider key for that one alone, 'custom'
+ * for the URL.
+ */
+function migrateRpcPreference(pref) {
+    const preset = pref && typeof pref.preset === 'string' ? pref.preset : null;
+    const customUrl = pref && typeof pref.customUrl === 'string' ? pref.customUrl : '';
+    if (!preset) return { v: 2, rows: [], customUrl };
+    if (preset === 'auto') {
+        return { v: 2, rows: RPC_ENDPOINTS.map(e => ({ key: e.key, on: true })), customUrl };
+    }
+    if (preset === RPC_CUSTOM_KEY) {
+        return { v: 2, rows: [{ key: RPC_CUSTOM_KEY, on: !!customUrl.trim() }], customUrl };
+    }
+    return { v: 2, rows: [{ key: preset, on: true }], customUrl };
+}
+
+/** Fill in the rows the code knows about and drop the ones it does not. */
+function normalizeRpcSelection(sel) {
+    const savedRows = Array.isArray(sel && sel.rows) ? sel.rows : [];
+    const customUrl = typeof (sel && sel.customUrl) === 'string' ? sel.customUrl.trim() : '';
+    const known = new Set(RPC_ENDPOINTS.map(e => e.key).concat(RPC_CUSTOM_KEY));
+
+    const rows = [];
+    const placed = new Set();
+    for (const row of savedRows) {
+        if (!row || !known.has(row.key) || placed.has(row.key)) continue;
+        placed.add(row.key);
+        rows.push({ key: row.key, on: !!row.on });
+    }
+    for (const e of RPC_ENDPOINTS) {
+        if (!placed.has(e.key)) rows.push({ key: e.key, on: false });
+    }
+    if (!placed.has(RPC_CUSTOM_KEY)) rows.push({ key: RPC_CUSTOM_KEY, on: false });
+
+    // An empty or all-off selection leaves the app with nowhere to go, so it
+    // reads as the default rather than as a choice.
+    if (!rows.some(r => r.on && (r.key !== RPC_CUSTOM_KEY || customUrl))) {
+        for (const r of rows) r.on = RPC_DEFAULT_ENABLED.includes(r.key);
+    }
+    return { rows, customUrl };
+}
+
+/** @param {{rows: Array<{key: string, on: boolean}>, customUrl: string}} sel */
+export function saveRpcSelection(sel) {
+    localStorage.setItem(CONFIG.storageKeys.rpcPreference, JSON.stringify({
+        v: 2,
+        rows: sel.rows.map(r => ({ key: r.key, on: !!r.on })),
+        customUrl: (sel.customUrl || '').trim()
+    }));
+}
+
+/**
+ * The URLs a selection stands for, in order. A custom row with no URL behind
+ * it contributes nothing.
+ * @returns {string[]}
+ */
+export function rpcSelectionUrls(sel) {
+    const byKey = new Map(RPC_ENDPOINTS.map(e => [e.key, e.url]));
+    const urls = [];
+    for (const row of sel.rows) {
+        if (!row.on) continue;
+        const url = row.key === RPC_CUSTOM_KEY ? (sel.customUrl || '').trim() : byKey.get(row.key);
+        if (url) urls.push(url);
+    }
+    return urls;
+}
+
+/**
+ * RPC endpoints for the Streamr SDK, in the user's order of preference.
+ * @returns {Array<{url: string}>}
  */
 export function getRpcEndpoints() {
-    // Check for user preference in localStorage
-    const saved = localStorage.getItem(CONFIG.storageKeys.rpcPreference);
-    if (saved) {
-        try {
-            const pref = JSON.parse(saved);
-            if (pref.preset === 'custom' && pref.customUrl) {
-                return [{ url: pref.customUrl }];
-            }
-            const urls = RPC_PRESETS[pref.preset]?.urls;
-            if (urls && urls.length > 0) {
-                return urls.map(url => ({ url }));
-            }
-        } catch (e) {
-            // Invalid saved preference, use defaults
-        }
-    }
-    
-    // Default: use dRPC (most reliable)
-    return RPC_PRESETS['drpc'].urls.map(url => ({ url }));
+    return rpcSelectionUrls(loadRpcSelection()).map(url => ({ url }));
 }
 
 /**
