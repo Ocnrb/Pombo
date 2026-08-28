@@ -2048,6 +2048,12 @@ class SettingsUI {
         if (probe.state === 'wrongchain') {
             return '<span class="text-yellow-400">not Polygon</span>';
         }
+        if (probe.state === 'limited') {
+            return '<span class="text-yellow-400">rate limited</span>';
+        }
+        if (probe.state === 'refused') {
+            return '<span class="text-yellow-400">refused</span>';
+        }
         return '<span class="text-red-400">no answer</span>';
     }
 
@@ -2174,9 +2180,13 @@ class SettingsUI {
     }
 
     /**
-     * One eth_chainId call. The chain is read rather than assumed, so a custom
-     * URL pointing at another network says so instead of looking healthy until
-     * a transaction fails.
+     * One eth_chainId call.
+     *
+     * An endpoint that answers and turns the call down is not the same fault as
+     * one that is gone, and reading the two as one is what let a dead endpoint
+     * hide here for months. The chain is read rather than assumed too, so a
+     * custom URL on another network says so instead of looking healthy until a
+     * transaction fails.
      */
     async probeRpcEndpoint(url) {
         const started = performance.now();
@@ -2187,8 +2197,15 @@ class SettingsUI {
                 body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_chainId', params: [], id: 1 }),
                 signal: AbortSignal.timeout(CONFIG.network.rpcTimeoutMs)
             });
+            if (response.status === 429) return { state: 'limited' };
             const data = await response.json();
-            if (!data.result || data.error) return { state: 'dead' };
+            if (data.error) {
+                // -32001/-32005 are what the public gateways send once a plan or
+                // a rate window runs out.
+                const code = data.error.code;
+                return { state: (code === -32001 || code === -32005) ? 'limited' : 'refused' };
+            }
+            if (!data.result) return { state: 'refused' };
             if (parseInt(data.result, 16) !== CONFIG.network.chainId) return { state: 'wrongchain' };
             return { state: 'ok', ms: Math.round(performance.now() - started) };
         } catch (e) {
