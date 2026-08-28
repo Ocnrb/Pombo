@@ -26,6 +26,10 @@ class GraphAPI {
     constructor() {
         this.cache = new Map();
         this.CACHE_DURATION = CONFIG.graph.cacheDurationMs;
+
+        // Whether the last real query worked, for Settings to report without
+        // making a call of its own. Null until the app has asked for anything.
+        this.lastQueryOk = null;
     }
 
     /**
@@ -96,8 +100,10 @@ class GraphAPI {
                 throw new Error(result.errors[0]?.message || 'GraphQL query failed');
             }
 
+            this.lastQueryOk = true;
             return result.data;
         } catch (error) {
+            this.lastQueryOk = false;
             Logger.error('Graph API query failed:', error);
             throw error;
         }

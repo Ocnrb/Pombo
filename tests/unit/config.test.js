@@ -4,7 +4,17 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { CONFIG, getRpcEndpoints, getNetworkParams, RPC_PRESETS, DEFAULT_RPC_ENDPOINTS } from '../../src/js/config.js';
+import {
+    CONFIG,
+    getRpcEndpoints,
+    getNetworkParams,
+    loadRpcSelection,
+    saveRpcSelection,
+    rpcSelectionUrls,
+    RPC_ENDPOINTS,
+    RPC_CUSTOM_KEY,
+    RPC_DEFAULT_ENABLED
+} from '../../src/js/config.js';
 
 describe('config', () => {
     describe('CONFIG object', () => {
@@ -67,10 +77,12 @@ describe('config', () => {
             });
         });
 
-        it('should return dRPC as default endpoint', () => {
-            const endpoints = getRpcEndpoints();
-            expect(endpoints.length).toBe(1);
-            expect(endpoints[0].url).toContain('drpc.org');
+        it('should return the default endpoints, dRPC first', () => {
+            const endpoints = getRpcEndpoints().map(e => e.url);
+            expect(endpoints).toEqual(
+                RPC_DEFAULT_ENABLED.map(k => RPC_ENDPOINTS.find(e => e.key === k).url)
+            );
+            expect(endpoints[0]).toContain('drpc.org');
         });
     });
 
@@ -103,59 +115,53 @@ describe('config', () => {
         });
     });
 
-    describe('RPC_PRESETS', () => {
-        it('should have an auto preset', () => {
-            expect(RPC_PRESETS).toHaveProperty('auto');
-            expect(RPC_PRESETS.auto.name).toBe('Auto (try all)');
-            expect(Array.isArray(RPC_PRESETS.auto.urls)).toBe(true);
-            expect(RPC_PRESETS.auto.urls.length).toBeGreaterThan(0);
-        });
-
-        it('should have multiple presets', () => {
-            const presetKeys = Object.keys(RPC_PRESETS);
-            expect(presetKeys.length).toBeGreaterThan(3);
-        });
-
-        it('should have valid URLs in all presets', () => {
-            Object.entries(RPC_PRESETS).forEach(([key, preset]) => {
-                expect(preset).toHaveProperty('name');
-                expect(preset).toHaveProperty('urls');
-                expect(Array.isArray(preset.urls)).toBe(true);
-                preset.urls.forEach(url => {
-                    expect(url).toMatch(/^https:\/\//);
-                });
+    describe('RPC_ENDPOINTS', () => {
+        it('should list several endpoints with a key, a name and an https url', () => {
+            expect(RPC_ENDPOINTS.length).toBeGreaterThan(2);
+            RPC_ENDPOINTS.forEach(e => {
+                expect(typeof e.key).toBe('string');
+                expect(typeof e.name).toBe('string');
+                expect(e.url).toMatch(/^https:\/\//);
+                expect(typeof e.webviewSafe).toBe('boolean');
             });
         });
 
-        it('should have drpc preset (recommended)', () => {
-            expect(RPC_PRESETS).toHaveProperty('drpc');
-            expect(RPC_PRESETS.drpc.urls[0]).toContain('drpc.org');
+        it('should have unique keys', () => {
+            const keys = RPC_ENDPOINTS.map(e => e.key);
+            expect(new Set(keys).size).toBe(keys.length);
         });
 
-        it('should not include deprecated endpoints', () => {
-            // polygon-rpc.com now requires auth
-            // blastapi has CORS issues
-            Object.values(RPC_PRESETS).forEach(preset => {
-                preset.urls.forEach(url => {
-                    expect(url).not.toContain('polygon-rpc.com');
-                    expect(url).not.toContain('blastapi');
-                });
+        it('should prefer dRPC', () => {
+            expect(RPC_ENDPOINTS[0].key).toBe('drpc');
+            expect(RPC_ENDPOINTS[0].url).toContain('drpc.org');
+        });
+
+        it('should not include endpoints known to be gone', () => {
+            RPC_ENDPOINTS.forEach(e => {
+                expect(e.url).not.toContain('polygon-rpc.com');
+                expect(e.url).not.toContain('blastapi');
+                expect(e.url).not.toContain('rpc.ankr.com');
+                expect(e.url).not.toContain('meowrpc');
+                expect(e.url).not.toContain('llamarpc');
             });
         });
-    });
 
-    describe('DEFAULT_RPC_ENDPOINTS', () => {
-        it('should match auto preset urls', () => {
-            expect(DEFAULT_RPC_ENDPOINTS).toEqual(RPC_PRESETS.auto.urls);
+        it('should keep at least one endpoint usable from the Android bridge', () => {
+            expect(RPC_ENDPOINTS.some(e => e.webviewSafe)).toBe(true);
         });
 
-        it('should have multiple fallback endpoints', () => {
-            expect(DEFAULT_RPC_ENDPOINTS.length).toBeGreaterThan(3);
+        it('should default to enabling endpoints it actually knows', () => {
+            const keys = RPC_ENDPOINTS.map(e => e.key);
+            RPC_DEFAULT_ENABLED.forEach(k => expect(keys).toContain(k));
         });
     });
 
     describe('getRpcEndpoints with localStorage', () => {
         const STORAGE_KEY = 'pombo_rpc_preference';
+
+        const defaultUrls = () =>
+            RPC_DEFAULT_ENABLED.map(k => RPC_ENDPOINTS.find(e => e.key === k).url);
+
 
         beforeEach(() => {
             // Clear localStorage before each test
@@ -167,13 +173,11 @@ describe('config', () => {
             localStorage.removeItem(STORAGE_KEY);
         });
 
-        it('should return dRPC endpoints when no preference saved', () => {
-            const endpoints = getRpcEndpoints();
-            expect(endpoints.length).toBe(1);
-            expect(endpoints[0].url).toContain('drpc.org');
+        it('should return the default endpoints when no preference saved', () => {
+            expect(getRpcEndpoints().map(e => e.url)).toEqual(defaultUrls());
         });
 
-        it('should return preset endpoints when preference is saved', () => {
+        it('should return the saved endpoints when a preference is saved', () => {
             localStorage.setItem(STORAGE_KEY, JSON.stringify({ preset: 'drpc' }));
             const endpoints = getRpcEndpoints();
             expect(endpoints.length).toBe(1);
@@ -191,18 +195,130 @@ describe('config', () => {
             expect(endpoints[0].url).toBe(customUrl);
         });
 
-        it('should fall back to dRPC on invalid JSON', () => {
+        it('should fall back to the default on invalid JSON', () => {
             localStorage.setItem(STORAGE_KEY, 'invalid json');
-            const endpoints = getRpcEndpoints();
-            expect(endpoints.length).toBe(1);
-            expect(endpoints[0].url).toContain('drpc.org');
+            expect(getRpcEndpoints().map(e => e.url)).toEqual(defaultUrls());
         });
 
-        it('should fall back to dRPC for unknown preset', () => {
+        it('should fall back to the default for an unknown preset', () => {
             localStorage.setItem(STORAGE_KEY, JSON.stringify({ preset: 'unknown-preset' }));
-            const endpoints = getRpcEndpoints();
-            expect(endpoints.length).toBe(1);
-            expect(endpoints[0].url).toContain('drpc.org');
+            expect(getRpcEndpoints().map(e => e.url)).toEqual(defaultUrls());
+        });
+    });
+
+    describe('RPC selection model', () => {
+        const STORAGE_KEY = 'pombo_rpc_preference';
+
+        beforeEach(() => localStorage.removeItem(STORAGE_KEY));
+        afterEach(() => localStorage.removeItem(STORAGE_KEY));
+
+        it('should offer a row per endpoint, with no custom row until one exists', () => {
+            const sel = loadRpcSelection();
+            expect(sel.rows.map(r => r.key)).toEqual(RPC_ENDPOINTS.map(e => e.key));
+        });
+
+        it('should carry a custom row only while a url stands behind it', () => {
+            saveRpcSelection({
+                rows: [{ key: 'drpc', on: true }, { key: RPC_CUSTOM_KEY, on: true }],
+                customUrl: 'https://my-own-node.example'
+            });
+            expect(loadRpcSelection().rows.some(r => r.key === RPC_CUSTOM_KEY)).toBe(true);
+
+            saveRpcSelection({
+                rows: [{ key: 'drpc', on: true }, { key: RPC_CUSTOM_KEY, on: true }],
+                customUrl: ''
+            });
+            expect(loadRpcSelection().rows.some(r => r.key === RPC_CUSTOM_KEY)).toBe(false);
+        });
+
+        it('should keep the saved order and put rows missing from the save last', () => {
+            saveRpcSelection({
+                rows: [{ key: '1rpc', on: true }, { key: 'drpc', on: true }],
+                customUrl: ''
+            });
+            const sel = loadRpcSelection();
+            expect(sel.rows[0].key).toBe('1rpc');
+            expect(sel.rows[1].key).toBe('drpc');
+            expect(rpcSelectionUrls(sel)).toEqual([
+                RPC_ENDPOINTS.find(e => e.key === '1rpc').url,
+                RPC_ENDPOINTS.find(e => e.key === 'drpc').url
+            ]);
+        });
+
+        it('should drop keys the code no longer knows', () => {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({
+                v: 2,
+                rows: [{ key: 'meowrpc', on: true }, { key: 'drpc', on: true }],
+                customUrl: ''
+            }));
+            const sel = loadRpcSelection();
+            expect(sel.rows.some(r => r.key === 'meowrpc')).toBe(false);
+            expect(rpcSelectionUrls(sel)).toEqual([RPC_ENDPOINTS[0].url]);
+        });
+
+        it('should add endpoints new to the code disabled and at the end', () => {
+            saveRpcSelection({ rows: [{ key: 'drpc', on: true }], customUrl: '' });
+            const sel = loadRpcSelection();
+            expect(sel.rows[0]).toEqual({ key: 'drpc', on: true });
+            sel.rows.slice(1).forEach(r => expect(r.on).toBe(false));
+        });
+
+        it('should fall back to the default when nothing is enabled', () => {
+            saveRpcSelection({
+                rows: RPC_ENDPOINTS.map(e => ({ key: e.key, on: false })),
+                customUrl: ''
+            });
+            const sel = loadRpcSelection();
+            expect(sel.rows.filter(r => r.on).map(r => r.key).sort())
+                .toEqual([...RPC_DEFAULT_ENABLED].sort());
+        });
+
+        it('should ignore a custom row with no url behind it', () => {
+            saveRpcSelection({
+                rows: [{ key: RPC_CUSTOM_KEY, on: true }, { key: 'drpc', on: true }],
+                customUrl: ''
+            });
+            expect(rpcSelectionUrls(loadRpcSelection())).toEqual([RPC_ENDPOINTS[0].url]);
+        });
+
+        it('should use a custom url alone when that is the whole selection', () => {
+            saveRpcSelection({
+                rows: [{ key: RPC_CUSTOM_KEY, on: true }],
+                customUrl: 'https://my-own-node.example '
+            });
+            expect(rpcSelectionUrls(loadRpcSelection())).toEqual(['https://my-own-node.example']);
+        });
+    });
+
+    describe('migration from the preset setting', () => {
+        const STORAGE_KEY = 'pombo_rpc_preference';
+
+        beforeEach(() => localStorage.removeItem(STORAGE_KEY));
+        afterEach(() => localStorage.removeItem(STORAGE_KEY));
+
+        it('should turn auto into every endpoint, in order', () => {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({ preset: 'auto' }));
+            expect(rpcSelectionUrls(loadRpcSelection())).toEqual(RPC_ENDPOINTS.map(e => e.url));
+        });
+
+        it('should turn a provider preset into that provider alone', () => {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({ preset: 'tenderly' }));
+            const urls = rpcSelectionUrls(loadRpcSelection());
+            expect(urls).toEqual([RPC_ENDPOINTS.find(e => e.key === 'tenderly').url]);
+        });
+
+        it('should turn custom into the custom url alone', () => {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({
+                preset: 'custom', customUrl: 'https://my-own-node.example'
+            }));
+            expect(rpcSelectionUrls(loadRpcSelection())).toEqual(['https://my-own-node.example']);
+        });
+
+        it('should fall back to the default for a preset that is gone', () => {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({ preset: 'meowrpc' }));
+            const sel = loadRpcSelection();
+            expect(sel.rows.filter(r => r.on).map(r => r.key).sort())
+                .toEqual([...RPC_DEFAULT_ENABLED].sort());
         });
     });
 });

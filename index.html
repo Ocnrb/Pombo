@@ -2185,7 +2185,7 @@
     <!-- Modal: Settings -->
     <!-- Settings Modal - Tabbed Layout -->
     <div id="settings-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center z-50">
-        <div class="bg-[#111113] rounded-2xl w-[640px] max-w-[95vw] mx-4 shadow-2xl border border-white/[0.06] overflow-hidden">
+        <div class="bg-[#111113] rounded-2xl w-[704px] max-w-[95vw] mx-4 shadow-2xl border border-white/[0.06] overflow-hidden">
             <!-- Header -->
             <div class="flex items-center justify-between px-6 py-4 border-b border-white/5">
                 <button id="close-settings-btn" class="modal-close-btn text-white/40 hover:text-white/80 transition p-1 -ml-1 md:order-2 md:ml-0 md:-mr-1">
@@ -2199,7 +2199,7 @@
                 <h3 class="text-lg font-medium text-white/90 md:order-1 hidden md:block">Settings</h3>
             </div>
             
-            <div class="flex min-h-[420px]">
+            <div class="flex min-h-[420px] md:min-h-[519px]">
                 <!-- Sidebar Tabs -->
                 <div class="w-44 bg-[#0a0a0a] border-r border-white/5 py-2 flex flex-col">
                     <!-- Mobile Carousel (hidden on desktop) -->
@@ -2441,62 +2441,74 @@
 
                     <!-- API Panel -->
                     <div id="settings-panel-api" class="settings-panel hidden">
-                        <div class="space-y-6">
-                            <div>
-                                <label class="block text-xs font-medium text-white/80 uppercase tracking-wider mb-2">The Graph API Key</label>
-                                <input
-                                    type="password"
-                                    id="settings-graph-api-key"
-                                    name="graph-api-token"
-                                    placeholder="Optional - uses default if empty"
-                                    autocomplete="one-time-code"
-                                    data-lpignore="true"
-                                    data-1p-ignore="true"
-                                    data-form-type="other"
-                                    class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20"
-                                />
-                                <p class="text-xs text-white/30 mt-2">
-                                    Get yours at <a href="https://thegraph.com/studio/apikeys/" target="_blank" class="text-white/60 hover:text-white transition">thegraph.com/studio</a>
-                                </p>
-                            </div>
-                            <div id="graph-api-status" class="text-xs"></div>
-                            
-                            <!-- RPC Endpoints Configuration -->
-                            <div class="mt-6 pt-6 border-t border-white/5">
-                                <label class="block text-xs font-medium text-white/80 uppercase tracking-wider mb-2">Polygon RPC Endpoint</label>
-                                
-                                <!-- Preset selection -->
-                                <select id="rpc-preset-select" class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition mb-3 appearance-none cursor-pointer">
-                                    <option value="drpc">dRPC (Recommended)</option>
-                                    <option value="auto">Auto (try all endpoints)</option>
-                                    <option value="publicnode">PublicNode</option>
-                                    <option value="meowrpc">Meow RPC</option>
-                                    <option value="tenderly">Tenderly</option>
-                                    <option value="llamarpc">Llama RPC</option>
-                                    <option value="1rpc">1RPC (Privacy)</option>
-                                    <option value="custom">Custom URL...</option>
-                                </select>
-                                
-                                <!-- Custom RPC input (hidden by default) -->
-                                <div id="custom-rpc-container" class="hidden mb-3">
-                                    <input
-                                        type="url"
-                                        id="custom-rpc-url"
-                                        placeholder="https://your-rpc-endpoint.com"
-                                        class="w-full bg-white/5 border border-white/10 text-white px-4 py-3 rounded-xl text-sm focus:outline-none focus:border-white/30 transition placeholder:text-white/20"
-                                    />
-                                    <p class="text-xs text-white/30 mt-1">Enter a valid Polygon RPC endpoint URL</p>
-                                </div>
-                                
-                                <!-- RPC Status -->
-                                <div class="flex items-center justify-between">
-                                    <div id="rpc-status" class="text-xs text-white/40">
-                                        <span class="inline-block w-2 h-2 rounded-full bg-white/20 mr-1.5 align-middle"></span>
-                                        <span class="align-middle">Not tested</span>
+                        <div class="space-y-3">
+
+                            <!-- The Graph API -->
+                            <div class="bg-white/[0.03] border border-white/5 rounded-xl">
+                                <button type="button" id="graph-card-toggle" class="w-full flex items-center gap-3 px-4 py-3 text-left">
+                                    <div class="min-w-0 flex-1">
+                                        <div class="text-xs font-medium text-white/80 uppercase tracking-wider">The Graph API</div>
+                                        <div id="graph-api-status" class="text-xs text-white/40 mt-1.5"></div>
                                     </div>
-                                    <button id="test-rpc-btn" class="text-xs text-white/60 hover:text-white transition px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10">
-                                        Test Connection
+                                    <svg id="graph-card-chevron" class="w-4 h-4 shrink-0 text-white/30 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 9l-7 7-7-7"/></svg>
+                                </button>
+                                <div id="graph-card-body" class="hidden px-4 pb-4">
+                                    <label for="settings-graph-api-key" class="text-[10px] text-white/30 uppercase tracking-wider block mb-1.5">Your API key</label>
+                                    <input
+                                        type="password"
+                                        id="settings-graph-api-key"
+                                        name="graph-api-token"
+                                        placeholder="Optional - uses default if empty"
+                                        autocomplete="one-time-code"
+                                        data-lpignore="true"
+                                        data-1p-ignore="true"
+                                        data-form-type="other"
+                                        class="w-full px-3 py-2 text-xs font-mono bg-white/5 border border-white/10 rounded-lg text-white placeholder-white/20 focus:outline-none focus:border-white/20 transition"
+                                    />
+                                    <p class="text-xs text-white/25 mt-2">
+                                        Get yours at <a href="https://thegraph.com/studio/apikeys/" target="_blank" class="text-white/60 hover:text-white transition">thegraph.com/studio</a>
+                                    </p>
+                                </div>
+                            </div>
+
+                            <!-- Polygon RPC -->
+                            <div class="bg-white/[0.03] border border-white/5 rounded-xl">
+                                <div class="flex items-center gap-3 px-4 py-3">
+                                    <button type="button" id="rpc-card-toggle" class="min-w-0 flex-1 text-left">
+                                        <div class="text-xs font-medium text-white/80 uppercase tracking-wider">Polygon RPC</div>
+                                        <div id="rpc-status" class="text-xs text-white/40 mt-1.5"></div>
                                     </button>
+                                    <span id="rpc-primary" class="shrink-0 text-xs text-white/50"></span>
+                                    <button type="button" id="rpc-card-expand" class="shrink-0 p-1">
+                                        <svg id="rpc-card-chevron" class="w-4 h-4 text-white/30 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 9l-7 7-7-7"/></svg>
+                                    </button>
+                                </div>
+                                <div id="rpc-card-body" class="hidden px-4 pb-4">
+                                    <p class="text-xs text-white/25 mb-3">
+                                        Checked endpoints are the ones used, in this order. The first is preferred.
+                                    </p>
+
+                                    <!-- One row per endpoint, rendered from the saved selection -->
+                                    <div id="rpc-endpoint-list" class="space-y-1.5"></div>
+
+                                    <!-- Add a custom endpoint; it is saved when the field is left -->
+                                    <div class="mt-3">
+                                        <button id="rpc-add-toggle-btn" class="text-xs text-white/60 hover:text-white/90 transition flex items-center gap-1.5">
+                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                                            <span>Add custom endpoint</span>
+                                        </button>
+                                        <div id="rpc-add-form" class="hidden mt-3 p-3 bg-white/[0.03] border border-white/5 rounded-xl">
+                                            <input id="rpc-add-url" type="url" placeholder="https://your-rpc-endpoint.com" spellcheck="false" autocomplete="off" class="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 font-mono focus:outline-none focus:border-white/30" />
+                                            <p id="rpc-add-error" class="hidden text-[11px] text-red-400 mt-2"></p>
+                                            <p class="text-xs text-white/25 mt-2">Any Polygon JSON-RPC endpoint.</p>
+                                        </div>
+                                    </div>
+
+                                    <div class="flex justify-end mt-4">
+                                        <button id="test-rpc-btn" class="text-xs text-white/60 hover:text-white transition px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10">
+                                            Test all
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
