@@ -134,6 +134,15 @@ describe('sanitizer', () => {
                 expect(clean).toContain('noopener');
                 expect(clean).toContain('noreferrer');
             });
+
+            it('should overwrite rel and target the sender chose', () => {
+                const dirty = '<a href="https://example.com" rel="opener" target="_self">Link</a>';
+                const host = document.createElement('div');
+                host.innerHTML = sanitizeMessageHtml(dirty);
+                const anchor = host.querySelector('a');
+                expect(anchor.getAttribute('rel')).toBe('noopener noreferrer');
+                expect(anchor.getAttribute('target')).toBe('_blank');
+            });
         });
 
         describe('Edge Cases', () => {
