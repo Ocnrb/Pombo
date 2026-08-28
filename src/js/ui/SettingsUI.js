@@ -1900,6 +1900,15 @@ class SettingsUI {
             entry.on = e.target.checked;
             this.paintRpcRow(row, entry.on);
             this.commitRpcSelection();
+            // Ticking one is choosing it, so measuring it is not traffic the
+            // user did not ask for; and leaving it unmeasured would make the
+            // count under the title read as a fault.
+            if (entry.on) {
+                const url = entry.key === RPC_CUSTOM_KEY
+                    ? this.rpcSelection.customUrl
+                    : RPC_ENDPOINTS.find(x => x.key === entry.key)?.url;
+                this.probeOneRpcEndpoint(url);
+            }
         });
 
         list.addEventListener('click', (e) => {
@@ -2000,6 +2009,7 @@ class SettingsUI {
             close();
             this.renderRpcEndpoints();
             this.commitRpcSelection();
+            this.probeOneRpcEndpoint(url);
         });
     }
 
@@ -2164,6 +2174,15 @@ class SettingsUI {
         } else {
             this.showNotification('RPC saved. Reload page to apply.', 'warning');
         }
+    }
+
+    /** Measure a single endpoint, for one that was just chosen or added. */
+    async probeOneRpcEndpoint(url) {
+        if (!url || !this.rpcProbes) return;
+        this.rpcProbes.set(url, { state: 'testing' });
+        this.renderRpcEndpoints();
+        this.rpcProbes.set(url, await this.probeRpcEndpoint(url));
+        this.renderRpcEndpoints();
     }
 
     /**
