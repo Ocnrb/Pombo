@@ -1394,8 +1394,8 @@ class SettingsUI {
         const label = ok === null ? 'Not checked' : (ok ? 'OK' : 'Not responding');
         const labelColor = ok === null ? '' : (ok ? 'text-green-400' : 'text-red-400');
         const key = this.graphAPI.isUsingDefaultKey()
-            ? '<span class="text-white/30 ml-2">Using default key (rate limited)</span>'
-            : '<span class="text-white/30 ml-2">Using your own key</span>';
+            ? '<span class="align-middle text-white/30 ml-2">Using default key (rate limited)</span>'
+            : '<span class="align-middle text-white/30 ml-2">Using your own key</span>';
 
         this.elements.graphApiStatus.innerHTML =
             `<span class="inline-block w-2 h-2 rounded-full ${dot} mr-1.5 align-middle"></span>` +
@@ -2132,7 +2132,7 @@ class SettingsUI {
             html = dot('bg-green-500', 'Connected', 'text-green-400');
         }
         const count = selected.length && !this.rpcNotice && !this.rpcTesting
-            ? `<span class="text-white/30 ml-2">${working.length}/${selected.length}</span>`
+            ? `<span class="align-middle text-white/30 ml-2">${working.length}/${selected.length}</span>`
             : '';
         statusEl.innerHTML = html + count;
 
