@@ -29,8 +29,14 @@ class MockSigningKey {
     }
 }
 
+// keccak256 and computeAddress stay real: the cache's soundness rests on the
+// address deriving from the key, so a stub of that would test nothing.
+const { ethers: realEthers } = await import('ethers');
+
 globalThis.ethers = {
     SigningKey: MockSigningKey,
+    keccak256: realEthers.keccak256,
+    computeAddress: realEthers.computeAddress,
     getBytes: vi.fn().mockImplementation((hex) => {
         // Return 65 bytes for shared secret (uncompressed point)
         const bytes = new Uint8Array(65);
@@ -38,6 +44,21 @@ globalThis.ethers = {
         return bytes;
     })
 };
+
+const wallet = (seed) => {
+    const privateKey = '0x' + seed.repeat(32);
+    const signing = new realEthers.SigningKey(privateKey);
+    return {
+        privateKey,
+        publicKey: signing.compressedPublicKey,
+        address: realEthers.computeAddress(signing.compressedPublicKey),
+    };
+};
+
+const ME = wallet('11');
+const OTHER_ME = wallet('22');
+const PEER_A = wallet('33');
+const PEER_B = wallet('44');
 
 // Mock crypto.subtle for HKDF + AES-GCM
 const mockAesKey = { type: 'secret', algorithm: { name: 'AES-GCM' } };
@@ -143,35 +164,72 @@ describe('DMCrypto', () => {
     // ========================================
     describe('getSharedKey()', () => {
         it('should derive and cache key on first call', async () => {
-            const key = await dmCrypto.getSharedKey('0xmykey', '0xPeer', '0x02peerkey');
+            const key = await dmCrypto.getSharedKey(ME.privateKey, PEER_A.address, PEER_A.publicKey);
             expect(key).toBe(mockAesKey);
-            expect(dmCrypto.sharedKeys.has('0xpeer')).toBe(true);
+            expect(dmCrypto.sharedKeys.has(PEER_A.address.toLowerCase())).toBe(true);
         });
 
         it('should return cached key on second call', async () => {
-            await dmCrypto.getSharedKey('0xmykey', '0xPeer', '0x02peerkey');
+            await dmCrypto.getSharedKey(ME.privateKey, PEER_A.address, PEER_A.publicKey);
             vi.clearAllMocks();
 
-            const key = await dmCrypto.getSharedKey('0xmykey', '0xPeer', '0x02peerkey');
+            const key = await dmCrypto.getSharedKey(ME.privateKey, PEER_A.address, PEER_A.publicKey);
             expect(key).toBe(mockAesKey);
             // Should not call deriveKey again
             expect(crypto.subtle.deriveKey).not.toHaveBeenCalled();
         });
 
         it('should normalize address to lowercase for cache', async () => {
-            await dmCrypto.getSharedKey('0xmykey', '0xABCDEF', '0x02peerkey');
-            expect(dmCrypto.sharedKeys.has('0xabcdef')).toBe(true);
+            await dmCrypto.getSharedKey(ME.privateKey, PEER_A.address.toUpperCase().replace('0X', '0x'), PEER_A.publicKey);
+            expect(dmCrypto.sharedKeys.has(PEER_A.address.toLowerCase())).toBe(true);
         });
 
         it('should cache different keys for different peers', async () => {
             const mockKey2 = { type: 'secret', peer: 2 };
             crypto.subtle.deriveKey.mockResolvedValueOnce(mockAesKey);
-            await dmCrypto.getSharedKey('0xmykey', '0xPeerA', '0x02peerA');
+            await dmCrypto.getSharedKey(ME.privateKey, PEER_A.address, PEER_A.publicKey);
 
             crypto.subtle.deriveKey.mockResolvedValueOnce(mockKey2);
-            await dmCrypto.getSharedKey('0xmykey', '0xPeerB', '0x02peerB');
+            await dmCrypto.getSharedKey(ME.privateKey, PEER_B.address, PEER_B.publicKey);
 
             expect(dmCrypto.sharedKeys.size).toBe(2);
+        });
+
+        it('rejects a public key that is not the peer address', async () => {
+            await expect(
+                dmCrypto.getSharedKey(ME.privateKey, PEER_A.address, PEER_B.publicKey)
+            ).rejects.toThrow(/does not belong/);
+            expect(dmCrypto.sharedKeys.size).toBe(0);
+        });
+
+        it('rejects a malformed public key', async () => {
+            await expect(
+                dmCrypto.getSharedKey(ME.privateKey, PEER_A.address, '0x02notakey')
+            ).rejects.toThrow(/malformed public key/);
+            expect(dmCrypto.sharedKeys.size).toBe(0);
+        });
+
+        it('drops keys derived for a different identity', async () => {
+            await dmCrypto.getSharedKey(ME.privateKey, PEER_A.address, PEER_A.publicKey);
+            dmCrypto.peerPublicKeys.set(PEER_A.address.toLowerCase(), PEER_A.publicKey);
+            expect(dmCrypto.sharedKeys.size).toBe(1);
+
+            const other = { type: 'secret', identity: 2 };
+            crypto.subtle.deriveKey.mockResolvedValueOnce(other);
+            const key = await dmCrypto.getSharedKey(OTHER_ME.privateKey, PEER_A.address, PEER_A.publicKey);
+
+            expect(key).toBe(other);
+            expect(dmCrypto.sharedKeys.size).toBe(1);
+            expect(dmCrypto.sharedKeys.get(PEER_A.address.toLowerCase())).toBe(other);
+            expect(dmCrypto.peerPublicKeys.size).toBe(0);
+        });
+
+        it('keeps the cache while the identity is the same', async () => {
+            await dmCrypto.getSharedKey(ME.privateKey, PEER_A.address, PEER_A.publicKey);
+            vi.clearAllMocks();
+
+            await dmCrypto.getSharedKey(ME.privateKey, PEER_A.address, PEER_A.publicKey);
+            expect(crypto.subtle.deriveKey).not.toHaveBeenCalled();
         });
     });
 
@@ -293,10 +351,11 @@ describe('DMCrypto', () => {
     // ========================================
     describe('clear()', () => {
         it('should clear sharedKeys cache', async () => {
-            await dmCrypto.getSharedKey('0xmykey', '0xPeer', '0x02pk');
+            await dmCrypto.getSharedKey(ME.privateKey, PEER_A.address, PEER_A.publicKey);
             expect(dmCrypto.sharedKeys.size).toBe(1);
             dmCrypto.clear();
             expect(dmCrypto.sharedKeys.size).toBe(0);
+            expect(dmCrypto.identityTag).toBeNull();
         });
 
         it('should clear peerPublicKeys cache', () => {
