@@ -27,6 +27,9 @@ class DMCrypto {
         this.sharedKeys = new Map();
         // Cache: peerAddress (lowercase) → compressedPublicKey hex
         this.peerPublicKeys = new Map();
+        // Which identity the cached keys were derived for. A shared key is a
+        // function of BOTH sides, so the peer's address alone does not name it.
+        this.identityTag = null;
     }
 
     /**
@@ -83,14 +86,42 @@ class DMCrypto {
      */
     async getSharedKey(myPrivateKeyHex, peerAddress, peerPublicKeyHex) {
         const normalized = peerAddress.toLowerCase();
+        this.useIdentity(myPrivateKeyHex);
 
         if (this.sharedKeys.has(normalized)) {
             return this.sharedKeys.get(normalized);
         }
 
+        // Addressing the cache by peer address is only sound while the address
+        // IS the key, so nothing else may reach the cache: an Ethereum address
+        // has exactly one public key, and a caller handing over a different one
+        // is either confused or feeding a forged inbox record.
+        let derivedAddress;
+        try {
+            derivedAddress = ethers.computeAddress(peerPublicKeyHex).toLowerCase();
+        } catch {
+            throw new Error(`DM: malformed public key for ${normalized}`);
+        }
+        if (derivedAddress !== normalized) {
+            throw new Error(`DM: public key does not belong to ${normalized}`);
+        }
+
         const key = await this.deriveSharedKey(myPrivateKeyHex, peerPublicKeyHex);
         this.sharedKeys.set(normalized, key);
         return key;
+    }
+
+    /**
+     * Bind the caches to the identity in use, dropping them when it changes.
+     * Keyed by a hash so the private key is not held here as well.
+     * @param {string} myPrivateKeyHex - My private key
+     */
+    useIdentity(myPrivateKeyHex) {
+        const tag = ethers.keccak256(myPrivateKeyHex);
+        if (this.identityTag === tag) return;
+        this.sharedKeys.clear();
+        this.peerPublicKeys.clear();
+        this.identityTag = tag;
     }
 
     /**
@@ -525,6 +556,7 @@ class DMCrypto {
     clear() {
         this.sharedKeys.clear();
         this.peerPublicKeys.clear();
+        this.identityTag = null;
     }
 
     // -- Helpers --
