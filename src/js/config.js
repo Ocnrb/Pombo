@@ -11,7 +11,6 @@ export const RPC_PRESETS = {
         urls: [
             'https://polygon.drpc.org',           // Very reliable, good CORS
             'https://polygon-bor-rpc.publicnode.com', // Reliable, good CORS
-            'https://rpc.ankr.com/polygon',       // Reliable, may throttle heavy use
             'https://polygon.meowrpc.com',        // Good alternative
             'https://polygon.gateway.tenderly.co', // Good alternative
             'https://polygon.llamarpc.com',       // Sometimes has DNS issues
@@ -25,10 +24,6 @@ export const RPC_PRESETS = {
     'publicnode': {
         name: 'PublicNode',
         urls: ['https://polygon-bor-rpc.publicnode.com']
-    },
-    'ankr': {
-        name: 'Ankr',
-        urls: ['https://rpc.ankr.com/polygon']
     },
     'meowrpc': {
         name: 'Meow RPC',
@@ -64,7 +59,6 @@ export const CONFIG = {
         rpcEndpoints: [
             'https://polygon.drpc.org',
             'https://polygon-bor-rpc.publicnode.com',
-            'https://rpc.ankr.com/polygon',
             'https://polygon.meowrpc.com',
             'https://polygon.gateway.tenderly.co',
             'https://polygon.llamarpc.com',
