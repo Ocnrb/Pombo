@@ -26,6 +26,7 @@ import { channelImageManager } from './channelImageManager.js';
 import { channelLatestMessageManager } from './channelLatestMessageManager.js';
 import { shouldRepublish } from './ttlRepublish.js';
 import { epochKeyManager } from './epochKeyManager.js';
+import { PresenceTracker } from './channels/PresenceTracker.js';
 
 class ChannelManager {
     constructor() {
@@ -57,10 +58,7 @@ class ChannelManager {
         this.REACTION_DEBOUNCE_MS = CONFIG.channels.reactionDebounceMs;
         
         // Online presence tracking
-        this.onlineUsers = new Map(); // streamId -> Map(userId -> {lastActive, nickname, address})
-        this.presenceInterval = null;
-        this.ONLINE_TIMEOUT = CONFIG.channels.onlineTimeoutMs;
-        this.onlineUsersHandlers = [];
+        this.presence = new PresenceTracker(this);
         
         this.MAX_RETRIES = CONFIG.channels.maxRetries;
         this.RETRY_DELAY = CONFIG.channels.retryDelayMs;
@@ -3224,173 +3222,23 @@ class ChannelManager {
     }
 
     // ==================== Presence Tracking ====================
+    // Lives in channels/PresenceTracker.js; the manager keeps the entry
+    // points its callers already use.
 
-    /**
-     * Register handler for online users updates
-     * @param {Function} handler - Callback function
-     */
-    onOnlineUsersChange(handler) {
-        this.onlineUsersHandlers.push(handler);
-    }
+    get onlineUsers() { return this.presence.onlineUsers; }
+    get ONLINE_TIMEOUT() { return this.presence.ONLINE_TIMEOUT; }
+    get onlineUsersHandlers() { return this.presence.onlineUsersHandlers; }
+    set onlineUsersHandlers(handlers) { this.presence.onlineUsersHandlers = handlers; }
+    get presenceInterval() { return this.presence.presenceInterval; }
+    set presenceInterval(interval) { this.presence.presenceInterval = interval; }
 
-    /**
-     * Notify online users handlers
-     * @param {string} streamId - Stream ID
-     */
-    notifyOnlineUsersChange(streamId) {
-        const users = this.getOnlineUsers(streamId);
-        this.onlineUsersHandlers.forEach(handler => {
-            try {
-                handler(streamId, users);
-            } catch (e) {
-                Logger.error('Online users handler error:', e);
-            }
-        });
-    }
-
-    /**
-     * Get online users for a channel
-     * @param {string} streamId - Stream ID
-     * @returns {Array} - Array of online users
-     */
-    getOnlineUsers(streamId) {
-        const users = this.onlineUsers.get(streamId);
-        if (!users) return [];
-        
-        const now = Date.now();
-        const onlineList = [];
-        
-        for (const [userId, data] of users.entries()) {
-            if (now - data.lastActive < this.ONLINE_TIMEOUT) {
-                onlineList.push({
-                    id: userId,
-                    nickname: data.nickname,
-                    address: data.address,
-                    lastActive: data.lastActive
-                });
-            }
-        }
-        
-        return onlineList;
-    }
-
-    /**
-     * Update user presence
-     * @param {string} streamId - Stream ID
-     * @param {Object} presenceData - Presence data
-     */
-    handlePresenceMessage(streamId, presenceData) {
-        if (!this.onlineUsers.has(streamId)) {
-            this.onlineUsers.set(streamId, new Map());
-        }
-        
-        // Use account from Streamr SDK (cryptographically guaranteed) over self-reported userId
-        const userId = presenceData.account || presenceData.userId;
-        if (!userId) return;
-
-        const users = this.onlineUsers.get(streamId);
-        users.set(userId, {
-            lastActive: presenceData.lastActive || Date.now(),
-            nickname: presenceData.nickname || null,
-            address: userId
-        });
-        
-        this.notifyOnlineUsersChange(streamId);
-    }
-
-    /**
-     * Publish presence to channel's EPHEMERAL stream
-     * Presence goes to ephemeralStreamId (not stored)
-     * @param {string} messageStreamId - Message Stream ID (channel key)
-     */
-    async publishPresence(messageStreamId) {
-        const channel = this.channels.get(messageStreamId);
-        if (!channel) return;
-        
-        // Use ephemeral stream for presence (not stored)
-        const ephemeralStreamId = channel.ephemeralStreamId || deriveEphemeralId(messageStreamId);
-        
-        // DM channels: sealed sender, minimal payload (identity travels inside)
-        if (channel.type === 'dm' && channel.peerAddress) {
-            try {
-                await dmManager.sealAndPublish(ephemeralStreamId, channel.peerAddress, {
-                    type: 'presence',
-                    nickname: identityManager.getUsername?.() || null,
-                    lastActive: Date.now()
-                }, STREAM_CONFIG.EPHEMERAL_STREAM.CONTROL);
-            } catch (e) {
-                Logger.warn('Failed to publish DM presence:', e.message);
-            }
-            return;
-        }
-        
-        // Non-DM channels: no self-reported userId/address (account from SDK provides identity)
-        const myNickname = identityManager.getUsername?.() || null;
-        
-        const presenceData = {
-            type: 'presence',
-            nickname: myNickname,
-            lastActive: Date.now()
-        };
-        
-        try {
-            // Publish to ephemeral stream (partition 0 = control)
-            await streamrController.publishControl(ephemeralStreamId, presenceData, channel.password);
-        } catch (e) {
-            // Waiting for the epoch key is an expected state for a member who
-            // just joined a gated channel (fail-closed publish, §7.9) — the
-            // heartbeat retries every beat anyway, so keep that case quiet.
-            if (e.message?.includes('No epoch key')) {
-                Logger.debug('Presence skipped (waiting for epoch key):', channel.messageStreamId?.slice(-20));
-            } else {
-                Logger.warn('Failed to publish presence:', e.message);
-            }
-        }
-    }
-
-    /**
-     * Start presence publishing for a channel
-     * @param {string} streamId - Stream ID
-     */
-    startPresenceTracking(streamId) {
-        // Publish presence immediately
-        this.publishPresence(streamId);
-        
-        // Then periodically
-        if (this.presenceInterval) {
-            clearInterval(this.presenceInterval);
-        }
-        
-        this.presenceInterval = setInterval(() => {
-            if (this.currentChannel === streamId) {
-                this.publishPresence(streamId);
-                
-                // Clean up old users
-                const users = this.onlineUsers.get(streamId);
-                if (users) {
-                    const now = Date.now();
-                    for (const [userId, data] of users.entries()) {
-                        if (now - data.lastActive > this.ONLINE_TIMEOUT) {
-                            users.delete(userId);
-                        }
-                    }
-                    this.notifyOnlineUsersChange(streamId);
-                }
-            }
-        }, 5000); // Every 5 seconds
-    }
-
-    /**
-     * Stop presence tracking
-     */
-    stopPresenceTracking() {
-        if (this.presenceInterval) {
-            clearInterval(this.presenceInterval);
-            this.presenceInterval = null;
-        }
-        // Tear down DM-2 ephemeral when leaving any channel
-        dmManager.unsubscribeDMEphemeral();
-    }
+    onOnlineUsersChange(handler) { return this.presence.onOnlineUsersChange(handler); }
+    notifyOnlineUsersChange(streamId) { return this.presence.notifyOnlineUsersChange(streamId); }
+    getOnlineUsers(streamId) { return this.presence.getOnlineUsers(streamId); }
+    handlePresenceMessage(streamId, presenceData) { return this.presence.handlePresenceMessage(streamId, presenceData); }
+    publishPresence(messageStreamId) { return this.presence.publishPresence(messageStreamId); }
+    startPresenceTracking(streamId) { return this.presence.startPresenceTracking(streamId); }
+    stopPresenceTracking() { return this.presence.stopPresenceTracking(); }
 
     // ==================== End Presence Tracking ====================
 
