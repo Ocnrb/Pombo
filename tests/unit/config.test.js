@@ -212,11 +212,23 @@ describe('config', () => {
         beforeEach(() => localStorage.removeItem(STORAGE_KEY));
         afterEach(() => localStorage.removeItem(STORAGE_KEY));
 
-        it('should offer a row per endpoint plus the custom one', () => {
+        it('should offer a row per endpoint, with no custom row until one exists', () => {
             const sel = loadRpcSelection();
-            expect(sel.rows.map(r => r.key)).toEqual(
-                RPC_ENDPOINTS.map(e => e.key).concat(RPC_CUSTOM_KEY)
-            );
+            expect(sel.rows.map(r => r.key)).toEqual(RPC_ENDPOINTS.map(e => e.key));
+        });
+
+        it('should carry a custom row only while a url stands behind it', () => {
+            saveRpcSelection({
+                rows: [{ key: 'drpc', on: true }, { key: RPC_CUSTOM_KEY, on: true }],
+                customUrl: 'https://my-own-node.example'
+            });
+            expect(loadRpcSelection().rows.some(r => r.key === RPC_CUSTOM_KEY)).toBe(true);
+
+            saveRpcSelection({
+                rows: [{ key: 'drpc', on: true }, { key: RPC_CUSTOM_KEY, on: true }],
+                customUrl: ''
+            });
+            expect(loadRpcSelection().rows.some(r => r.key === RPC_CUSTOM_KEY)).toBe(false);
         });
 
         it('should keep the saved order and put rows missing from the save last', () => {

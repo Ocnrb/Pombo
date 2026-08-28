@@ -418,14 +418,20 @@ function normalizeRpcSelection(sel) {
     for (const e of RPC_ENDPOINTS) {
         if (!placed.has(e.key)) rows.push({ key: e.key, on: false });
     }
-    if (!placed.has(RPC_CUSTOM_KEY)) rows.push({ key: RPC_CUSTOM_KEY, on: false });
+
+    // The custom endpoint is a row only once one exists: an empty row that can
+    // never be ticked is furniture, not a choice.
+    const custom = rows.filter(r => r.key === RPC_CUSTOM_KEY);
+    const withoutCustom = rows.filter(r => r.key !== RPC_CUSTOM_KEY);
+    const ordered = customUrl ? rows : withoutCustom;
+    if (customUrl && custom.length === 0) ordered.push({ key: RPC_CUSTOM_KEY, on: true });
 
     // An empty or all-off selection leaves the app with nowhere to go, so it
     // reads as the default rather than as a choice.
-    if (!rows.some(r => r.on && (r.key !== RPC_CUSTOM_KEY || customUrl))) {
-        for (const r of rows) r.on = RPC_DEFAULT_ENABLED.includes(r.key);
+    if (!ordered.some(r => r.on)) {
+        for (const r of ordered) r.on = RPC_DEFAULT_ENABLED.includes(r.key);
     }
-    return { rows, customUrl };
+    return { rows: ordered, customUrl };
 }
 
 /** @param {{rows: Array<{key: string, on: boolean}>, customUrl: string}} sel */

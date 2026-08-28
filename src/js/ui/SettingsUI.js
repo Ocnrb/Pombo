@@ -752,6 +752,7 @@ class SettingsUI {
             this.elements.settingsGraphApiKey.addEventListener('change', async (e) => {
                 const newKey = e.target.value.trim();
                 await this.graphAPI.setApiKey(newKey || null);
+                await this.graphAPI.testConnection();
                 await this.updateGraphApiStatusDisplay();
                 this.showNotification('Graph API key updated!', 'success');
             });
@@ -1256,8 +1257,9 @@ class SettingsUI {
             this.runDiagnosis();
         }
 
-        // Probe the RPC endpoints when the API tab is shown, so an endpoint
-        // that stopped answering is visible without anyone asking.
+        // Probe the endpoints already in use when the API tab is shown, so one
+        // that stopped answering shows up without anyone asking. The ones not
+        // picked are left alone until Test all.
         if (tabName === 'api') {
             this.testRpcEndpoints();
         }
@@ -1383,20 +1385,21 @@ class SettingsUI {
      */
     async updateGraphApiStatusDisplay() {
         if (!this.elements.graphApiStatus) return;
-        
-        const isDefault = this.graphAPI.isUsingDefaultKey();
-        
-        if (isDefault) {
-            this.elements.graphApiStatus.innerHTML = '<span class="text-yellow-500 inline-flex items-center gap-1"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>Using default key (rate limited)</span>';
-        } else {
-            this.elements.graphApiStatus.innerHTML = '<span class="text-white/30">Testing connection...</span>';
-            const connected = await this.graphAPI.testConnection();
-            if (connected) {
-                this.elements.graphApiStatus.innerHTML = '<span class="text-green-500 inline-flex items-center gap-1"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Custom key active</span>';
-            } else {
-                this.elements.graphApiStatus.innerHTML = '<span class="text-red-500 inline-flex items-center gap-1"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>Invalid key or connection failed</span>';
-            }
-        }
+
+        // Reports the outcome of the last query the app actually made, so
+        // opening Settings costs nothing. A key the user types is validated on
+        // the spot, which is the one moment a call of our own is warranted.
+        const ok = this.graphAPI.lastQueryOk;
+        const dot = ok === null ? 'bg-white/20' : (ok ? 'bg-green-500' : 'bg-red-500');
+        const label = ok === null ? 'Not checked' : (ok ? 'OK' : 'Not responding');
+        const labelColor = ok === null ? '' : (ok ? 'text-green-400' : 'text-red-400');
+        const key = this.graphAPI.isUsingDefaultKey()
+            ? '<span class="text-white/30 ml-2">Using default key (rate limited)</span>'
+            : '<span class="text-white/30 ml-2">Using your own key</span>';
+
+        this.elements.graphApiStatus.innerHTML =
+            `<span class="inline-block w-2 h-2 rounded-full ${dot} mr-1.5 align-middle"></span>` +
+            `<span class="align-middle ${labelColor}">${label}</span>` + key;
     }
 
     /**
@@ -1868,8 +1871,8 @@ class SettingsUI {
     // ========================================
 
     /**
-     * Wire up the endpoint list. The rows themselves are rendered every time
-     * the panel is shown, so the handlers are delegated to the container.
+     * Wire up the endpoint card. Rows are redrawn whenever the panel is shown,
+     * so their handlers are delegated to the container.
      */
     initRpcSettings() {
         const list = document.getElementById('rpc-endpoint-list');
@@ -1880,8 +1883,7 @@ class SettingsUI {
         this.rpcProbes = new Map();
 
         // Ticking a box repaints only its own row. Redrawing the list here
-        // would drop the click that follows and take the focus out of the
-        // custom URL field mid-word.
+        // would drop the click that follows.
         list.addEventListener('change', (e) => {
             const row = e.target.closest('[data-rpc-key]');
             if (!row || !e.target.classList.contains('rpc-row-check')) return;
@@ -1891,13 +1893,16 @@ class SettingsUI {
             this.updateRpcApplyState();
         });
 
-        list.addEventListener('input', (e) => {
-            if (!e.target.classList.contains('rpc-row-url')) return;
-            this.rpcDraft.customUrl = e.target.value.trim();
-            this.updateRpcApplyState();
-        });
-
         list.addEventListener('click', (e) => {
+            const remove = e.target.closest('.rpc-row-remove');
+            if (remove) {
+                this.rpcDraft = {
+                    rows: this.rpcDraft.rows.filter(r => r.key !== RPC_CUSTOM_KEY),
+                    customUrl: ''
+                };
+                this.renderRpcEndpoints();
+                return;
+            }
             const btn = e.target.closest('.rpc-row-move');
             if (!btn) return;
             const key = btn.closest('[data-rpc-key]')?.dataset.rpcKey;
@@ -1910,18 +1915,75 @@ class SettingsUI {
         });
 
         document.getElementById('test-rpc-btn')
-            ?.addEventListener('click', () => this.testRpcEndpoints());
+            ?.addEventListener('click', () => this.testRpcEndpoints({ all: true }));
         document.getElementById('apply-rpc-btn')
             ?.addEventListener('click', () => this.applyRpcSelection());
 
+        this.initRpcCards();
+        this.initRpcAddForm();
         this.renderRpcEndpoints();
     }
 
+    /** Both cards open only when asked; the summary line is what is always on. */
+    initRpcCards() {
+        const cards = [
+            ['graph-card-toggle', 'graph-card-body', 'graph-card-chevron'],
+            ['rpc-card-toggle', 'rpc-card-body', 'rpc-card-chevron'],
+            ['rpc-card-expand', 'rpc-card-body', 'rpc-card-chevron']
+        ];
+        for (const [toggleId, bodyId, chevronId] of cards) {
+            document.getElementById(toggleId)?.addEventListener('click', () => {
+                const body = document.getElementById(bodyId);
+                const open = body?.classList.toggle('hidden') === false;
+                document.getElementById(chevronId)?.classList.toggle('rotate-180', open);
+            });
+        }
+    }
+
+    /** Adding a custom endpoint, the same shape as adding a storage node. */
+    initRpcAddForm() {
+        const toggle = document.getElementById('rpc-add-toggle-btn');
+        const form = document.getElementById('rpc-add-form');
+        const input = document.getElementById('rpc-add-url');
+        const error = document.getElementById('rpc-add-error');
+        if (!toggle || !form || !input) return;
+
+        const close = () => {
+            form.classList.add('hidden');
+            toggle.classList.remove('hidden');
+            input.value = '';
+            error?.classList.add('hidden');
+        };
+
+        toggle.addEventListener('click', () => {
+            form.classList.remove('hidden');
+            toggle.classList.add('hidden');
+            input.focus();
+        });
+        document.getElementById('rpc-add-cancel')?.addEventListener('click', close);
+        document.getElementById('rpc-add-confirm')?.addEventListener('click', () => {
+            const url = input.value.trim();
+            if (!/^https:\/\/\S+$/.test(url)) {
+                if (error) {
+                    error.textContent = 'Enter an https:// URL';
+                    error.classList.remove('hidden');
+                }
+                return;
+            }
+            this.rpcDraft.customUrl = url;
+            this.rpcDraft.rows = this.rpcDraft.rows
+                .filter(r => r.key !== RPC_CUSTOM_KEY)
+                .concat({ key: RPC_CUSTOM_KEY, on: true });
+            close();
+            this.renderRpcEndpoints();
+        });
+    }
+
     /**
-     * Draw one row per endpoint: the checkbox that puts it in the list, its
-     * position in that list, and what the last probe found. A dead endpoint
-     * has to be readable without pressing anything, which is why the probe
-     * result lives on the row and not in a count at the bottom.
+     * One line per endpoint: the checkbox that puts it in the list, its place
+     * in that list, and what the last probe found. The verdict lives on the row
+     * rather than in a count at the bottom, because a dead endpoint has to be
+     * readable at a glance.
      */
     renderRpcEndpoints() {
         const list = document.getElementById('rpc-endpoint-list');
@@ -1933,27 +1995,30 @@ class SettingsUI {
         list.innerHTML = this.rpcDraft.rows.map((row, i) => {
             const isCustom = row.key === RPC_CUSTOM_KEY;
             const endpoint = byKey.get(row.key);
-            const name = isCustom ? 'Custom URL' : (endpoint?.name || row.key);
+            const name = isCustom ? 'Custom' : (endpoint?.name || row.key);
             const url = isCustom ? this.rpcDraft.customUrl : endpoint?.url;
             const probe = this.rpcProbes?.get(url || row.key);
+            const host = (url || '').replace(/^https:\/\//, '');
 
-            const detail = isCustom
-                ? `<input type="url" class="rpc-row-url w-full bg-transparent border-0 p-0 mt-0.5 text-[11px] text-white/50 focus:outline-none focus:text-white/80 placeholder:text-white/20"
-                        placeholder="https://your-rpc-endpoint.com" value="${_escapeAttr(this.rpcDraft.customUrl || '')}" />`
-                : `<div class="text-[11px] text-white/30 truncate">${_escapeHtml((url || '').replace(/^https:\/\//, ''))}</div>`;
+            const remove = isCustom
+                ? `<button class="rpc-row-remove shrink-0 text-white/30 hover:text-red-400/90 px-1 rounded transition" title="Remove">
+                       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3"/></svg>
+                   </button>`
+                : '';
 
             return `
-                <div data-rpc-key="${row.key}" class="flex items-center gap-3 px-3 py-2 rounded-xl bg-white/5 border ${row.on ? 'border-white/20' : 'border-white/5'} transition">
+                <div data-rpc-key="${row.key}" class="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-white/[0.03] border ${row.on ? 'border-white/15' : 'border-white/5'} transition">
                     <input type="checkbox" class="rpc-row-check w-3.5 h-3.5 accent-white rounded shrink-0" ${row.on ? 'checked' : ''} />
-                    <div class="min-w-0 flex-1">
-                        <div class="rpc-row-name text-sm ${row.on ? 'text-white' : 'text-white/50'}">${_escapeHtml(name)}</div>
-                        ${detail}
+                    <div class="min-w-0 flex-1 flex items-baseline gap-2">
+                        <span class="rpc-row-name text-sm ${row.on ? 'text-white' : 'text-white/50'}">${_escapeHtml(name)}</span>
+                        <span class="text-[11px] text-white/25 truncate">${_escapeHtml(host)}</span>
                     </div>
-                    <div class="text-[11px] shrink-0 whitespace-nowrap">${this.renderRpcProbe(probe)}</div>
+                    <span class="text-[11px] shrink-0 whitespace-nowrap">${this.renderRpcProbe(probe)}</span>
+                    ${remove}
                     <div class="flex flex-col shrink-0 -my-1">
-                        <button class="rpc-row-move text-white/25 hover:text-white/70 transition leading-none px-1 disabled:opacity-20 disabled:hover:text-white/25"
+                        <button class="rpc-row-move text-white/25 hover:text-white/70 transition leading-none px-1 disabled:opacity-20"
                                 data-dir="up" ${i === 0 ? 'disabled' : ''} aria-label="Move up">&#9650;</button>
-                        <button class="rpc-row-move text-white/25 hover:text-white/70 transition leading-none px-1 disabled:opacity-20 disabled:hover:text-white/25"
+                        <button class="rpc-row-move text-white/25 hover:text-white/70 transition leading-none px-1 disabled:opacity-20"
                                 data-dir="down" ${i === last ? 'disabled' : ''} aria-label="Move down">&#9660;</button>
                     </div>
                 </div>`;
@@ -1964,7 +2029,7 @@ class SettingsUI {
 
     /** Reflect one row's checked state without touching the rest of the list. */
     paintRpcRow(row, on) {
-        row.classList.toggle('border-white/20', on);
+        row.classList.toggle('border-white/15', on);
         row.classList.toggle('border-white/5', !on);
         const label = row.querySelector('.rpc-row-name');
         label?.classList.toggle('text-white', on);
@@ -1994,30 +2059,58 @@ class SettingsUI {
             : null;
     }
 
-    /** Apply only offers itself when the draft differs and can actually be used. */
+    /** Apply only offers itself when the draft differs and can be used. */
     updateRpcApplyState() {
         const applyBtn = document.getElementById('apply-rpc-btn');
         if (!applyBtn || !this.rpcDraft) return;
-        const dirty = JSON.stringify(this.rpcDraft) !== this.rpcSaved;
         const problem = this.rpcDraftProblem();
-        applyBtn.classList.toggle('hidden', !dirty);
+        applyBtn.classList.toggle('hidden', JSON.stringify(this.rpcDraft) === this.rpcSaved);
         applyBtn.disabled = !!problem;
         applyBtn.classList.toggle('opacity-40', !!problem);
         applyBtn.classList.toggle('cursor-not-allowed', !!problem);
-
-        if (dirty) {
-            const statusEl = document.getElementById('rpc-status');
-            if (statusEl) {
-                statusEl.innerHTML = problem
-                    ? `<span class="inline-block w-2 h-2 rounded-full bg-red-500 mr-1.5 align-middle"></span><span class="align-middle text-red-400">${problem}</span>`
-                    : '<span class="inline-block w-2 h-2 rounded-full bg-yellow-400 mr-1.5 align-middle"></span><span class="align-middle text-yellow-400">Not applied yet</span>';
-            }
-        }
+        this.updateRpcSummary();
     }
 
     /**
-     * Persist the draft and reconnect the Streamr client on the new endpoints.
+     * The line under the card title, which is all there is to read while the
+     * list is closed: whether the app can reach Polygon, and how many of the
+     * chosen endpoints answered.
      */
+    updateRpcSummary() {
+        const statusEl = document.getElementById('rpc-status');
+        if (!statusEl || !this.rpcDraft) return;
+
+        const dot = (color, text, textColor) =>
+            `<span class="inline-block w-2 h-2 rounded-full ${color} mr-1.5 align-middle"></span>` +
+            `<span class="align-middle ${textColor}">${text}</span>`;
+
+        const selected = rpcSelectionUrls(this.rpcDraft);
+        const problem = this.rpcDraftProblem();
+        const dirty = JSON.stringify(this.rpcDraft) !== this.rpcSaved;
+        const tested = selected.filter(u => this.rpcProbes?.has(u));
+        const working = tested.filter(u => this.rpcProbes.get(u)?.state === 'ok');
+
+        let html;
+        if (this.rpcTesting) {
+            html = dot('bg-yellow-400 animate-pulse', 'Testing...', 'text-yellow-400');
+        } else if (problem) {
+            html = dot('bg-red-500', problem, 'text-red-400');
+        } else if (dirty) {
+            html = dot('bg-yellow-400', 'Not applied yet', 'text-yellow-400');
+        } else if (tested.length === 0) {
+            html = dot('bg-white/20', 'Not tested', '');
+        } else if (working.length === 0) {
+            html = dot('bg-red-500', 'Not connected', 'text-red-400');
+        } else {
+            html = dot('bg-green-500', 'Connected', 'text-green-400');
+        }
+        const count = selected.length
+            ? `<span class="text-white/30 ml-2">${working.length}/${selected.length}</span>`
+            : '';
+        statusEl.innerHTML = html + (this.rpcTesting || problem ? '' : count);
+    }
+
+    /** Persist the draft and reconnect the Streamr client on the new endpoints. */
     async applyRpcSelection() {
         if (!this.rpcDraft || this.rpcDraftProblem()) return;
 
@@ -2042,60 +2135,48 @@ class SettingsUI {
     }
 
     /**
-     * Probe every row at once, checked or not: an endpoint that died is worth
-     * seeing before it is picked, and one that is picked is worth seeing die.
-     * Serially this would be one timeout after another.
+     * Probe endpoints, all at once rather than one timeout after another.
+     *
+     * By default only the checked ones, which are the endpoints the app already
+     * talks to: opening Settings must not hand your address to a provider you
+     * did not choose. Test all is the explicit ask that covers the rest.
      */
-    async testRpcEndpoints() {
+    async testRpcEndpoints({ all = false } = {}) {
         const testBtn = document.getElementById('test-rpc-btn');
-        const statusEl = document.getElementById('rpc-status');
-        if (!this.rpcDraft) return;
+        if (!this.rpcDraft || this.rpcTesting) return;
 
         const byKey = new Map(RPC_ENDPOINTS.map(e => [e.key, e.url]));
         const urls = [];
         for (const row of this.rpcDraft.rows) {
+            if (!all && !row.on) continue;
             const url = row.key === RPC_CUSTOM_KEY ? this.rpcDraft.customUrl : byKey.get(row.key);
             if (url && !urls.includes(url)) urls.push(url);
         }
         if (urls.length === 0) return;
 
+        this.rpcTesting = true;
         if (testBtn) {
             testBtn.disabled = true;
             testBtn.textContent = 'Testing...';
         }
-        this.rpcProbes = new Map(urls.map(u => [u, { state: 'testing' }]));
+        urls.forEach(u => this.rpcProbes.set(u, { state: 'testing' }));
         this.renderRpcEndpoints();
-        if (statusEl) {
-            statusEl.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-yellow-400 mr-1.5 align-middle"></span><span class="align-middle">Testing...</span>';
-        }
 
         const results = await Promise.all(urls.map(url => this.probeRpcEndpoint(url)));
         urls.forEach((url, i) => this.rpcProbes.set(url, results[i]));
-        this.renderRpcEndpoints();
 
+        this.rpcTesting = false;
         if (testBtn) {
             testBtn.disabled = false;
             testBtn.textContent = 'Test all';
         }
-        if (!statusEl) return;
-
-        const selected = rpcSelectionUrls(this.rpcDraft);
-        const dead = selected.filter(u => this.rpcProbes.get(u)?.state !== 'ok');
-        if (JSON.stringify(this.rpcDraft) !== this.rpcSaved) {
-            this.updateRpcApplyState();
-        } else if (dead.length === 0) {
-            statusEl.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-green-500 mr-1.5 align-middle"></span><span class="align-middle text-green-400">Connected</span>';
-        } else if (dead.length < selected.length) {
-            statusEl.innerHTML = `<span class="inline-block w-2 h-2 rounded-full bg-yellow-400 mr-1.5 align-middle"></span><span class="align-middle text-yellow-400">${dead.length} of ${selected.length} not answering</span>`;
-        } else {
-            statusEl.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-red-500 mr-1.5 align-middle"></span><span class="align-middle text-red-400">No selected endpoint answered</span>';
-        }
+        this.renderRpcEndpoints();
     }
 
     /**
-     * One eth_chainId call. The chain is checked rather than assumed, so a
-     * custom URL pointing at the wrong network says so instead of looking fine
-     * until a transaction fails.
+     * One eth_chainId call. The chain is read rather than assumed, so a custom
+     * URL pointing at another network says so instead of looking healthy until
+     * a transaction fails.
      */
     async probeRpcEndpoint(url) {
         const started = performance.now();
@@ -2117,19 +2198,18 @@ class SettingsUI {
     }
 
     /**
-     * Reload the saved selection when Settings opens, dropping an unapplied
-     * draft: the panel should never show a choice the app is not using.
+     * Reload the saved selection when the panel is shown, dropping an unapplied
+     * draft: it should never show a choice the app is not using.
      */
     updateRpcStatusDisplay() {
         if (!document.getElementById('rpc-endpoint-list')) return;
         this.rpcDraft = loadRpcSelection();
         this.rpcSaved = JSON.stringify(this.rpcDraft);
         this.rpcProbes = new Map();
+        this.rpcTesting = false;
+        document.getElementById('rpc-add-form')?.classList.add('hidden');
+        document.getElementById('rpc-add-toggle-btn')?.classList.remove('hidden');
         this.renderRpcEndpoints();
-        const statusEl = document.getElementById('rpc-status');
-        if (statusEl) {
-            statusEl.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-white/20 mr-1.5 align-middle"></span><span class="align-middle">Not tested</span>';
-        }
     }
 
     // === REPAIR INBOX UI ===
