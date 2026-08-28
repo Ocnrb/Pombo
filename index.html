@@ -2478,9 +2478,7 @@
                                         <div class="text-xs font-medium text-white/80 uppercase tracking-wider">Polygon RPC</div>
                                         <div id="rpc-status" class="text-xs text-white/40 mt-1.5"></div>
                                     </button>
-                                    <button id="test-rpc-btn" class="shrink-0 text-xs text-white/60 hover:text-white transition px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10">
-                                        Test all
-                                    </button>
+                                    <span id="rpc-primary" class="shrink-0 text-xs text-white/50"></span>
                                     <button type="button" id="rpc-card-expand" class="shrink-0 p-1">
                                         <svg id="rpc-card-chevron" class="w-4 h-4 text-white/30 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 9l-7 7-7-7"/></svg>
                                     </button>
@@ -2493,26 +2491,22 @@
                                     <!-- One row per endpoint, rendered from the saved selection -->
                                     <div id="rpc-endpoint-list" class="space-y-1.5"></div>
 
-                                    <!-- Add a custom endpoint, the same shape as adding a storage node -->
+                                    <!-- Add a custom endpoint; it is saved when the field is left -->
                                     <div class="mt-3">
                                         <button id="rpc-add-toggle-btn" class="text-xs text-white/60 hover:text-white/90 transition flex items-center gap-1.5">
                                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                                             <span>Add custom endpoint</span>
                                         </button>
-                                        <div id="rpc-add-form" class="hidden mt-3 p-3 bg-white/[0.03] border border-white/5 rounded-xl space-y-3">
+                                        <div id="rpc-add-form" class="hidden mt-3 p-3 bg-white/[0.03] border border-white/5 rounded-xl">
                                             <input id="rpc-add-url" type="url" placeholder="https://your-rpc-endpoint.com" spellcheck="false" autocomplete="off" class="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 font-mono focus:outline-none focus:border-white/30" />
-                                            <p id="rpc-add-error" class="hidden text-[11px] text-red-400"></p>
-                                            <p class="text-xs text-white/25">Any Polygon JSON-RPC endpoint. It is added to the list and used alongside whatever else is checked.</p>
-                                            <div class="flex items-center gap-2 justify-end">
-                                                <button id="rpc-add-cancel" class="text-white/60 hover:text-white/90 px-3 py-1.5 rounded-lg text-xs transition">Cancel</button>
-                                                <button id="rpc-add-confirm" class="bg-[#F6851B] hover:bg-[#F6851B]/90 text-white px-3 py-1.5 rounded-lg text-xs transition">Add</button>
-                                            </div>
+                                            <p id="rpc-add-error" class="hidden text-[11px] text-red-400 mt-2"></p>
+                                            <p class="text-xs text-white/25 mt-2">Any Polygon JSON-RPC endpoint. It joins the list when you leave the field.</p>
                                         </div>
                                     </div>
 
-                                    <div class="flex justify-end mt-3">
-                                        <button id="apply-rpc-btn" class="hidden bg-[#F6851B] hover:bg-[#F6851B]/90 text-white px-3 py-1.5 rounded-lg text-xs transition">
-                                            Apply
+                                    <div class="flex justify-end mt-4">
+                                        <button id="test-rpc-btn" class="text-xs text-white/60 hover:text-white transition px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10">
+                                            Test all
                                         </button>
                                     </div>
                                 </div>
