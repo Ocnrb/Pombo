@@ -46,7 +46,13 @@ class MessageRenderer {
      */
     wrapInlineEmojis(html) {
         const emojiRegex = /([\p{Emoji_Presentation}\p{Extended_Pictographic}][\uFE0F\u200D]?)/gu;
-        return html.replace(emojiRegex, '<span class="inline-emoji">$1</span>');
+        // Runs after linkify, so tags are already in the string: wrapping an
+        // emoji inside one would put a span in the middle of an attribute.
+        return html.replace(/<[^>]*>|[^<]+/g, (chunk) => (
+            chunk.startsWith('<')
+                ? chunk
+                : chunk.replace(emojiRegex, '<span class="inline-emoji">$1</span>')
+        ));
     }
 
     /**
