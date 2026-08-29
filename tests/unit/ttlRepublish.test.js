@@ -34,6 +34,9 @@ vi.mock('../../src/js/streamr.js', () => ({
         publishChannelImage: vi.fn().mockResolvedValue(undefined),
         setStorageDays: vi.fn().mockResolvedValue(true),
         subscribeToKeysStream: vi.fn().mockResolvedValue(undefined),
+        getStreamStorageInfo: vi.fn().mockResolvedValue({ enabled: false, nodes: [], storageDays: null }),
+        addStorageNodeToStream: vi.fn().mockResolvedValue({ success: true, nodeAddress: '0xnode' }),
+        removeStorageFromStream: vi.fn().mockResolvedValue({ success: true }),
         checkPermissions: vi.fn().mockResolvedValue({ canSubscribe: true, canPublish: true, isOwner: false })
     },
     STREAM_CONFIG: {
@@ -680,5 +683,155 @@ describe('channelManager._resolveKeysRetention()', () => {
         } finally {
             vi.restoreAllMocks();
         }
+    });
+});
+
+describe('channel storage covers every stored stream', () => {
+    // -1 message, -3 admin, and -4 keys on gated channels. The ephemeral
+    // -2 never has storage, and a DM inbox is an account-level stream
+    // rather than part of any one conversation.
+    const NODE = '0xnode1';
+    const info = (nodes, storageDays) => ({ enabled: nodes.length > 0, nodes, storageDays });
+
+    const gated = (extra = {}) => ({
+        messageStreamId: 's-1', adminStreamId: 's-3', keysStreamId: 's-4',
+        name: 'T', type: 'gated', gate: { address: '0xgate' }, ...extra
+    });
+    const plain = (extra = {}) => ({
+        messageStreamId: 's-1', adminStreamId: 's-3', name: 'T', type: 'public', ...extra
+    });
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        channelManager.channels.clear();
+        streamrController.getStreamStorageInfo.mockResolvedValue(info([], null));
+        streamrController.addStorageNodeToStream.mockResolvedValue({ success: true, nodeAddress: NODE });
+        streamrController.removeStorageFromStream.mockResolvedValue({ success: true });
+    });
+
+    describe('getChannelStorageInfo()', () => {
+        it('reads the keys stream of a gated channel', async () => {
+            channelManager.channels.set('s-1', gated());
+            await channelManager.getChannelStorageInfo('s-1');
+            expect(streamrController.getStreamStorageInfo).toHaveBeenCalledWith('s-4');
+        });
+
+        it('does not read a keys stream a channel does not have', async () => {
+            channelManager.channels.set('s-1', plain());
+            const result = await channelManager.getChannelStorageInfo('s-1');
+            expect(streamrController.getStreamStorageInfo).not.toHaveBeenCalledWith('s-4');
+            expect(streamrController.getStreamStorageInfo).toHaveBeenCalledTimes(2);
+            expect(result.hasKeysStream).toBe(false);
+        });
+
+        it('marks a node present on the keys stream', async () => {
+            channelManager.channels.set('s-1', gated());
+            streamrController.getStreamStorageInfo.mockResolvedValue(info([NODE], 180));
+
+            const { nodes } = await channelManager.getChannelStorageInfo('s-1');
+            expect(nodes).toEqual([{ address: NODE, onMessage: true, onAdmin: true, onKeys: true }]);
+        });
+
+        it('marks a node missing from the keys stream', async () => {
+            channelManager.channels.set('s-1', gated());
+            streamrController.getStreamStorageInfo
+                .mockResolvedValueOnce(info([NODE], 180))
+                .mockResolvedValueOnce(info([NODE], 180))
+                .mockResolvedValueOnce(info([], null));
+
+            const { nodes } = await channelManager.getChannelStorageInfo('s-1');
+            expect(nodes).toEqual([{ address: NODE, onMessage: true, onAdmin: true, onKeys: false }]);
+        });
+
+        it('keeps reporting the message stream retention as the channel one', async () => {
+            channelManager.channels.set('s-1', gated());
+            streamrController.getStreamStorageInfo
+                .mockResolvedValueOnce(info([NODE], 180))
+                .mockResolvedValueOnce(info([NODE], 30))
+                .mockResolvedValueOnce(info([NODE], 3));
+
+            const result = await channelManager.getChannelStorageInfo('s-1');
+            expect(result.storageDays).toBe(180);
+            expect(result.retention).toEqual({ message: 180, admin: 30, keys: 3 });
+        });
+
+        it('flags streams that hold different retentions', async () => {
+            channelManager.channels.set('s-1', gated());
+            streamrController.getStreamStorageInfo
+                .mockResolvedValueOnce(info([NODE], 180))
+                .mockResolvedValueOnce(info([NODE], 180))
+                .mockResolvedValueOnce(info([NODE], 3));
+
+            const result = await channelManager.getChannelStorageInfo('s-1');
+            expect(result.retentionInSync).toBe(false);
+        });
+
+        it('does not flag a channel whose streams agree', async () => {
+            channelManager.channels.set('s-1', gated());
+            streamrController.getStreamStorageInfo.mockResolvedValue(info([NODE], 180));
+
+            const result = await channelManager.getChannelStorageInfo('s-1');
+            expect(result.retentionInSync).toBe(true);
+        });
+
+        it('does not flag a channel with no keys stream', async () => {
+            channelManager.channels.set('s-1', plain());
+            streamrController.getStreamStorageInfo.mockResolvedValue(info([NODE], 180));
+
+            const result = await channelManager.getChannelStorageInfo('s-1');
+            expect(result.retentionInSync).toBe(true);
+            expect(result.retention.keys).toBeNull();
+        });
+
+        it('survives a stream whose lookup fails', async () => {
+            channelManager.channels.set('s-1', gated());
+            streamrController.getStreamStorageInfo
+                .mockResolvedValueOnce(info([NODE], 180))
+                .mockResolvedValueOnce(info([NODE], 180))
+                .mockRejectedValueOnce(new Error('rpc down'));
+
+            const result = await channelManager.getChannelStorageInfo('s-1');
+            expect(result.retention.keys).toBeNull();
+            expect(result.retentionInSync).toBe(true);
+        });
+    });
+
+    describe('addChannelStorageNode()', () => {
+        it('adds the node to the keys stream too', async () => {
+            channelManager.channels.set('s-1', gated());
+            const result = await channelManager.addChannelStorageNode('s-1', { storageProvider: 'streamr' });
+            expect(streamrController.addStorageNodeToStream)
+                .toHaveBeenCalledWith('s-4', { storageProvider: 'streamr' });
+            expect(result.keys.success).toBe(true);
+        });
+
+        it('reports null rather than a failure for a channel with no keys stream', async () => {
+            channelManager.channels.set('s-1', plain());
+            const result = await channelManager.addChannelStorageNode('s-1', {});
+            expect(result.keys).toBeNull();
+            expect(streamrController.addStorageNodeToStream).toHaveBeenCalledTimes(2);
+        });
+
+        it('derives the keys stream when the record does not carry it', async () => {
+            channelManager.channels.set('s-1', gated({ keysStreamId: undefined }));
+            await channelManager.addChannelStorageNode('s-1', {});
+            expect(streamrController.addStorageNodeToStream).toHaveBeenCalledWith('s-1-keys', {});
+        });
+    });
+
+    describe('removeChannelStorageNode()', () => {
+        it('removes the node from the keys stream too', async () => {
+            channelManager.channels.set('s-1', gated());
+            const result = await channelManager.removeChannelStorageNode('s-1', NODE);
+            expect(streamrController.removeStorageFromStream).toHaveBeenCalledWith('s-4', NODE);
+            expect(result.keys.success).toBe(true);
+        });
+
+        it('reports null rather than a failure for a channel with no keys stream', async () => {
+            channelManager.channels.set('s-1', plain());
+            const result = await channelManager.removeChannelStorageNode('s-1', NODE);
+            expect(result.keys).toBeNull();
+            expect(streamrController.removeStorageFromStream).toHaveBeenCalledTimes(2);
+        });
     });
 });

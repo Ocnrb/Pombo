@@ -3878,7 +3878,7 @@ class StreamrController {
      * Used by the Channel Settings UI to grow storage redundancy on existing channels
      * without going through the full `enableStorage` create-time flow.
      *
-     * @param {string} streamId - Stream ID (-1 message or -3 admin only)
+     * @param {string} streamId - Stored stream only: -1 message, -3 admin, -4 keys
      * @param {Object} options
      * @param {string} [options.storageProvider='streamr'] - 'streamr' or 'custom'
      * @param {string} [options.customStorageAddress] - EVM address (required if provider is 'custom')
@@ -3890,7 +3890,7 @@ class StreamrController {
             throw new Error('Client not initialized');
         }
 
-        if (!isMessageStream(streamId) && !isAdminStream(streamId)) {
+        if (!isMessageStream(streamId) && !isAdminStream(streamId) && !isKeysStream(streamId)) {
             return { success: false, nodeAddress: null, error: 'Storage not allowed on this stream' };
         }
 

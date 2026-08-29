@@ -49,6 +49,21 @@ export function pickRetention(candidates) {
 }
 
 /**
+ * Do a channel's stored streams agree on their retention?
+ *
+ * Entries that are not a usable retention are skipped rather than counted
+ * as a mismatch: they are streams the channel does not have, or lookups
+ * that failed, and an unknown value contradicts nothing.
+ *
+ * @param {Array<unknown>} values - one per stored stream
+ * @returns {boolean} true when every known value is the same
+ */
+export function retentionInSync(values) {
+    const known = (values || []).filter((v) => typeof v === 'number' && v > 0);
+    return known.every((v) => v === known[0]);
+}
+
+/**
  * Retention to assume for a gated channel's KEYS stream (-4) without a
  * lookup. The epoch-key sweep evaluates announce freshness every 45s and
  * must never turn that into a network call, so this reads only what the

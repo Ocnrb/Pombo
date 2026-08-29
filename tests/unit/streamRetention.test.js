@@ -16,7 +16,7 @@ vi.mock('../../src/js/graph.js', () => ({
     graphAPI: { getStream: vi.fn() }
 }));
 
-const { readStreamRetention, pickRetention, keysRetentionDays } =
+const { readStreamRetention, pickRetention, keysRetentionDays, retentionInSync } =
     await import('../../src/js/streamRetention.js');
 const { graphAPI } = await import('../../src/js/graph.js');
 const { epochKeyManager } = await import('../../src/js/epochKeyManager.js');
@@ -80,6 +80,32 @@ describe('pickRetention()', () => {
     it('falls back to the configured default', () => {
         expect(pickRetention([[null, 'a'], [undefined, 'b']]))
             .toEqual({ storageDays: CONFIG.storage.defaultRetentionDays, source: 'default' });
+    });
+});
+
+describe('retentionInSync()', () => {
+    it('agrees when every known value matches', () => {
+        expect(retentionInSync([180, 180, 180])).toBe(true);
+    });
+
+    it('disagrees when one stream holds a different retention', () => {
+        expect(retentionInSync([180, 180, 3])).toBe(false);
+        expect(retentionInSync([3, 180, 180])).toBe(false);
+    });
+
+    // An unknown value is a stream the channel does not have, or a lookup
+    // that failed. Neither contradicts anything, and reporting them as a
+    // mismatch would put the badge on every channel with no keys stream.
+    it('skips unknown values rather than counting them as a mismatch', () => {
+        expect(retentionInSync([180, 180, null])).toBe(true);
+        expect(retentionInSync([180, null, undefined])).toBe(true);
+        expect(retentionInSync([180, 0, -1, '180'])).toBe(true);
+    });
+
+    it('agrees when nothing is known at all', () => {
+        expect(retentionInSync([null, null, null])).toBe(true);
+        expect(retentionInSync([])).toBe(true);
+        expect(retentionInSync(null)).toBe(true);
     });
 });
 

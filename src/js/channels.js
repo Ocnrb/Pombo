@@ -25,7 +25,7 @@ import { adminStatePoller } from './adminStatePoller.js';
 import { channelImageManager } from './channelImageManager.js';
 import { channelLatestMessageManager } from './channelLatestMessageManager.js';
 import { epochKeyManager } from './epochKeyManager.js';
-import { readStreamRetention, keysRetentionDays } from './streamRetention.js';
+import { readStreamRetention, keysRetentionDays, retentionInSync } from './streamRetention.js';
 import { PresenceTracker } from './channels/PresenceTracker.js';
 import { ImageRecovery } from './channels/ImageRecovery.js';
 import { TtlRepublish } from './channels/TtlRepublish.js';
@@ -1458,99 +1458,133 @@ class ChannelManager {
     // ===== STORAGE MANAGEMENT (POST-CREATION) ========================================
 
     /**
-     * Get aggregated storage info for a channel (merges message + admin streams).
-     * The user-facing view is a single list — internally we coordinate both
-     * persistent streams (-1 message, -3 admin). The ephemeral stream (-2)
-     * never has storage by design.
+     * Get aggregated storage info for a channel: every stored stream, which
+     * is -1 message, -3 admin, and -4 keys on gated channels. The ephemeral
+     * stream (-2) never has storage by design, and a DM's inbox is an
+     * account-level stream rather than part of any one conversation.
      *
-     * Returned `nodes` array contains entries `{ address, onMessage, onAdmin }`
-     * so the UI can warn (and the update flow can heal) divergence between
-     * the two streams if a previous operation partially failed.
+     * The user-facing view stays a single list and a single retention
+     * figure. `onMessage`/`onAdmin`/`onKeys` per node, and `retentionInSync`
+     * across the streams, are what let the panel flag a channel whose
+     * streams drifted apart after a partial update.
      *
      * @param {string} messageStreamId
-     * @returns {Promise<{enabled: boolean, nodes: Array<{address:string,onMessage:boolean,onAdmin:boolean}>, storageDays: number|null}>}
+     * @returns {Promise<{enabled: boolean, nodes: Array<{address:string,onMessage:boolean,onAdmin:boolean,onKeys:boolean}>, storageDays: number|null, retention: {message:number|null,admin:number|null,keys:number|null}, retentionInSync: boolean, hasKeysStream: boolean}>}
      */
     async getChannelStorageInfo(messageStreamId) {
         const channel = this.channels.get(messageStreamId);
         const adminStreamId = channel?.adminStreamId || deriveAdminId(messageStreamId);
+        const keysStreamId = channel?.type === 'gated'
+            ? (channel.keysStreamId || deriveKeysId(messageStreamId))
+            : null;
 
-        const [msgInfo, adminInfo] = await Promise.all([
-            streamrController.getStreamStorageInfo(messageStreamId).catch(() => ({ enabled: false, nodes: [], storageDays: null })),
-            adminStreamId
-                ? streamrController.getStreamStorageInfo(adminStreamId).catch(() => ({ enabled: false, nodes: [], storageDays: null }))
-                : Promise.resolve({ enabled: false, nodes: [], storageDays: null })
+        const none = () => ({ enabled: false, nodes: [], storageDays: null });
+        const infoFor = (streamId) => streamId
+            ? streamrController.getStreamStorageInfo(streamId).catch(none)
+            : Promise.resolve(none());
+
+        const [msgInfo, adminInfo, keysInfo] = await Promise.all([
+            infoFor(messageStreamId),
+            infoFor(adminStreamId),
+            infoFor(keysStreamId)
         ]);
 
-        const map = new Map(); // address(lower) -> { address, onMessage, onAdmin }
-        for (const n of msgInfo.nodes || []) {
-            const key = String(n).toLowerCase();
-            map.set(key, { address: n, onMessage: true, onAdmin: false });
-        }
-        for (const n of adminInfo.nodes || []) {
-            const key = String(n).toLowerCase();
-            const existing = map.get(key);
-            if (existing) {
-                existing.onAdmin = true;
-            } else {
-                map.set(key, { address: n, onMessage: false, onAdmin: true });
+        const map = new Map(); // address(lower) -> { address, onMessage, onAdmin, onKeys }
+        const mark = (info, flag) => {
+            for (const n of info.nodes || []) {
+                const key = String(n).toLowerCase();
+                const existing = map.get(key);
+                if (existing) {
+                    existing[flag] = true;
+                } else {
+                    map.set(key, { address: n, onMessage: false, onAdmin: false, onKeys: false, [flag]: true });
+                }
             }
-        }
+        };
+        mark(msgInfo, 'onMessage');
+        mark(adminInfo, 'onAdmin');
+        mark(keysInfo, 'onKeys');
 
+        const days = (info) => typeof info.storageDays === 'number' ? info.storageDays : null;
+        const retention = {
+            message: days(msgInfo),
+            admin: days(adminInfo),
+            keys: keysStreamId ? days(keysInfo) : null
+        };
         const nodes = Array.from(map.values());
-        // Show message-stream TTL as the channel TTL (admin TTL tracks it but
-        // is not surfaced to users).
-        const storageDays = typeof msgInfo.storageDays === 'number' ? msgInfo.storageDays : null;
 
         return {
             enabled: nodes.length > 0,
             nodes,
-            storageDays
+            // One figure for the panel: the message stream's, as before.
+            // `retentionInSync` is what says the others do not match it.
+            storageDays: retention.message,
+            retention,
+            retentionInSync: retentionInSync([retention.message, retention.admin, retention.keys]),
+            hasKeysStream: !!keysStreamId
         };
     }
 
     /**
-     * Add a storage node to a channel (applied to both -1 and -3).
-     * Same retention is applied to both streams when `storageDays` is provided.
+     * Add a storage node to every stored stream of a channel: -1, -3, and
+     * -4 on gated channels. Same retention is applied to each when
+     * `storageDays` is provided.
      *
      * @param {string} messageStreamId
      * @param {Object} options
      * @param {string} options.storageProvider - 'streamr' or 'custom'
      * @param {string} [options.customStorageAddress] - EVM address (required if provider is 'custom')
-     * @param {number} [options.storageDays] - Retention days (applied to both streams)
-     * @returns {Promise<{message: {success:boolean,error?:string}, admin: {success:boolean,error?:string}}>}
+     * @param {number} [options.storageDays] - Retention days (applied to each stream)
+     * @returns {Promise<{message: Object, admin: Object, keys: Object|null}>}
+     *          `keys` is null when the channel has no keys stream.
      */
     async addChannelStorageNode(messageStreamId, options = {}) {
         const channel = this.channels.get(messageStreamId);
         if (!channel) throw new Error('Channel not found');
         const adminStreamId = channel.adminStreamId || deriveAdminId(messageStreamId);
+        const keysStreamId = channel.type === 'gated'
+            ? (channel.keysStreamId || deriveKeysId(messageStreamId))
+            : null;
 
         // Sequential to avoid nonce conflicts (REPLACEMENT_UNDERPRICED).
         const message = await streamrController.addStorageNodeToStream(messageStreamId, options);
         const admin = adminStreamId
             ? await streamrController.addStorageNodeToStream(adminStreamId, options)
             : { success: false, error: 'No admin stream' };
+        const keys = keysStreamId
+            ? await streamrController.addStorageNodeToStream(keysStreamId, options)
+            : null;
 
-        return { message, admin };
+        return { message, admin, keys };
     }
 
     /**
-     * Remove a storage node from a channel (from both -1 and -3).
+     * Remove a storage node from every stored stream of a channel: -1, -3,
+     * and -4 on gated channels.
+     *
      * @param {string} messageStreamId
      * @param {string} nodeAddress
-     * @returns {Promise<{message: {success:boolean,error?:string}, admin: {success:boolean,error?:string}}>}
+     * @returns {Promise<{message: Object, admin: Object, keys: Object|null}>}
+     *          `keys` is null when the channel has no keys stream.
      */
     async removeChannelStorageNode(messageStreamId, nodeAddress) {
         const channel = this.channels.get(messageStreamId);
         if (!channel) throw new Error('Channel not found');
         const adminStreamId = channel.adminStreamId || deriveAdminId(messageStreamId);
+        const keysStreamId = channel.type === 'gated'
+            ? (channel.keysStreamId || deriveKeysId(messageStreamId))
+            : null;
 
         // Sequential to avoid nonce conflicts.
         const message = await streamrController.removeStorageFromStream(messageStreamId, nodeAddress);
         const admin = adminStreamId
             ? await streamrController.removeStorageFromStream(adminStreamId, nodeAddress)
             : { success: true };
+        const keys = keysStreamId
+            ? await streamrController.removeStorageFromStream(keysStreamId, nodeAddress)
+            : null;
 
-        return { message, admin };
+        return { message, admin, keys };
     }
 
     /**
