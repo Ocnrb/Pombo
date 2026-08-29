@@ -25,23 +25,38 @@ const POMBO_NODE = '0xae340e799e8151f6a4999d245e466197aa217667';
 
 describe('storage panel rendering', () => {
     let readonly;
+    let editor;
     let mixed;
+    let mixedText;
     let list;
 
     beforeEach(() => {
+        // Same shape as the panel: the warning is a sibling of both
+        // retention states, not a child of either.
         document.body.innerHTML = `
-            <label>Retention Period<span id="channel-storage-retention-mixed" class="hidden"></span></label>
-            <div id="channel-storage-retention-readonly">-</div>
-            <input id="channel-storage-retention-input" />
+            <div>
+                <label>Retention Period</label>
+                <div id="channel-storage-retention-readonly">-</div>
+                <div id="channel-storage-retention-editor" class="hidden">
+                    <input id="channel-storage-retention-input" />
+                </div>
+                <div id="channel-storage-retention-mixed" class="hidden">
+                    <p><svg></svg><span id="channel-storage-retention-mixed-text"></span></p>
+                </div>
+            </div>
             <div id="channel-storage-nodes-list"></div>
             <div id="channel-storage-no-storage" class="hidden"></div>
         `;
         readonly = document.getElementById('channel-storage-retention-readonly');
+        editor = document.getElementById('channel-storage-retention-editor');
         mixed = document.getElementById('channel-storage-retention-mixed');
+        mixedText = document.getElementById('channel-storage-retention-mixed-text');
         list = document.getElementById('channel-storage-nodes-list');
         channelSettingsUI.elements = {
             channelStorageRetentionReadonly: readonly,
+            channelStorageRetentionEditor: editor,
             channelStorageRetentionMixed: mixed,
+            channelStorageRetentionMixedText: mixedText,
             channelStorageRetentionInput: document.getElementById('channel-storage-retention-input'),
             channelStorageNodesList: list,
             channelStorageNoStorage: document.getElementById('channel-storage-no-storage')
@@ -70,32 +85,43 @@ describe('storage panel rendering', () => {
             expect(readonly.textContent).toContain('180 days');
         });
 
-        it('stays unbadged when the streams agree', () => {
+        it('stays silent when the streams agree', () => {
             channelSettingsUI._renderStorageList({}, info(), false);
             expect(readonly.textContent).toBe('180 days');
             expect(mixed.classList.contains('hidden')).toBe(true);
         });
 
-        it('badges the label when the streams hold different retentions', () => {
+        it('warns when the streams hold different retentions', () => {
             channelSettingsUI._renderStorageList({}, info({
                 retention: { message: 180, admin: 180, keys: 3 },
                 retentionInSync: false
             }), false);
 
             expect(mixed.classList.contains('hidden')).toBe(false);
-            expect(mixed.textContent).toBe('mixed');
+            expect(mixedText.textContent).toMatch(/not the same/i);
             expect(readonly.textContent).toBe('180 days');
         });
 
-        // The figure is swapped for an editor for whoever can manage the
-        // channel, so a badge living inside it is hidden from the only
-        // person who can act on it.
-        it('keeps the badge outside the figure that gets swapped for the editor', () => {
+        it('tells whoever can manage the channel how to fix it', () => {
             channelSettingsUI._renderStorageList({}, info({ retentionInSync: false }), true);
-            expect(readonly.contains(mixed)).toBe(false);
+            expect(mixedText.textContent).toMatch(/save it again/i);
         });
 
-        it('names what each stream holds in the badge title', () => {
+        it('does not tell a reader to save what they cannot save', () => {
+            channelSettingsUI._renderStorageList({}, info({ retentionInSync: false }), false);
+            expect(mixedText.textContent).not.toMatch(/save/i);
+        });
+
+        // Each retention state is hidden for exactly the audience the other
+        // one serves, so a warning living inside either is invisible to half
+        // the people who need it — the managing half included.
+        it('keeps the warning outside both retention states', () => {
+            channelSettingsUI._renderStorageList({}, info({ retentionInSync: false }), true);
+            expect(readonly.contains(mixed)).toBe(false);
+            expect(editor.contains(mixed)).toBe(false);
+        });
+
+        it('names what each stream holds on hover', () => {
             channelSettingsUI._renderStorageList({}, info({
                 retention: { message: 180, admin: 30, keys: 3 },
                 retentionInSync: false
@@ -106,7 +132,7 @@ describe('storage panel rendering', () => {
             expect(mixed.title).toContain('keys 3');
         });
 
-        it('leaves the keys stream out of the badge title when there is none', () => {
+        it('leaves the keys stream out of the detail when there is none', () => {
             channelSettingsUI._renderStorageList({}, info({
                 retention: { message: 180, admin: 30, keys: null },
                 retentionInSync: false,
@@ -117,7 +143,7 @@ describe('storage panel rendering', () => {
             expect(mixed.title).not.toContain('keys');
         });
 
-        it('clears the badge again once the streams agree', () => {
+        it('clears the warning again once the streams agree', () => {
             channelSettingsUI._renderStorageList({}, info({ retentionInSync: false }), false);
             channelSettingsUI._renderStorageList({}, info(), false);
             expect(mixed.classList.contains('hidden')).toBe(true);

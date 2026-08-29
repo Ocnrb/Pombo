@@ -320,10 +320,10 @@ class ChannelSettingsUI {
         const POMBO_NODE = '0xae340e799e8151f6a4999d245e466197aa217667';
         const { enabled, nodes, storageDays, retention, retentionInSync, hasKeysStream } = info;
 
-        // Retention: one figure, the message stream's. The badge sits on the
-        // label, not on the figure, because the figure is swapped for an
-        // editor for whoever can manage the channel — and that is exactly
-        // the person who needs to be told the streams disagree.
+        // Retention: one figure, the message stream's. The warning is a
+        // sibling of both retention states, never inside one: the readonly
+        // figure is hidden for whoever can manage the channel, and the
+        // editor is hidden for everyone else.
         const daysText = (typeof storageDays === 'number') ? `${storageDays} days` : (enabled ? 'Not set' : '-');
         if (this.elements.channelStorageRetentionReadonly) {
             this.elements.channelStorageRetentionReadonly.textContent = daysText;
@@ -338,8 +338,13 @@ class ChannelSettingsUI {
                     `admin ${retention?.admin ?? 'not set'}`,
                     ...(hasKeysStream ? [`keys ${retention?.keys ?? 'not set'}`] : [])
                 ].join(', ');
-                mixed.textContent = 'mixed';
-                mixed.title = `This channel's streams hold different retentions (${detail}). Saving a retention applies the same value to all of them.`;
+                const text = this.elements.channelStorageRetentionMixedText;
+                if (text) {
+                    text.textContent = canManage
+                        ? 'Retention is not the same on all of this channel’s streams. Save it again to apply one value to all of them.'
+                        : 'Retention is not the same on all of this channel’s streams.';
+                }
+                mixed.title = `Retention per stream: ${detail}.`;
             }
         }
         if (this.elements.channelStorageRetentionInput && typeof storageDays === 'number') {
