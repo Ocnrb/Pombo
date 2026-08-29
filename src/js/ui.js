@@ -417,6 +417,7 @@ class UIController {
             channelDescriptionDisplay: document.getElementById('channel-description-display'),
             channelStorageRetentionReadonly: document.getElementById('channel-storage-retention-readonly'),
             channelStorageRetentionEditor: document.getElementById('channel-storage-retention-editor'),
+            channelStorageRetentionMixed: document.getElementById('channel-storage-retention-mixed'),
             channelStorageRetentionInput: document.getElementById('channel-storage-retention-input'),
             channelStorageRetentionSave: document.getElementById('channel-storage-retention-save'),
             channelStorageNodesList: document.getElementById('channel-storage-nodes-list'),

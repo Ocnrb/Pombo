@@ -320,21 +320,26 @@ class ChannelSettingsUI {
         const POMBO_NODE = '0xae340e799e8151f6a4999d245e466197aa217667';
         const { enabled, nodes, storageDays, retention, retentionInSync, hasKeysStream } = info;
 
-        // Retention: one figure, the message stream's. When the channel's
-        // other stored streams do not match it, the figure alone would be a
-        // lie, so it carries a badge naming what each stream actually holds.
+        // Retention: one figure, the message stream's. The badge sits on the
+        // label, not on the figure, because the figure is swapped for an
+        // editor for whoever can manage the channel — and that is exactly
+        // the person who needs to be told the streams disagree.
         const daysText = (typeof storageDays === 'number') ? `${storageDays} days` : (enabled ? 'Not set' : '-');
         if (this.elements.channelStorageRetentionReadonly) {
-            const el = this.elements.channelStorageRetentionReadonly;
-            if (retentionInSync === false) {
+            this.elements.channelStorageRetentionReadonly.textContent = daysText;
+        }
+        const mixed = this.elements.channelStorageRetentionMixed;
+        if (mixed) {
+            const divergent = retentionInSync === false;
+            mixed.classList.toggle('hidden', !divergent);
+            if (divergent) {
                 const detail = [
                     `messages ${retention?.message ?? 'not set'}`,
                     `admin ${retention?.admin ?? 'not set'}`,
                     ...(hasKeysStream ? [`keys ${retention?.keys ?? 'not set'}`] : [])
                 ].join(', ');
-                el.innerHTML = `${escapeHtml(daysText)}<span class="text-[10px] text-amber-400/80 ml-1.5" title="${escapeAttr(`This channel's streams hold different retentions (${detail}). Saving a retention applies the same value to all of them.`)}">mixed</span>`;
-            } else {
-                el.textContent = daysText;
+                mixed.textContent = 'mixed';
+                mixed.title = `This channel's streams hold different retentions (${detail}). Saving a retention applies the same value to all of them.`;
             }
         }
         if (this.elements.channelStorageRetentionInput && typeof storageDays === 'number') {

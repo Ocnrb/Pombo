@@ -25,19 +25,23 @@ const POMBO_NODE = '0xae340e799e8151f6a4999d245e466197aa217667';
 
 describe('storage panel rendering', () => {
     let readonly;
+    let mixed;
     let list;
 
     beforeEach(() => {
         document.body.innerHTML = `
+            <label>Retention Period<span id="channel-storage-retention-mixed" class="hidden"></span></label>
             <div id="channel-storage-retention-readonly">-</div>
             <input id="channel-storage-retention-input" />
             <div id="channel-storage-nodes-list"></div>
             <div id="channel-storage-no-storage" class="hidden"></div>
         `;
         readonly = document.getElementById('channel-storage-retention-readonly');
+        mixed = document.getElementById('channel-storage-retention-mixed');
         list = document.getElementById('channel-storage-nodes-list');
         channelSettingsUI.elements = {
             channelStorageRetentionReadonly: readonly,
+            channelStorageRetentionMixed: mixed,
             channelStorageRetentionInput: document.getElementById('channel-storage-retention-input'),
             channelStorageNodesList: list,
             channelStorageNoStorage: document.getElementById('channel-storage-no-storage')
@@ -66,22 +70,29 @@ describe('storage panel rendering', () => {
             expect(readonly.textContent).toContain('180 days');
         });
 
-        it('stays a plain figure when the streams agree', () => {
+        it('stays unbadged when the streams agree', () => {
             channelSettingsUI._renderStorageList({}, info(), false);
             expect(readonly.textContent).toBe('180 days');
-            expect(readonly.querySelector('span')).toBeNull();
+            expect(mixed.classList.contains('hidden')).toBe(true);
         });
 
-        it('badges the figure when the streams hold different retentions', () => {
+        it('badges the label when the streams hold different retentions', () => {
             channelSettingsUI._renderStorageList({}, info({
                 retention: { message: 180, admin: 180, keys: 3 },
                 retentionInSync: false
             }), false);
 
-            const badge = readonly.querySelector('span');
-            expect(badge).not.toBeNull();
-            expect(badge.textContent).toBe('mixed');
-            expect(readonly.textContent).toContain('180 days');
+            expect(mixed.classList.contains('hidden')).toBe(false);
+            expect(mixed.textContent).toBe('mixed');
+            expect(readonly.textContent).toBe('180 days');
+        });
+
+        // The figure is swapped for an editor for whoever can manage the
+        // channel, so a badge living inside it is hidden from the only
+        // person who can act on it.
+        it('keeps the badge outside the figure that gets swapped for the editor', () => {
+            channelSettingsUI._renderStorageList({}, info({ retentionInSync: false }), true);
+            expect(readonly.contains(mixed)).toBe(false);
         });
 
         it('names what each stream holds in the badge title', () => {
@@ -90,10 +101,9 @@ describe('storage panel rendering', () => {
                 retentionInSync: false
             }), false);
 
-            const title = readonly.querySelector('span').getAttribute('title');
-            expect(title).toContain('messages 180');
-            expect(title).toContain('admin 30');
-            expect(title).toContain('keys 3');
+            expect(mixed.title).toContain('messages 180');
+            expect(mixed.title).toContain('admin 30');
+            expect(mixed.title).toContain('keys 3');
         });
 
         it('leaves the keys stream out of the badge title when there is none', () => {
@@ -103,9 +113,14 @@ describe('storage panel rendering', () => {
                 hasKeysStream: false
             }), false);
 
-            const title = readonly.querySelector('span').getAttribute('title');
-            expect(title).toContain('admin 30');
-            expect(title).not.toContain('keys');
+            expect(mixed.title).toContain('admin 30');
+            expect(mixed.title).not.toContain('keys');
+        });
+
+        it('clears the badge again once the streams agree', () => {
+            channelSettingsUI._renderStorageList({}, info({ retentionInSync: false }), false);
+            channelSettingsUI._renderStorageList({}, info(), false);
+            expect(mixed.classList.contains('hidden')).toBe(true);
         });
     });
 
