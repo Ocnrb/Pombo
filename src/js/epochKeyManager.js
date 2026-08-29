@@ -50,6 +50,7 @@ import { KEYS_MSG_TYPE, KEYS_STREAM } from './streamConstants.js';
 import { gateManager } from './gate.js';
 import { dmCrypto } from './dmCrypto.js';
 import { authorship } from './authorship.js';
+import { keysRetentionDays } from './streamRetention.js';
 
 /**
  * Channels running the epoch-key protocol (gated, N-A/N-C): the gate clone
@@ -616,7 +617,7 @@ class EpochKeyManager {
     async _maybeAnnouncePub(channel, s) {
         if (!usesSharedPublish(channel) || !s.pubKey) return;
         if (s.pubAnnounce && s.pubAnnounce.rev > s.pubKey.rev) return;   // we hold the superseded key
-        const retentionMs = (channel.storageDays || CONFIG.storage.defaultRetentionDays) * 86_400_000;
+        const retentionMs = keysRetentionDays(channel) * 86_400_000;
         const freshest = s.pubAnnounceFreshness || 0;
         if (freshest && Date.now() - freshest < retentionMs * CONFIG.storage.ttlRepublishAgeFraction) return;
 
@@ -651,7 +652,7 @@ class EpochKeyManager {
         // storage lost it (or the resend failed; republishing then is a
         // harmless duplicate). Otherwise republish when nearing the TTL.
         const freshest = s.announceFreshness.get(s.currentEpoch) || 0;
-        const retentionMs = (channel.storageDays || CONFIG.storage.defaultRetentionDays) * 86_400_000;
+        const retentionMs = keysRetentionDays(channel) * 86_400_000;
         if (freshest && Date.now() - freshest < retentionMs * CONFIG.storage.ttlRepublishAgeFraction) return;
 
         // CONSISTENT BY CONSTRUCTION across the admin's devices: this only

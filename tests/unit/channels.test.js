@@ -1781,6 +1781,49 @@ describe('ChannelManager', () => {
             expect(channelManager.channels.has('0xmyaddress/test-1')).toBe(true);
         });
 
+        // Retention is a separate transaction per stream and any of them can
+        // fail on its own. Recording the value that was asked for is what
+        // lets the record claim a retention the stream never got.
+        describe('retention actually applied', () => {
+            afterEach(() => {
+                streamrController.enableStorage.mockResolvedValue({
+                    success: true, provider: 'streamr', storageDays: 180, retentionApplied: true
+                });
+            });
+
+            const applied = (days) => ({
+                success: true, provider: 'streamr', storageDays: days, retentionApplied: true
+            });
+            const notApplied = () => ({
+                success: true, provider: 'streamr', storageDays: null, retentionApplied: false
+            });
+
+            it('records the retention each stream reported, not the one requested', async () => {
+                streamrController.createStream.mockResolvedValue({
+                    messageStreamId: '0xmyaddress/test-1',
+                    ephemeralStreamId: '0xmyaddress/test-2',
+                    adminStreamId: '0xmyaddress/test-3',
+                    keysStreamId: '0xmyaddress/test-4'
+                });
+                streamrController.enableStorage
+                    .mockResolvedValueOnce(applied(30))
+                    .mockResolvedValueOnce(applied(30))
+                    .mockResolvedValueOnce(notApplied());
+
+                const channel = await channelManager.createChannel('Group', 'gated', null, [], { storageDays: 30 });
+                expect(channel.storageDays).toBe(30);
+                expect(channel.adminStorageDays).toBe(30);
+                expect(channel.keysStorageDays).toBeNull();
+            });
+
+            it('leaves every cached retention null when none of them landed', async () => {
+                streamrController.enableStorage.mockResolvedValue(notApplied());
+                const channel = await channelManager.createChannel('Test', 'public', null, [], { storageDays: 30 });
+                expect(channel.storageDays).toBeNull();
+                expect(channel.adminStorageDays).toBeNull();
+            });
+        });
+
         it('should save channels to storage', async () => {
             await channelManager.createChannel('Test', 'public');
             expect(secureStorage.setChannels).toHaveBeenCalled();

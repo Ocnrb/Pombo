@@ -934,6 +934,91 @@ describe('StreamrController Core', () => {
             const result = await streamrController.enableStorage('stream-1');
             expect(result.success).toBe(false);
         });
+
+        // Retention is a second transaction and fails on its own. Reporting
+        // back the value that was asked for is what lets the channel record
+        // claim a retention the stream never got.
+        describe('retention outcome', () => {
+            it('reports the retention that landed', async () => {
+                const result = await streamrController.enableStorage('stream-1', { storageDays: 30 });
+                expect(result.storageDays).toBe(30);
+                expect(result.retentionApplied).toBe(true);
+            });
+
+            it('reports no retention when setStorageDayCount never succeeds', async () => {
+                mockStream.setStorageDayCount.mockRejectedValue(new Error('rpc down'));
+                const result = await streamrController.enableStorage('stream-1', { storageDays: 30 });
+                expect(result.storageDays).toBeNull();
+                expect(result.retentionApplied).toBe(false);
+            });
+
+            it('still reports the storage node as enabled when only the retention failed', async () => {
+                mockStream.setStorageDayCount.mockRejectedValue(new Error('rpc down'));
+                const result = await streamrController.enableStorage('stream-1', { storageDays: 30 });
+                expect(result.success).toBe(true);
+                expect(mockStream.addToStorageNode).toHaveBeenCalled();
+            });
+
+            it('retries the retention independently of the node assignment', async () => {
+                await streamrController.enableStorage('stream-1', { storageDays: 30 });
+                const named = executeWithRetry.mock.calls.map(([name]) => name);
+                expect(named).toContain('enableStorage');
+                expect(named).toContain('setStorageDayCount');
+            });
+
+            it('reports no retention when the node assignment itself failed', async () => {
+                executeWithRetry.mockRejectedValueOnce(new Error('fail'));
+                const result = await streamrController.enableStorage('stream-1', { storageDays: 30 });
+                expect(result.storageDays).toBeNull();
+                expect(result.retentionApplied).toBe(false);
+                expect(mockStream.setStorageDayCount).not.toHaveBeenCalled();
+            });
+
+            it('ticks progress the same number of times whether the retention lands or not', async () => {
+                const onProgress = vi.fn();
+                await streamrController.enableStorage('stream-1', { storageDays: 30, onProgress });
+                const whenApplied = onProgress.mock.calls.length;
+
+                onProgress.mockClear();
+                mockStream.setStorageDayCount.mockRejectedValue(new Error('rpc down'));
+                await streamrController.enableStorage('stream-1', { storageDays: 30, onProgress });
+                expect(onProgress.mock.calls.length).toBe(whenApplied);
+            });
+        });
+    });
+
+    // ==================== addStorageNodeToStream() ====================
+    // Storage on the keys stream is what makes the epoch-key protocol
+    // asynchronous, so the settings panel has to be able to grow and shrink
+    // its redundancy like any other stored stream.
+    describe('addStorageNodeToStream() stream types', () => {
+        // A real 40-hex address: unlike enableStorage, this path validates
+        // the node address for every provider.
+        beforeEach(() => {
+            STREAM_CONFIG.NODE_ADDRESS = '0xae340e799e8151f6a4999d245e466197aa217667';
+        });
+
+        it('accepts the message stream', async () => {
+            const result = await streamrController.addStorageNodeToStream('stream-1');
+            expect(result.success).toBe(true);
+        });
+
+        it('accepts the admin stream', async () => {
+            const result = await streamrController.addStorageNodeToStream('stream-3');
+            expect(result.success).toBe(true);
+        });
+
+        it('accepts the keys stream', async () => {
+            const result = await streamrController.addStorageNodeToStream('stream-4');
+            expect(result.success).toBe(true);
+            expect(mockStream.addToStorageNode).toHaveBeenCalled();
+        });
+
+        it('refuses the ephemeral stream, which must never be stored', async () => {
+            const result = await streamrController.addStorageNodeToStream('stream-2');
+            expect(result.success).toBe(false);
+            expect(result.error).toMatch(/not allowed/i);
+        });
     });
 
     // ==================== setStorageDays() ====================

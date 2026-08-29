@@ -318,12 +318,34 @@ class ChannelSettingsUI {
     _renderStorageList(channel, info, canManage) {
         const list = this.elements.channelStorageNodesList;
         const POMBO_NODE = '0xae340e799e8151f6a4999d245e466197aa217667';
-        const { enabled, nodes, storageDays } = info;
+        const { enabled, nodes, storageDays, retention, retentionInSync, hasKeysStream } = info;
 
-        // Retention
+        // Retention: one figure, the message stream's. The warning is a
+        // sibling of both retention states, never inside one: the readonly
+        // figure is hidden for whoever can manage the channel, and the
+        // editor is hidden for everyone else.
         const daysText = (typeof storageDays === 'number') ? `${storageDays} days` : (enabled ? 'Not set' : '-');
         if (this.elements.channelStorageRetentionReadonly) {
             this.elements.channelStorageRetentionReadonly.textContent = daysText;
+        }
+        const mixed = this.elements.channelStorageRetentionMixed;
+        if (mixed) {
+            const divergent = retentionInSync === false;
+            mixed.classList.toggle('hidden', !divergent);
+            if (divergent) {
+                const detail = [
+                    `messages ${retention?.message ?? 'not set'}`,
+                    `admin ${retention?.admin ?? 'not set'}`,
+                    ...(hasKeysStream ? [`keys ${retention?.keys ?? 'not set'}`] : [])
+                ].join(', ');
+                const text = this.elements.channelStorageRetentionMixedText;
+                if (text) {
+                    text.textContent = canManage
+                        ? 'Retention is not the same on all of this channel’s streams. Save it again to apply one value to all of them.'
+                        : 'Retention is not the same on all of this channel’s streams.';
+                }
+                mixed.title = `Retention per stream: ${detail}.`;
+            }
         }
         if (this.elements.channelStorageRetentionInput && typeof storageDays === 'number') {
             this.elements.channelStorageRetentionInput.value = String(storageDays);
@@ -342,7 +364,7 @@ class ChannelSettingsUI {
             const addr = n.address;
             const isOfficial = addr.toLowerCase() === POMBO_NODE.toLowerCase();
             const label = isOfficial ? 'Pombo' : 'Custom';
-            const divergent = !(n.onMessage && n.onAdmin);
+            const divergent = !(n.onMessage && n.onAdmin && (!hasKeysStream || n.onKeys));
             const divergentBadge = divergent
                 ? '<span class="text-[10px] text-amber-400/80 ml-1.5" title="Storage assignment is out of sync between channel streams. Removing and re-adding will heal it.">partial</span>'
                 : '';
@@ -476,7 +498,8 @@ class ChannelSettingsUI {
                 showNotification?.('Updating retention…', 'info');
                 try {
                     const result = await channelManager.setChannelStorageDays(channel.streamId, days);
-                    const ok = result.message && result.admin;
+                    // `keys` is null on channels without a -4, which is not a failure.
+                    const ok = result.message && result.admin && result.keys !== false;
                     showNotification?.(
                         ok ? `Retention updated to ${days} days` : 'Retention updated partially. Try again.',
                         ok ? 'success' : 'error'
@@ -500,11 +523,17 @@ class ChannelSettingsUI {
         const { showNotification } = this.deps;
         const msgOk = !!result?.message?.success;
         const adminOk = !!result?.admin?.success;
+        // null is a channel with no keys stream, which is not a failure.
+        const keysOk = result?.keys === null || result?.keys === undefined
+            ? null
+            : !!result.keys.success;
         const verb = op === 'add' ? 'added' : 'removed';
-        if (msgOk && adminOk) {
+        const outcomes = [msgOk, adminOk, ...(keysOk === null ? [] : [keysOk])];
+
+        if (outcomes.every(Boolean)) {
             showNotification?.(`Storage node ${verb}`, 'success');
-        } else if (!msgOk && !adminOk) {
-            const err = result?.message?.error || result?.admin?.error || 'unknown error';
+        } else if (outcomes.every(o => !o)) {
+            const err = result?.message?.error || result?.admin?.error || result?.keys?.error || 'unknown error';
             showNotification?.(`Failed to ${op} storage node: ${err}`, 'error');
         } else {
             showNotification?.(`Storage node partially ${verb}. Retry to sync.`, 'error');
