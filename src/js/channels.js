@@ -29,6 +29,7 @@ import { readStreamRetention, keysRetentionDays, retentionInSync } from './strea
 import { PresenceTracker } from './channels/PresenceTracker.js';
 import { ImageRecovery } from './channels/ImageRecovery.js';
 import { TtlRepublish } from './channels/TtlRepublish.js';
+import { MessageOverrides } from './channels/MessageOverrides.js';
 
 class ChannelManager {
     constructor() {
@@ -54,11 +55,6 @@ class ChannelManager {
         // Prevents duplicate sends on rapid clicks or retries
         this.sendingMessages = new Set(); // streamId:messageId
         
-        // Deduplication: track reactions currently being sent
-        // Prevents duplicate reaction sends on rapid clicks
-        this.pendingReactions = new Set(); // streamId:messageId:emoji:action
-        this.REACTION_DEBOUNCE_MS = CONFIG.channels.reactionDebounceMs;
-        
         // Online presence tracking
         this.presence = new PresenceTracker(this);
         
@@ -83,9 +79,7 @@ class ChannelManager {
         
         this.imageRecovery = new ImageRecovery(this);
         this.ttlRepublish = new TtlRepublish(this);
-        
-        // Deduplication: track edit/delete operations currently being sent
-        this.pendingOverrides = new Set(); // streamId:targetId:type
+        this.overrides = new MessageOverrides(this);
     }
 
     /**
@@ -2972,276 +2966,23 @@ class ChannelManager {
         this.notifyHandlers('initial_history_complete', { streamId: messageStreamId });
     }
 
-    /**
-     * Store a reaction in the channel object
-     * @param {Object} channel - Channel object
-     * @param {string} messageId - Message ID
-     * @param {string} emoji - Emoji
-     * @param {string} user - User address
-     * @param {string} action - 'add' or 'remove' (default: 'add')
-     */
-    storeReaction(channel, messageId, emoji, user, action = 'add') {
-        if (!channel.reactions) {
-            channel.reactions = {};
-        }
-        if (!channel.reactions[messageId]) {
-            channel.reactions[messageId] = {};
-        }
-        if (!channel.reactions[messageId][emoji]) {
-            channel.reactions[messageId][emoji] = [];
-        }
-        
-        const normalizedUser = user.toLowerCase();
-        const userIndex = channel.reactions[messageId][emoji].findIndex(u => u.toLowerCase() === normalizedUser);
-        
-        if (action === 'remove') {
-            // Remove user from reaction
-            if (userIndex >= 0) {
-                channel.reactions[messageId][emoji].splice(userIndex, 1);
-                // Clean up empty arrays
-                if (channel.reactions[messageId][emoji].length === 0) {
-                    delete channel.reactions[messageId][emoji];
-                }
-                if (Object.keys(channel.reactions[messageId]).length === 0) {
-                    delete channel.reactions[messageId];
-                }
-            }
-        } else {
-            // Add user if not already in the list
-            if (userIndex < 0) {
-                channel.reactions[messageId][emoji].push(user);
-            }
-        }
-    }
+    // ==================== Message Overrides ====================
+    // Lives in channels/MessageOverrides.js; the manager keeps the entry
+    // points its callers already use.
 
-    /**
-     * Get reactions for a channel
-     * @param {string} streamId - Stream ID
-     * @returns {Object} - Reactions object { messageId -> { emoji -> [users] } }
-     */
-    getChannelReactions(streamId) {
-        const channel = this.channels.get(streamId);
-        return channel?.reactions || {};
-    }
+    get pendingReactions() { return this.overrides.pendingReactions; }
+    get REACTION_DEBOUNCE_MS() { return this.overrides.REACTION_DEBOUNCE_MS; }
+    get pendingOverrides() { return this.overrides.pendingOverrides; }
 
-    // ==================== Message Edit/Delete (Append-Only Overrides) ====================
+    storeReaction(channel, messageId, emoji, user, action = 'add') { return this.overrides.storeReaction(channel, messageId, emoji, user, action); }
+    getChannelReactions(streamId) { return this.overrides.getChannelReactions(streamId); }
+    handleOverrideMessage(streamId, data, fromHistory = false) { return this.overrides.handleOverrideMessage(streamId, data, fromHistory); }
+    applyPendingOverrides(channel) { return this.overrides.applyPendingOverrides(channel); }
+    sendEdit(streamId, targetId, newText) { return this.overrides.sendEdit(streamId, targetId, newText); }
+    sendDelete(streamId, targetId) { return this.overrides.sendDelete(streamId, targetId); }
+    sendReaction(streamId, messageId, emoji, isRemoving = false) { return this.overrides.sendReaction(streamId, messageId, emoji, isRemoving); }
 
-    /**
-     * Handle an edit or delete override message (real-time or from history)
-     * Validates account matches original message sender, then applies the override.
-     * @param {string} streamId - Stream ID
-     * @param {Object} data - Override message { type: 'edit'|'delete', targetId, text?, account, timestamp }
-     * @param {boolean} [fromHistory=false] - Whether this is from history replay (skip notification)
-     */
-    handleOverrideMessage(streamId, data, fromHistory = false) {
-        const channel = this.channels.get(streamId);
-        if (!channel) return;
-
-        const account = data.account;
-        if (!account || !data.targetId) return;
-
-        // Find the original message
-        const original = channel.messages.find(m => m.id === data.targetId);
-
-        if (!original) {
-            // Message not loaded yet — store as pending override to apply later
-            if (!(channel._pendingOverrides instanceof Map)) channel._pendingOverrides = new Map();
-            const existing = channel._pendingOverrides.get(data.targetId);
-            // Keep only the latest override per targetId
-            if (!existing || data.timestamp > existing.timestamp) {
-                channel._pendingOverrides.set(data.targetId, data);
-            }
-            return;
-        }
-
-        // SECURITY: Only the original sender can edit/delete their message
-        if (original.sender?.toLowerCase() !== account.toLowerCase()) {
-            Logger.warn('Override rejected: sender mismatch', { 
-                originalSender: original.sender, overrideSender: account 
-            });
-            return;
-        }
-
-        // Apply the override
-        if (data.type === 'edit') {
-            if (!data.text) return;
-            original.text = data.text;
-            original._edited = true;
-            original._editedAt = data.timestamp;
-        } else if (data.type === 'delete') {
-            // Remove from messages array
-            const idx = channel.messages.indexOf(original);
-            if (idx >= 0) channel.messages.splice(idx, 1);
-        }
-
-        if (!fromHistory) {
-            this.notifyHandlers(data.type === 'edit' ? 'message_edited' : 'message_deleted', {
-                streamId,
-                targetId: data.targetId
-            });
-        }
-    }
-
-    /**
-     * Apply any pending overrides to messages that just arrived (e.g. from history)
-     * Called after messages are added to channel.messages
-     * @param {Object} channel - Channel object
-     */
-    applyPendingOverrides(channel) {
-        if (!(channel._pendingOverrides instanceof Map) || channel._pendingOverrides.size === 0) return;
-        
-        const applied = [];
-        for (const [targetId, override] of channel._pendingOverrides) {
-            const msg = channel.messages.find(m => m.id === targetId);
-            if (!msg) continue;
-            
-            // Verify sender match
-            if (msg.sender?.toLowerCase() !== override.account?.toLowerCase()) continue;
-            
-            if (override.type === 'edit' && override.text) {
-                msg.text = override.text;
-                msg._edited = true;
-                msg._editedAt = override.timestamp;
-            } else if (override.type === 'delete') {
-                msg._deleted = true;
-                msg._deletedAt = override.timestamp;
-            }
-            applied.push(targetId);
-        }
-        
-        for (const id of applied) {
-            channel._pendingOverrides.delete(id);
-        }
-
-        // Prune deleted messages in place (preserving array identity) so the
-        // final state matches handleOverrideMessage's splice path. Callers no
-        // longer need to remember a `filter(m => !m._deleted)` afterwards —
-        // forgetting it used to leave deleted messages visible.
-        for (let i = channel.messages.length - 1; i >= 0; i--) {
-            if (channel.messages[i]._deleted) channel.messages.splice(i, 1);
-        }
-    }
-
-    /**
-     * Send an edit for a previously sent message
-     * @param {string} streamId - Message Stream ID (channel key)
-     * @param {string} targetId - ID of the message to edit
-     * @param {string} newText - New text content
-     */
-    async sendEdit(streamId, targetId, newText) {
-        if (!newText?.trim()) throw new Error('Edit text cannot be empty');
-        
-        const channel = this.channels.get(streamId);
-        if (!channel) throw new Error('Channel not found');
-
-        // DM channels: route through DMManager
-        if (channel.type === 'dm') {
-            return await dmManager.sendEdit(streamId, targetId, newText);
-        }
-
-        const overrideKey = `${streamId}:${targetId}:edit`;
-        if (this.pendingOverrides.has(overrideKey)) return;
-        this.pendingOverrides.add(overrideKey);
-
-        try {
-            const original = channel.messages.find(m => m.id === targetId);
-            if (!original) throw new Error('Message not found');
-            
-            const myAddress = authManager.getAddress();
-            if (original.sender?.toLowerCase() !== myAddress?.toLowerCase()) {
-                throw new Error('Can only edit your own messages');
-            }
-
-            const override = {
-                type: 'edit',
-                targetId,
-                text: newText.trim(),
-                timestamp: Date.now()
-            };
-
-            // Apply locally first (optimistic)
-            original.text = override.text;
-            original._edited = true;
-            original._editedAt = override.timestamp;
-
-            this.notifyHandlers('message_edited', { streamId, targetId });
-
-            // Publish to control partition when available, else fallback to content partition
-            const overridePartition = channel?._controlPartitionSupported === false
-                ? STREAM_CONFIG.MESSAGE_STREAM.MESSAGES
-                : STREAM_CONFIG.MESSAGE_STREAM.CONTROL;
-            // publishAsChannel, not publish: edits/deletes must ride the SAME
-            // identity as the message they override — the channel's ephemeral
-            // key with the proof (public/password), or the account (gated/
-            // read-only). Going through the raw account path put the wallet
-            // on the wire beside ephemeral messages.
-            await streamrController.publishAsChannel(
-                streamId,
-                overridePartition,
-                override,
-                channel.password
-            );
-            Logger.debug('Edit published for message:', targetId);
-        } finally {
-            setTimeout(() => this.pendingOverrides.delete(overrideKey), 2000);
-        }
-    }
-
-    /**
-     * Send a delete for a previously sent message
-     * @param {string} streamId - Message Stream ID (channel key)
-     * @param {string} targetId - ID of the message to delete
-     */
-    async sendDelete(streamId, targetId) {
-        const channel = this.channels.get(streamId);
-        if (!channel) throw new Error('Channel not found');
-
-        // DM channels: route through DMManager
-        if (channel.type === 'dm') {
-            return await dmManager.sendDelete(streamId, targetId);
-        }
-
-        const overrideKey = `${streamId}:${targetId}:delete`;
-        if (this.pendingOverrides.has(overrideKey)) return;
-        this.pendingOverrides.add(overrideKey);
-
-        try {
-            const original = channel.messages.find(m => m.id === targetId);
-            if (!original) throw new Error('Message not found');
-            
-            const myAddress = authManager.getAddress();
-            if (original.sender?.toLowerCase() !== myAddress?.toLowerCase()) {
-                throw new Error('Can only delete your own messages');
-            }
-
-            const override = {
-                type: 'delete',
-                targetId,
-                timestamp: Date.now()
-            };
-
-            // Apply locally first (optimistic) — remove from messages array
-            const idx = channel.messages.indexOf(original);
-            if (idx >= 0) channel.messages.splice(idx, 1);
-
-            this.notifyHandlers('message_deleted', { streamId, targetId });
-
-            // Publish to control partition when available, else fallback to content partition
-            const overridePartition = channel?._controlPartitionSupported === false
-                ? STREAM_CONFIG.MESSAGE_STREAM.MESSAGES
-                : STREAM_CONFIG.MESSAGE_STREAM.CONTROL;
-            // Same identity as the message it deletes — see sendEdit.
-            await streamrController.publishAsChannel(
-                streamId,
-                overridePartition,
-                override,
-                channel.password
-            );
-            Logger.debug('Delete published for message:', targetId);
-        } finally {
-            setTimeout(() => this.pendingOverrides.delete(overrideKey), 2000);
-        }
-    }
+    // ==================== End Message Overrides ====================
 
     // ==================== Presence Tracking ====================
     // Lives in channels/PresenceTracker.js; the manager keeps the entry
@@ -4286,77 +4027,6 @@ class ChannelManager {
         } catch (error) {
             // Non-critical - log but don't throw
             Logger.debug('Failed to send wake signals:', error.message);
-        }
-    }
-
-    /**
-     * Send reaction to a message
-     * @param {string} streamId - Stream ID
-     * @param {string} messageId - Message ID to react to
-     * @param {string} emoji - Emoji reaction
-     * @param {boolean} isRemoving - True if removing reaction
-     */
-    async sendReaction(streamId, messageId, emoji, isRemoving = false) {
-        const action = isRemoving ? 'remove' : 'add';
-        
-        // DEDUPLICATION: Create unique key for this reaction operation
-        // Prevents duplicate sends on rapid clicks
-        const reactionKey = `${streamId}:${messageId}:${emoji}:${action}`;
-        
-        if (this.pendingReactions.has(reactionKey)) {
-            Logger.debug('Reaction already pending, skipping duplicate:', reactionKey);
-            return; // Silently skip duplicate
-        }
-        
-        this.pendingReactions.add(reactionKey);
-        
-        try {
-            const channel = this.channels.get(streamId);
-            if (!channel) return;
-
-            const reaction = {
-                type: 'reaction',
-                action: action,
-                messageId: messageId,
-                emoji: emoji,
-                senderName: identityManager.getUsername?.() || null,
-                timestamp: Date.now()
-            };
-
-            // DM channels: sealed sender before publishing to peer's inbox
-            if (channel.type === 'dm' && channel.peerAddress) {
-                const myAddress = authManager.getAddress();
-                await dmManager.sealAndPublish(
-                    streamId, channel.peerAddress, reaction,
-                    STREAM_CONFIG.MESSAGE_STREAM.MESSAGES);
-
-                // Persist locally — we won't receive our own reaction back from peer's inbox
-                await secureStorage.addSentReaction(streamId, messageId, emoji, myAddress, action);
-            } else {
-                // Regular channels: send to MESSAGE stream (stored) via publishReaction
-                await streamrController.publishReaction(
-                    streamId,
-                    reaction,
-                    channel.password
-                );
-            }
-            
-            // Persist locally for write-only channels
-            if (channel.writeOnly) {
-                // Use own address — the reaction object has no `user` field
-                // (the old `reaction.user` was always undefined, breaking
-                // reaction rendering after reload on write-only channels)
-                await secureStorage.addSentReaction(streamId, messageId, emoji, authManager.getAddress(), action);
-            }
-            
-            Logger.debug('Reaction', action, ':', emoji, 'to message:', messageId);
-        } catch (error) {
-            Logger.error('Failed to send reaction:', error);
-        } finally {
-            // Remove from pending after debounce period to prevent rapid re-sends
-            setTimeout(() => {
-                this.pendingReactions.delete(reactionKey);
-            }, this.REACTION_DEBOUNCE_MS);
         }
     }
 
