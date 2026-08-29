@@ -6,6 +6,7 @@ import { channelManager } from '../../channels.js';
 import { mediaController } from '../../media.js';
 import { Logger } from '../../logger.js';
 import { mediaHandler } from '../MediaHandler.js';
+import { escapeAttr as _escapeAttr } from '../utils.js';
 
 /**
  * @param {Object} ui - the UI controller singleton
