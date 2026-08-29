@@ -6,6 +6,7 @@ import { mediaController } from '../../media.js';
 import { mediaHandler } from '../MediaHandler.js';
 import { messageRenderer } from '../MessageRenderer.js';
 import { sanitizeText } from '../sanitizer.js';
+import { escapeAttr as _escapeAttr } from '../utils.js';
 
 /**
  * @param {Object} ui - the UI controller singleton
