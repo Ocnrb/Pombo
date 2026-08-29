@@ -370,6 +370,10 @@ class ChannelManager {
                 // Moderation can still list them after a reload.
                 knownBanned: ch.knownBanned || [],
                 storageEnabled: ch.storageEnabled,
+                // Last -3 retention read off-chain. Only a fallback for when
+                // the Graph is unreachable on a later open: without it the
+                // TTL republish reverts to the 180-day default and disarms.
+                adminStorageDays: ch.adminStorageDays ?? null,
                 // Exposure and metadata
                 exposure: ch.exposure || 'hidden',
                 description: ch.description || '',
@@ -1542,10 +1546,12 @@ class ChannelManager {
             ? await streamrController.setStorageDays(adminStreamId, days)
             : false;
 
-        // Keep the local copy in sync — the TTL republish check on owner open
-        // (docs/TTL_REPUBLISH_PLAN.md) compares artifact age against this.
-        if (message && typeof days === 'number' && days > 0) {
-            channel.storageDays = days;
+        // Keep the local copies in sync. The -3 value is the one the TTL
+        // republish falls back to, and the Graph lags the transaction by
+        // enough to answer a reopen with the previous retention.
+        if (typeof days === 'number' && days > 0 && (message || admin)) {
+            if (message) channel.storageDays = days;
+            if (admin) channel.adminStorageDays = days;
             await this.saveChannels();
         }
 

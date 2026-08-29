@@ -7,6 +7,7 @@ import { Logger } from '../logger.js';
 import { CONFIG } from '../config.js';
 import { streamrController } from '../streamr.js';
 import { authManager } from '../auth.js';
+import { graphAPI } from '../graph.js';
 import { channelImageManager } from '../channelImageManager.js';
 import { epochKeyManager } from '../epochKeyManager.js';
 import { shouldRepublish } from '../ttlRepublish.js';
@@ -18,6 +19,49 @@ export class TtlRepublish {
      */
     constructor(manager) {
         this.manager = manager;
+    }
+
+    /**
+     * Retention of the ADMIN stream, which is what the purge applies to the
+     * -3 artifacts. The chain is the system of record: `channel.storageDays`
+     * is the retention REQUESTED at creation for the -1, is absent on joined
+     * records, and diverges from the -3 whenever a partial update leaves the
+     * two streams out of step.
+     *
+     * The resolved value is cached on the channel purely as a fallback for a
+     * Graph outage — without it an unreachable Graph silently reinstates the
+     * 180-day default and disarms the republish.
+     *
+     * Never throws: an unresolved retention must still let the caller run the
+     * challenge redundancy check.
+     *
+     * @param {Object} channel - Channel object (the live record in `channels`)
+     * @param {string} adminStreamId - Admin stream id (-3)
+     * @returns {Promise<{storageDays: number, source: 'graph'|'cached'|'local'|'default'}>}
+     * @private
+     */
+    async _resolveAdminRetention(channel, adminStreamId) {
+        try {
+            const stream = await graphAPI.getStream(adminStreamId);
+            const days = JSON.parse(stream?.metadata || '{}').storageDays;
+            if (typeof days === 'number' && days > 0) {
+                if (channel.adminStorageDays !== days) {
+                    channel.adminStorageDays = days;
+                    await this.manager.saveChannels();
+                }
+                return { storageDays: days, source: 'graph' };
+            }
+        } catch (e) {
+            Logger.debug('Admin retention lookup failed:', e?.message);
+        }
+
+        if (typeof channel.adminStorageDays === 'number' && channel.adminStorageDays > 0) {
+            return { storageDays: channel.adminStorageDays, source: 'cached' };
+        }
+        if (typeof channel.storageDays === 'number' && channel.storageDays > 0) {
+            return { storageDays: channel.storageDays, source: 'local' };
+        }
+        return { storageDays: CONFIG.storage.defaultRetentionDays, source: 'default' };
     }
 
     /**
@@ -67,14 +111,17 @@ export class TtlRepublish {
             && !!ownerAddress
             && myAddress.toLowerCase() === ownerAddress.toLowerCase();
 
-        const storageDays = (typeof channel.storageDays === 'number' && channel.storageDays > 0)
-            ? channel.storageDays
-            : CONFIG.storage.defaultRetentionDays;
+        // Resolved for the owner only: everyone else returns right below.
+        const retention = isOwner
+            ? await this._resolveAdminRetention(channel, adminStreamId)
+            : { storageDays: null, source: 'not-owner' };
+        const storageDays = retention.storageDays;
         const ageDays = (ts) => Math.round((Date.now() - ts) / 86_400_000);
 
         // One line per open stating the gate values — republishes are rare by
         // design, so without this the "nothing to do" paths are silent and
-        // undiagnosable in the field.
+        // undiagnosable in the field. `thresholdDays` is the age at which a
+        // retained artifact starts republishing.
         Logger.debug('TTL republish check', {
             streamId: channel.messageStreamId.slice(-20),
             type: channel.type,
@@ -82,7 +129,11 @@ export class TtlRepublish {
             hasPwd: !!pwd,
             adminRev: channel.adminRev || 0,
             adminAgeDays: channel.adminTs ? ageDays(channel.adminTs) : null,
-            storageDays
+            storageDays,
+            retentionSource: retention.source,
+            thresholdDays: storageDays
+                ? Number((storageDays * (CONFIG.storage.ttlRepublishAgeFraction ?? 0.8)).toFixed(2))
+                : null
         });
 
         // Only the owner can publish on -3 (on-chain permissions) — for
