@@ -44,7 +44,8 @@ vi.mock('../../src/js/streamr.js', () => ({
     },
     deriveEphemeralId: vi.fn((id) => `${id}-ephemeral`),
     deriveMessageId: vi.fn((id) => `${id}-message`),
-    deriveAdminId: vi.fn((id) => `${id}-admin`)
+    deriveAdminId: vi.fn((id) => `${id}-admin`),
+    deriveKeysId: vi.fn((id) => `${id}-keys`)
 }));
 
 vi.mock('../../src/js/auth.js', () => ({
@@ -516,5 +517,148 @@ describe('setChannelStorageDays() local sync', () => {
         await channelManager.setChannelStorageDays('s-1', 30);
         expect(channel.storageDays).toBe(180);
         expect(channel.adminStorageDays).toBe(30);
+    });
+
+    // A gated channel's KEY_ANNOUNCEs live on the -4 and age out by its own
+    // retention. Leaving it out of the update lets it purge on a schedule
+    // nobody chose, while the settings panel reports success.
+    describe('keys stream (-4)', () => {
+        const gated = (extra = {}) => ({
+            messageStreamId: 's-1', adminStreamId: 's-3', keysStreamId: 's-4',
+            name: 'T', type: 'gated', gate: { address: '0xgate' },
+            storageDays: 180, adminStorageDays: 180, keysStorageDays: 180, ...extra
+        });
+
+        it('applies the retention to the keys stream too', async () => {
+            channelManager.channels.set('s-1', gated());
+            streamrController.setStorageDays.mockResolvedValue(true);
+
+            const result = await channelManager.setChannelStorageDays('s-1', 30);
+            expect(streamrController.setStorageDays).toHaveBeenCalledWith('s-4', 30);
+            expect(result.keys).toBe(true);
+        });
+
+        it('derives the keys stream when the record does not carry it', async () => {
+            channelManager.channels.set('s-1', gated({ keysStreamId: undefined }));
+            streamrController.setStorageDays.mockResolvedValue(true);
+
+            await channelManager.setChannelStorageDays('s-1', 30);
+            expect(streamrController.setStorageDays).toHaveBeenCalledWith('s-1-keys', 30);
+        });
+
+        it('caches the keys retention only when its own update succeeded', async () => {
+            const channel = gated();
+            channelManager.channels.set('s-1', channel);
+            // Message, admin, keys — in that order.
+            streamrController.setStorageDays
+                .mockResolvedValueOnce(true)
+                .mockResolvedValueOnce(true)
+                .mockResolvedValueOnce(false);
+
+            const result = await channelManager.setChannelStorageDays('s-1', 30);
+            expect(channel.storageDays).toBe(30);
+            expect(channel.adminStorageDays).toBe(30);
+            expect(channel.keysStorageDays).toBe(180);
+            expect(result.keys).toBe(false);
+        });
+
+        it('reports null rather than false for a channel with no keys stream', async () => {
+            channelManager.channels.set('s-1', {
+                messageStreamId: 's-1', adminStreamId: 's-3', name: 'T', type: 'public'
+            });
+            streamrController.setStorageDays.mockResolvedValue(true);
+
+            const result = await channelManager.setChannelStorageDays('s-1', 30);
+            expect(result.keys).toBeNull();
+            expect(streamrController.setStorageDays).toHaveBeenCalledTimes(2);
+        });
+    });
+});
+
+describe('saveChannels() retention persistence', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        channelManager.channels.clear();
+    });
+
+    // Unsaved, every reload reverts these to the 180-day default and disarms
+    // both the TTL republish and the epoch-key re-announce.
+    it('persists the retention of all three stored streams', async () => {
+        channelManager.channels.set('s-1', {
+            messageStreamId: 's-1', adminStreamId: 's-3', keysStreamId: 's-4',
+            name: 'T', type: 'gated',
+            storageDays: 30, adminStorageDays: 20, keysStorageDays: 10
+        });
+
+        await channelManager.saveChannels();
+        expect(secureStorage.setChannels).toHaveBeenCalledWith(
+            expect.arrayContaining([expect.objectContaining({
+                storageDays: 30, adminStorageDays: 20, keysStorageDays: 10
+            })])
+        );
+    });
+
+    it('writes null rather than dropping an unresolved retention', async () => {
+        channelManager.channels.set('s-1', {
+            messageStreamId: 's-1', adminStreamId: 's-3', name: 'T', type: 'public'
+        });
+
+        await channelManager.saveChannels();
+        const [saved] = secureStorage.setChannels.mock.calls[0][0];
+        expect(saved.storageDays).toBeNull();
+        expect(saved.adminStorageDays).toBeNull();
+        expect(saved.keysStorageDays).toBeNull();
+    });
+});
+
+describe('channelManager._resolveKeysRetention()', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        channelManager.channels.clear();
+        graphAPI.getStream.mockResolvedValue(null);
+    });
+
+    const gated = (extra = {}) => ({
+        messageStreamId: 's-1', keysStreamId: 's-4',
+        name: 'T', type: 'gated', storageDays: 180, ...extra
+    });
+
+    it('reads the keys stream, not the message or admin one', async () => {
+        graphAPI.getStream.mockResolvedValue(streamMetadata(7));
+        await channelManager._resolveKeysRetention(gated());
+        expect(graphAPI.getStream).toHaveBeenCalledWith('s-4');
+        expect(graphAPI.getStream).toHaveBeenCalledTimes(1);
+    });
+
+    it('caches the resolved retention and persists it', async () => {
+        graphAPI.getStream.mockResolvedValue(streamMetadata(7));
+        const channel = gated();
+        channelManager.channels.set('s-1', channel);
+
+        await channelManager._resolveKeysRetention(channel);
+        expect(channel.keysStorageDays).toBe(7);
+        expect(secureStorage.setChannels).toHaveBeenCalledWith(
+            expect.arrayContaining([expect.objectContaining({ keysStorageDays: 7 })])
+        );
+    });
+
+    it('does not re-persist an unchanged retention', async () => {
+        graphAPI.getStream.mockResolvedValue(streamMetadata(7));
+        await channelManager._resolveKeysRetention(gated({ keysStorageDays: 7 }));
+        expect(secureStorage.setChannels).not.toHaveBeenCalled();
+    });
+
+    it('leaves the cached value alone when the Graph is unreachable', async () => {
+        graphAPI.getStream.mockRejectedValue(new Error('graph down'));
+        const channel = gated({ keysStorageDays: 3 });
+        await channelManager._resolveKeysRetention(channel);
+        expect(channel.keysStorageDays).toBe(3);
+        expect(secureStorage.setChannels).not.toHaveBeenCalled();
+    });
+
+    it('derives the keys stream when the record does not carry it', async () => {
+        graphAPI.getStream.mockResolvedValue(streamMetadata(7));
+        await channelManager._resolveKeysRetention(gated({ keysStreamId: undefined }));
+        expect(graphAPI.getStream).toHaveBeenCalledWith('s-1-keys');
     });
 });

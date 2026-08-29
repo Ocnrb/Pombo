@@ -7,7 +7,7 @@ import { Logger } from '../logger.js';
 import { CONFIG } from '../config.js';
 import { streamrController } from '../streamr.js';
 import { authManager } from '../auth.js';
-import { graphAPI } from '../graph.js';
+import { readStreamRetention, pickRetention } from '../streamRetention.js';
 import { channelImageManager } from '../channelImageManager.js';
 import { epochKeyManager } from '../epochKeyManager.js';
 import { shouldRepublish } from '../ttlRepublish.js';
@@ -41,27 +41,16 @@ export class TtlRepublish {
      * @private
      */
     async _resolveAdminRetention(channel, adminStreamId) {
-        try {
-            const stream = await graphAPI.getStream(adminStreamId);
-            const days = JSON.parse(stream?.metadata || '{}').storageDays;
-            if (typeof days === 'number' && days > 0) {
-                if (channel.adminStorageDays !== days) {
-                    channel.adminStorageDays = days;
-                    await this.manager.saveChannels();
-                }
-                return { storageDays: days, source: 'graph' };
-            }
-        } catch (e) {
-            Logger.debug('Admin retention lookup failed:', e?.message);
+        const days = await readStreamRetention(adminStreamId);
+        if (days !== null && channel.adminStorageDays !== days) {
+            channel.adminStorageDays = days;
+            await this.manager.saveChannels();
         }
-
-        if (typeof channel.adminStorageDays === 'number' && channel.adminStorageDays > 0) {
-            return { storageDays: channel.adminStorageDays, source: 'cached' };
-        }
-        if (typeof channel.storageDays === 'number' && channel.storageDays > 0) {
-            return { storageDays: channel.storageDays, source: 'local' };
-        }
-        return { storageDays: CONFIG.storage.defaultRetentionDays, source: 'default' };
+        return pickRetention([
+            [days, 'graph'],
+            [channel.adminStorageDays, 'cached'],
+            [channel.storageDays, 'local']
+        ]);
     }
 
     /**

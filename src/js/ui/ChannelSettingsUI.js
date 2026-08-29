@@ -476,7 +476,8 @@ class ChannelSettingsUI {
                 showNotification?.('Updating retention…', 'info');
                 try {
                     const result = await channelManager.setChannelStorageDays(channel.streamId, days);
-                    const ok = result.message && result.admin;
+                    // `keys` is null on channels without a -4, which is not a failure.
+                    const ok = result.message && result.admin && result.keys !== false;
                     showNotification?.(
                         ok ? `Retention updated to ${days} days` : 'Retention updated partially. Try again.',
                         ok ? 'success' : 'error'
