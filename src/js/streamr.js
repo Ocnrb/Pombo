@@ -1462,9 +1462,14 @@ class StreamrController {
     }
 
     /**
-     * Get storage information for a stream from the Streamr SDK
+     * Get storage information for a stream from the Streamr SDK.
+     *
+     * `ok` says whether the chain actually answered. Everything else is only
+     * meaningful when it did: an unreachable RPC returns the same empty shape
+     * a stream with no storage would.
+     *
      * @param {string} streamId - Stream ID
-     * @returns {Promise<{enabled: boolean, nodes: string[], storageDays: number|null}>}
+     * @returns {Promise<{ok: boolean, enabled: boolean, nodes: string[], storageDays: number|null}>}
      */
     async getStreamStorageInfo(streamId) {
         if (!this.client) {
@@ -1510,10 +1515,12 @@ class StreamrController {
                 }
             }
             
-            return { enabled, nodes: storageNodes, storageDays };
+            return { ok: true, enabled, nodes: storageNodes, storageDays };
         } catch (error) {
             Logger.error('Failed to get stream storage info:', error);
-            return { enabled: false, nodes: [], storageDays: null };
+            // `ok: false` is not "no nodes": callers that would skip a write,
+            // or call a node missing, must treat it as nothing known.
+            return { ok: false, enabled: false, nodes: [], storageDays: null };
         }
     }
 

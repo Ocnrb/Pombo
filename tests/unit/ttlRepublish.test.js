@@ -40,6 +40,7 @@ vi.mock('../../src/js/streamr.js', () => ({
         checkPermissions: vi.fn().mockResolvedValue({ canSubscribe: true, canPublish: true, isOwner: false })
     },
     STREAM_CONFIG: {
+        NODE_ADDRESS: '0xae340e799e8151f6a4999d245e466197aa217667',
         partitions: 1,
         LOAD_MORE_COUNT: 20,
         ADMIN_HISTORY_COUNT: 10,
@@ -527,57 +528,6 @@ describe('setChannelStorageDays() local sync', () => {
     // A gated channel's KEY_ANNOUNCEs live on the -4 and age out by its own
     // retention. Leaving it out of the update lets it purge on a schedule
     // nobody chose, while the settings panel reports success.
-    describe('keys stream (-4)', () => {
-        const gated = (extra = {}) => ({
-            messageStreamId: 's-1', adminStreamId: 's-3', keysStreamId: 's-4',
-            name: 'T', type: 'gated', gate: { address: '0xgate' },
-            storageDays: 180, adminStorageDays: 180, keysStorageDays: 180, ...extra
-        });
-
-        it('applies the retention to the keys stream too', async () => {
-            channelManager.channels.set('s-1', gated());
-            streamrController.setStorageDays.mockResolvedValue(true);
-
-            const result = await channelManager.setChannelStorageDays('s-1', 30);
-            expect(streamrController.setStorageDays).toHaveBeenCalledWith('s-4', 30);
-            expect(result.keys).toBe(true);
-        });
-
-        it('derives the keys stream when the record does not carry it', async () => {
-            channelManager.channels.set('s-1', gated({ keysStreamId: undefined }));
-            streamrController.setStorageDays.mockResolvedValue(true);
-
-            await channelManager.setChannelStorageDays('s-1', 30);
-            expect(streamrController.setStorageDays).toHaveBeenCalledWith('s-1-keys', 30);
-        });
-
-        it('caches the keys retention only when its own update succeeded', async () => {
-            const channel = gated();
-            channelManager.channels.set('s-1', channel);
-            // Message, admin, keys — in that order.
-            streamrController.setStorageDays
-                .mockResolvedValueOnce(true)
-                .mockResolvedValueOnce(true)
-                .mockResolvedValueOnce(false);
-
-            const result = await channelManager.setChannelStorageDays('s-1', 30);
-            expect(channel.storageDays).toBe(30);
-            expect(channel.adminStorageDays).toBe(30);
-            expect(channel.keysStorageDays).toBe(180);
-            expect(result.keys).toBe(false);
-        });
-
-        it('reports null rather than false for a channel with no keys stream', async () => {
-            channelManager.channels.set('s-1', {
-                messageStreamId: 's-1', adminStreamId: 's-3', name: 'T', type: 'public'
-            });
-            streamrController.setStorageDays.mockResolvedValue(true);
-
-            const result = await channelManager.setChannelStorageDays('s-1', 30);
-            expect(result.keys).toBeNull();
-            expect(streamrController.setStorageDays).toHaveBeenCalledTimes(2);
-        });
-    });
 });
 
 describe('saveChannels() retention persistence', () => {
@@ -794,44 +744,241 @@ describe('channel storage covers every stored stream', () => {
             expect(result.retention.keys).toBeNull();
             expect(result.retentionInSync).toBe(true);
         });
+
+        // A lookup that failed is not a stream without nodes, and the panel
+        // needs the difference before it calls a node missing.
+        it('flags that not every stream answered', async () => {
+            channelManager.channels.set('s-1', gated());
+            streamrController.getStreamStorageInfo
+                .mockResolvedValueOnce(info([NODE], 180))
+                .mockResolvedValueOnce({ ok: false, enabled: false, nodes: [], storageDays: null })
+                .mockResolvedValueOnce(info([NODE], 180));
+
+            const result = await channelManager.getChannelStorageInfo('s-1');
+            expect(result.allStreamsRead).toBe(false);
+        });
+
+        it('does not flag anything when every stream answered', async () => {
+            channelManager.channels.set('s-1', gated());
+            streamrController.getStreamStorageInfo.mockResolvedValue(info([NODE], 180));
+
+            const result = await channelManager.getChannelStorageInfo('s-1');
+            expect(result.allStreamsRead).toBe(true);
+        });
+    });
+
+
+});
+
+describe('storage writes go only where they are needed', () => {
+    // Every storage operation is one transaction per stream. A channel that
+    // is already half-configured should cost what is missing, not the whole
+    // set again, and the count the user approves has to be the real one.
+    const NODE = '0xae340e799e8151f6a4999d245e466197aa217667';
+    const OTHER = '0xotherstoragenode';
+
+    const state = (nodes, storageDays, ok = true) => ({ ok, enabled: nodes.length > 0, nodes, storageDays });
+
+    const gated = (extra = {}) => ({
+        messageStreamId: 's-1', adminStreamId: 's-3', keysStreamId: 's-4',
+        name: 'T', type: 'gated', gate: { address: '0xgate' }, ...extra
+    });
+    const plain = (extra = {}) => ({
+        messageStreamId: 's-1', adminStreamId: 's-3', name: 'T', type: 'public', ...extra
+    });
+
+    /** Queue the reads: three streams before, then three after. */
+    const reads = (...values) => {
+        streamrController.getStreamStorageInfo.mockReset();
+        values.forEach(v => streamrController.getStreamStorageInfo.mockResolvedValueOnce(v));
+        streamrController.getStreamStorageInfo.mockResolvedValue(values[values.length - 1]);
+    };
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        channelManager.channels.clear();
+        streamrController.setStorageDays.mockResolvedValue(true);
+        streamrController.addStorageNodeToStream.mockResolvedValue({ success: true, nodeAddress: NODE });
+        streamrController.removeStorageFromStream.mockResolvedValue({ success: true });
+    });
+
+    describe('setChannelStorageDays()', () => {
+        it('writes only to the streams that are not already at the target', async () => {
+            channelManager.channels.set('s-1', gated());
+            reads(
+                state([NODE], 180), state([NODE], 180), state([NODE], 3),   // before
+                state([NODE], 180), state([NODE], 180), state([NODE], 180)  // after
+            );
+
+            const result = await channelManager.setChannelStorageDays('s-1', 180);
+            expect(streamrController.setStorageDays).toHaveBeenCalledTimes(1);
+            expect(streamrController.setStorageDays).toHaveBeenCalledWith('s-4', 180);
+            expect(result.sent).toBe(1);
+            expect(result.results).toEqual({ message: 'unchanged', admin: 'unchanged', keys: 'applied' });
+        });
+
+        it('sends nothing when every stream already holds the target', async () => {
+            channelManager.channels.set('s-1', gated());
+            reads(state([NODE], 180), state([NODE], 180), state([NODE], 180));
+
+            const result = await channelManager.setChannelStorageDays('s-1', 180);
+            expect(streamrController.setStorageDays).not.toHaveBeenCalled();
+            expect(result.sent).toBe(0);
+            expect(result.verified).toBeNull();
+        });
+
+        // Skipping on an unknown would leave the stream diverged with the UI
+        // reporting success; a redundant write only costs gas.
+        it('writes to a stream whose current retention could not be read', async () => {
+            channelManager.channels.set('s-1', plain());
+            reads(
+                state([NODE], 180), state([], null, false),
+                state([NODE], 180), state([NODE], 180)
+            );
+
+            await channelManager.setChannelStorageDays('s-1', 180);
+            expect(streamrController.setStorageDays).toHaveBeenCalledTimes(1);
+            expect(streamrController.setStorageDays).toHaveBeenCalledWith('s-3', 180);
+        });
+
+        it('reports the write as unverified when the read-back still disagrees', async () => {
+            channelManager.channels.set('s-1', plain());
+            reads(
+                state([NODE], 180), state([NODE], 3),
+                state([NODE], 180), state([NODE], 3)   // the -3 never took it
+            );
+
+            const result = await channelManager.setChannelStorageDays('s-1', 180);
+            expect(result.verified).toBe(false);
+        });
+
+        it('confirms the write when the read-back agrees', async () => {
+            channelManager.channels.set('s-1', plain());
+            reads(
+                state([NODE], 180), state([NODE], 3),
+                state([NODE], 180), state([NODE], 180)
+            );
+
+            const result = await channelManager.setChannelStorageDays('s-1', 180);
+            expect(result.verified).toBe(true);
+        });
+
+        it('caches a retention a stream already had, not only the ones written', async () => {
+            const channel = gated();
+            channelManager.channels.set('s-1', channel);
+            reads(
+                state([NODE], 180), state([NODE], 180), state([NODE], 3),
+                state([NODE], 180), state([NODE], 180), state([NODE], 180)
+            );
+
+            await channelManager.setChannelStorageDays('s-1', 180);
+            expect(channel.storageDays).toBe(180);
+            expect(channel.adminStorageDays).toBe(180);
+            expect(channel.keysStorageDays).toBe(180);
+        });
+
+        it('does not cache a retention whose write failed', async () => {
+            const channel = plain({ storageDays: 30, adminStorageDays: 30 });
+            channelManager.channels.set('s-1', channel);
+            reads(state([NODE], 30), state([NODE], 30), state([NODE], 30), state([NODE], 30));
+            streamrController.setStorageDays.mockResolvedValue(false);
+
+            await channelManager.setChannelStorageDays('s-1', 180);
+            expect(channel.storageDays).toBe(30);
+            expect(channel.adminStorageDays).toBe(30);
+        });
     });
 
     describe('addChannelStorageNode()', () => {
-        it('adds the node to the keys stream too', async () => {
+        it('adds the node only to the streams that lack it', async () => {
             channelManager.channels.set('s-1', gated());
+            reads(
+                state([NODE], 180), state([NODE], 180), state([], null),
+                state([NODE], 180), state([NODE], 180), state([NODE], 180)
+            );
+
             const result = await channelManager.addChannelStorageNode('s-1', { storageProvider: 'streamr' });
+            expect(streamrController.addStorageNodeToStream).toHaveBeenCalledTimes(1);
             expect(streamrController.addStorageNodeToStream)
                 .toHaveBeenCalledWith('s-4', { storageProvider: 'streamr' });
-            expect(result.keys.success).toBe(true);
+            expect(result.results.keys).toBe('applied');
         });
 
-        it('reports null rather than a failure for a channel with no keys stream', async () => {
+        it('sends nothing when the node is already on every stream', async () => {
+            channelManager.channels.set('s-1', gated());
+            reads(state([NODE], 180), state([NODE], 180), state([NODE], 180));
+
+            const result = await channelManager.addChannelStorageNode('s-1', { storageProvider: 'streamr' });
+            expect(streamrController.addStorageNodeToStream).not.toHaveBeenCalled();
+            expect(result.sent).toBe(0);
+        });
+
+        it('matches the node address case-insensitively', async () => {
             channelManager.channels.set('s-1', plain());
-            const result = await channelManager.addChannelStorageNode('s-1', {});
-            expect(result.keys).toBeNull();
+            reads(state([NODE.toUpperCase()], 180), state([NODE], 180));
+
+            const result = await channelManager.addChannelStorageNode('s-1', { storageProvider: 'streamr' });
+            expect(result.sent).toBe(0);
+        });
+
+        it('adds a custom node the streams do not carry', async () => {
+            channelManager.channels.set('s-1', plain());
+            reads(
+                state([NODE], 180), state([NODE], 180),
+                state([NODE, OTHER], 180), state([NODE, OTHER], 180)
+            );
+
+            await channelManager.addChannelStorageNode('s-1',
+                { storageProvider: 'custom', customStorageAddress: OTHER });
             expect(streamrController.addStorageNodeToStream).toHaveBeenCalledTimes(2);
         });
 
-        it('derives the keys stream when the record does not carry it', async () => {
-            channelManager.channels.set('s-1', gated({ keysStreamId: undefined }));
-            await channelManager.addChannelStorageNode('s-1', {});
-            expect(streamrController.addStorageNodeToStream).toHaveBeenCalledWith('s-1-keys', {});
+        it('writes to a stream it could not read', async () => {
+            channelManager.channels.set('s-1', plain());
+            reads(
+                state([NODE], 180), state([], null, false),
+                state([NODE], 180), state([NODE], 180)
+            );
+
+            await channelManager.addChannelStorageNode('s-1', { storageProvider: 'streamr' });
+            expect(streamrController.addStorageNodeToStream).toHaveBeenCalledWith('s-3', expect.any(Object));
         });
     });
 
     describe('removeChannelStorageNode()', () => {
-        it('removes the node from the keys stream too', async () => {
+        it('removes the node only from the streams that carry it', async () => {
             channelManager.channels.set('s-1', gated());
+            reads(
+                state([NODE], 180), state([], null), state([NODE], 180),
+                state([], null), state([], null), state([], null)
+            );
+
             const result = await channelManager.removeChannelStorageNode('s-1', NODE);
-            expect(streamrController.removeStorageFromStream).toHaveBeenCalledWith('s-4', NODE);
-            expect(result.keys.success).toBe(true);
+            expect(streamrController.removeStorageFromStream).toHaveBeenCalledTimes(2);
+            expect(result.results.admin).toBe('unchanged');
         });
 
-        it('reports null rather than a failure for a channel with no keys stream', async () => {
-            channelManager.channels.set('s-1', plain());
+        it('sends nothing when no stream carries the node', async () => {
+            channelManager.channels.set('s-1', gated());
+            reads(state([], null), state([], null), state([], null));
+
             const result = await channelManager.removeChannelStorageNode('s-1', NODE);
-            expect(result.keys).toBeNull();
-            expect(streamrController.removeStorageFromStream).toHaveBeenCalledTimes(2);
+            expect(streamrController.removeStorageFromStream).not.toHaveBeenCalled();
+            expect(result.sent).toBe(0);
+        });
+
+        // A stream we could not read has an empty node list, which looks
+        // exactly like one that never carried the node. Skipping on that
+        // would leave the node assigned with the UI reporting it removed.
+        it('removes from a stream it could not read', async () => {
+            channelManager.channels.set('s-1', plain());
+            reads(
+                state([NODE], 180), state([], null, false),
+                state([], null), state([], null)
+            );
+
+            await channelManager.removeChannelStorageNode('s-1', NODE);
+            expect(streamrController.removeStorageFromStream).toHaveBeenCalledWith('s-3', NODE);
         });
     });
 });

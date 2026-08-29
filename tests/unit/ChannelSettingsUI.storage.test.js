@@ -171,6 +171,15 @@ describe('storage panel rendering', () => {
             }), false);
             expect(list.innerHTML).not.toContain('partial');
         });
+
+        // A lookup that timed out says nothing about that stream.
+        it('does not badge a node when a stream lookup failed', () => {
+            channelSettingsUI._renderStorageList({}, info({
+                nodes: [node({ onMessage: false })],
+                allStreamsRead: false
+            }), false);
+            expect(list.innerHTML).not.toContain('partial');
+        });
     });
 });
 
@@ -182,26 +191,37 @@ describe('_reportStorageResult()', () => {
         channelSettingsUI.deps = { showNotification: notify };
     });
 
-    const ok = { success: true };
-    const bad = { success: false, error: 'rpc down' };
+    const outcome = (results, sent, verified) => ({ results, sent, verified });
 
-    it('reports success only when every stream took the change', () => {
-        channelSettingsUI._reportStorageResult({ message: ok, admin: ok, keys: ok }, 'add');
+    it('reports success when every write landed and the read-back agrees', () => {
+        channelSettingsUI._reportStorageResult(
+            outcome({ message: 'applied', admin: 'applied', keys: 'applied' }, 3, true), 'add');
         expect(notify).toHaveBeenCalledWith('Storage node added', 'success');
     });
 
-    it('reports partial when the keys stream alone failed', () => {
-        channelSettingsUI._reportStorageResult({ message: ok, admin: ok, keys: bad }, 'add');
+    // Nothing to pay for is a success, not a silent no-op.
+    it('says so when there was nothing to do', () => {
+        channelSettingsUI._reportStorageResult(outcome({}, 0, null), 'add');
+        expect(notify).toHaveBeenCalledWith(expect.stringContaining('already'), 'success');
+    });
+
+    it('reports partial when one stream failed', () => {
+        channelSettingsUI._reportStorageResult(
+            outcome({ message: 'applied', admin: 'applied', keys: 'failed' }, 3, false), 'add');
         expect(notify).toHaveBeenCalledWith(expect.stringContaining('partially'), 'error');
     });
 
-    it('treats a channel with no keys stream as complete', () => {
-        channelSettingsUI._reportStorageResult({ message: ok, admin: ok, keys: null }, 'remove');
-        expect(notify).toHaveBeenCalledWith('Storage node removed', 'success');
+    // Every write claimed success and the streams still disagree: saying
+    // "done" here is the silent failure this whole path exists to stop.
+    it('refuses to call it done when the read-back still disagrees', () => {
+        channelSettingsUI._reportStorageResult(
+            outcome({ message: 'applied', admin: 'applied' }, 2, false), 'add');
+        expect(notify).toHaveBeenCalledWith(expect.stringContaining('partially'), 'error');
     });
 
     it('reports outright failure when nothing took the change', () => {
-        channelSettingsUI._reportStorageResult({ message: bad, admin: bad, keys: bad }, 'add');
+        channelSettingsUI._reportStorageResult(
+            outcome({ message: 'failed', admin: 'failed' }, 2, false), 'add');
         expect(notify).toHaveBeenCalledWith(expect.stringContaining('Failed to add'), 'error');
     });
 });
