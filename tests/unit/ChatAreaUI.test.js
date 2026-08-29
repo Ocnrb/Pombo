@@ -70,6 +70,7 @@ vi.mock('../../src/js/logger.js', () => ({
 import { chatAreaUI } from '../../src/js/ui/ChatAreaUI.js';
 import { previewModeUI } from '../../src/js/ui/PreviewModeUI.js';
 import { messageRenderer } from '../../src/js/ui/MessageRenderer.js';
+import { reactionManager } from '../../src/js/ui/ReactionManager.js';
 
 describe('ChatAreaUI', () => {
     let messageInput;
@@ -636,6 +637,41 @@ describe('ChatAreaUI', () => {
             ]);
 
             expect(messageRenderer.buildMessageHTML).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    // ==================== updateMessage ====================
+    describe('updateMessage()', () => {
+        function renderOne() {
+            chatAreaUI.setDependencies({
+                getActiveChannel: () => ({ streamId: 'stream-1', hasMoreHistory: false }),
+                authManager: { getAddress: () => '0xme' }
+            });
+            chatAreaUI.messagesArea.innerHTML =
+                '<div class="message-entry" data-msg-id="msg-1">before</div>';
+        }
+
+        it('rewires the replaced node: its react and reply buttons are attached per element', () => {
+            renderOne();
+            messageRenderer.buildMessageHTML.mockReturnValue(
+                '<div class="message-entry" data-msg-id="msg-1">after</div>'
+            );
+
+            const updated = chatAreaUI.updateMessage({
+                id: 'msg-1', text: 'after', sender: '0xother', timestamp: Date.now()
+            });
+
+            expect(updated).toBe(true);
+            expect(chatAreaUI.messagesArea.textContent).toContain('after');
+            expect(reactionManager.attachReactionListeners).toHaveBeenCalled();
+        });
+
+        it('leaves the caller to re-render when the message is not on screen', () => {
+            renderOne();
+            chatAreaUI.messagesArea.innerHTML = '';
+
+            expect(chatAreaUI.updateMessage({ id: 'msg-1', timestamp: Date.now() })).toBe(false);
+            expect(reactionManager.attachReactionListeners).not.toHaveBeenCalled();
         });
     });
 });

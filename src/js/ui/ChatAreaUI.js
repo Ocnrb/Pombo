@@ -957,6 +957,9 @@ class ChatAreaUI {
         const newEl = template.content.firstElementChild;
         if (newEl) {
             existing.replaceWith(newEl);
+            // The replaced node carries no listeners: react, reply and the
+            // reaction badges are wired per element, not delegated.
+            this._attachMessageListeners();
             return true;
         }
         return false;
