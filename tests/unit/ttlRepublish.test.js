@@ -33,6 +33,7 @@ vi.mock('../../src/js/streamr.js', () => ({
         resendChannelImage: vi.fn().mockResolvedValue(null),
         publishChannelImage: vi.fn().mockResolvedValue(undefined),
         setStorageDays: vi.fn().mockResolvedValue(true),
+        subscribeToKeysStream: vi.fn().mockResolvedValue(undefined),
         checkPermissions: vi.fn().mockResolvedValue({ canSubscribe: true, canPublish: true, isOwner: false })
     },
     STREAM_CONFIG: {
@@ -115,6 +116,7 @@ import { streamrController } from '../../src/js/streamr.js';
 import { authManager } from '../../src/js/auth.js';
 import { channelImageManager } from '../../src/js/channelImageManager.js';
 import { graphAPI } from '../../src/js/graph.js';
+import { epochKeyManager } from '../../src/js/epochKeyManager.js';
 import { secureStorage } from '../../src/js/secureStorage.js';
 import { CONFIG } from '../../src/js/config.js';
 
@@ -660,5 +662,23 @@ describe('channelManager._resolveKeysRetention()', () => {
         graphAPI.getStream.mockResolvedValue(streamMetadata(7));
         await channelManager._resolveKeysRetention(gated({ keysStreamId: undefined }));
         expect(graphAPI.getStream).toHaveBeenCalledWith('s-1-keys');
+    });
+
+    // Opening the channel is the only thing that refreshes this value: the
+    // sweep that consumes it runs every 45s and never looks it up.
+    it('runs when a gated channel is wired into the epoch-key protocol', async () => {
+        const resolve = vi.spyOn(channelManager, '_resolveKeysRetention').mockResolvedValue(undefined);
+        vi.spyOn(epochKeyManager, 'onKeyAdopted').mockImplementation(() => {});
+        vi.spyOn(epochKeyManager, 'loadPersistedState').mockImplementation(() => {});
+        vi.spyOn(epochKeyManager, 'hasCurrentKey').mockReturnValue(true);
+        vi.spyOn(epochKeyManager, 'ensureChannelKeys').mockResolvedValue(undefined);
+
+        const channel = gated();
+        try {
+            await channelManager._setupEpochKeys(channel);
+            expect(resolve).toHaveBeenCalledWith(channel);
+        } finally {
+            vi.restoreAllMocks();
+        }
     });
 });
