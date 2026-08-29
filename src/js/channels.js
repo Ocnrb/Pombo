@@ -25,7 +25,7 @@ import { adminStatePoller } from './adminStatePoller.js';
 import { channelImageManager } from './channelImageManager.js';
 import { channelLatestMessageManager } from './channelLatestMessageManager.js';
 import { epochKeyManager } from './epochKeyManager.js';
-import { readStreamRetention } from './streamRetention.js';
+import { readStreamRetention, keysRetentionDays } from './streamRetention.js';
 import { PresenceTracker } from './channels/PresenceTracker.js';
 import { ImageRecovery } from './channels/ImageRecovery.js';
 import { TtlRepublish } from './channels/TtlRepublish.js';
@@ -2659,6 +2659,14 @@ class ChannelManager {
             channel.keysStorageDays = days;
             await this.saveChannels();
         }
+        // The sweep that consumes this is headless and silent, so without
+        // a line here a wrong retention is invisible until the announces
+        // are already gone.
+        Logger.debug('Keys retention', {
+            streamId: keysStreamId.slice(-20),
+            read: days,
+            using: keysRetentionDays(channel)
+        });
     }
 
     /**
