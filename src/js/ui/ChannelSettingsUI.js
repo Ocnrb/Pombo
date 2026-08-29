@@ -366,7 +366,7 @@ class ChannelSettingsUI {
             const label = isOfficial ? 'Pombo' : 'Custom';
             const divergent = !(n.onMessage && n.onAdmin && (!hasKeysStream || n.onKeys));
             const divergentBadge = divergent
-                ? '<span class="text-[10px] text-amber-400/80 ml-1.5" title="Storage assignment is out of sync between channel streams. Removing and re-adding will heal it.">partial</span>'
+                ? '<span class="text-[10px] text-amber-400/80 ml-1.5" title="This node is missing from some of the channel streams. Adding it again heals it, and only the streams that lack it are charged.">partial</span>'
                 : '';
             const removeBtn = canManage
                 ? `<button data-storage-remove="${escapeAttr(addr)}" class="storage-remove-btn shrink-0 text-white/40 hover:text-red-400/90 px-2 py-1 rounded transition" title="Remove">
@@ -498,10 +498,14 @@ class ChannelSettingsUI {
                 showNotification?.('Updating retention…', 'info');
                 try {
                     const result = await channelManager.setChannelStorageDays(channel.streamId, days);
-                    // `keys` is null on channels without a -4, which is not a failure.
-                    const ok = result.message && result.admin && result.keys !== false;
+                    const failed = Object.values(result.results || {}).filter(v => v === 'failed').length;
+                    const ok = failed === 0 && result.verified !== false;
                     showNotification?.(
-                        ok ? `Retention updated to ${days} days` : 'Retention updated partially. Try again.',
+                        ok
+                            ? (result.sent === 0
+                                ? `Retention already ${days} days on every stream`
+                                : `Retention updated to ${days} days`)
+                            : 'Retention updated partially. Try again.',
                         ok ? 'success' : 'error'
                     );
                 } catch (err) {
@@ -521,22 +525,19 @@ class ChannelSettingsUI {
      */
     _reportStorageResult(result, op) {
         const { showNotification } = this.deps;
-        const msgOk = !!result?.message?.success;
-        const adminOk = !!result?.admin?.success;
-        // null is a channel with no keys stream, which is not a failure.
-        const keysOk = result?.keys === null || result?.keys === undefined
-            ? null
-            : !!result.keys.success;
         const verb = op === 'add' ? 'added' : 'removed';
-        const outcomes = [msgOk, adminOk, ...(keysOk === null ? [] : [keysOk])];
+        const states = Object.values(result?.results || {});
+        const failed = states.filter(v => v === 'failed').length;
 
-        if (outcomes.every(Boolean)) {
+        if (result?.sent === 0) {
+            showNotification?.(`Storage node already ${verb === 'added' ? 'on every stream' : 'off every stream'}`, 'success');
+        } else if (failed === 0 && result?.verified !== false) {
             showNotification?.(`Storage node ${verb}`, 'success');
-        } else if (outcomes.every(o => !o)) {
-            const err = result?.message?.error || result?.admin?.error || result?.keys?.error || 'unknown error';
-            showNotification?.(`Failed to ${op} storage node: ${err}`, 'error');
+        } else if (failed === states.length) {
+            showNotification?.(`Failed to ${op} storage node`, 'error');
         } else {
-            showNotification?.(`Storage node partially ${verb}. Retry to sync.`, 'error');
+            // Either a write failed or the read-back still disagrees.
+            showNotification?.(`Storage node partially ${verb}. Try again to sync.`, 'error');
         }
     }
 
