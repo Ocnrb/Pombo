@@ -934,6 +934,57 @@ describe('StreamrController Core', () => {
             const result = await streamrController.enableStorage('stream-1');
             expect(result.success).toBe(false);
         });
+
+        // Retention is a second transaction and fails on its own. Reporting
+        // back the value that was asked for is what lets the channel record
+        // claim a retention the stream never got.
+        describe('retention outcome', () => {
+            it('reports the retention that landed', async () => {
+                const result = await streamrController.enableStorage('stream-1', { storageDays: 30 });
+                expect(result.storageDays).toBe(30);
+                expect(result.retentionApplied).toBe(true);
+            });
+
+            it('reports no retention when setStorageDayCount never succeeds', async () => {
+                mockStream.setStorageDayCount.mockRejectedValue(new Error('rpc down'));
+                const result = await streamrController.enableStorage('stream-1', { storageDays: 30 });
+                expect(result.storageDays).toBeNull();
+                expect(result.retentionApplied).toBe(false);
+            });
+
+            it('still reports the storage node as enabled when only the retention failed', async () => {
+                mockStream.setStorageDayCount.mockRejectedValue(new Error('rpc down'));
+                const result = await streamrController.enableStorage('stream-1', { storageDays: 30 });
+                expect(result.success).toBe(true);
+                expect(mockStream.addToStorageNode).toHaveBeenCalled();
+            });
+
+            it('retries the retention independently of the node assignment', async () => {
+                await streamrController.enableStorage('stream-1', { storageDays: 30 });
+                const named = executeWithRetry.mock.calls.map(([name]) => name);
+                expect(named).toContain('enableStorage');
+                expect(named).toContain('setStorageDayCount');
+            });
+
+            it('reports no retention when the node assignment itself failed', async () => {
+                executeWithRetry.mockRejectedValueOnce(new Error('fail'));
+                const result = await streamrController.enableStorage('stream-1', { storageDays: 30 });
+                expect(result.storageDays).toBeNull();
+                expect(result.retentionApplied).toBe(false);
+                expect(mockStream.setStorageDayCount).not.toHaveBeenCalled();
+            });
+
+            it('ticks progress the same number of times whether the retention lands or not', async () => {
+                const onProgress = vi.fn();
+                await streamrController.enableStorage('stream-1', { storageDays: 30, onProgress });
+                const whenApplied = onProgress.mock.calls.length;
+
+                onProgress.mockClear();
+                mockStream.setStorageDayCount.mockRejectedValue(new Error('rpc down'));
+                await streamrController.enableStorage('stream-1', { storageDays: 30, onProgress });
+                expect(onProgress.mock.calls.length).toBe(whenApplied);
+            });
+        });
     });
 
     // ==================== setStorageDays() ====================

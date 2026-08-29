@@ -3776,7 +3776,9 @@ class StreamrController {
      * @param {string} [options.customStorageAddress] - EVM address of the custom storage node (required if provider is 'custom')
      * @param {number} options.storageDays - Retention days (default: 180)
      * @param {number} retries - Number of retry attempts
-     * @returns {Promise<{success: boolean, provider: string, storageDays: number|null}>} - Result
+     * @returns {Promise<{success: boolean, provider: string, storageDays: number|null, retentionApplied: boolean}>}
+     *          `success` covers the storage node assignment; `storageDays` is
+     *          the retention that ACTUALLY landed, null when it did not.
      */
     async enableStorage(messageStreamId, options = {}, retries = 7) {
         if (!this.client) {
@@ -3834,38 +3836,41 @@ class StreamrController {
         try {
             await executeWithRetry('enableStorage', async () => {
                 const stream = await this.client.getStream(messageStreamId);
-
                 await stream.addToStorageNode(nodeAddress);
                 try { options.onProgress?.(); } catch (_) { /* progress callback errors must not break flow */ }
-
-                if (storageDays && providerConfig.supportsTTL) {
-                    try {
-                        await stream.setStorageDayCount(storageDays);
-                        Logger.debug('Storage days set to:', storageDays);
-                    } catch (ttlError) {
-                        Logger.warn('Could not set storage days (continuing):', ttlError.message);
-                    } finally {
-                        try { options.onProgress?.(); } catch (_) { /* ignore */ }
-                    }
-                }
-
-                Logger.info('Storage enabled:', {
-                    stream: messageStreamId,
-                    provider: providerId,
-                    days: storageDays
-                });
+                Logger.info('Storage enabled:', { stream: messageStreamId, provider: providerId });
             }, { maxRetries: retries });
-
-            return {
-                success: true,
-                provider: providerId,
-                storageDays: storageDays,
-                nodeAddress: nodeAddress
-            };
         } catch (error) {
             Logger.error('All storage attempts failed for:', messageStreamId);
-            return { success: false, provider: providerId, storageDays: null };
+            return { success: false, provider: providerId, storageDays: null, retentionApplied: false };
         }
+
+        // Retention is a SECOND transaction and fails on its own. It gets its
+        // own retry, and when it never lands the caller is told so instead of
+        // being handed back the value it asked for.
+        let retentionApplied = false;
+        if (storageDays && providerConfig.supportsTTL) {
+            try {
+                await executeWithRetry('setStorageDayCount', async () => {
+                    const stream = await this.client.getStream(messageStreamId);
+                    await stream.setStorageDayCount(storageDays);
+                }, { maxRetries: retries });
+                retentionApplied = true;
+                Logger.debug('Storage days set to:', storageDays);
+            } catch (ttlError) {
+                Logger.warn('Retention NOT applied on', messageStreamId, '— the stream keeps the node default:', ttlError.message);
+            } finally {
+                try { options.onProgress?.(); } catch (_) { /* ignore */ }
+            }
+        }
+
+        return {
+            success: true,
+            provider: providerId,
+            storageDays: retentionApplied ? storageDays : null,
+            retentionApplied,
+            nodeAddress: nodeAddress
+        };
     }
 
     /**
