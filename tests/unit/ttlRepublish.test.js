@@ -74,7 +74,8 @@ vi.mock('../../src/js/secureStorage.js', () => ({
 
 vi.mock('../../src/js/graph.js', () => ({
     graphAPI: {
-        getPublicPomboChannels: vi.fn().mockResolvedValue([])
+        getPublicPomboChannels: vi.fn().mockResolvedValue([]),
+        getStream: vi.fn().mockResolvedValue(null)
     }
 }));
 
@@ -112,7 +113,17 @@ import { channelManager } from '../../src/js/channels.js';
 import { streamrController } from '../../src/js/streamr.js';
 import { authManager } from '../../src/js/auth.js';
 import { channelImageManager } from '../../src/js/channelImageManager.js';
+import { graphAPI } from '../../src/js/graph.js';
+import { secureStorage } from '../../src/js/secureStorage.js';
 import { CONFIG } from '../../src/js/config.js';
+
+const streamMetadata = (storageDays) => ({
+    metadata: JSON.stringify({
+        partitions: 3,
+        description: '{"a":"pombo","k":"admin"}',
+        ...(storageDays === undefined ? {} : { storageDays })
+    })
+});
 
 const DAY = 86_400_000;
 
@@ -192,6 +203,7 @@ describe('channelManager._ttlRepublishOnOpen()', () => {
         vi.clearAllMocks();
         channelManager.channels.clear();
         authManager.getAddress.mockReturnValue('0xmyaddress');
+        graphAPI.getStream.mockResolvedValue(null);
         streamrController.resendChannelImage.mockResolvedValue(null);
         streamrController.verifyPasswordChallenge.mockResolvedValue({ found: true, valid: true, ts: FRESH_TS() });
         // The admin-state branch delegates to the real publishAdminState — spy
@@ -360,6 +372,92 @@ describe('channelManager._ttlRepublishOnOpen()', () => {
             expect(streamrController.publishChannelImage).not.toHaveBeenCalled();
         });
     });
+
+    describe('retention source', () => {
+        // The purge applies the -3 stream's retention. `channel.storageDays`
+        // is the -1 value requested at creation, is absent on joined records
+        // and does not survive a reload, so trusting it disarms the republish
+        // on every channel whose real retention is shorter than the default.
+        const AGE = (days) => Date.now() - days * DAY;
+
+        it('uses the -3 retention from the chain, not the local storageDays', async () => {
+            graphAPI.getStream.mockResolvedValue(streamMetadata(3));
+            // 2.9d is fresh under the local 180d (threshold 144d) and stale
+            // under the real 3d (threshold 2.4d).
+            const channel = makeChannel({ storageDays: 180, adminTs: AGE(2.9) });
+            await channelManager._ttlRepublishOnOpen(channel, ADMIN_ID, null);
+            expect(publishAdminStateSpy).toHaveBeenCalled();
+        });
+
+        it('reads the admin stream, not the message stream', async () => {
+            graphAPI.getStream.mockResolvedValue(streamMetadata(3));
+            await channelManager._ttlRepublishOnOpen(makeChannel(), ADMIN_ID, null);
+            expect(graphAPI.getStream).toHaveBeenCalledWith(ADMIN_ID);
+            expect(graphAPI.getStream).not.toHaveBeenCalledWith(STREAM_ID);
+        });
+
+        it('does not look up the retention for non-owners', async () => {
+            await channelManager._ttlRepublishOnOpen(
+                makeChannel({ createdBy: '0xsomeoneelse' }), ADMIN_ID, null);
+            expect(graphAPI.getStream).not.toHaveBeenCalled();
+        });
+
+        it('caches the resolved retention on the channel and persists it', async () => {
+            graphAPI.getStream.mockResolvedValue(streamMetadata(7));
+            const channel = makeChannel();
+            channelManager.channels.set(STREAM_ID, channel);
+            await channelManager._ttlRepublishOnOpen(channel, ADMIN_ID, null);
+            expect(channel.adminStorageDays).toBe(7);
+            expect(secureStorage.setChannels).toHaveBeenCalledWith(
+                expect.arrayContaining([expect.objectContaining({ adminStorageDays: 7 })])
+            );
+        });
+
+        it('does not re-persist when the retention is unchanged', async () => {
+            graphAPI.getStream.mockResolvedValue(streamMetadata(7));
+            const channel = makeChannel({ adminStorageDays: 7 });
+            channelManager.channels.set(STREAM_ID, channel);
+            await channelManager._ttlRepublishOnOpen(channel, ADMIN_ID, null);
+            expect(secureStorage.setChannels).not.toHaveBeenCalled();
+        });
+
+        it('falls back to the cached retention when the Graph is unreachable', async () => {
+            graphAPI.getStream.mockRejectedValue(new Error('graph down'));
+            const channel = makeChannel({ storageDays: 180, adminStorageDays: 3, adminTs: AGE(2.9) });
+            await channelManager._ttlRepublishOnOpen(channel, ADMIN_ID, null);
+            expect(publishAdminStateSpy).toHaveBeenCalled();
+        });
+
+        it('falls back to the local storageDays when nothing was ever cached', async () => {
+            graphAPI.getStream.mockRejectedValue(new Error('graph down'));
+            const channel = makeChannel({ storageDays: 10, adminTs: AGE(9) });
+            await channelManager._ttlRepublishOnOpen(channel, ADMIN_ID, null);
+            expect(publishAdminStateSpy).toHaveBeenCalled();
+        });
+
+        it('falls back to the default when no retention is known anywhere', async () => {
+            graphAPI.getStream.mockRejectedValue(new Error('graph down'));
+            const age = (CONFIG.storage.defaultRetentionDays - 10) * DAY;
+            const channel = makeChannel({ storageDays: null, adminTs: Date.now() - age });
+            await channelManager._ttlRepublishOnOpen(channel, ADMIN_ID, null);
+            expect(publishAdminStateSpy).toHaveBeenCalled();
+        });
+
+        it('ignores metadata without a retention instead of reading it as zero', async () => {
+            graphAPI.getStream.mockResolvedValue(streamMetadata(undefined));
+            const channel = makeChannel({ storageDays: 10, adminStorageDays: null, adminTs: AGE(9) });
+            await channelManager._ttlRepublishOnOpen(channel, ADMIN_ID, null);
+            expect(channel.adminStorageDays).toBeNull();
+            expect(publishAdminStateSpy).toHaveBeenCalled();
+        });
+
+        it('ignores unparseable metadata', async () => {
+            graphAPI.getStream.mockResolvedValue({ metadata: 'not json' });
+            const channel = makeChannel({ storageDays: 10, adminTs: AGE(9) });
+            await channelManager._ttlRepublishOnOpen(channel, ADMIN_ID, null);
+            expect(publishAdminStateSpy).toHaveBeenCalled();
+        });
+    });
 });
 
 describe('setChannelStorageDays() local sync', () => {
@@ -390,5 +488,33 @@ describe('setChannelStorageDays() local sync', () => {
 
         await channelManager.setChannelStorageDays('s-1', 30);
         expect(channel.storageDays).toBe(180);
+    });
+
+    it('updates the cached -3 retention alongside the message one', async () => {
+        const channel = {
+            messageStreamId: 's-1', adminStreamId: 's-3',
+            name: 'T', type: 'public', storageDays: 180, adminStorageDays: 180
+        };
+        channelManager.channels.set('s-1', channel);
+        streamrController.setStorageDays.mockResolvedValue(true);
+
+        await channelManager.setChannelStorageDays('s-1', 30);
+        expect(channel.adminStorageDays).toBe(30);
+    });
+
+    it('updates each stream independently when one of the two fails', async () => {
+        const channel = {
+            messageStreamId: 's-1', adminStreamId: 's-3',
+            name: 'T', type: 'public', storageDays: 180, adminStorageDays: 180
+        };
+        channelManager.channels.set('s-1', channel);
+        // Message first, admin second.
+        streamrController.setStorageDays
+            .mockResolvedValueOnce(false)
+            .mockResolvedValueOnce(true);
+
+        await channelManager.setChannelStorageDays('s-1', 30);
+        expect(channel.storageDays).toBe(180);
+        expect(channel.adminStorageDays).toBe(30);
     });
 });
