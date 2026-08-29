@@ -24,9 +24,10 @@ import { mediaController } from './media.js';
 import { adminStatePoller } from './adminStatePoller.js';
 import { channelImageManager } from './channelImageManager.js';
 import { channelLatestMessageManager } from './channelLatestMessageManager.js';
-import { shouldRepublish } from './ttlRepublish.js';
 import { epochKeyManager } from './epochKeyManager.js';
 import { PresenceTracker } from './channels/PresenceTracker.js';
+import { ImageRecovery } from './channels/ImageRecovery.js';
+import { TtlRepublish } from './channels/TtlRepublish.js';
 
 class ChannelManager {
     constructor() {
@@ -79,11 +80,8 @@ class ChannelManager {
         // AbortController for in-flight history fetches - aborted on channel switch
         this.historyAbortController = null;
         
-        // Re-entrance guard for recoverIncompleteImages (per stream). The
-        // recovery loop calls loadMoreHistory internally, and loadMoreHistory
-        // triggers recovery on completion — without this guard that would
-        // recurse forever.
-        this._imageRecoveryInFlight = new Set(); // messageStreamId
+        this.imageRecovery = new ImageRecovery(this);
+        this.ttlRepublish = new TtlRepublish(this);
         
         // Deduplication: track edit/delete operations currently being sent
         this.pendingOverrides = new Set(); // streamId:targetId:type
@@ -1692,170 +1690,13 @@ class ChannelManager {
 
     /**
      * TTL-aware republish of the -3 artifacts on owner open
-     * (docs/TTL_REPUBLISH_PLAN.md).
-     *
-     * The storage node's TTL purge deletes by message timestamp, and the -3
-     * artifacts are published once and then only read — so an unmoderated
-     * channel eventually loses its ADMIN_STATE (bans/pins vanish silently),
-     * its CHANNEL_IMAGE, and its PASSWORD_CHALLENGE (channel becomes
-     * unjoinable, joiners fail closed). Whenever the OWNER opens a channel,
-     * compare each retained artifact's payload `ts` against the channel's
-     * retention and republish anything past `ttlRepublishAgeFraction` of its
-     * life. Republishing resets the retention clock, so this stays quiet for
-     * the next ~80% of the TTL — it is NOT a per-open publish.
-     *
-     * The challenge branch also keeps the old redundancy semantics (missing
-     * or invalid → republish), covering the create-time publish racing the
-     * storage attachment.
-     *
-     * Must run AFTER bootstrapAdminState (reads channel.adminTs/adminRev).
-     * Fire-and-forget from subscribeToChannel Step 1; never blocks the
-     * render gate.
-     *
+     * (channels/TtlRepublish.js).
      * @param {Object} channel - Channel object
      * @param {string} adminStreamId - Admin stream id (-3)
      * @param {string|null} pwd - Channel password (null for public channels)
      */
-    async _ttlRepublishOnOpen(channel, adminStreamId, pwd) {
-        if (!channel || !adminStreamId) return;
-        if (channel.type === 'dm') return;
-        // NOTE: deliberately NOT gated on channel.storageEnabled — the local
-        // flag can be stale (joined channels, pre-flag records) while the
-        // stream has storage on-chain. Each branch self-gates: nothing
-        // retained → nothing republished (and a missing challenge must
-        // republish regardless, the legacy redundancy semantics).
-        const myAddress = authManager.getAddress();
-        // Owner = createdBy when known, else the stream path prefix — streams
-        // are created under the owner's address, and locally-joined password
-        // channels may not carry createdBy (Android channelOwner() does the
-        // same prefix fallback).
-        const ownerAddress = channel.createdBy
-            || (typeof channel.messageStreamId === 'string' && channel.messageStreamId.startsWith('0x')
-                ? channel.messageStreamId.split('/')[0]
-                : null);
-        const isOwner = !!myAddress
-            && !!ownerAddress
-            && myAddress.toLowerCase() === ownerAddress.toLowerCase();
-
-        const storageDays = (typeof channel.storageDays === 'number' && channel.storageDays > 0)
-            ? channel.storageDays
-            : CONFIG.storage.defaultRetentionDays;
-        const ageDays = (ts) => Math.round((Date.now() - ts) / 86_400_000);
-
-        // One line per open stating the gate values — republishes are rare by
-        // design, so without this the "nothing to do" paths are silent and
-        // undiagnosable in the field.
-        Logger.debug('TTL republish check', {
-            streamId: channel.messageStreamId.slice(-20),
-            type: channel.type,
-            isOwner,
-            hasPwd: !!pwd,
-            adminRev: channel.adminRev || 0,
-            adminAgeDays: channel.adminTs ? ageDays(channel.adminTs) : null,
-            storageDays
-        });
-
-        // Only the owner can publish on -3 (on-chain permissions) — for
-        // everyone else this whole check is a no-op.
-        if (!isOwner) return;
-
-        // Gated: the resends below open epoch envelopes, and this check can
-        // fire before the open's epoch key setup has loaded the persisted
-        // state — without this a cold session skipped the image republish
-        // for a cycle.
-        if (channel.gate?.address) {
-            epochKeyManager.loadPersistedState(channel.messageStreamId);
-        }
-
-        // ADMIN_STATE (-3/P0): republish the current snapshot with rev+1 via
-        // the normal publish path (serialization + ADMIN_INVALIDATE fan-out
-        // included). Only when a snapshot is actually retained — an empty
-        // state has nothing to preserve.
-        if (channel.adminLoaded && (channel.adminRev || 0) > 0
-            && shouldRepublish(channel.adminTs, storageDays)) {
-            try {
-                Logger.info('ADMIN_STATE nearing storage TTL — owner republishing', {
-                    streamId: channel.messageStreamId.slice(-20),
-                    ageDays: ageDays(channel.adminTs),
-                    storageDays
-                });
-                await this.publishAdminState(channel.messageStreamId, { state: channel.adminState });
-            } catch (e) {
-                Logger.debug('ADMIN_STATE TTL republish failed (will retry next open):', e?.message);
-            }
-        }
-
-        // PASSWORD_CHALLENGE (-3/P2): missing OR invalid (legacy redundancy
-        // semantics) OR too old → republish a fresh payload. Content is
-        // immutable, so a fresh publish is always safe.
-        if (channel.type === 'password' && pwd) {
-            try {
-                const res = await streamrController.verifyPasswordChallenge(adminStreamId, pwd);
-                const tooOld = res.found && res.valid && shouldRepublish(res.ts, storageDays);
-                if (!res.found) {
-                    Logger.info('PASSWORD_CHALLENGE not retained on -3/P2 — owner republishing for redundancy');
-                    await streamrController.publishPasswordChallenge(adminStreamId, pwd);
-                } else if (!res.valid) {
-                    // Should not happen (only owner can publish on -3), but if
-                    // a stale/corrupt entry was retained, republish to restore
-                    // a valid challenge.
-                    Logger.warn('PASSWORD_CHALLENGE on -3/P2 did not verify with owner password — republishing');
-                    await streamrController.publishPasswordChallenge(adminStreamId, pwd);
-                } else if (tooOld) {
-                    Logger.info('PASSWORD_CHALLENGE nearing storage TTL — owner republishing', {
-                        ageDays: ageDays(res.ts),
-                        storageDays
-                    });
-                    await streamrController.publishPasswordChallenge(adminStreamId, pwd);
-                } else {
-                    Logger.debug('PASSWORD_CHALLENGE retained and fresh — skipping republish');
-                }
-            } catch (e) {
-                Logger.debug('PASSWORD_CHALLENGE redundancy check failed (will retry next open):', e?.message);
-            }
-        }
-
-        // CHANNEL_IMAGE (-3/P1): republish the RETAINED payload verbatim with
-        // rev+1 and a fresh ts. Deliberately resent here (last:1) instead of
-        // trusting channelImageManager's cache — the cache survives a storage
-        // purge (IDB), and resurrecting a purged image from local cache is a
-        // recovery decision this path does not make (see plan §6).
-        try {
-            const payload = await streamrController.resendChannelImage(adminStreamId, { password: pwd });
-            if (payload?.data && payload?.hash && shouldRepublish(payload.ts, storageDays)) {
-                if (payload.encrypted && !pwd) {
-                    Logger.debug('CHANNEL_IMAGE TTL republish skipped: encrypted payload without password');
-                    return;
-                }
-                const freshPayload = {
-                    ...payload,
-                    rev: (typeof payload.rev === 'number' ? payload.rev : 0) + 1,
-                    ts: Date.now(),
-                    createdBy: payload.createdBy || myAddress
-                };
-                Logger.info('CHANNEL_IMAGE nearing storage TTL — owner republishing', {
-                    streamId: channel.messageStreamId.slice(-20),
-                    ageDays: ageDays(payload.ts),
-                    storageDays,
-                    rev: freshPayload.rev
-                });
-                await streamrController.publishChannelImage(
-                    adminStreamId, freshPayload, payload.encrypted ? pwd : null);
-                // Keep the local rev counter ahead of the retained entry so a
-                // later image change never publishes a lower rev.
-                channel.channelImageRev = Math.max(channel.channelImageRev || 0, freshPayload.rev);
-                await channelImageManager.setLocal(adminStreamId, {
-                    hash: freshPayload.hash,
-                    dataUrl: freshPayload.data,
-                    encrypted: !!freshPayload.encrypted,
-                    ts: freshPayload.ts,
-                    rev: freshPayload.rev,
-                    owner: freshPayload.createdBy
-                });
-            }
-        } catch (e) {
-            Logger.debug('CHANNEL_IMAGE TTL republish failed (will retry next open):', e?.message);
-        }
+    _ttlRepublishOnOpen(channel, adminStreamId, pwd) {
+        return this.ttlRepublish.republishOnOpen(channel, adminStreamId, pwd);
     }
 
     /**
@@ -4164,352 +4005,26 @@ class ChannelManager {
         }
     }
 
-    /**
-     * Recover image manifests whose chunks fell outside the initial resend
-     * window. Each chunked image publishes N chunk messages followed by 1
-     * manifest; with `INITIAL_MESSAGES = 50` bounded by Streamr `last:N`,
-     * multiple historical images cause older manifests to land without all
-     * their chunks (the manifest is at the end of the upload run, so the
-     * manifest itself usually fits but the head chunks get truncated).
-     * Without this, the affected placeholders stay on "Loading…" forever
-     * unless the user scrolls back manually.
-     *
-     * Strategy: scan visible manifests, identify those that haven't been
-     * cached, persisted, or fully assembled, and call `loadMoreHistory`
-     * in a bounded loop until they are recovered or no more history is
-     * available. Chunks that arrive feed `registerStoredImageChunk` →
-     * `tryAssembleStoredImage` → `onImageReceived`, which the UI handler
-     * in `setupMediaHandlers` uses to swap placeholders in place.
-     *
-     * @param {string} messageStreamId
-     * @param {number} [maxRounds]
-     */
-    async recoverIncompleteImages(messageStreamId, maxRounds = CONFIG.media.recoveryMaxRounds) {
-        const channel = this.channels.get(messageStreamId);
-        if (!channel) return;
-        if (channel.writeOnly || channel.type === 'dm') return;
-        if (typeof mediaController?.isStoredChunkedImageManifest !== 'function') return;
-        if (this._imageRecoveryInFlight.has(messageStreamId)) return;
+    // ===== Image recovery =====
+    // Lives in channels/ImageRecovery.js; the manager keeps the entry
+    // points its callers already use.
 
-        this._imageRecoveryInFlight.add(messageStreamId);
-        try {
-            await this._recoverIncompleteImagesInner(messageStreamId, channel, maxRounds);
-        } finally {
-            this._imageRecoveryInFlight.delete(messageStreamId);
-        }
+    get _imageRecoveryInFlight() { return this.imageRecovery._imageRecoveryInFlight; }
+
+    recoverIncompleteImages(messageStreamId, maxRounds = CONFIG.media.recoveryMaxRounds) {
+        return this.imageRecovery.recoverIncompleteImages(messageStreamId, maxRounds);
     }
 
-    /** @private Recovery loop body — always called with the in-flight guard held. */
-    async _recoverIncompleteImagesInner(messageStreamId, channel, maxRounds) {
-        const stagnantLimit = CONFIG.media.recoveryStagnantRoundsLimit;
-        const generationAtStart = this.switchGeneration;
-        let prevIncompleteCount = -1;
-        let stagnantRounds = 0;
-
-        // Sum buffered chunk counts across the given imageIds so we can
-        // distinguish "pagination loaded chunks but no manifest completed
-        // yet" (real progress) from "pagination found nothing" (stagnant).
-        const sumPendingChunks = (ids) => {
-            let total = 0;
-            for (const id of ids) {
-                const pending = mediaController.pendingImageAssemblies?.get?.(id);
-                if (pending) total += pending.chunks.size;
-            }
-            return total;
-        };
-
-        // Global view: count chunks across ALL pending assemblies for this
-        // stream. Some assemblies may be in `pendingImageAssemblies` without
-        // having been re-classified as "incomplete" yet (e.g., manifest just
-        // re-registered this round) — counting only the per-id total can
-        // misreport stagnation. This catches chunks landing for any pending
-        // image owned by this stream.
-        const sumAllChunks = (streamId) => {
-            let total = 0;
-            const map = mediaController.pendingImageAssemblies;
-            if (!map || typeof map.forEach !== 'function') return 0;
-            map.forEach((pending) => {
-                if (pending?.streamId === streamId) total += pending.chunks.size;
-            });
-            return total;
-        };
-
-        for (let round = 0; round < maxRounds; round++) {
-            if (this.switchGeneration !== generationAtStart) return;
-
-            const incompleteIds = [];
-            for (const msg of channel.messages) {
-                if (!mediaController.isStoredChunkedImageManifest(msg)) continue;
-                if (msg.verified?.valid === false) continue;
-                if (!msg.imageId) continue;
-                if (mediaController.deletedImageIds?.has?.(msg.imageId)) continue;
-
-                // Already cached in memory — placeholder will heal via recoverImage()
-                if (mediaController.getImage?.(msg.imageId)) {
-                    // Re-fire delivery in case the placeholder was rendered
-                    // after the cache fill (covers the race where assembly
-                    // completed during the same tick as the render).
-                    mediaController.recoverImage?.(msg.imageId);
-                    continue;
-                }
-
-                // Already persisted to ledger — load it and let the placeholder healer fire
-                try {
-                    const fromLedger = await secureStorage.getImageBlob?.(msg.imageId);
-                    if (fromLedger) {
-                        mediaController.handleImageData?.({
-                            type: 'image_data',
-                            imageId: msg.imageId,
-                            data: fromLedger
-                        });
-                        continue;
-                    }
-                } catch (err) {
-                    Logger.debug('recoverIncompleteImages: ledger lookup failed:', err?.message || err);
-                }
-
-                // Manifest registered but not yet via assembler (e.g., verified after
-                // initial flush, or arrived in pagination without manifest re-register).
-                // Force re-registration so any buffered chunks can complete.
-                try {
-                    if (typeof mediaController.registerStoredImageManifest === 'function') {
-                        await mediaController.registerStoredImageManifest(messageStreamId, msg);
-                    }
-                } catch (err) {
-                    Logger.debug('recoverIncompleteImages: manifest re-register failed:', err?.message || err);
-                }
-
-                // After re-register the assembly may have completed
-                if (mediaController.getImage?.(msg.imageId)) {
-                    mediaController.recoverImage?.(msg.imageId);
-                    continue;
-                }
-
-                // Pending assembly already complete — nudge it to retry
-                const pending = mediaController.pendingImageAssemblies?.get?.(msg.imageId);
-                if (pending?.manifest && pending.chunks.size >= pending.manifest.chunkCount) {
-                    mediaController.recoverImage?.(msg.imageId);
-                    continue;
-                }
-
-                incompleteIds.push(msg.imageId);
-            }
-
-            if (incompleteIds.length === 0) {
-                if (round > 0) {
-                    Logger.debug(
-                        `recoverIncompleteImages: all manifests resolved for ${messageStreamId.slice(-20)} after ${round} round(s)`
-                    );
-                }
-                return;
-            }
-            if (!channel.hasMoreHistory) {
-                // Pagination exhausted — but range resends can be silently
-                // truncated, so "not in stored history" may be false. Try a
-                // targeted window re-query around each manifest before giving up.
-                Logger.warn(
-                    `recoverIncompleteImages: ${incompleteIds.length} manifest(s) incomplete after pagination for ${messageStreamId.slice(-20)} — trying targeted window recovery`
-                );
-                const recoveredIds = await this._recoverChunksViaWindow(
-                    messageStreamId, channel, incompleteIds, generationAtStart
-                );
-                if (this.switchGeneration !== generationAtStart) return;
-                const stillIncomplete = incompleteIds.filter(id => !recoveredIds.includes(id));
-                if (stillIncomplete.length > 0) {
-                    Logger.warn(
-                        `recoverIncompleteImages: ${stillIncomplete.length} manifest(s) still incomplete (chunks truly not in stored history) for ${messageStreamId.slice(-20)}`
-                    );
-                    this._markChannelImagesUnavailable(messageStreamId, stillIncomplete);
-                }
-                return;
-            }
-
-            Logger.debug(
-                `recoverIncompleteImages: paginating to recover ${incompleteIds.length} image manifest(s) ` +
-                `for ${messageStreamId.slice(-20)} (round ${round + 1}/${maxRounds})`
-            );
-
-            // Snapshot pending chunk totals BEFORE pagination so we can detect
-            // real progress (chunks arriving) even when no manifest completed
-            // this round — a single 5MB GIF can need 25+ chunks across many
-            // pagination rounds before the count of incomplete manifests drops.
-            const chunksBefore = sumPendingChunks(incompleteIds);
-            const allChunksBefore = sumAllChunks(messageStreamId);
-
-            const result = await this.loadMoreHistory(messageStreamId);
-            if (this.switchGeneration !== generationAtStart) return;
-
-            const chunksAfter = sumPendingChunks(incompleteIds);
-            const allChunksAfter = sumAllChunks(messageStreamId);
-            const madeProgress = result.loaded > 0
-                || chunksAfter > chunksBefore
-                || allChunksAfter > allChunksBefore
-                || incompleteIds.length !== prevIncompleteCount;
-
-            // Stagnation guard: only count rounds where nothing changed
-            // (no new messages, no new chunks, same incomplete count).
-            // Without this, multi-GIF backlogs would bail before later
-            // images had a chance to complete their long chunk runs.
-            if (madeProgress) {
-                stagnantRounds = 0;
-                prevIncompleteCount = incompleteIds.length;
-            } else {
-                stagnantRounds++;
-                if (stagnantRounds >= stagnantLimit) {
-                    Logger.warn(
-                        `recoverIncompleteImages: ${incompleteIds.length} manifest(s) stagnant after ${stagnantRounds} rounds — trying targeted window recovery for ${messageStreamId.slice(-20)}`
-                    );
-                    const recoveredIds = await this._recoverChunksViaWindow(
-                        messageStreamId, channel, incompleteIds, generationAtStart
-                    );
-                    if (this.switchGeneration !== generationAtStart) return;
-                    const stillIncomplete = incompleteIds.filter(id => !recoveredIds.includes(id));
-                    if (stillIncomplete.length > 0) {
-                        this._markChannelImagesUnavailable(messageStreamId, stillIncomplete);
-                    }
-                    return;
-                }
-            }
-
-            // Nothing new fetched and no more history → continue (stagnation
-            // counter will catch the dead end after `stagnantLimit` rounds).
-            if (result.loaded === 0 && !result.hasMore && chunksAfter === chunksBefore && allChunksAfter === allChunksBefore) {
-                continue;
-            }
-        }
-
-        Logger.debug(
-            `recoverIncompleteImages: hit max rounds (${maxRounds}) for ${messageStreamId.slice(-20)}`
-        );
+    _recoverIncompleteImagesInner(messageStreamId, channel, maxRounds) {
+        return this.imageRecovery._recoverIncompleteImagesInner(messageStreamId, channel, maxRounds);
     }
 
-    /**
-     * Targeted window recovery for incomplete chunked images.
-     *
-     * Storage range resends can be SILENTLY TRUNCATED (WS drop mid-iteration
-     * yields a short response with no error — confirmed against a storage
-     * node holding 422 messages while the client received ~106). When that
-     * happens, pagination concludes `hasMore: false` and the chunks look
-     * "missing" even though they are stored.
-     *
-     * Since chunks are always published moments before their manifest, we
-     * re-query a small window around each incomplete manifest's timestamp,
-     * with a few fresh attempts (each opens a new storage connection).
-     *
-     * @param {string} messageStreamId
-     * @param {Object} channel
-     * @param {string[]} incompleteIds
-     * @param {number} generationAtStart - Switch fence captured by the caller
-     * @returns {Promise<string[]>} imageIds recovered (assembled or chunk-complete)
-     * @private
-     */
-    async _recoverChunksViaWindow(messageStreamId, channel, incompleteIds, generationAtStart) {
-        const windowMs = CONFIG.media.recoveryWindowMs;
-        const forwardMarginMs = CONFIG.media.recoveryWindowForwardMarginMs;
-        const maxAttempts = CONFIG.media.recoveryWindowAttempts;
-        const recovered = [];
-        const incompleteSet = new Set(incompleteIds);
-
-        const chunkDiag = (imageId) => {
-            const pending = mediaController.pendingImageAssemblies?.get?.(imageId);
-            const total = pending?.manifest?.chunkCount;
-            if (!pending || !Number.isInteger(total)) return `${imageId}: no pending assembly`;
-            const missing = [];
-            for (let i = 0; i < total; i++) {
-                if (!pending.chunks.has(i)) missing.push(i);
-            }
-            return `${imageId}: ${pending.chunks.size}/${total} chunks, missing [${missing.join(',')}]`;
-        };
-
-        for (const imageId of incompleteIds) {
-            if (this.switchGeneration !== generationAtStart) return recovered;
-
-            const manifestMsg = channel.messages.find(
-                (m) => m?.imageId === imageId && mediaController.isStoredChunkedImageManifest?.(m)
-            );
-            const anchorTs = manifestMsg?.timestamp
-                || mediaController.pendingImageAssemblies?.get?.(imageId)?.manifest?.timestamp;
-            if (!anchorTs) {
-                Logger.debug(`window recovery: no manifest timestamp for ${imageId} — skipping`);
-                continue;
-            }
-
-            Logger.info(`window recovery: ${chunkDiag(imageId)} — querying ±window around manifest`);
-
-            let done = false;
-            for (let attempt = 1; attempt <= maxAttempts && !done; attempt++) {
-                if (this.switchGeneration !== generationAtStart) return recovered;
-                try {
-                    const result = await streamrController.fetchOlderHistoryWindowed(
-                        messageStreamId,
-                        STREAM_CONFIG.MESSAGE_STREAM.MESSAGES,
-                        anchorTs + forwardMarginMs,
-                        windowMs + forwardMarginMs,
-                        this.historyAbortController?.signal ?? null,
-                        channel.password || null
-                    );
-
-                    for (const item of result.messages || []) {
-                        const content = item?.content;
-                        if (
-                            content
-                            && mediaController.isStoredImageChunkMessage?.(content)
-                            && incompleteSet.has(content.imageId)
-                        ) {
-                            await mediaController.registerStoredImageChunk(messageStreamId, content);
-                        }
-                    }
-
-                    // Re-register the manifest to trigger assembly of buffered chunks
-                    if (manifestMsg && typeof mediaController.registerStoredImageManifest === 'function') {
-                        await mediaController.registerStoredImageManifest(messageStreamId, manifestMsg);
-                    }
-                } catch (err) {
-                    Logger.debug(`window recovery attempt ${attempt} failed for ${imageId}:`, err?.message || err);
-                }
-
-                if (mediaController.getImage?.(imageId)) {
-                    mediaController.recoverImage?.(imageId);
-                    recovered.push(imageId);
-                    done = true;
-                } else {
-                    const pending = mediaController.pendingImageAssemblies?.get?.(imageId);
-                    if (pending?.manifest && pending.chunks.size >= pending.manifest.chunkCount) {
-                        mediaController.recoverImage?.(imageId);
-                        recovered.push(imageId);
-                        done = true;
-                    }
-                }
-
-                if (!done && attempt < maxAttempts) {
-                    Logger.debug(`window recovery: retrying ${imageId} (attempt ${attempt + 1}/${maxAttempts}) — ${chunkDiag(imageId)}`);
-                }
-            }
-
-            Logger.info(`window recovery: ${done ? 'RECOVERED' : 'still incomplete'} — ${chunkDiag(imageId)}`);
-        }
-
-        return recovered;
+    _recoverChunksViaWindow(messageStreamId, channel, incompleteIds, generationAtStart) {
+        return this.imageRecovery._recoverChunksViaWindow(messageStreamId, channel, incompleteIds, generationAtStart);
     }
 
-    /**
-     * Mark image placeholders as unavailable (history exhausted or recovery
-     * gave up). Emits an event the chat UI can render as an "Image unavailable"
-     * tile with a Retry button (handler re-invokes recoverIncompleteImages).
-     * @param {string} messageStreamId
-     * @param {string[]} imageIds
-     * @private
-     */
     _markChannelImagesUnavailable(messageStreamId, imageIds) {
-        if (!Array.isArray(imageIds) || imageIds.length === 0) return;
-        if (typeof window === 'undefined') return;
-        try {
-            window.dispatchEvent(new CustomEvent('pombo:imageRecoveryGaveUp', {
-                detail: { streamId: messageStreamId, imageIds: imageIds.slice() }
-            }));
-        } catch (err) {
-            Logger.debug('_markChannelImagesUnavailable: dispatch failed:', err?.message || err);
-        }
+        return this.imageRecovery._markChannelImagesUnavailable(messageStreamId, imageIds);
     }
 
     /**
