@@ -319,6 +319,10 @@ class ChannelSettingsUI {
         const list = this.elements.channelStorageNodesList;
         const POMBO_NODE = '0xae340e799e8151f6a4999d245e466197aa217667';
         const { enabled, nodes, storageDays, retention, retentionInSync, hasKeysStream } = info;
+        // A lookup that failed says nothing about that stream. Calling a node
+        // missing on that basis sends the admin to pay for a repair that may
+        // not be needed.
+        const allStreamsRead = info.allStreamsRead !== false;
 
         // Retention: one figure, the message stream's. The warning is a
         // sibling of both retention states, never inside one: the readonly
@@ -364,7 +368,8 @@ class ChannelSettingsUI {
             const addr = n.address;
             const isOfficial = addr.toLowerCase() === POMBO_NODE.toLowerCase();
             const label = isOfficial ? 'Pombo' : 'Custom';
-            const divergent = !(n.onMessage && n.onAdmin && (!hasKeysStream || n.onKeys));
+            const divergent = allStreamsRead
+                && !(n.onMessage && n.onAdmin && (!hasKeysStream || n.onKeys));
             const divergentBadge = divergent
                 ? '<span class="text-[10px] text-amber-400/80 ml-1.5" title="This node is missing from some of the channel streams. Adding it again heals it, and only the streams that lack it are charged.">partial</span>'
                 : '';

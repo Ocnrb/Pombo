@@ -744,6 +744,27 @@ describe('channel storage covers every stored stream', () => {
             expect(result.retention.keys).toBeNull();
             expect(result.retentionInSync).toBe(true);
         });
+
+        // A lookup that failed is not a stream without nodes, and the panel
+        // needs the difference before it calls a node missing.
+        it('flags that not every stream answered', async () => {
+            channelManager.channels.set('s-1', gated());
+            streamrController.getStreamStorageInfo
+                .mockResolvedValueOnce(info([NODE], 180))
+                .mockResolvedValueOnce({ ok: false, enabled: false, nodes: [], storageDays: null })
+                .mockResolvedValueOnce(info([NODE], 180));
+
+            const result = await channelManager.getChannelStorageInfo('s-1');
+            expect(result.allStreamsRead).toBe(false);
+        });
+
+        it('does not flag anything when every stream answered', async () => {
+            channelManager.channels.set('s-1', gated());
+            streamrController.getStreamStorageInfo.mockResolvedValue(info([NODE], 180));
+
+            const result = await channelManager.getChannelStorageInfo('s-1');
+            expect(result.allStreamsRead).toBe(true);
+        });
     });
 
 

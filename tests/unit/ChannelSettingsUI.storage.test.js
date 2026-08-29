@@ -171,6 +171,15 @@ describe('storage panel rendering', () => {
             }), false);
             expect(list.innerHTML).not.toContain('partial');
         });
+
+        // A lookup that timed out says nothing about that stream.
+        it('does not badge a node when a stream lookup failed', () => {
+            channelSettingsUI._renderStorageList({}, info({
+                nodes: [node({ onMessage: false })],
+                allStreamsRead: false
+            }), false);
+            expect(list.innerHTML).not.toContain('partial');
+        });
     });
 });
 
