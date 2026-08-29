@@ -52,6 +52,7 @@ import {
 // === STREAM CONFIG (DUAL-STREAM ARCHITECTURE) ===
 import { STREAM_CONFIG } from './streamConfig.js';
 import { History } from './streamr/History.js';
+import { MessagePipeline } from './streamr/MessagePipeline.js';
 
 // === ID DERIVATION FUNCTIONS ===
 // Re-exported from streamConstants.js; kept as local names for readability
@@ -108,6 +109,7 @@ class StreamrController {
         this.address = null;
         this.mediaHandlers = new Map(); // ephemeralStreamId -> { handler, password }
         this.history = new History(this);
+        this.messages = new MessagePipeline(this);
     }
 
     async validateCustomStorageNodeAddress(nodeAddress) {
@@ -3399,65 +3401,7 @@ class StreamrController {
             return partitionSubs[partition];
         }
 
-        const messageHandler = async (content, streamMessage) => {
-            try {
-                let data = content;
-
-                // Handle binary content (Uint8Array from MEDIA_DATA partition)
-                if (content instanceof Uint8Array) {
-                    data = await this._openBinaryMediaPayload(streamId, content, password);
-                    if (!data) return;
-                    const transportPublisher = streamMessage && (typeof streamMessage.getPublisherId === 'function'
-                        ? streamMessage.getPublisherId()
-                        : streamMessage.publisherId);
-                    const publisherId = await this.resolveAuthor(streamId, streamMessage, transportPublisher, { live: true });
-                    if (!publisherId) return;
-                    await handler(data, publisherId);
-                    return;
-                }
-
-                if (password && typeof content === 'string') {
-                    data = await cryptoManager.decryptJSON(content, password);
-                }
-                // Gated channels: epoch-encrypted envelope (N-A). Unknown kid
-                // is NOT an error — skip; storage-backed messages come back via
-                // the refresh fired when the key is adopted.
-                if (this.isEpochEnvelope(data)) {
-                    const opened = await this.openEpochEnvelope(streamId, data, {
-                        live: true,
-                        timestamp: typeof streamMessage?.getTimestamp === 'function'
-                            ? streamMessage.getTimestamp() : streamMessage?.timestamp
-                    });
-                    if (opened === null) return;
-                    data = opened;
-
-                    // Members-only: the seal held an authorship wrapper —
-                    // verify it, swap the author in, and cut lapsed members.
-                    const modeChannel = await this._gatedChannelFor(streamId);
-                    if (modeChannel?.authorMode === 'members') {
-                        const authored = await this._openAuthorship(modeChannel, data, { live: true });
-                        if (!authored) return;
-                        data = authored.payload;
-                        this.attachAccount(data, authored.author);
-                        await handler(data);
-                        return;
-                    }
-                }
-                // Authorship: envelope signer on gated streams, transport
-                // publisher otherwise (resolveAuthor; D10c)
-                if (streamMessage && typeof data === 'object') {
-                    const transportPublisher = typeof streamMessage.getPublisherId === 'function'
-                        ? streamMessage.getPublisherId()
-                        : streamMessage.publisherId;
-                    const publisherId = await this.resolveAuthor(streamId, streamMessage, transportPublisher, { live: true });
-                    if (!publisherId) return;
-                    this.attachAccount(data, publisherId);
-                }
-                await handler(data);
-            } catch (error) {
-                Logger.error(`Failed to process partition ${partition} message:`, error);
-            }
-        };
+        const messageHandler = this.messages.makeHandler(streamId, handler, password, `partition ${partition} message:`);
 
         const gatedChannel = await this._gatedChannelFor(streamId);
         partitionSubs[partition] = await this.client.subscribe({
@@ -4033,68 +3977,7 @@ class StreamrController {
             throw new Error('Client not initialized');
         }
         
-        const messageHandler = async (content, streamMessage) => {
-            try {
-                let data = content;
-
-                // Handle binary content (Uint8Array from MEDIA_DATA partition)
-                if (content instanceof Uint8Array) {
-                    data = await this._openBinaryMediaPayload(streamId, content, password);
-                    if (!data) return;
-                    // Extract account and wrap binary with metadata
-                    const transportPublisher = streamMessage && (typeof streamMessage.getPublisherId === 'function'
-                        ? streamMessage.getPublisherId()
-                        : streamMessage.publisherId);
-                    const publisherId = await this.resolveAuthor(streamId, streamMessage, transportPublisher, { live: true });
-                    if (!publisherId) return;
-                    await handler(data, publisherId);
-                    return;
-                }
-
-                // Decrypt if password provided
-                if (password && typeof content === 'string') {
-                    data = await cryptoManager.decryptJSON(content, password);
-                }
-
-                // Epoch envelope (gated): unknown kid → skip, not error (§7.9)
-                if (this.isEpochEnvelope(data)) {
-                    const opened = await this.openEpochEnvelope(streamId, data, {
-                        live: true,
-                        timestamp: typeof streamMessage?.getTimestamp === 'function'
-                            ? streamMessage.getTimestamp() : streamMessage?.timestamp
-                    });
-                    if (opened === null) return;
-                    data = opened;
-
-                    // Members-only: the seal held an authorship wrapper —
-                    // verify it, swap the author in, and cut lapsed members.
-                    const gatedChannel = await this._gatedChannelFor(streamId);
-                    if (gatedChannel?.authorMode === 'members') {
-                        const authored = await this._openAuthorship(gatedChannel, data, { live: true });
-                        if (!authored) return;
-                        data = authored.payload;
-                        this.attachAccount(data, authored.author);
-                        await handler(data);
-                        return;
-                    }
-                }
-
-                // Authorship: envelope signer on gated streams, transport
-                // publisher otherwise (resolveAuthor; D10c)
-                if (streamMessage && typeof data === 'object') {
-                    const transportPublisher = typeof streamMessage.getPublisherId === 'function'
-                        ? streamMessage.getPublisherId()
-                        : streamMessage.publisherId;
-                    const publisherId = await this.resolveAuthor(streamId, streamMessage, transportPublisher, { live: true });
-                    if (!publisherId) return;
-                    this.attachAccount(data, publisherId);
-                }
-
-                await handler(data);
-            } catch (error) {
-                Logger.error('Failed to process message:', error);
-            }
-        };
+        const messageHandler = this.messages.makeHandler(streamId, handler, password, 'message:');
         const errorHandler = async (error) => {
             // Decrypt errors for missing GroupKeys
             if (error.code === 'DECRYPT_ERROR' || error.message?.includes('encryption key')) {
