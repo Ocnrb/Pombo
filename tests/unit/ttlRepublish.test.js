@@ -945,5 +945,19 @@ describe('storage writes go only where they are needed', () => {
             expect(streamrController.removeStorageFromStream).not.toHaveBeenCalled();
             expect(result.sent).toBe(0);
         });
+
+        // A stream we could not read has an empty node list, which looks
+        // exactly like one that never carried the node. Skipping on that
+        // would leave the node assigned with the UI reporting it removed.
+        it('removes from a stream it could not read', async () => {
+            channelManager.channels.set('s-1', plain());
+            reads(
+                state([NODE], 180), state([], null, false),
+                state([], null), state([], null)
+            );
+
+            await channelManager.removeChannelStorageNode('s-1', NODE);
+            expect(streamrController.removeStorageFromStream).toHaveBeenCalledWith('s-3', NODE);
+        });
     });
 });
